@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, boolean, integer, customType } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, boolean, integer, customType, AnyPgColumn } from 'drizzle-orm/pg-core';
 
 // Custom bytea type for binary data
 const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
@@ -34,10 +34,10 @@ export const workspaceMembers = pgTable('workspace_members', {
   joinedAt: timestamp('joined_at').defaultNow(),
 });
 
-export const pages = pgTable('pages', {
+export const pages: any = pgTable('pages', {
   id: uuid('id').defaultRandom().primaryKey(),
   workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
-  parentId: uuid('parent_id').references(() => pages.id, { onDelete: 'set null' }),
+  parentId: uuid('parent_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }),
   title: text('title').notNull().default('Untitled'),
   icon: text('icon'),
   position: integer('position').notNull().default(0),
