@@ -194,6 +194,41 @@ pagesRoute.patch(":id", async (c) => {
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
+pagesRoute.patch(":id/content", async (c) => {
+  const pageId = c.req.param("id");
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: "Page not found" });
+  }
+
+  ensureWorkspaceForPage(page);
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(page.workspaceId!, user.id);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== "object") {
+    throw new HTTPException(400, { message: "Invalid body" });
+  }
+
+  const { ydoc } = body as { ydoc?: number[] };
+  if (!Array.isArray(ydoc)) {
+    throw new HTTPException(400, { message: "ydoc is required" });
+  }
+
+  const ydocBuffer = Buffer.from(ydoc);
+  const updateResult = await pool.query(
+    "update pages set ydoc = $1, updated_at = now() where id = $2",
+    [ydocBuffer, pageId]
+  );
+
+  if (updateResult.rowCount === 0) {
+    throw new HTTPException(500, { message: "Failed to update page content" });
+  }
+
+  return c.json({ success: true });
+});
+
 pagesRoute.patch(":id/move", async (c) => {
   const pageId = c.req.param("id");
   const page = await getPageById(pageId);
