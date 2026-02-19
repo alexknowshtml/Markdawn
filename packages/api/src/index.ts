@@ -1,9 +1,11 @@
 import { serve } from "@hono/node-server";
+import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { timing } from "hono/timing";
+import { readFileSync } from "fs";
 import pagesRoute from "./routes/pages";
 import workspacesRoute from "./routes/workspaces";
 import searchRoute from "./routes/search";
@@ -48,6 +50,17 @@ app.route("/api/workspaces", workspacesRoute);
 app.route("/api/search", searchRoute);
 
 app.route("/api", authRoutes);
+
+if (isProduction) {
+  app.use('/assets/*', serveStatic({ root: './dist/web' }));
+  app.all('*', (c) => {
+    if (c.req.path.startsWith('/api/')) {
+      return c.notFound();
+    }
+    const html = readFileSync('./dist/web/index.html', 'utf-8');
+    return c.html(html);
+  });
+}
 
 app.notFound((c) => c.json({ error: "Not Found" }, 404));
 

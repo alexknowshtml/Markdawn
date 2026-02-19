@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
+import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { Editor } from '../components/editor/Editor';
 import { EditorHeader } from '../components/editor/EditorHeader';
 
@@ -21,6 +22,7 @@ async function fetchPage(pageId: string): Promise<PageResponse> {
 
 export default function Page() {
   const { pageId, workspaceSlug } = useParams<{ pageId: string; workspaceSlug: string }>();
+  const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
 
   const { data: page } = useQuery({
     queryKey: ['pages', 'detail', pageId],
@@ -42,8 +44,9 @@ export default function Page() {
         workspaceSlug={workspaceSlug}
         pageId={pageId}
         initialTitle={page?.title ?? 'Untitled'}
+        provider={provider}
       />
-      <Editor pageId={pageId} />
+      <Editor pageId={pageId} onProviderReady={setProvider} />
     </div>
   );
 }

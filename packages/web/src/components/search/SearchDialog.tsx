@@ -148,31 +148,31 @@ export function SearchDialog() {
       onClick={closeDialog}
     >
       <div
-        className="w-full max-w-2xl rounded-xl border border-zinc-200 bg-white shadow-2xl"
+        className="w-full max-w-2xl rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-2xl"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="relative border-b border-zinc-200 px-4 py-3">
+        <div className="relative border-b border-zinc-200 dark:border-zinc-700 px-4 py-3">
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages..."
-            className="w-full rounded-md border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+            className="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 dark:focus:ring-zinc-100/10"
           />
           {isLoading && (
             <div className="absolute right-6 top-1/2 -translate-y-1/2">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 border-t-zinc-700" />
+              <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 dark:border-zinc-600 border-t-zinc-700 dark:border-t-zinc-300" />
             </div>
           )}
         </div>
 
         <div className="max-h-80 overflow-y-auto p-2">
           {!trimmedQuery && (
-            <div className="px-3 py-6 text-sm text-zinc-500 text-center">Type to search...</div>
+            <div className="px-3 py-6 text-sm text-zinc-500 dark:text-zinc-400 text-center">Type to search...</div>
           )}
 
           {trimmedQuery && !isLoading && !hasResults && (
-            <div className="px-3 py-6 text-sm text-zinc-500 text-center">No pages found</div>
+            <div className="px-3 py-6 text-sm text-zinc-500 dark:text-zinc-400 text-center">No pages found</div>
           )}
 
           {hasResults && (
@@ -188,14 +188,14 @@ export function SearchDialog() {
                     onMouseEnter={() => setActiveIndex(index)}
                     className={`w-full rounded-md px-3 py-2 text-left transition-colors ${
                       index === activeIndex
-                        ? "bg-zinc-900 text-white"
-                        : "bg-white text-zinc-900 hover:bg-zinc-100"
+                        ? "bg-zinc-900 dark:bg-zinc-700 text-white"
+                        : "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
                     }`}
                   >
                     <div className="text-sm font-medium truncate">{result.title}</div>
                     <div
                       className={`text-xs ${
-                        index === activeIndex ? "text-zinc-200" : "text-zinc-500"
+                        index === activeIndex ? "text-zinc-200 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"
                       }`}
                     >
                       {result.workspaceSlug}

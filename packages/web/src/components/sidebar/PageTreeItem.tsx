@@ -139,7 +139,7 @@ export function PageTreeItem({
       <div 
         className={clsx(
           "group flex items-center h-8 pr-2 py-1 cursor-pointer transition-colors relative",
-          isActive ? "bg-zinc-200 text-zinc-900 font-medium" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+          isActive ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100"
         )}
         style={{ paddingLeft: `${depth * 12 + 12}px` }}
         onClick={handleNavigate}
@@ -147,7 +147,7 @@ export function PageTreeItem({
         data-testid="page-tree-item"
       >
         <div 
-          className="flex items-center justify-center w-5 h-5 rounded-sm hover:bg-zinc-300/50 mr-1 text-zinc-400 hover:text-zinc-600"
+          className="flex items-center justify-center w-5 h-5 rounded-sm hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 mr-1 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
           onClick={handleToggle}
         >
           {page.children && page.children.length > 0 ? (
@@ -158,7 +158,7 @@ export function PageTreeItem({
         </div>
 
         <div className="flex-1 flex items-center min-w-0 mr-2">
-          <FileText size={14} className={clsx("mr-2 flex-shrink-0", isActive ? "text-zinc-900" : "text-zinc-400")} />
+          <FileText size={14} className={clsx("mr-2 flex-shrink-0", isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
           
           {isEditing ? (
             <input
@@ -168,7 +168,7 @@ export function PageTreeItem({
               onChange={(e) => setEditTitle(e.target.value)}
               onBlur={handleRenameSave}
               onKeyDown={handleKeyDown}
-              className="flex-1 bg-white border border-blue-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0"
+              className="flex-1 bg-white dark:bg-zinc-900 border border-blue-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0 text-zinc-900 dark:text-zinc-100"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
@@ -180,7 +180,7 @@ export function PageTreeItem({
           <div className="hidden group-hover:flex items-center gap-0.5 absolute right-2 bg-gradient-to-l from-inherit pl-2">
             <button 
               onClick={handleCreateChild}
-              className="p-1 rounded hover:bg-zinc-300 text-zinc-500 hover:text-zinc-900"
+              className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
               title="Add subpage"
             >
               <Plus size={14} />
@@ -192,19 +192,19 @@ export function PageTreeItem({
                   e.stopPropagation();
                   setShowMenu(!showMenu);
                 }}
-                className="p-1 rounded hover:bg-zinc-300 text-zinc-500 hover:text-zinc-900"
+                className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
               >
                 <MoreHorizontal size={14} />
               </button>
 
               {showMenu && (
-                <div className="absolute right-0 top-6 w-32 bg-white border border-zinc-200 shadow-lg rounded-md z-50 py-1 flex flex-col">
+                <div className="absolute right-0 top-6 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-lg rounded-md z-50 py-1 flex flex-col">
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       handleRenameStart();
                     }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 hover:bg-zinc-100 w-full text-left"
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left"
                   >
                     <Edit2 size={12} /> Rename
                   </button>
@@ -213,7 +213,7 @@ export function PageTreeItem({
                       e.stopPropagation();
                       handleDelete();
                     }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 hover:bg-red-50 w-full text-left"
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 w-full text-left"
                   >
                     <Trash2 size={12} /> Delete
                   </button>
