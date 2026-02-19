@@ -4,6 +4,8 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { timing } from "hono/timing";
+import pagesRoute from "./routes/pages";
+import { authRoutes } from "./routes";
 
 type OriginDecision = string | undefined;
 
@@ -36,6 +38,10 @@ app.use("*", timing());
 app.get("/api/health", (c) => {
   return c.json({ status: "ok", timestamp: Date.now() });
 });
+
+app.route("/api/pages", pagesRoute);
+
+app.route("/api", authRoutes);
 
 app.notFound((c) => c.json({ error: "Not Found" }, 404));
 

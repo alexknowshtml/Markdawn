@@ -1,6 +1,7 @@
-import React from 'react';
-import { NavLink } from 'react-router-dom';
-import clsx from 'clsx';
+import React from "react";
+import { NavLink } from "react-router-dom";
+import clsx from "clsx";
+import { authClient } from "../lib/auth-client";
 
 export function Sidebar({ className }: { className?: string }) {
   return (
@@ -17,33 +18,50 @@ export function Sidebar({ className }: { className?: string }) {
           Workspaces
         </div>
         {/* Placeholder navigation items */}
-        <NavLink 
-          to="/app/demo" 
-          className={({ isActive }) => clsx(
-            "block px-2 py-1.5 rounded-md text-sm font-medium transition-colors",
-            isActive ? "bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
-          )}
+        <NavLink
+          to="/app/demo"
+          className={(navState: { isActive: boolean }) =>
+            clsx(
+              "block px-2 py-1.5 rounded-md text-sm font-medium transition-colors",
+              navState.isActive
+                ? "bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200"
+                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+            )
+          }
         >
           Demo Workspace
         </NavLink>
-        <NavLink 
-          to="/app/personal" 
-          className={({ isActive }) => clsx(
-            "block px-2 py-1.5 rounded-md text-sm font-medium transition-colors",
-            isActive ? "bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200" : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
-          )}
+        <NavLink
+          to="/app/personal"
+          className={(navState: { isActive: boolean }) =>
+            clsx(
+              "block px-2 py-1.5 rounded-md text-sm font-medium transition-colors",
+              navState.isActive
+                ? "bg-white text-zinc-900 shadow-sm ring-1 ring-zinc-200"
+                : "text-zinc-600 hover:bg-zinc-100 hover:text-zinc-900"
+            )
+          }
         >
           Personal Notes
         </NavLink>
       </nav>
 
       <div className="p-4 border-t border-zinc-200">
-        <NavLink 
-          to="/login"
+        <button
+          type="button"
+          onClick={() =>
+            authClient.signOut({
+              fetchOptions: {
+                onSuccess: () => {
+                  window.location.assign("/login");
+                },
+              },
+            })
+          }
           className="block w-full px-4 py-2 text-sm text-center text-zinc-600 bg-white border border-zinc-300 rounded-md hover:bg-zinc-50"
         >
           Log Out
-        </NavLink>
+        </button>
       </div>
     </aside>
   );

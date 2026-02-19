@@ -1,6 +1,7 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import Home from './routes/Home';
 import Login from './routes/Login';
 import Dashboard from './routes/Dashboard';
@@ -14,7 +15,14 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/login" element={<Login />} />
         
-        <Route path="/app" element={<AppShell />}>
+        <Route
+          path="/app"
+          element={
+            <ProtectedRoute>
+              <AppShell />
+            </ProtectedRoute>
+          }
+        >
           <Route index element={<Dashboard />} />
           <Route path=":workspaceSlug" element={<Workspace />} />
           <Route path=":workspaceSlug/:pageId" element={<Page />} />
