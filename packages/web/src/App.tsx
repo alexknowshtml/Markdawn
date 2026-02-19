@@ -7,6 +7,7 @@ import Login from './routes/Login';
 import Dashboard from './routes/Dashboard';
 import Workspace from './routes/Workspace';
 import Page from './routes/Page';
+import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
 
 function App() {
   return (
@@ -25,6 +26,7 @@ function App() {
         >
           <Route index element={<Dashboard />} />
           <Route path=":workspaceSlug" element={<Workspace />} />
+          <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
           <Route path=":workspaceSlug/:pageId" element={<Page />} />
         </Route>
         

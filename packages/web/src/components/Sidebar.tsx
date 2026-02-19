@@ -12,6 +12,8 @@ import { authClient } from "../lib/auth-client";
 import { useWorkspaces } from '../hooks/use-workspaces';
 import { PageTree } from './sidebar/PageTree';
 import { useAuth } from '../hooks/useAuth';
+import { WorkspaceSelector } from './workspace/WorkspaceSelector';
+import { CreateWorkspaceModal } from './workspace/CreateWorkspaceModal';
 
 export function Sidebar({ className }: { className?: string }) {
   const navigate = useNavigate();
@@ -20,6 +22,7 @@ export function Sidebar({ className }: { className?: string }) {
   
   const { data: session } = useAuth();
   const { data: workspaces, isLoading: isLoadingWorkspaces } = useWorkspaces();
+  const [showCreateModal, setShowCreateModal] = useState(false);
   
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -35,12 +38,6 @@ export function Sidebar({ className }: { className?: string }) {
 
   const currentWorkspace = workspaces?.find(w => w.slug === workspaceSlug);
 
-  const handleWorkspaceChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newSlug = e.target.value;
-    if (newSlug) {
-      navigate(`/app/${newSlug}`);
-    }
-  };
 
   const handleSignOut = async () => {
     await authClient.signOut({
@@ -106,28 +103,12 @@ export function Sidebar({ className }: { className?: string }) {
       )}
       data-testid="sidebar"
     >
-      <div className="h-14 px-3 border-b border-zinc-200 flex items-center gap-2 bg-zinc-50/50 backdrop-blur-sm">
+      <div className="h-16 px-3 border-b border-zinc-200 flex items-center gap-2 bg-zinc-50/50 backdrop-blur-sm">
         <div className="flex-1 min-w-0 relative">
           {isLoadingWorkspaces ? (
-            <div className="h-8 w-full bg-zinc-200 animate-pulse rounded" />
+            <div className="h-9 w-full bg-zinc-200 animate-pulse rounded" />
           ) : (
-            <div className="relative">
-              <select
-                value={workspaceSlug || ''}
-                onChange={handleWorkspaceChange}
-                className="w-full h-8 pl-2 pr-8 text-sm font-semibold text-zinc-800 bg-transparent hover:bg-zinc-200/50 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500/20 appearance-none cursor-pointer truncate transition-colors"
-              >
-                <option value="" disabled>Select Workspace</option>
-                {workspaces?.map((w) => (
-                  <option key={w.id} value={w.slug}>
-                    {w.name}
-                  </option>
-                ))}
-              </select>
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none text-zinc-500">
-                <Briefcase size={14} />
-              </div>
-            </div>
+            <WorkspaceSelector onCreateWorkspace={() => setShowCreateModal(true)} />
           )}
         </div>
         
@@ -183,6 +164,9 @@ export function Sidebar({ className }: { className?: string }) {
           </button>
         </div>
       </div>
+      {showCreateModal && (
+        <CreateWorkspaceModal onClose={() => setShowCreateModal(false)} />
+      )}
     </aside>
   );
 }

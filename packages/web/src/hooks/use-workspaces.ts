@@ -12,16 +12,15 @@ async function fetchWorkspaces(): Promise<Workspace[]> {
 }
 
 async function fetchWorkspaceBySlug(slug: string): Promise<Workspace> {
-  const res = await fetch(`${API_BASE}/workspaces?slug=${slug}`);
+  const res = await fetch(`${API_BASE}/workspaces/${slug}`);
   if (!res.ok) {
     throw new Error('Failed to fetch workspace');
   }
   const data = await res.json();
-  if (Array.isArray(data)) {
-    if (data.length === 0) throw new Error('Workspace not found');
-    return data[0];
+  if (data?.workspace) {
+    return data.workspace as Workspace;
   }
-  return data;
+  return data as Workspace;
 }
 
 export function useWorkspaces() {

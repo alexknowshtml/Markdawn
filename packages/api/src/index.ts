@@ -5,6 +5,8 @@ import { HTTPException } from "hono/http-exception";
 import { logger } from "hono/logger";
 import { timing } from "hono/timing";
 import pagesRoute from "./routes/pages";
+import workspacesRoute from "./routes/workspaces";
+import searchRoute from "./routes/search";
 import { authRoutes } from "./routes";
 
 type OriginDecision = string | undefined;
@@ -40,6 +42,10 @@ app.get("/api/health", (c) => {
 });
 
 app.route("/api/pages", pagesRoute);
+
+app.route("/api/workspaces", workspacesRoute);
+
+app.route("/api/search", searchRoute);
 
 app.route("/api", authRoutes);
 

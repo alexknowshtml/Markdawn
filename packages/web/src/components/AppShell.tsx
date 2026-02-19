@@ -2,6 +2,7 @@ import React from 'react';
 import { Outlet } from 'react-router-dom';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { SearchDialog } from './search/SearchDialog';
 
 export function AppShell() {
   return (
@@ -16,6 +17,7 @@ export function AppShell() {
             <Outlet />
           </div>
         </div>
+        <SearchDialog />
       </main>
     </div>
   );
