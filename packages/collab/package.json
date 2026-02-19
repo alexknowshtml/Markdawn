@@ -1,0 +1,11 @@
+{
+  "name": "@markdawn/collab",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "echo 'dev not configured yet'",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src"
+  }
+}
