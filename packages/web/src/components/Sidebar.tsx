@@ -6,7 +6,8 @@ import {
   User,
   PanelLeftClose,
   PanelLeftOpen,
-  Briefcase
+  Briefcase,
+  Settings
 } from 'lucide-react';
 import { ThemeToggle } from './ThemeToggle';
 import { HeaderActions } from './HeaderActions';
@@ -63,9 +64,19 @@ export function Sidebar({ className, collapsed = false, onToggleCollapsed }: Sid
         </button>
         
         <div className="flex-1 flex flex-col items-center gap-4 w-full">
-          <div className="w-8 h-8 rounded-md bg-zinc-700 dark:bg-zinc-300 flex items-center justify-center text-white dark:text-zinc-900 font-bold text-xs shadow-sm transition-colors">
-            {currentWorkspace?.name?.[0]?.toUpperCase() || <Briefcase size={16} />}
-          </div>
+          {workspaceSlug ? (
+            <button 
+              onClick={() => navigate(`/app/${workspaceSlug}/settings`)}
+              className="w-8 h-8 rounded-md bg-zinc-700 dark:bg-zinc-300 flex items-center justify-center text-white dark:text-zinc-900 font-bold text-xs shadow-sm transition-colors hover:bg-zinc-600 dark:hover:bg-zinc-400 cursor-pointer"
+              title="Workspace Settings"
+            >
+              {currentWorkspace?.name?.[0]?.toUpperCase()}
+            </button>
+          ) : (
+            <div className="w-8 h-8 rounded-md bg-zinc-700 dark:bg-zinc-300 flex items-center justify-center text-white dark:text-zinc-900 font-bold text-xs shadow-sm transition-colors">
+              <Briefcase size={16} />
+            </div>
+          )}
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-4 w-full pb-2">
@@ -116,6 +127,16 @@ export function Sidebar({ className, collapsed = false, onToggleCollapsed }: Sid
         >
           <PanelLeftClose size={18} />
         </button>
+        
+        {workspaceSlug && (
+          <button 
+            onClick={() => navigate(`/app/${workspaceSlug}/settings`)}
+            className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            title="Workspace Settings"
+          >
+            <Settings size={18} />
+          </button>
+        )}
       </div>
       
       <div className="relative z-0 flex-1 overflow-hidden flex flex-col bg-zinc-50/30 dark:bg-zinc-900/30 animate-fade-in">

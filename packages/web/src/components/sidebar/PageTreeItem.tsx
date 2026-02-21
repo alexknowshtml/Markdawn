@@ -13,6 +13,7 @@ import {
 import clsx from 'clsx';
 import { PageTreeNode } from '@markdawn/shared';
 import { useCreatePage, useUpdatePage, useDeletePage } from '../../hooks/use-pages';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface PageTreeItemProps {
   page: PageTreeNode;
@@ -39,6 +40,7 @@ export function PageTreeItem({
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(page.title);
   const [showMenu, setShowMenu] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -123,17 +125,24 @@ export function PageTreeItem({
     }
   };
 
-  const handleDelete = async () => {
-    if (window.confirm(`Are you sure you want to delete "${page.title}"?`)) {
-      try {
-        await deletePageMutation.mutateAsync(page.id);
-        if (isActive) {
-          navigate(`/app/${workspaceSlug}`);
-        }
-      } catch (error) {
-        console.error('Failed to delete page', error);
+  const handleDelete = () => {
+    setShowDeleteDialog(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    try {
+      await deletePageMutation.mutateAsync(page.id);
+      setShowDeleteDialog(false);
+      if (isActive) {
+        navigate(`/app/${workspaceSlug}`);
       }
+    } catch (error) {
+      console.error('Failed to delete page', error);
     }
+  };
+
+  const handleCancelDelete = () => {
+    setShowDeleteDialog(false);
   };
 
   const handleExport = async () => {
@@ -161,136 +170,148 @@ export function PageTreeItem({
   };
 
   return (
-    <div className="select-none">
-      <div 
-        className={clsx(
-          "group flex items-center h-8 pr-2 py-1 cursor-pointer transition-colors relative",
-          isActive ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100"
-        )}
-        style={{ paddingLeft: `${depth * 12 + 12}px` }}
-        onClick={handleNavigate}
-        onDoubleClick={handleRenameStart}
-        data-testid="page-tree-item"
-      >
-        <button
-          type="button"
-          onClick={hasChildren ? handleToggle : undefined}
+    <>
+      <div className="select-none">
+        <div 
           className={clsx(
-            "flex items-center justify-center w-5 h-5 rounded-sm mr-2",
-            hasChildren
-              ? "hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
-              : "text-zinc-400 dark:text-zinc-500",
+            "group flex items-center h-8 pr-2 py-1 cursor-pointer transition-colors relative",
+            isActive ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100"
           )}
-          aria-label={hasChildren ? "Toggle nested pages" : "Page"}
+          style={{ paddingLeft: `${depth * 12 + 12}px` }}
+          onClick={handleNavigate}
+          onDoubleClick={handleRenameStart}
+          data-testid="page-tree-item"
         >
-          {hasChildren ? (
-            isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
-          ) : (
-            <FileText size={14} className={clsx(isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
-          )}
-        </button>
-
-        <div
-          className={clsx(
-            "flex-1 flex items-center min-w-0 transition-[padding] duration-150",
-            showMenu ? "pr-14" : "pr-2 group-hover:pr-14",
-          )}
-        >
-          
-          {isEditing ? (
-            <input
-              ref={inputRef}
-              type="text"
-              value={editTitle}
-              onChange={(e) => setEditTitle(e.target.value)}
-              onBlur={handleRenameSave}
-              onKeyDown={handleKeyDown}
-              className="flex-1 bg-white dark:bg-zinc-900 border border-zinc-400 dark:border-zinc-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0 text-zinc-900 dark:text-zinc-100"
-              onClick={(e) => e.stopPropagation()}
-            />
-          ) : (
-              <span className="truncate text-sm leading-none pt-0.5">{page.title}</span>
+          <button
+            type="button"
+            onClick={hasChildren ? handleToggle : undefined}
+            className={clsx(
+              "flex items-center justify-center w-5 h-5 rounded-sm mr-2",
+              hasChildren
+                ? "hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
+                : "text-zinc-400 dark:text-zinc-500",
             )}
-        </div>
+            aria-label={hasChildren ? "Toggle nested pages" : "Page"}
+          >
+            {hasChildren ? (
+              isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+            ) : (
+              <FileText size={14} className={clsx(isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
+            )}
+          </button>
 
-        {!isEditing && (
           <div
             className={clsx(
-              "absolute right-1 z-20 flex items-center gap-0.5 transition-opacity",
-              showMenu
-                ? "opacity-100 pointer-events-auto"
-                : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
+              "flex-1 flex items-center min-w-0 transition-[padding] duration-150",
+              showMenu ? "pr-14" : "pr-2 group-hover:pr-14",
             )}
           >
-            <button 
-              onClick={handleCreateChild}
-              className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
-              title="Add subpage"
-            >
-              <Plus size={14} />
-            </button>
             
-              <div className="relative" ref={menuRef}>
-              <button 
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(!showMenu);
-                }}
-                className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
-              >
-                <MoreHorizontal size={14} />
-              </button>
-
-              {showMenu && (
-                <div className="absolute right-0 top-6 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-lg rounded-md z-50 py-1 flex flex-col">
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRenameStart();
-                    }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
-                  >
-                    <Edit2 size={12} /> Rename
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleExport();
-                    }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
-                  >
-                    <Download size={12} /> Export
-                  </button>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleDelete();
-                    }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 w-full text-left cursor-pointer"
-                  >
-                    <Trash2 size={12} /> Delete
-                  </button>
-                </div>
+            {isEditing ? (
+              <input
+                ref={inputRef}
+                type="text"
+                value={editTitle}
+                onChange={(e) => setEditTitle(e.target.value)}
+                onBlur={handleRenameSave}
+                onKeyDown={handleKeyDown}
+                className="flex-1 bg-white dark:bg-zinc-900 border border-zinc-400 dark:border-zinc-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0 text-zinc-900 dark:text-zinc-100"
+                onClick={(e) => e.stopPropagation()}
+              />
+            ) : (
+                <span className="truncate text-sm leading-none pt-0.5">{page.title}</span>
               )}
+          </div>
+
+          {!isEditing && (
+            <div
+              className={clsx(
+                "absolute right-1 z-20 flex items-center gap-0.5 transition-opacity",
+                showMenu
+                  ? "opacity-100 pointer-events-auto"
+                  : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
+              )}
+            >
+              <button 
+                onClick={handleCreateChild}
+                className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
+                title="Add subpage"
+              >
+                <Plus size={14} />
+              </button>
+              
+                <div className="relative" ref={menuRef}>
+                <button 
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(!showMenu);
+                  }}
+                  className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
+                >
+                  <MoreHorizontal size={14} />
+                </button>
+
+                {showMenu && (
+                  <div className="absolute right-0 top-6 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-lg rounded-md z-50 py-1 flex flex-col">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRenameStart();
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
+                    >
+                      <Edit2 size={12} /> Rename
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleExport();
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
+                    >
+                      <Download size={12} /> Export
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete();
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 w-full text-left cursor-pointer"
+                    >
+                      <Trash2 size={12} /> Delete
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
+          )}
+        </div>
+
+        {isExpanded && page.children && page.children.length > 0 && (
+          <div>
+            {page.children.map((child) => (
+              <PageTreeItem
+                key={child.id}
+                page={child}
+                depth={depth + 1}
+                expandedKeys={expandedKeys}
+                onToggleExpand={onToggleExpand}
+                workspaceSlug={workspaceSlug}
+              />
+            ))}
           </div>
         )}
       </div>
 
-      {isExpanded && page.children && page.children.length > 0 && (
-        <div>
-          {page.children.map((child) => (
-            <PageTreeItem
-              key={child.id}
-              page={child}
-              depth={depth + 1}
-              expandedKeys={expandedKeys}
-              onToggleExpand={onToggleExpand}
-              workspaceSlug={workspaceSlug}
-            />
-          ))}
-        </div>
-      )}
-    </div>
+      <ConfirmDialog
+        isOpen={showDeleteDialog}
+        title="Delete page"
+        message={`Are you sure you want to delete "${page.title}"? This action cannot be undone.`}
+        confirmText="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+        loading={deletePageMutation.isPending}
+      />
+    </>
   );
 }

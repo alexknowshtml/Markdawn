@@ -2,12 +2,14 @@ import React, { useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/use-workspaces';
 import { usePageTree } from '../hooks/use-pages';
+import { useCreatePage } from '../hooks/use-pages';
 
 export default function Workspace() {
   const navigate = useNavigate();
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
   const { data: workspace } = useWorkspace(workspaceSlug);
   const { data: pages, isLoading, error, refetch } = usePageTree(workspace?.id ?? '');
+  const createPageMutation = useCreatePage();
 
   useEffect(() => {
     if (workspace && workspaceSlug && workspace.slug !== workspaceSlug) {
@@ -15,13 +17,23 @@ export default function Workspace() {
     }
   }, [navigate, workspace, workspaceSlug]);
 
+  const handleCreatePage = async () => {
+    if (!workspace?.id) return;
+    try {
+      const newPage = await createPageMutation.mutateAsync({ workspaceId: workspace.id });
+      navigate(`/app/${workspace.slug}/${newPage.id}`);
+    } catch (error) {
+      console.error('Failed to create page', error);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
           {workspace?.name || workspaceSlug}
         </h1>
-        <button className="px-4 py-2 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-md text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer">
+        <button className="px-4 py-2 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-md text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer" onClick={handleCreatePage}>
           New Page
         </button>
       </div>
