@@ -1,12 +1,14 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
-import { ThemeToggle } from '../components/ThemeToggle';
+import { HeaderActions } from '../components/HeaderActions';
+
+const GITHUB_REPO = "https://github.com/atharva-again/Markdawn";
 
 export default function Home() {
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-zinc-50 dark:bg-zinc-950 overflow-hidden selection:bg-zinc-900 selection:text-white dark:selection:bg-white dark:selection:text-zinc-900">
       <div className="absolute top-4 right-4 z-50">
-        <ThemeToggle />
+        <HeaderActions />
       </div>
       <div className="absolute inset-0 z-0 bg-gradient-to-b from-transparent to-zinc-100/50 dark:to-zinc-900/50 pointer-events-none" />
 
@@ -36,12 +38,14 @@ export default function Home() {
           >
             Get Started
           </Link>
-          <Link 
-            to="/app" 
+          <a 
+            href={GITHUB_REPO}
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex items-center justify-center px-8 py-3.5 text-sm font-semibold text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-full hover:bg-zinc-50 dark:hover:bg-zinc-800 transition-all duration-200 shadow-sm hover:shadow-md"
           >
             Learn More
-          </Link>
+          </a>
         </div>
       </main>
       

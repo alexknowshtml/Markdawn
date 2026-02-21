@@ -1,6 +1,6 @@
 import React from "react";
 import { authClient } from "../lib/auth-client";
-import { ThemeToggle } from "../components/ThemeToggle";
+import { HeaderActions } from "../components/HeaderActions";
 
 export default function Login() {
   const handleSocialSignIn = (provider: "github" | "google") => async () => {
@@ -18,7 +18,7 @@ export default function Login() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4 dark:bg-zinc-950">
       <div className="absolute top-4 right-4">
-        <ThemeToggle />
+        <HeaderActions />
       </div>
       <div className="w-full max-w-sm animate-fade-in rounded-lg border border-zinc-200 bg-white p-8 shadow-sm dark:border-zinc-800 dark:bg-zinc-900">
         <h1 className="mb-2 text-center text-2xl font-semibold text-zinc-900 dark:text-zinc-50">Log In</h1>
