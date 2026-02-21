@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, uuid, boolean, integer, customType, AnyPgColumn } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, uuid, boolean, integer, customType, AnyPgColumn, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 // Custom bytea type for binary data
@@ -101,3 +101,12 @@ export const pages: any = pgTable('pages', {
   deletedAt: timestamp('deleted_at'),
 
 });
+
+export const userFavorites = pgTable('user_favorites', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userPageUnique: unique().on(table.userId, table.pageId),
+}));
