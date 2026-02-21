@@ -10,6 +10,7 @@ import { readFileSync } from "fs";
 import pagesRoute from "./routes/pages";
 import workspacesRoute from "./routes/workspaces";
 import searchRoute from "./routes/search";
+import favoritesRoute from "./routes/favorites";
 import { authRoutes } from "./routes";
 
 type OriginDecision = string | undefined;
@@ -49,6 +50,8 @@ app.route("/api/pages", pagesRoute);
 app.route("/api/workspaces", workspacesRoute);
 
 app.route("/api/search", searchRoute);
+
+app.route("/api/favorites", favoritesRoute);
 
 app.route("/api", authRoutes);
 
