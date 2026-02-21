@@ -176,6 +176,29 @@ pagesRoute.get("/trash", async (c) => {
   return c.json((result.rows as RawPageRow[]).map(normalizePageRow));
 });
 
+pagesRoute.get("/recent", async (c) => {
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    throw new HTTPException(400, { message: "workspaceId is required" });
+  }
+
+  const limitParam = c.req.query("limit");
+  const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 10;
+  if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+    throw new HTTPException(400, { message: "limit must be a positive integer" });
+  }
+
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(workspaceId, user.id);
+
+  const result = await pool.query(
+    "select p.id, p.title, p.icon, pv.visited_at as \"visitedAt\" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.workspace_id = $2 and p.is_deleted = false order by pv.visited_at desc limit $3",
+    [user.id, workspaceId, parsedLimit]
+  );
+
+  return c.json(result.rows as { id: string; title: string; icon: string | null; visitedAt: Date }[]);
+});
+
 pagesRoute.get(":id", async (c) => {
   const pageId = c.req.param("id");
   const page = await getPageById(pageId);
@@ -188,6 +211,11 @@ pagesRoute.get(":id", async (c) => {
 
   const user = c.get("user") as { id: string };
   await ensureWorkspaceMember(page.workspaceId!, user.id);
+
+  await pool.query(
+    "insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at",
+    [user.id, pageId]
+  );
 
   return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null });
 });
