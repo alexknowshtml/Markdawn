@@ -97,7 +97,7 @@ pagesRoute.get("/tree", async (c) => {
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    "select * from pages where workspace_id = $1 order by parent_id nulls first, position asc",
+    "select * from pages where workspace_id = $1 and is_deleted = false order by parent_id nulls first, position asc",
     [workspaceId]
   );
 
@@ -157,6 +157,23 @@ pagesRoute.post("/", async (c) => {
 
   const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
   return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
+});
+
+pagesRoute.get("/trash", async (c) => {
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    throw new HTTPException(400, { message: "workspaceId is required" });
+  }
+
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(workspaceId, user.id);
+
+  const result = await pool.query(
+    "select * from pages where workspace_id = $1 and is_deleted = true order by deleted_at desc nulls last, position asc",
+    [workspaceId]
+  );
+
+  return c.json((result.rows as RawPageRow[]).map(normalizePageRow));
 });
 
 pagesRoute.get(":id", async (c) => {
@@ -222,6 +239,31 @@ pagesRoute.patch(":id", async (c) => {
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: "Failed to update page" });
+  }
+
+  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
+  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
+});
+
+pagesRoute.patch(":id/restore", async (c) => {
+  const pageId = c.req.param("id");
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: "Page not found" });
+  }
+
+  ensureWorkspaceForPage(page);
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(page.workspaceId!, user.id);
+
+  const updateResult = await pool.query(
+    "update pages set is_deleted = false, deleted_at = null, updated_at = now() where id = $1 returning *",
+    [pageId]
+  );
+
+  if (updateResult.rowCount === 0) {
+    throw new HTTPException(500, { message: "Failed to restore page" });
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -405,6 +447,30 @@ pagesRoute.post(":id/import/markdown", async (c) => {
 });
 
 pagesRoute.delete(":id", async (c) => {
+  const pageId = c.req.param("id");
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: "Page not found" });
+  }
+
+  ensureWorkspaceForPage(page);
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(page.workspaceId!, user.id);
+
+  const updateResult = await pool.query(
+    "update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1",
+    [pageId]
+  );
+
+  if (updateResult.rowCount === 0) {
+    throw new HTTPException(500, { message: "Failed to delete page" });
+  }
+
+  return c.json({ deleted: true });
+});
+
+pagesRoute.delete(":id/permanent", async (c) => {
   const pageId = c.req.param("id");
   const page = await getPageById(pageId);
 
