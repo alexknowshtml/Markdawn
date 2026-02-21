@@ -9,3 +9,6 @@ dist/
 
 # sisyphus artifacts
 .sisyphus/
+
+# test artifacts
+test-results/
