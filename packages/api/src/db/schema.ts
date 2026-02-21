@@ -89,7 +89,15 @@ export const pages: any = pgTable('pages', {
   icon: text('icon'),
   position: integer('position').notNull().default(0),
   ydoc: bytea('ydoc'),
+
   createdBy: uuid('created_by').references(() => users.id),
+
   createdAt: timestamp('created_at').defaultNow(),
+
   updatedAt: timestamp('updated_at').defaultNow(),
+
+  isDeleted: boolean('is_deleted').default(false),
+
+  deletedAt: timestamp('deleted_at'),
+
 });
