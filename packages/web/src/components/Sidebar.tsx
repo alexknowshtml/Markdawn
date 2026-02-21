@@ -8,6 +8,7 @@ import {
   PanelLeftOpen,
   Briefcase
 } from 'lucide-react';
+import { ThemeToggle } from './ThemeToggle';
 import { HeaderActions } from './HeaderActions';
 import { authClient } from "../lib/auth-client";
 import { useWorkspaces } from '../hooks/use-workspaces';
@@ -68,7 +69,7 @@ export function Sidebar({ className, collapsed = false, onToggleCollapsed }: Sid
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-4 w-full pb-2">
-            <HeaderActions />
+            <ThemeToggle />
           <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700">
              {session?.user?.image ? (
                <img src={session.user.image} alt={session.user.name || "User"} className="w-full h-full object-cover" />
@@ -134,7 +135,7 @@ export function Sidebar({ className, collapsed = false, onToggleCollapsed }: Sid
 
       <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 animate-fade-in">
           <div className="mb-2 flex justify-end">
-            <HeaderActions />
+            <ThemeToggle />
           </div>
         <div className="flex items-center gap-3 p-1 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors group">
           <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden flex-shrink-0 border border-zinc-200 dark:border-zinc-700">
