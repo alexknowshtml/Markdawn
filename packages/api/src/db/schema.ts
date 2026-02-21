@@ -86,6 +86,7 @@ export const pages: any = pgTable('pages', {
   workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   parentId: uuid('parent_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }),
   title: text('title').notNull().default('Untitled'),
+  titleSearch: text('title_search').generatedAlwaysAs(sql`to_tsvector('english', coalesce(title, ''))`),
   icon: text('icon'),
   coverType: text('cover_type'),
   coverValue: text('cover_value'),
