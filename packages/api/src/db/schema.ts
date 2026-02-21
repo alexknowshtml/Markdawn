@@ -87,7 +87,9 @@ export const pages: any = pgTable('pages', {
   parentId: uuid('parent_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }),
   title: text('title').notNull().default('Untitled'),
   icon: text('icon'),
-  position: integer('position').notNull().default(0),
+  coverType: text('cover_type'),
+  coverValue: text('cover_value'),
+  position: text('position').notNull().default('0'),
   ydoc: bytea('ydoc'),
 
   createdBy: uuid('created_by').references(() => users.id),
@@ -107,6 +109,15 @@ export const userFavorites = pgTable('user_favorites', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  userPageUnique: unique().on(table.userId, table.pageId),
+}));
+
+export const pageVisits = pgTable('page_visits', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  visitedAt: timestamp('visited_at').defaultNow(),
 }, (table) => ({
   userPageUnique: unique().on(table.userId, table.pageId),
 }));
