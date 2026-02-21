@@ -40,18 +40,18 @@ export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4">
-      <div className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl">
-        <h2 className="text-lg font-semibold text-zinc-900">Create workspace</h2>
-        <p className="mt-1 text-sm text-zinc-500">Name your new space for documents.</p>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in">
+      <div className="w-full max-w-md rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-6 shadow-xl animate-slide-up">
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Create workspace</h2>
+        <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Name your new space for documents.</p>
 
         <form onSubmit={handleSubmit} className="mt-4 space-y-4">
           <div>
-            <label className="text-sm font-medium text-zinc-700">Workspace name</label>
+            <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Workspace name</label>
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
-              className="mt-2 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-900 focus:outline-none focus:ring-2 focus:ring-zinc-900/10"
+              className="mt-2 w-full rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-50 bg-white dark:bg-zinc-800 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 dark:focus:ring-zinc-100/10"
               placeholder="Acme Studio"
               required
               minLength={2}
@@ -63,14 +63,14 @@ export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
             <button
               type="button"
               onClick={onClose}
-              className="px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900"
+              className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
               disabled={loading}
             >
               Cancel
             </button>
             <button
               type="submit"
-              className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 rounded-md hover:bg-zinc-800 transition-colors disabled:opacity-60"
+              className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-800 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors disabled:opacity-60"
               disabled={loading}
             >
               {loading ? "Creating..." : "Create"}

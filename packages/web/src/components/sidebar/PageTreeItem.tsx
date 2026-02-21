@@ -168,7 +168,7 @@ export function PageTreeItem({
               onChange={(e) => setEditTitle(e.target.value)}
               onBlur={handleRenameSave}
               onKeyDown={handleKeyDown}
-              className="flex-1 bg-white dark:bg-zinc-900 border border-blue-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0 text-zinc-900 dark:text-zinc-100"
+              className="flex-1 bg-white dark:bg-zinc-900 border border-zinc-400 dark:border-zinc-500 rounded px-1 py-0.5 text-xs focus:outline-none h-6 min-w-0 text-zinc-900 dark:text-zinc-100"
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
@@ -177,7 +177,10 @@ export function PageTreeItem({
         </div>
 
         {!isEditing && (
-          <div className="hidden group-hover:flex items-center gap-0.5 absolute right-2 bg-gradient-to-l from-inherit pl-2">
+          <div className={clsx(
+            "hidden group-hover:flex items-center gap-0.5 absolute right-2 bg-gradient-to-l pl-2",
+            isActive ? "from-zinc-200 dark:from-zinc-800" : "from-zinc-100 dark:from-zinc-800"
+          )}>
             <button 
               onClick={handleCreateChild}
               className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"

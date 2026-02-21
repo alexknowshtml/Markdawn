@@ -13,12 +13,20 @@ export function ThemeToggle() {
   return (
     <button
       onClick={toggleTheme}
-      className="p-2 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors text-gray-600 dark:text-gray-300"
+      className="relative p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-300 overflow-hidden w-9 h-9 flex items-center justify-center cursor-pointer"
       title={`Theme: ${theme}`}
     >
-      {theme === 'light' && <Sun size={18} />}
-      {theme === 'dark' && <Moon size={18} />}
-      {theme === 'system' && <Monitor size={18} />}
+      <div className="relative w-full h-full flex items-center justify-center">
+        <div className={`absolute transition-all duration-300 ${theme === 'light' ? 'opacity-100 scale-100 rotate-0' : 'opacity-0 scale-50 -rotate-90'}`}>
+          <Sun size={18} />
+        </div>
+        <div className={`absolute transition-all duration-300 ${theme === 'dark' ? 'opacity-100 scale-100 rotate-0' : 'opacity-0 scale-50 rotate-90'}`}>
+          <Moon size={18} />
+        </div>
+        <div className={`absolute transition-all duration-300 ${theme === 'system' ? 'opacity-100 scale-100 rotate-0' : 'opacity-0 scale-50 rotate-90'}`}>
+          <Monitor size={18} />
+        </div>
+      </div>
     </button>
   );
 }

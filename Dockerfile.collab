@@ -34,7 +34,6 @@ WORKDIR /app
 
 ENV NODE_ENV=production
 ENV COLLAB_PORT=1234
-ENV DATABASE_URL=""
 
 COPY --from=build /app/node_modules /app/node_modules
 COPY --from=build /app/packages/shared /app/packages/shared

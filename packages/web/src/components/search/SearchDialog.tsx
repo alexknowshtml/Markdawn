@@ -144,35 +144,42 @@ export function SearchDialog() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/40 backdrop-blur-sm px-4 py-20"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/50 backdrop-blur-sm px-4 py-20 animate-fade-in"
       onClick={closeDialog}
     >
       <div
-        className="w-full max-w-2xl rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-2xl"
+        className="w-full max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl animate-slide-up overflow-hidden"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="relative border-b border-zinc-200 dark:border-zinc-700 px-4 py-3">
+        <div className="relative border-b border-zinc-200 dark:border-zinc-800 p-2">
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages..."
-            className="w-full rounded-md border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 dark:focus:ring-zinc-100/10"
+            className="w-full rounded-xl bg-transparent px-4 py-3 text-lg text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-500/20 dark:focus:ring-zinc-400/20 transition-shadow"
           />
           {isLoading && (
             <div className="absolute right-6 top-1/2 -translate-y-1/2">
-              <div className="h-4 w-4 animate-spin rounded-full border-2 border-zinc-300 dark:border-zinc-600 border-t-zinc-700 dark:border-t-zinc-300" />
+              <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 dark:border-zinc-600 border-t-zinc-700 dark:border-t-zinc-300" />
             </div>
           )}
         </div>
 
-        <div className="max-h-80 overflow-y-auto p-2">
+        <div className="max-h-[60vh] overflow-y-auto p-2">
           {!trimmedQuery && (
-            <div className="px-3 py-6 text-sm text-zinc-500 dark:text-zinc-400 text-center">Type to search...</div>
+            <div className="px-4 py-14 text-center">
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">Type to search pages...</p>
+            </div>
           )}
 
           {trimmedQuery && !isLoading && !hasResults && (
-            <div className="px-3 py-6 text-sm text-zinc-500 dark:text-zinc-400 text-center">No pages found</div>
+            <div className="px-4 py-14 text-center">
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">No results found</p>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
+                We couldn't find anything matching "{trimmedQuery}"
+              </p>
+            </div>
           )}
 
           {hasResults && (
@@ -186,19 +193,21 @@ export function SearchDialog() {
                       closeDialog();
                     }}
                     onMouseEnter={() => setActiveIndex(index)}
-                    className={`w-full rounded-md px-3 py-2 text-left transition-colors ${
+                    className={`w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 ${
                       index === activeIndex
-                        ? "bg-zinc-900 dark:bg-zinc-700 text-white"
-                        : "bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800"
+                        ? "bg-zinc-100 dark:bg-zinc-800/50 text-zinc-900 dark:text-zinc-100"
+                        : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
                     }`}
                   >
-                    <div className="text-sm font-medium truncate">{result.title}</div>
-                    <div
-                      className={`text-xs ${
-                        index === activeIndex ? "text-zinc-200 dark:text-zinc-300" : "text-zinc-500 dark:text-zinc-400"
-                      }`}
-                    >
-                      {result.workspaceSlug}
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium truncate">{result.title}</div>
+                      <div
+                        className={`text-xs mt-0.5 truncate transition-colors ${
+                          index === activeIndex ? "text-zinc-500 dark:text-zinc-400" : "text-zinc-400 dark:text-zinc-500"
+                        }`}
+                      >
+                        {result.workspaceSlug}
+                      </div>
                     </div>
                   </button>
                 </li>

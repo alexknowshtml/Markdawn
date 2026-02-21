@@ -170,7 +170,7 @@ export function WorkspaceSettings() {
             value={name}
             onChange={(event) => setName(event.target.value)}
             disabled={!canManage}
-            className="flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 dark:focus:ring-zinc-100/10 disabled:bg-zinc-100 dark:disabled:bg-zinc-800"
+            className="flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-500 disabled:bg-zinc-100 dark:disabled:bg-zinc-800"
           />
           {canManage && (
             <button
@@ -196,7 +196,7 @@ export function WorkspaceSettings() {
             value={inviteEmail}
             onChange={(event) => setInviteEmail(event.target.value)}
             type="email"
-            className="flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-900/10 dark:focus:ring-zinc-100/10"
+            className="flex-1 rounded-md border border-zinc-200 dark:border-zinc-700 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-zinc-500"
             placeholder="name@company.com"
             disabled={!canManage}
           />
@@ -220,7 +220,7 @@ export function WorkspaceSettings() {
             const isSelf = session?.user?.id && member.user_id === session.user.id;
             const canRemove = canManage && !(member.role === "owner") && !isSelf;
             return (
-              <div key={member.id} className="flex items-center gap-3 py-3">
+              <div key={member.id} className="flex items-center gap-3 py-3 hover:bg-zinc-50 dark:hover:bg-zinc-800">
                 <div className="h-9 w-9 rounded-full overflow-hidden bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-xs font-medium text-zinc-500 dark:text-zinc-400">
                   {member.avatar_url ? (
                     <img src={member.avatar_url} alt={member.name} className="h-full w-full object-cover" />

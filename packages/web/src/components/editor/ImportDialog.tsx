@@ -57,31 +57,31 @@ export function ImportDialog({ pageId }: ImportDialogProps) {
       <button
         type="button"
         onClick={() => setIsOpen(true)}
-        className="px-3 py-2 text-sm font-medium text-zinc-700 border border-zinc-200 rounded-md hover:bg-zinc-100 transition-colors"
+        className="px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-600 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
       >
         Import Markdown
       </button>
 
       {isOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in"
           onClick={closeDialog}
         >
           <div
-            className="w-full max-w-md rounded-xl border border-zinc-200 bg-white p-6 shadow-xl"
+            className="w-full max-w-md rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-6 shadow-xl animate-slide-up"
             onClick={(event) => event.stopPropagation()}
           >
-            <h2 className="text-lg font-semibold text-zinc-900">Import markdown</h2>
-            <p className="mt-1 text-sm text-zinc-500">Upload a .md file to replace this page content.</p>
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">Import markdown</h2>
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Upload a .md file to replace this page content.</p>
 
             <form onSubmit={handleSubmit} className="mt-4 space-y-4">
               <div>
-                <label className="text-sm font-medium text-zinc-700">Markdown file</label>
+                <label className="text-sm font-medium text-zinc-700 dark:text-zinc-300">Markdown file</label>
                 <input
                   ref={fileInputRef}
                   type="file"
                   accept=".md"
-                  className="mt-2 w-full rounded-md border border-zinc-200 px-3 py-2 text-sm text-zinc-900 file:mr-4 file:rounded-md file:border-0 file:bg-zinc-100 file:px-3 file:py-2 file:text-sm file:font-medium file:text-zinc-700 hover:file:bg-zinc-200"
+                  className="mt-2 w-full rounded-md border-2 border-dashed border-zinc-300 dark:border-zinc-600 px-3 py-4 text-sm text-zinc-900 dark:text-zinc-50 bg-white dark:bg-zinc-800 file:mr-4 file:rounded-md file:border-0 file:bg-zinc-100 dark:file:bg-zinc-700 file:px-3 file:py-2 file:text-sm file:font-medium file:text-zinc-700 dark:file:text-zinc-300 hover:file:bg-zinc-200 dark:hover:file:bg-zinc-600 transition-colors"
                   disabled={isLoading}
                   required
                 />
@@ -93,14 +93,14 @@ export function ImportDialog({ pageId }: ImportDialogProps) {
                 <button
                   type="button"
                   onClick={closeDialog}
-                  className="px-3 py-2 text-sm text-zinc-600 hover:text-zinc-900"
+                  className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
                   disabled={isLoading}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 rounded-md hover:bg-zinc-800 transition-colors disabled:opacity-60"
+                  className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-800 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors disabled:opacity-60"
                   disabled={isLoading}
                 >
                   {isLoading ? "Importing..." : "Import"}

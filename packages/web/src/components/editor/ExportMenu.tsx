@@ -41,11 +41,11 @@ export function ExportMenu({ pageId }: ExportMenuProps) {
         type="button"
         onClick={handleExport}
         disabled={isLoading}
-        className="px-3 py-2 text-sm font-medium text-zinc-700 border border-zinc-200 rounded-md hover:bg-zinc-100 transition-colors disabled:opacity-60"
+        className="px-3 py-2 text-sm font-medium text-zinc-700 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-600 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors disabled:opacity-60"
       >
         {isLoading ? "Exporting..." : "Export Markdown"}
       </button>
-      {error && <span className="text-xs text-red-600">{error}</span>}
+      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </div>
   );
 }

@@ -32,14 +32,14 @@ export default function Page() {
 
   if (!pageId || !workspaceSlug) {
     return (
-      <div className="max-w-3xl mx-auto px-8 py-12 text-zinc-400">
+      <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 text-zinc-400 animate-fade-in">
         Page not found.
       </div>
     );
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-8 py-12">
+    <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 animate-fade-in">
       <EditorHeader
         workspaceSlug={workspaceSlug}
         pageId={pageId}

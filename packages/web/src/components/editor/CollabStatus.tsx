@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
 
 type CollabStatusProps = {
@@ -48,20 +48,43 @@ export function CollabStatus({ provider }: CollabStatusProps) {
 
   const label = STATUS_LABELS[status] ?? "Connecting";
   const dotClass = STATUS_COLORS[status] ?? STATUS_COLORS.connecting;
-  const userLabel = useMemo(() => {
-    if (userCount <= 1) return null;
-    return `${userCount} users`;
-  }, [userCount]);
 
   if (!provider) {
     return null;
   }
 
   return (
-    <div className="flex items-center gap-2">
-      <span className={`h-2.5 w-2.5 rounded-full ${dotClass}`} />
-      <span className="text-xs text-zinc-500 dark:text-zinc-400">{label}</span>
-      {userLabel ? <span className="text-xs text-zinc-400">· {userLabel}</span> : null}
+    <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-zinc-100/80 dark:bg-zinc-800/50 border border-zinc-200/80 dark:border-zinc-700/50 transition-all duration-300 shadow-sm">
+      <div className="relative flex h-2 w-2 items-center justify-center">
+        {status === "connected" && (
+          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${dotClass}`} />
+        )}
+        <span className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-300 ${dotClass}`} />
+      </div>
+      <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300 transition-colors duration-300">
+        {label}
+      </span>
+      {userCount > 1 && (
+        <>
+          <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-600" />
+          <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400">
+            <svg
+              className="h-3 w-3"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
+              />
+            </svg>
+            <span className="text-xs font-medium">{userCount}</span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

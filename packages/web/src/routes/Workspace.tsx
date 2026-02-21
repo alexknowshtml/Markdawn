@@ -1,33 +1,69 @@
 import React from 'react';
 import { useParams, Link } from 'react-router-dom';
+import { useWorkspace } from '../hooks/use-workspaces';
+import { usePageTree } from '../hooks/use-pages';
 
 export default function Workspace() {
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
+  const { data: workspace } = useWorkspace(workspaceSlug);
+  const { data: pages, isLoading, error, refetch } = usePageTree(workspace?.id ?? '');
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-zinc-900 capitalize">{workspaceSlug} Workspace</h1>
-        <button className="px-4 py-2 bg-zinc-900 text-white rounded-md text-sm hover:bg-zinc-800 transition-colors">
+        <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 capitalize">
+          {workspaceSlug} Workspace
+        </h1>
+        <button className="px-4 py-2 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-md text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
           New Page
         </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-        {[1, 2, 3, 4, 5].map((id) => (
-          <Link 
-            key={id}
-            to={`/app/${workspaceSlug}/page-${id}`}
-            className="block p-6 bg-white border border-zinc-200 rounded-lg hover:border-zinc-400 hover:shadow-sm transition-all"
+      {error ? (
+        <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center justify-between">
+          <span>Failed to load pages.</span>
+          <button 
+            onClick={() => refetch()}
+            className="px-3 py-1 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded text-sm transition-colors"
           >
-            <div className="h-32 bg-zinc-50 rounded-md mb-4 flex items-center justify-center text-zinc-300">
-              Cover Image
+            Retry
+          </button>
+        </div>
+      ) : isLoading ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
+          {[1, 2, 3, 4, 5, 6].map((id) => (
+            <div key={id} className="block p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg">
+              <div className="h-32 bg-zinc-100 dark:bg-zinc-800 rounded-md mb-4 animate-pulse" />
+              <div className="h-5 bg-zinc-100 dark:bg-zinc-800 rounded w-3/4 mb-2 animate-pulse" />
+              <div className="h-4 bg-zinc-100 dark:bg-zinc-800 rounded w-1/2 animate-pulse" />
             </div>
-            <h3 className="font-semibold text-zinc-900 mb-1">Project Note {id}</h3>
-            <p className="text-sm text-zinc-500">Last edited 2 days ago</p>
-          </Link>
-        ))}
-      </div>
+          ))}
+        </div>
+      ) : !pages || pages.length === 0 ? (
+        <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
+          No pages yet
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
+          {pages.map((page) => (
+            <Link 
+              key={page.id}
+              to={`/app/${workspaceSlug}/${page.id}`}
+              className="block p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-sm transition-all"
+            >
+              <div className="h-32 bg-zinc-50 dark:bg-zinc-800/50 rounded-md mb-4 flex items-center justify-center text-zinc-300 dark:text-zinc-600">
+                {page.icon ? <span className="text-4xl">{page.icon}</span> : 'Cover Image'}
+              </div>
+              <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-1 truncate">
+                {page.title || 'Untitled'}
+              </h3>
+              <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                Last edited {new Date(page.updatedAt).toLocaleDateString()}
+              </p>
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

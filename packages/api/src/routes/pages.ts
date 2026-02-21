@@ -6,6 +6,13 @@ import { pages } from "../db";
 import { pool } from "../db/connection";
 
 type PageRow = typeof pages.$inferSelect;
+type RawPageRow = PageRow & {
+  workspace_id?: string | null;
+  parent_id?: string | null;
+  created_by?: string | null;
+  created_at?: Date | null;
+  updated_at?: Date | null;
+};
 
 const pagesRoute = new Hono();
 
@@ -61,8 +68,18 @@ const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
 
 const getPageById = async (pageId: string) => {
   const result = await pool.query("select * from pages where id = $1 limit 1", [pageId]);
-  return (result.rows[0] as PageRow | undefined) ?? null;
+  const row = (result.rows[0] as RawPageRow | undefined) ?? null;
+  return row ? normalizePageRow(row) : null;
 };
+
+const normalizePageRow = (row: RawPageRow): PageRow => ({
+  ...row,
+  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
+  parentId: row.parentId ?? row.parent_id ?? null,
+  createdBy: row.createdBy ?? row.created_by ?? null,
+  createdAt: row.createdAt ?? row.created_at ?? null,
+  updatedAt: row.updatedAt ?? row.updated_at ?? null,
+});
 
 const ensureWorkspaceForPage = (page: PageRow) => {
   if (!page.workspaceId) {
@@ -84,7 +101,7 @@ pagesRoute.get("/tree", async (c) => {
     [workspaceId]
   );
 
-  return c.json(buildTree(result.rows as PageRow[]));
+  return c.json(buildTree((result.rows as RawPageRow[]).map(normalizePageRow)));
 });
 
 pagesRoute.post("/", async (c) => {
@@ -138,7 +155,7 @@ pagesRoute.post("/", async (c) => {
     throw new HTTPException(500, { message: "Failed to create page" });
   }
 
-  const created = insertResult.rows[0] as PageRow;
+  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
   return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
 });
 
@@ -207,7 +224,7 @@ pagesRoute.patch(":id", async (c) => {
     throw new HTTPException(500, { message: "Failed to update page" });
   }
 
-  const updated = updateResult.rows[0] as PageRow;
+  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
@@ -291,7 +308,7 @@ pagesRoute.patch(":id/move", async (c) => {
     throw new HTTPException(500, { message: "Failed to move page" });
   }
 
-  const updated = updateResult.rows[0] as PageRow;
+  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 

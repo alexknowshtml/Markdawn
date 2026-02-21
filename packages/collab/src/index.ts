@@ -1,10 +1,17 @@
+import "dotenv/config";
 import { Database } from "@hocuspocus/extension-database";
 import { Logger } from "@hocuspocus/extension-logger";
 import { Server } from "@hocuspocus/server";
 import { Pool } from "pg";
 
 const port = Number(process.env.COLLAB_PORT ?? "1234");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const databaseUrl = process.env.DATABASE_URL;
+
+if (!databaseUrl) {
+  throw new Error("DATABASE_URL is required for collab server");
+}
+
+const pool = new Pool({ connectionString: databaseUrl });
 
 const server = new Server({
   port,

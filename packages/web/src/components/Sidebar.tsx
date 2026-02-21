@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import clsx from 'clsx';
 import { 
@@ -16,7 +16,13 @@ import { useAuth } from '../hooks/useAuth';
 import { WorkspaceSelector } from './workspace/WorkspaceSelector';
 import { CreateWorkspaceModal } from './workspace/CreateWorkspaceModal';
 
-export function Sidebar({ className }: { className?: string }) {
+interface SidebarProps {
+  className?: string;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+}
+
+export function Sidebar({ className, collapsed = false, onToggleCollapsed }: SidebarProps) {
   const navigate = useNavigate();
   const params = useParams();
   const workspaceSlug = params.workspaceSlug;
@@ -24,18 +30,6 @@ export function Sidebar({ className }: { className?: string }) {
   const { data: session } = useAuth();
   const { data: workspaces, isLoading: isLoadingWorkspaces } = useWorkspaces();
   const [showCreateModal, setShowCreateModal] = useState(false);
-  
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem('markdawn-sidebar-collapsed') === 'true';
-    } catch {
-      return false;
-    }
-  });
-
-  useEffect(() => {
-    localStorage.setItem('markdawn-sidebar-collapsed', String(collapsed));
-  }, [collapsed]);
 
   const currentWorkspace = workspaces?.find(w => w.slug === workspaceSlug);
 
@@ -60,22 +54,22 @@ export function Sidebar({ className }: { className?: string }) {
         data-testid="sidebar-collapsed"
       >
         <button 
-          onClick={() => setCollapsed(false)}
-          className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 mb-6"
+          onClick={onToggleCollapsed}
+          className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 mb-6 transition-colors"
           title="Expand Sidebar"
         >
           <PanelLeftOpen size={20} />
         </button>
         
         <div className="flex-1 flex flex-col items-center gap-4 w-full">
-          <div className="w-8 h-8 rounded-md bg-blue-600 flex items-center justify-center text-white font-bold text-xs shadow-sm">
+          <div className="w-8 h-8 rounded-md bg-zinc-700 dark:bg-zinc-300 flex items-center justify-center text-white dark:text-zinc-900 font-bold text-xs shadow-sm transition-colors">
             {currentWorkspace?.name?.[0]?.toUpperCase() || <Briefcase size={16} />}
           </div>
         </div>
 
         <div className="mt-auto flex flex-col items-center gap-4 w-full pb-2">
             <ThemeToggle />
-          <div className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-700 overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700">
+          <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden ring-1 ring-zinc-200 dark:ring-zinc-700">
              {session?.user?.image ? (
                <img src={session.user.image} alt={session.user.name || "User"} className="w-full h-full object-cover" />
              ) : (
@@ -87,7 +81,7 @@ export function Sidebar({ className }: { className?: string }) {
           
           <button 
              onClick={handleSignOut}
-             className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+             className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
              title="Sign Out"
           >
             <LogOut size={20} />
@@ -105,7 +99,7 @@ export function Sidebar({ className }: { className?: string }) {
       )}
       data-testid="sidebar"
     >
-      <div className="h-16 px-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm">
+      <div className="h-16 px-3 border-b border-zinc-200 dark:border-zinc-800 flex items-center gap-2 bg-zinc-50/50 dark:bg-zinc-900/50 backdrop-blur-sm animate-fade-in">
         <div className="flex-1 min-w-0 relative">
           {isLoadingWorkspaces ? (
             <div className="h-9 w-full bg-zinc-200 dark:bg-zinc-800 animate-pulse rounded" />
@@ -115,15 +109,15 @@ export function Sidebar({ className }: { className?: string }) {
         </div>
         
         <button 
-          onClick={() => setCollapsed(true)}
-          className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors"
+          onClick={onToggleCollapsed}
+          className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           title="Collapse Sidebar"
         >
           <PanelLeftClose size={18} />
         </button>
       </div>
       
-      <div className="flex-1 overflow-hidden flex flex-col bg-zinc-50/30 dark:bg-zinc-900/30">
+      <div className="flex-1 overflow-hidden flex flex-col bg-zinc-50/30 dark:bg-zinc-900/30 animate-fade-in">
         {currentWorkspace && workspaceSlug ? (
           <PageTree workspaceId={currentWorkspace.id} workspaceSlug={workspaceSlug} />
         ) : (
@@ -138,7 +132,7 @@ export function Sidebar({ className }: { className?: string }) {
         )}
       </div>
 
-      <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
+      <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 animate-fade-in">
           <div className="mb-2 flex justify-end">
             <ThemeToggle />
           </div>
@@ -162,7 +156,7 @@ export function Sidebar({ className }: { className?: string }) {
           </div>
           <button 
              onClick={handleSignOut}
-             className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors opacity-0 group-hover:opacity-100"
+             className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors opacity-0 group-hover:opacity-100"
              title="Sign Out"
           >
             <LogOut size={16} />
