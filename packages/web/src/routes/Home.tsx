@@ -1,10 +1,16 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { HeaderActions } from '../components/HeaderActions';
+import { useAuth } from '../hooks/useAuth';
 
 const GITHUB_REPO = "https://github.com/atharva-again/Markdawn";
 
 export default function Home() {
+  const { data: session } = useAuth();
+  
+  if (session?.user) {
+    return <Navigate to="/app" replace />;
+  }
   return (
     <div className="relative flex flex-col items-center justify-center min-h-screen bg-zinc-50 dark:bg-zinc-950 overflow-hidden selection:bg-zinc-900 selection:text-white dark:selection:bg-white dark:selection:text-zinc-900">
       <div className="absolute top-4 right-4 z-50">

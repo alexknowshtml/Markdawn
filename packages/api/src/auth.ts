@@ -15,8 +15,8 @@ const slugify = (value: string) =>
     .replace(/(^-|-$)+/g, "");
 
 const getPersonalWorkspaceName = (name?: string | null, email?: string | null) => {
-  const base = name?.trim() || email?.split("@")?.[0] || "Personal";
-  return base.length > 0 ? base : "Personal";
+  const firstName = name?.trim()?.split(" ")?.[0] || email?.split("@")?.[0] || "Personal";
+  return firstName.length > 0 ? `${firstName}'s Workspace` : "Personal Workspace";
 };
 
 const buildWorkspaceSlug = async (name: string) => {

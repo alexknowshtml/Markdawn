@@ -40,11 +40,11 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
   };
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative z-[90]" ref={dropdownRef}>
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="w-full h-10 px-3 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 text-left text-sm font-medium text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 flex items-center gap-3 shadow-sm"
+        className="w-full h-10 px-3 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 text-left text-sm font-medium text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 flex items-center gap-3 shadow-sm cursor-pointer"
       >
         <span className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 shadow-sm">
           <Briefcase size={14} strokeWidth={2.5} />
@@ -59,7 +59,7 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-xl z-20 animate-slide-up">
+        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-xl z-[95] animate-slide-up">
           <div className="max-h-[60vh] overflow-y-auto p-1.5 space-y-0.5">
             {(workspaces ?? []).map((workspace) => {
               const isActive = workspace.slug === params.workspaceSlug;
@@ -68,7 +68,7 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
                   key={workspace.id}
                   type="button"
                   onClick={() => handleNavigate(workspace.slug)}
-                  className={`w-full px-2.5 py-2 text-left text-sm rounded-md transition-all duration-150 flex items-center gap-2.5 ${
+                  className={`w-full px-2.5 py-2 text-left text-sm rounded-md transition-all duration-150 flex items-center gap-2.5 cursor-pointer ${
                     isActive 
                       ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" 
                       : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200"
@@ -94,7 +94,7 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
                 setOpen(false);
                 onCreateWorkspace();
               }}
-              className="w-full px-2.5 py-2 text-left text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-md transition-all duration-150 flex items-center gap-2.5"
+              className="w-full px-2.5 py-2 text-left text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-md transition-all duration-150 flex items-center gap-2.5 cursor-pointer"
             >
               <span className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
                 <Plus size={14} strokeWidth={2.5} />

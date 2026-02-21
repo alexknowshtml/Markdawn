@@ -32,21 +32,60 @@ if (!databaseUrl) {
 }
 
 const pool = new Pool({ connectionString: databaseUrl });
+const SERVER_DEBOUNCE_MS = 1500;
+const SERVER_MAX_DEBOUNCE_MS = 10000;
+
+const parseCookies = (cookieHeader?: string) => {
+  if (!cookieHeader) {
+    return new Map<string, string>();
+  }
+
+  const cookies = new Map<string, string>();
+  for (const cookie of cookieHeader.split(";")) {
+    const [rawKey, ...rawValueParts] = cookie.split("=");
+    const key = rawKey?.trim();
+    if (!key) {
+      continue;
+    }
+
+    const value = rawValueParts.join("=").trim();
+    if (!value) {
+      continue;
+    }
+
+    try {
+      cookies.set(key, decodeURIComponent(value));
+    } catch {
+      cookies.set(key, value);
+    }
+  }
+
+  return cookies;
+};
 
 const server = new Server({
   port,
-  onAuthenticate: async ({ token }) => {
-    if (!token) {
+  debounce: SERVER_DEBOUNCE_MS,
+  maxDebounce: SERVER_MAX_DEBOUNCE_MS,
+  onAuthenticate: async ({ token, requestHeaders }) => {
+    const cookies = parseCookies(requestHeaders.cookie);
+    const sessionToken =
+      token ||
+      cookies.get("better-auth.session_token") ||
+      cookies.get("__Secure-better-auth.session_token") ||
+      "";
+
+    if (!sessionToken) {
       throw new Error("Unauthorized");
     }
 
     const result = await pool.query(
       `select users.id, users.email, users.name, users.avatar_url as "avatarUrl"
-       from session
-       join users on users.id = session."userId"
-       where session.token = $1 and session."expiresAt" > NOW()
+       from sessions
+       join users on users.id = sessions.user_id
+       where sessions.token = $1 and sessions.expires_at > NOW()
        limit 1`,
-      [token],
+      [sessionToken],
     );
 
     const user = result.rows[0];

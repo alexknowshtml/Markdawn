@@ -27,6 +27,8 @@ export function useWorkspaces() {
   return useQuery({
     queryKey: ['workspaces'],
     queryFn: fetchWorkspaces,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
   });
 }
 
@@ -35,5 +37,8 @@ export function useWorkspace(slug?: string) {
     queryKey: ['workspace', slug],
     queryFn: () => fetchWorkspaceBySlug(slug!),
     enabled: !!slug,
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+    retry: false,
   });
 }

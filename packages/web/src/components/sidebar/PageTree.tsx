@@ -87,7 +87,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           <span>Pages</span>
           <button 
             onClick={handleCreateRootPage}
-            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-all text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+            className="opacity-0 group-hover:opacity-100 p-1 hover:bg-zinc-200 dark:hover:bg-zinc-800 rounded-md transition-all text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
             title="New Page"
             data-testid="new-page-btn"
           >
@@ -111,7 +111,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
               <p className="text-sm text-zinc-400 dark:text-zinc-500 mb-3">No pages yet</p>
               <button
                 onClick={handleCreateRootPage}
-                className="text-xs px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 rounded-md transition-colors font-medium flex items-center gap-1.5"
+                className="text-xs px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 rounded-md transition-colors font-medium flex items-center gap-1.5 cursor-pointer"
               >
                 <Plus size={12} />
                 <span>Create your first page</span>

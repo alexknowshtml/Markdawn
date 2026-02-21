@@ -18,10 +18,18 @@ export function usePageTitle(pageId?: string, initialTitle?: string) {
   const [title, setTitle] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastSavedTitleRef = useRef('Untitled');
+
+  const normalizeTitle = (value: string) => {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : 'Untitled';
+  };
 
   useEffect(() => {
     if (typeof initialTitle === 'string') {
-      setTitle(initialTitle);
+      const normalized = normalizeTitle(initialTitle);
+      setTitle(normalized);
+      lastSavedTitleRef.current = normalized;
     }
   }, [initialTitle]);
 
@@ -36,11 +44,21 @@ export function usePageTitle(pageId?: string, initialTitle?: string) {
     if (!pageId) {
       return undefined;
     }
+    const nextTitle = normalizeTitle(title);
+
+    if (nextTitle === lastSavedTitleRef.current) {
+      return undefined;
+    }
+
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
     debounceRef.current = setTimeout(() => {
-      mutation.mutate(title.trim().length > 0 ? title : 'Untitled');
+      mutation.mutate(nextTitle, {
+        onSuccess: () => {
+          lastSavedTitleRef.current = nextTitle;
+        },
+      });
     }, 1000);
 
     return () => {

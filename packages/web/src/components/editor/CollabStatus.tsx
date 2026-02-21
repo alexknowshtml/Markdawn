@@ -1,11 +1,13 @@
 import React, { useEffect, useState } from "react";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
+import { WebSocketStatus } from "@hocuspocus/provider";
 
 type CollabStatusProps = {
   provider: HocuspocusProvider | null;
+  status: ProviderStatus;
 };
 
-type ProviderStatus = "connecting" | "connected" | "disconnected";
+type ProviderStatus = WebSocketStatus;
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
   connecting: "Connecting",
@@ -19,16 +21,13 @@ const STATUS_COLORS: Record<ProviderStatus, string> = {
   disconnected: "bg-rose-500",
 };
 
-export function CollabStatus({ provider }: CollabStatusProps) {
-  const [status, setStatus] = useState<ProviderStatus>("connecting");
+export function CollabStatus({ provider, status }: CollabStatusProps) {
   const [userCount, setUserCount] = useState(1);
 
   useEffect(() => {
-    if (!provider) return;
-
-    const handleStatus = ({ status: nextStatus }: { status: ProviderStatus }) => {
-      setStatus(nextStatus);
-    };
+    if (!provider) {
+      return;
+    }
 
     const updateUsers = () => {
       const awareness = provider.awareness;
@@ -36,12 +35,10 @@ export function CollabStatus({ provider }: CollabStatusProps) {
       setUserCount(count || 1);
     };
 
-    provider.on("status", handleStatus);
     provider.awareness?.on("change", updateUsers);
     updateUsers();
 
     return () => {
-      provider.off("status", handleStatus);
       provider.awareness?.off("change", updateUsers);
     };
   }, [provider]);
@@ -56,9 +53,6 @@ export function CollabStatus({ provider }: CollabStatusProps) {
   return (
     <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-zinc-100/80 dark:bg-zinc-800/50 border border-zinc-200/80 dark:border-zinc-700/50 transition-all duration-300 shadow-sm">
       <div className="relative flex h-2 w-2 items-center justify-center">
-        {status === "connected" && (
-          <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${dotClass}`} />
-        )}
         <span className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-300 ${dotClass}`} />
       </div>
       <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300 transition-colors duration-300">

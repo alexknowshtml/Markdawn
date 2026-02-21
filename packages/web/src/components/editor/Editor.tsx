@@ -2,15 +2,15 @@ import "@blocknote/mantine/style.css";
 import React, { useEffect, useMemo } from "react";
 import { BlockNoteView } from "@blocknote/mantine";
 import { useCreateBlockNote } from "@blocknote/react";
-import { HocuspocusProvider } from "@hocuspocus/provider";
+import { HocuspocusProvider, WebSocketStatus } from "@hocuspocus/provider";
 import * as Y from "yjs";
 import { useAuth } from "../../hooks/useAuth";
-import { authClient } from "../../lib/auth-client";
 import { useTheme } from "../../hooks/useTheme";
 
 interface EditorProps {
   pageId: string;
   onProviderReady?: (provider: HocuspocusProvider) => void;
+  onStatusChange?: (status: WebSocketStatus) => void;
 }
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? "ws://localhost:1234";
@@ -36,13 +36,13 @@ function getCollabColor(seed: string) {
   return COLLAB_COLORS[index] ?? COLLAB_COLORS[0];
 }
 
-export function Editor({ pageId, onProviderReady }: EditorProps) {
+export function Editor({ pageId, onProviderReady, onStatusChange }: EditorProps) {
   const { isDark } = useTheme();
   const { data: session } = useAuth();
   const userId = session?.user?.id ?? session?.user?.email ?? "";
   const userName = session?.user?.name ?? "Anonymous";
   const userColor = useMemo(() => getCollabColor(userId || userName) ?? "#958DF1", [userId, userName]);
-  const token = useMemo(() => session?.session?.token ?? "", [session?.user?.id]);
+  const token = useMemo(() => session?.session?.token ?? "", [session?.session?.token]);
   const doc = useMemo(() => new Y.Doc(), [pageId]);
   const provider = useMemo(
     () =>
@@ -51,13 +51,26 @@ export function Editor({ pageId, onProviderReady }: EditorProps) {
         name: pageId,
         token,
         document: doc,
+        forceSyncInterval: 15000,
+        onStatus: ({ status }) => {
+          onStatusChange?.(status);
+        },
+        onSynced: ({ state }) => {
+          if (state) {
+            onStatusChange?.(WebSocketStatus.Connected);
+          }
+        },
+        onAuthenticationFailed: () => {
+          onStatusChange?.(WebSocketStatus.Disconnected);
+        },
       }),
-    [doc, pageId, token]
+    [doc, onStatusChange, pageId, token]
   );
 
   useEffect(() => {
+    onStatusChange?.(WebSocketStatus.Connecting);
     onProviderReady?.(provider);
-  }, [onProviderReady, provider]);
+  }, [onProviderReady, onStatusChange, provider]);
 
   useEffect(() => {
     return () => {
@@ -76,7 +89,7 @@ export function Editor({ pageId, onProviderReady }: EditorProps) {
         color: userColor,
       },
     },
-  });
+  }, [pageId, provider, doc, userName, userColor]);
 
   return (
     <div className="editor-wrapper min-h-[500px]">

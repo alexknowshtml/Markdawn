@@ -7,7 +7,8 @@ import {
   MoreHorizontal, 
   Plus, 
   Trash2, 
-  Edit2 
+  Edit2,
+  Download
 } from 'lucide-react';
 import clsx from 'clsx';
 import { PageTreeNode } from '@markdawn/shared';
@@ -33,6 +34,7 @@ export function PageTreeItem({
   const activePageId = params.pageId;
   const isActive = activePageId === page.id;
   const isExpanded = expandedKeys.has(page.id);
+  const hasChildren = Boolean(page.children && page.children.length > 0);
   
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(page.title);
@@ -134,6 +136,30 @@ export function PageTreeItem({
     }
   };
 
+  const handleExport = async () => {
+    setShowMenu(false);
+    try {
+      const res = await fetch(`/api/pages/${page.id}/export/markdown`);
+      if (!res.ok) {
+        throw new Error("Failed to export markdown");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("content-disposition");
+      const match = disposition?.match(/filename="?([^";]+)"?/i);
+      const filename = match?.[1] ?? `${page.title || "page"}.md`;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error("Failed to export page", error);
+    }
+  };
+
   return (
     <div className="select-none">
       <div 
@@ -146,19 +172,30 @@ export function PageTreeItem({
         onDoubleClick={handleRenameStart}
         data-testid="page-tree-item"
       >
-        <div 
-          className="flex items-center justify-center w-5 h-5 rounded-sm hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 mr-1 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
-          onClick={handleToggle}
+        <button
+          type="button"
+          onClick={hasChildren ? handleToggle : undefined}
+          className={clsx(
+            "flex items-center justify-center w-5 h-5 rounded-sm mr-2",
+            hasChildren
+              ? "hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
+              : "text-zinc-400 dark:text-zinc-500",
+          )}
+          aria-label={hasChildren ? "Toggle nested pages" : "Page"}
         >
-          {page.children && page.children.length > 0 ? (
+          {hasChildren ? (
             isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
           ) : (
-            <div className="w-4" /> 
+            <FileText size={14} className={clsx(isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
           )}
-        </div>
+        </button>
 
-        <div className="flex-1 flex items-center min-w-0 mr-2">
-          <FileText size={14} className={clsx("mr-2 flex-shrink-0", isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
+        <div
+          className={clsx(
+            "flex-1 flex items-center min-w-0 transition-[padding] duration-150",
+            showMenu ? "pr-14" : "pr-2 group-hover:pr-14",
+          )}
+        >
           
           {isEditing ? (
             <input
@@ -172,30 +209,34 @@ export function PageTreeItem({
               onClick={(e) => e.stopPropagation()}
             />
           ) : (
-            <span className="truncate text-sm leading-none pt-0.5">{page.title}</span>
-          )}
+              <span className="truncate text-sm leading-none pt-0.5">{page.title}</span>
+            )}
         </div>
 
         {!isEditing && (
-          <div className={clsx(
-            "hidden group-hover:flex items-center gap-0.5 absolute right-2 bg-gradient-to-l pl-2",
-            isActive ? "from-zinc-200 dark:from-zinc-800" : "from-zinc-100 dark:from-zinc-800"
-          )}>
+          <div
+            className={clsx(
+              "absolute right-1 z-20 flex items-center gap-0.5 transition-opacity",
+              showMenu
+                ? "opacity-100 pointer-events-auto"
+                : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
+            )}
+          >
             <button 
               onClick={handleCreateChild}
-              className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+              className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
               title="Add subpage"
             >
               <Plus size={14} />
             </button>
             
-            <div className="relative" ref={menuRef}>
+              <div className="relative" ref={menuRef}>
               <button 
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowMenu(!showMenu);
                 }}
-                className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
               >
                 <MoreHorizontal size={14} />
               </button>
@@ -207,16 +248,25 @@ export function PageTreeItem({
                       e.stopPropagation();
                       handleRenameStart();
                     }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left"
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
                   >
                     <Edit2 size={12} /> Rename
                   </button>
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
+                      handleExport();
+                    }}
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 w-full text-left cursor-pointer"
+                  >
+                    <Download size={12} /> Export
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
                       handleDelete();
                     }}
-                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 w-full text-left"
+                    className="flex items-center gap-2 px-3 py-1.5 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 w-full text-left cursor-pointer"
                   >
                     <Trash2 size={12} /> Delete
                   </button>

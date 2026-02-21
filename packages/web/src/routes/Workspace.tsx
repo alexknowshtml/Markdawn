@@ -1,20 +1,27 @@
-import React from 'react';
-import { useParams, Link } from 'react-router-dom';
+import React, { useEffect } from 'react';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/use-workspaces';
 import { usePageTree } from '../hooks/use-pages';
 
 export default function Workspace() {
+  const navigate = useNavigate();
   const { workspaceSlug } = useParams<{ workspaceSlug: string }>();
   const { data: workspace } = useWorkspace(workspaceSlug);
   const { data: pages, isLoading, error, refetch } = usePageTree(workspace?.id ?? '');
 
+  useEffect(() => {
+    if (workspace && workspaceSlug && workspace.slug !== workspaceSlug) {
+      navigate(`/app/${workspace.slug}`, { replace: true });
+    }
+  }, [navigate, workspace, workspaceSlug]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50 capitalize">
-          {workspaceSlug} Workspace
+        <h1 className="text-3xl font-bold text-zinc-900 dark:text-zinc-50">
+          {workspace?.name || workspaceSlug}
         </h1>
-        <button className="px-4 py-2 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-md text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors">
+        <button className="px-4 py-2 bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 rounded-md text-sm hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer">
           New Page
         </button>
       </div>
@@ -48,7 +55,7 @@ export default function Workspace() {
           {pages.map((page) => (
             <Link 
               key={page.id}
-              to={`/app/${workspaceSlug}/${page.id}`}
+              to={`/app/${workspace?.slug ?? workspaceSlug}/${page.id}`}
               className="block p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-sm transition-all"
             >
               <div className="h-32 bg-zinc-50 dark:bg-zinc-800/50 rounded-md mb-4 flex items-center justify-center text-zinc-300 dark:text-zinc-600">

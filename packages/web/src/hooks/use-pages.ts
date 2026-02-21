@@ -49,6 +49,8 @@ export function usePageTree(workspaceId: string) {
     queryKey: ['pageTree', workspaceId],
     queryFn: () => fetchPageTree(workspaceId),
     enabled: !!workspaceId,
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: false,
   });
 }
 
