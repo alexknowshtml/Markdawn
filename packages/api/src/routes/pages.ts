@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { ServerBlockNoteEditor } from "@blocknote/server-util";
+import type { ServerBlockNoteEditor } from "@blocknote/server-util";
 import { requireAuth } from "../middleware/auth";
 import { pages } from "../db";
 import { pool } from "../db/connection";
@@ -11,14 +11,27 @@ const pagesRoute = new Hono();
 
 pagesRoute.use("*", requireAuth);
 
-const blocknoteServer = ServerBlockNoteEditor.create();
-type MarkdownBlockInput = Parameters<typeof blocknoteServer.blocksToMarkdownLossy>[0];
+type BlockNoteServerInstance = ReturnType<typeof ServerBlockNoteEditor.create>;
+type MarkdownBlockInput = Parameters<BlockNoteServerInstance["blocksToMarkdownLossy"]>[0];
+
+let blocknoteServerPromise: Promise<BlockNoteServerInstance> | null = null;
+
+const getBlockNoteServer = () => {
+  if (!blocknoteServerPromise) {
+    blocknoteServerPromise = import("@blocknote/server-util").then(({ ServerBlockNoteEditor }) =>
+      ServerBlockNoteEditor.create()
+    );
+  }
+
+  return blocknoteServerPromise;
+};
 
 const buildTree = (rows: PageRow[]) => {
-  const nodes = rows.map((page) => ({
+  type PageNode = PageRow & { ydoc: number[] | null; children: PageNode[] };
+  const nodes: PageNode[] = rows.map((page) => ({
     ...page,
     ydoc: page.ydoc ? Array.from(page.ydoc) : null,
-    children: [] as any[],
+    children: [],
   }));
   const map = new Map<string, (typeof nodes)[number]>();
   nodes.forEach((node) => map.set(node.id, node));
@@ -313,6 +326,7 @@ pagesRoute.get(":id/export/markdown", async (c) => {
     throw new HTTPException(500, { message: "Failed to decode page content" });
   }
 
+  const blocknoteServer = await getBlockNoteServer();
   const markdown = await blocknoteServer.blocksToMarkdownLossy(blocks);
   const filename = `${page.title || "Untitled"}.md`;
   c.header("Content-Type", "text/markdown");
@@ -357,6 +371,7 @@ pagesRoute.post(":id/import/markdown", async (c) => {
     throw new HTTPException(400, { message: "Markdown is required" });
   }
 
+  const blocknoteServer = await getBlockNoteServer();
   const blocks = await blocknoteServer.tryParseMarkdownToBlocks(markdown);
   const encoded = new TextEncoder().encode(JSON.stringify(blocks));
 

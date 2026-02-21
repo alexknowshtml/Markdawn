@@ -3,9 +3,9 @@ import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { pool } from "./db";
 import { randomUUID } from "crypto";
 import { db } from "./db";
-import { workspaces, workspaceMembers } from "./db/schema";
+import { users, sessions, accounts, verifications, workspaces, workspaceMembers } from "./db/schema";
 
-const FRONTEND_URL = "http://localhost:5173";
+const FRONTEND_URL = process.env.FRONTEND_URL ?? process.env.BASE_URL ?? "http://localhost:5173";
 
 const slugify = (value: string) =>
   value
@@ -73,7 +73,18 @@ export const auth = betterAuth({
   baseURL: FRONTEND_URL,
   database: drizzleAdapter(db, {
     provider: "pg",
+    schema: {
+      user: users,
+      session: sessions,
+      account: accounts,
+      verification: verifications,
+    },
   }),
+  advanced: {
+    database: {
+      generateId: false,
+    },
+  },
   socialProviders: {
     github: {
       clientId: process.env.GITHUB_CLIENT_ID as string,

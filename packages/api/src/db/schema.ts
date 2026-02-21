@@ -1,4 +1,5 @@
 import { pgTable, text, timestamp, uuid, boolean, integer, customType, AnyPgColumn } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
 
 // Custom bytea type for binary data
 const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
@@ -7,10 +8,56 @@ const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
   },
 });
 
+// ======================
+// Better Auth Tables
+// ======================
+
+export const sessions = pgTable('sessions', {
+  id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
+  expiresAt: timestamp('expires_at'),
+  token: text('token').notNull(),
+  createdAt: timestamp('created_at').notNull(),
+  updatedAt: timestamp('updated_at').notNull(),
+  ipAddress: text('ip_address'),
+  userAgent: text('user_agent'),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+});
+
+export const accounts = pgTable('accounts', {
+  id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
+  accountId: text('account_id').notNull(),
+  providerId: text('provider_id').notNull(),
+  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  accessToken: text('access_token'),
+  refreshToken: text('refresh_token'),
+  idToken: text('id_token'),
+  accessTokenExpiresAt: timestamp('access_token_expires_at'),
+  refreshTokenExpiresAt: timestamp('refresh_token_expires_at'),
+  scope: text('scope'),
+  password: text('password'),
+  createdAt: timestamp('created_at').notNull(),
+  updatedAt: timestamp('updated_at').notNull(),
+});
+
+export const verifications = pgTable('verifications', {
+  id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
+  identifier: text('identifier').notNull(),
+  value: text('value').notNull(),
+  expiresAt: timestamp('expires_at').notNull(),
+  createdAt: timestamp('created_at'),
+  updatedAt: timestamp('updated_at').notNull(),
+});
+
+// ======================
+// App Tables
+// ======================
+
 export const users = pgTable('users', {
   id: uuid('id').defaultRandom().primaryKey(),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
+  emailVerified: boolean('email_verified').default(false),
+  image: text('image'),
   avatarUrl: text('avatar_url'),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),

@@ -13,6 +13,8 @@ interface EditorProps {
   onProviderReady?: (provider: HocuspocusProvider) => void;
 }
 
+const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? "ws://localhost:1234";
+
 const COLLAB_COLORS = [
   "#958DF1",
   "#F98181",
@@ -45,7 +47,7 @@ export function Editor({ pageId, onProviderReady }: EditorProps) {
   const provider = useMemo(
     () =>
       new HocuspocusProvider({
-        url: "ws://localhost:1234",
+        url: COLLAB_URL,
         name: pageId,
         token,
         document: doc,
