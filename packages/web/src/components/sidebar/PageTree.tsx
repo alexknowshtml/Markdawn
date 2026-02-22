@@ -11,6 +11,7 @@ import { PageTreeItem } from './PageTreeItem';
 import clsx from 'clsx';
 import { generatePosition } from '@markdawn/shared';
 import { showErrorToast } from "../../utils/toast"
+import { EmptyState } from '../EmptyState';
 
 interface PageTreeProps {
   workspaceId: string;
@@ -48,8 +49,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           `markdawn-expanded-pages-${workspaceId}`, 
           JSON.stringify(Array.from(expandedKeys))
         );
-      } catch (e) {
-        console.error('Failed to save expanded state', e);
+      } catch {
         showErrorToast('Failed to save expanded state');
       }
     };
@@ -70,8 +70,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     try {
       const newPage = await createPageMutation.mutateAsync({ workspaceId });
       navigate(`/app/${workspaceSlug}/${newPage.id}`);
-    } catch (error) {
-      console.error('Failed to create root page', error);
+    } catch {
       showErrorToast('Failed to create root page');
     }
   };
@@ -188,7 +187,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
       await movePageMutation.mutateAsync({
         pageId: activePage.id,
         parentId: nextParentId,
-        position: newPosition
+        position: String(newPosition)
       });
     } catch {
       return;
@@ -326,16 +325,14 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                   />
                 ))}
                 {pages?.length === 0 && (
-                  <div className="px-4 py-8 text-center flex flex-col items-center justify-center animate-fade-in">
-                    <p className="text-sm text-zinc-400 dark:text-zinc-500 mb-3">No pages yet</p>
-                    <button
-                      onClick={handleCreateRootPage}
-                      className="text-xs px-3 py-1.5 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 rounded-md transition-colors font-medium flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Plus size={12} />
-                      <span>Create your first page</span>
-                    </button>
-                  </div>
+                  <EmptyState
+                    compact
+                    icon={<FileText size={16} />}
+                    title="No pages yet"
+                    description="Create your first page."
+                    actionLabel="Create page"
+                    onAction={handleCreateRootPage}
+                  />
                 )}
               </div>
             </SortableContext>

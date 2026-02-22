@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { randomBytes } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import type { ServerBlockNoteEditor } from "@blocknote/server-util";
+import { generatePosition } from "@markdawn/shared";
 import { requireAuth } from "../middleware/auth";
 import { pages } from "../db";
 import { pool } from "../db/connection";

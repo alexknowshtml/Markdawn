@@ -73,8 +73,7 @@ export function EditorHeader({ workspaceSlug, pageId, initialTitle, initialIcon,
         isFavorite,
         workspaceId
       });
-    } catch (error) {
-      console.error('Failed to toggle favorite', error);
+    } catch {
       showErrorToast('Failed to toggle favorite');
     }
   };
@@ -90,8 +89,7 @@ export function EditorHeader({ workspaceSlug, pageId, initialTitle, initialIcon,
         pageId,
         updates: { icon: newIcon },
       });
-    } catch (error) {
-      console.error("Failed to update icon", error);
+    } catch {
       showErrorToast("Failed to update icon");
       setIcon(initialIcon);
     }
@@ -219,7 +217,6 @@ export function EditorHeader({ workspaceSlug, pageId, initialTitle, initialIcon,
     </div>
   );
 }
-
 
 
 

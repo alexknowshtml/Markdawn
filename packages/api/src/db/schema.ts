@@ -125,6 +125,7 @@ export const userFavorites = pgTable('user_favorites', {
   id: uuid('id').defaultRandom().primaryKey(),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at').defaultNow(),
 }, (table) => ({
   userPageUnique: unique().on(table.userId, table.pageId),

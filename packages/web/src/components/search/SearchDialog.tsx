@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { FileText, Filter } from "lucide-react";
+import { EmptyState } from "../EmptyState";
 
 type SearchResult = {
   id: string;
@@ -245,12 +246,12 @@ export function SearchDialog() {
           )}
 
           {trimmedQuery && !isLoading && !hasResults && (
-            <div className="px-4 py-14 text-center">
-              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">No results found</p>
-              <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-                We couldn't find anything matching "{trimmedQuery}"
-              </p>
-            </div>
+            <EmptyState
+              compact
+              icon={<FileText className="h-5 w-5" />}
+              title="No results found"
+              description={`We couldn't find anything matching "${trimmedQuery}"`}
+            />
           )}
 
           {hasResults && (
@@ -293,6 +294,9 @@ export function SearchDialog() {
               ))}
             </ul>
           )}
+        </div>
+        <div className="border-t border-zinc-200 dark:border-zinc-800 px-4 py-2 text-xs text-zinc-500 dark:text-zinc-400">
+          ↑↓ navigate, Enter select, Esc close
         </div>
       </div>
     </div>

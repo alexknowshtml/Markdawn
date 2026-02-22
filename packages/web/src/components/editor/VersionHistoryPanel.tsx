@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { X, History, RotateCcw, Save } from 'lucide-react';
 import { useCreateVersion, useRestoreVersion, useVersions } from '../../hooks/use-versions';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface VersionHistoryPanelProps {
   pageId: string;
@@ -25,6 +26,7 @@ export function VersionHistoryPanel({ pageId, pageTitle, onClose }: VersionHisto
   const createVersion = useCreateVersion(pageId);
   const restoreVersion = useRestoreVersion(pageId);
   const [isSaving, setIsSaving] = useState(false);
+  const [versionToRestore, setVersionToRestore] = useState<string | null>(null);
 
   const timeline = useMemo(() => versions, [versions]);
 
@@ -37,13 +39,21 @@ export function VersionHistoryPanel({ pageId, pageTitle, onClose }: VersionHisto
   };
 
   const handleRestore = (versionId: string) => {
-    if (window.confirm('Restore this version title? This will overwrite the current title.')) {
-      restoreVersion.mutate(versionId);
+    setVersionToRestore(versionId);
+  };
+
+  const confirmRestore = () => {
+    if (!versionToRestore) {
+      return;
     }
+    restoreVersion.mutate(versionToRestore, {
+      onSettled: () => setVersionToRestore(null),
+    });
   };
 
   return (
-    <aside className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col flex-shrink-0 z-40">
+    <>
+      <aside className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col flex-shrink-0 z-40">
       <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-white dark:bg-zinc-900">
         <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-medium">
           <History size={18} />
@@ -114,6 +124,16 @@ export function VersionHistoryPanel({ pageId, pageTitle, onClose }: VersionHisto
           </ol>
         )}
       </div>
-    </aside>
+      </aside>
+      <ConfirmDialog
+        isOpen={versionToRestore !== null}
+        title="Restore version"
+        message="Restore this version title? This will overwrite the current title."
+        confirmText="Restore"
+        onConfirm={confirmRestore}
+        onCancel={() => setVersionToRestore(null)}
+        loading={restoreVersion.isPending}
+      />
+    </>
   );
 }

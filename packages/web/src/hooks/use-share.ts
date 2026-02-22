@@ -26,7 +26,7 @@ export function useSharePage() {
   return useMutation({
     mutationFn: (pageId: string) => sharePage(pageId),
     onSuccess: (_, pageId) => {
-      queryClient.invalidateQueries({ queryKey: ['page', pageId] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
       showSuccessToast('Page shared publicly');
     },
     onError: () => {
@@ -40,7 +40,7 @@ export function useUnsharePage() {
   return useMutation({
     mutationFn: (pageId: string) => unsharePage(pageId),
     onSuccess: (_, pageId) => {
-      queryClient.invalidateQueries({ queryKey: ['page', pageId] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
       showSuccessToast('Page is no longer public');
     },
     onError: () => {

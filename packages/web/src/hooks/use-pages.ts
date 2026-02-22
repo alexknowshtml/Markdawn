@@ -73,7 +73,7 @@ async function permanentDeletePage(pageId: string): Promise<void> {
   }
 }
 
-async function movePage(pageId: string, parentId: string | null, position: number): Promise<Page> {
+async function movePage(pageId: string, parentId: string | null, position: string): Promise<Page> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/move`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -180,7 +180,7 @@ export function usePermanentDeletePage() {
 export function useMovePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ pageId, parentId, position }: { pageId: string; parentId: string | null; position: number }) =>
+    mutationFn: ({ pageId, parentId, position }: { pageId: string; parentId: string | null; position: string }) =>
       movePage(pageId, parentId, position),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });

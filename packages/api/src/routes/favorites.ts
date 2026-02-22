@@ -78,8 +78,8 @@ favoritesRoute.post("/", async (c) => {
   await ensureWorkspaceMember(page.workspace_id, user.id);
 
   const insertResult = await pool.query(
-    "insert into user_favorites (user_id, page_id) values ($1, $2) on conflict (user_id, page_id) do nothing returning id",
-    [user.id, pageId]
+    "insert into user_favorites (user_id, page_id, workspace_id) values ($1, $2, $3) on conflict (user_id, page_id) do nothing returning id",
+    [user.id, pageId, page.workspace_id]
   );
 
   if (insertResult.rowCount === 0) {

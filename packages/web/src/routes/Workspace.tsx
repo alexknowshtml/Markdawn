@@ -4,6 +4,8 @@ import { useWorkspace } from '../hooks/use-workspaces';
 import { usePageTree } from '../hooks/use-pages';
 import { useCreatePage } from '../hooks/use-pages';
 import { showErrorToast } from "../utils/toast"
+import { EmptyState } from '../components/EmptyState';
+import { FileText } from 'lucide-react';
 
 export default function Workspace() {
   const navigate = useNavigate();
@@ -23,8 +25,7 @@ export default function Workspace() {
     try {
       const newPage = await createPageMutation.mutateAsync({ workspaceId: workspace.id });
       navigate(`/app/${workspace.slug}/${newPage.id}`);
-    } catch (error) {
-      console.error('Failed to create page', error);
+    } catch {
       showErrorToast('Failed to create page');
     }
   };
@@ -61,9 +62,13 @@ export default function Workspace() {
           ))}
         </div>
       ) : !pages || pages.length === 0 ? (
-        <div className="py-12 text-center text-zinc-500 dark:text-zinc-400">
-          No pages yet
-        </div>
+        <EmptyState
+          icon={<FileText size={24} />}
+          title="No pages yet"
+          description="Create your first page to start writing."
+          actionLabel="Create your first page"
+          onAction={handleCreatePage}
+        />
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {pages.map((page, index) => (

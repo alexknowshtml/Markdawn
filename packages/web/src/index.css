@@ -87,6 +87,14 @@
   overflow: hidden;
 }
 
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition-duration: 0ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 .bn-container,
 .bn-container[data-color-scheme="dark"] {
   --bn-colors-editor-background: transparent;

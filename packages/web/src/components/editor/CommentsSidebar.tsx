@@ -18,6 +18,7 @@ import {
   Comment
 } from '../../hooks/use-comments';
 import { useAuth } from '../../hooks/useAuth';
+import { ConfirmDialog } from '../ConfirmDialog';
 
 interface CommentsSidebarProps {
   pageId: string;
@@ -39,6 +40,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
   const [newCommentText, setNewCommentText] = useState('');
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [replyText, setReplyText] = useState('');
+  const [commentToDelete, setCommentToDelete] = useState<string | null>(null);
 
   const filteredComments = comments.filter(comment => {
     if (filter === 'open') return !comment.resolved;
@@ -75,9 +77,16 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
   };
 
   const handleDelete = (commentId: string) => {
-    if (window.confirm('Are you sure you want to delete this comment?')) {
-      deleteComment.mutate(commentId);
+    setCommentToDelete(commentId);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!commentToDelete) {
+      return;
     }
+    deleteComment.mutate(commentToDelete, {
+      onSettled: () => setCommentToDelete(null),
+    });
   };
 
   const formatDate = (dateString: string) => {
@@ -93,7 +102,8 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
   if (!isOpen) return null;
 
   return (
-    <aside className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col flex-shrink-0 z-40">
+    <>
+      <aside className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col flex-shrink-0 z-40">
       <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-white dark:bg-zinc-900">
         <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-medium">
           <MessageSquare size={18} />
@@ -307,6 +317,16 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
           ))
         )}
       </div>
-    </aside>
+      </aside>
+      <ConfirmDialog
+        isOpen={commentToDelete !== null}
+        title="Delete comment"
+        message="Are you sure you want to delete this comment?"
+        confirmText="Delete"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setCommentToDelete(null)}
+        loading={deleteComment.isPending}
+      />
+    </>
   );
 }

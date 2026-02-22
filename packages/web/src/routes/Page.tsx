@@ -51,8 +51,7 @@ export default function Page() {
         pageId,
         updates: { coverType: type, coverValue: value },
       });
-    } catch (error) {
-      console.error('Failed to update cover', error);
+    } catch {
       showErrorToast('Failed to update cover');
     }
   };

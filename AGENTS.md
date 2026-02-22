@@ -324,3 +324,41 @@ URLs are parameterized via environment variables:
 - `VITE_API_URL` — Frontend uses for API calls (default: http://localhost:3001)
 - `VITE_COLLAB_URL` — Frontend uses for WebSocket (default: ws://localhost:1234)
 - Vite proxy targets are configurable via env vars in vite.config.ts
+
+
+### BlockNote Custom Block Specs
+- **Issue**: `createReactBlockSpec` returns a factory function that must be called to get the spec object
+- **Solution**: Export the result of calling the factory function:
+  ```typescript
+  // Wrong - exports the factory function
+  export const myBlockSpec = createReactBlockSpec(...);
+  
+  // Correct - exports the spec object  
+  export const myBlockSpec = createReactBlockSpec(...)(undefined);
+  ```
+- **Reference**: `packages/web/src/editor/schema.ts`
+
+### Yjs Export Handling
+- **Issue**: `ydoc` column stores binary Yjs CRDT data, not plain text
+- **Solution**: Use null-byte detection to distinguish text from binary:
+  ```typescript
+  const hasNullByte = page.ydoc.includes(0);
+  if (!hasNullByte) {
+    content = new TextDecoder().decode(page.ydoc);
+  }
+  ```
+- **Why**: Yjs binary contains null bytes, plain markdown text does not
+- **Reference**: `packages/api/src/routes/export.ts`
+
+### Wiki Links in BlockNote
+- **Issue**: Links are marks, not nodes in TipTap/BlockNote
+- **Solution**: Use text with marks format:
+  ```typescript
+  [{ type: "text", text: linkText, marks: [{ type: "link", attrs: { href } }] }]
+  ```
+- **Reference**: `packages/web/src/components/editor/Editor.tsx`
+
+### API Routes - Use pool.query
+- **Issue**: Drizzle has type mismatches between root and package installations
+- **Solution**: Use `pool.query` for all API route operations
+- **Reference**: `packages/api/src/routes/pages.ts`

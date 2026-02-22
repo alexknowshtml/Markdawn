@@ -79,6 +79,7 @@ searchRoute.get("/", async (c) => {
       select array_agg(title order by depth desc) as breadcrumb from ancestors
     ) breadcrumbs on true
     where wm.user_id = $1
+      and p.is_deleted = false
       and (p.title_search @@ plainto_tsquery('english', $2) or p.title ilike $3)
       ${whereClause}
     order by rank desc nulls last

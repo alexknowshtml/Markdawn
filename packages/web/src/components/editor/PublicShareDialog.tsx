@@ -25,8 +25,7 @@ export function PublicShareDialog({ page, onClose }: PublicShareDialogProps) {
       await navigator.clipboard.writeText(publicUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error("Failed to copy text: ", err);
+    } catch {
       showErrorToast("Failed to copy link");
     }
   };

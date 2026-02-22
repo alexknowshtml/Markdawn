@@ -3,6 +3,7 @@ import { Trash2, RotateCcw, FileText, X } from 'lucide-react';
 import { useTrashPages, useRestorePage, usePermanentDeletePage } from '../../hooks/use-pages';
 import { showSuccessToast, showErrorToast } from '../../utils/toast';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { EmptyState } from '../EmptyState';
 
 interface TrashViewProps {
   workspaceId: string;
@@ -105,10 +106,11 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
               ))}
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center py-12 text-center">
-              <Trash2 size={48} className="text-zinc-300 dark:text-zinc-700 mb-4" />
-              <p className="text-zinc-500 dark:text-zinc-400">No pages in trash</p>
-            </div>
+            <EmptyState
+              icon={<Trash2 size={24} />}
+              title="Trash is empty"
+              description="Deleted pages will appear here."
+            />
           )}
         </div>
       </div>

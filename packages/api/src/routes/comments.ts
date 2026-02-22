@@ -8,6 +8,13 @@ type PageRow = {
   workspace_id: string | null;
 };
 
+type UserRow = {
+  id: string;
+  name: string;
+  email: string;
+  avatar_url: string | null;
+};
+
 type CommentRow = {
   id: string;
   page_id: string | null;
@@ -69,6 +76,11 @@ commentsRoute.use("*", requireAuth);
 const getPageById = async (pageId: string) => {
   const result = await pool.query("select id, workspace_id from pages where id = $1 limit 1", [pageId]);
   return (result.rows[0] as PageRow | undefined) ?? null;
+};
+
+const getUserById = async (userId: string) => {
+  const result = await pool.query("select id, name, email, avatar_url from users where id = $1 limit 1", [userId]);
+  return (result.rows[0] as UserRow | undefined) ?? null;
 };
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
@@ -177,6 +189,10 @@ commentsRoute.post(":pageId/comments", async (c) => {
 
   const user = c.get("user") as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
+  const currentUser = await getUserById(user.id);
+  if (!currentUser) {
+    throw new HTTPException(404, { message: "User not found" });
+  }
 
   const { content, anchorBlockId } = await c.req.json();
   
@@ -201,10 +217,10 @@ commentsRoute.post(":pageId/comments", async (c) => {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     user: {
-      id: user.id,
-      name: "", // Will be filled by JOIN in real implementation
-      email: "",
-      avatarUrl: null,
+      id: currentUser.id,
+      name: currentUser.name,
+      email: currentUser.email,
+      avatarUrl: currentUser.avatar_url ?? null,
     },
     replies: [],
   });
@@ -225,6 +241,10 @@ commentsRoute.post(":pageId/comments/:commentId/replies", async (c) => {
 
   const user = c.get("user") as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
+  const currentUser = await getUserById(user.id);
+  if (!currentUser) {
+    throw new HTTPException(404, { message: "User not found" });
+  }
 
   // Verify comment exists
   const commentResult = await pool.query(
@@ -254,10 +274,10 @@ commentsRoute.post(":pageId/comments/:commentId/replies", async (c) => {
     content: row.content,
     createdAt: row.created_at,
     user: {
-      id: user.id,
-      name: "",
-      email: "",
-      avatarUrl: null,
+      id: currentUser.id,
+      name: currentUser.name,
+      email: currentUser.email,
+      avatarUrl: currentUser.avatar_url ?? null,
     },
   });
 });
@@ -278,6 +298,17 @@ commentsRoute.patch(":pageId/comments/:commentId", async (c) => {
   await ensureWorkspaceMember(page.workspace_id, user.id);
 
   const { content, resolved } = await c.req.json();
+
+  const commentResult = await pool.query(
+    "SELECT user_id FROM comments WHERE id = $1 AND page_id = $2",
+    [commentId, pageId]
+  );
+
+  if (commentResult.rowCount === 0) {
+    throw new HTTPException(404, { message: "Comment not found" });
+  }
+
+  const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
   
   // Build update query dynamically
   const updates: string[] = [];
@@ -287,6 +318,9 @@ commentsRoute.patch(":pageId/comments/:commentId", async (c) => {
   if (content !== undefined) {
     if (typeof content !== "string") {
       throw new HTTPException(400, { message: "content must be a string" });
+    }
+    if (!commentOwnerId || commentOwnerId !== user.id) {
+      throw new HTTPException(403, { message: "Forbidden" });
     }
     updates.push(`content = $${paramIndex++}`);
     values.push(content);
@@ -298,16 +332,16 @@ commentsRoute.patch(":pageId/comments/:commentId", async (c) => {
     }
     updates.push(`resolved = $${paramIndex++}`);
     values.push(resolved);
-    updates.push(`updated_at = NOW()`);
   }
 
   if (updates.length === 0) {
     throw new HTTPException(400, { message: "No fields to update" });
   }
+  updates.push("updated_at = NOW()");
 
   values.push(commentId, pageId);
   const result = await pool.query(
-    `UPDATE comments SET ${updates.join(", ")} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
+    `UPDATE comments SET ${updates.join(", ")} WHERE id = ${paramIndex++} AND page_id = ${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
     values
   );
 
@@ -352,6 +386,11 @@ commentsRoute.delete(":pageId/comments/:commentId", async (c) => {
   
   if (commentResult.rowCount === 0) {
     throw new HTTPException(404, { message: "Comment not found" });
+  }
+
+  const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
+  if (!commentOwnerId || commentOwnerId !== user.id) {
+    throw new HTTPException(403, { message: "Forbidden" });
   }
 
   // Delete comment (replies will cascade due to foreign key)

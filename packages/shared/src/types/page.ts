@@ -6,7 +6,7 @@ export interface Page {
   icon: string | null;
   coverType: string | null;
   coverValue: string | null;
-  position: number;
+  position: string;
   ydoc: Uint8Array | null;
   createdBy: string | null;
   createdAt: Date;
