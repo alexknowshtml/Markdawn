@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+import { showSuccessToast, showErrorToast } from "../../utils/toast";
 
 type ImportDialogProps = {
   pageId: string;
@@ -44,9 +45,12 @@ export function ImportDialog({ pageId }: ImportDialogProps) {
         throw new Error("Failed to import markdown");
       }
       setSuccess(true);
+      showSuccessToast("Markdown imported");
       window.location.reload();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed");
+      const errorMessage = err instanceof Error ? err.message : "Import failed";
+      setError(errorMessage);
+      showErrorToast("Import failed");
     } finally {
       setIsLoading(false);
     }

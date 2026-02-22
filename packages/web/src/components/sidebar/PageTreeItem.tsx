@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useNavigate, useParams } from 'react-router-dom';
 import { 
   ChevronRight, 
@@ -8,12 +10,15 @@ import {
   Plus, 
   Trash2, 
   Edit2,
-  Download
+  Download,
+  Star
 } from 'lucide-react';
 import clsx from 'clsx';
 import { PageTreeNode } from '@markdawn/shared';
 import { useCreatePage, useUpdatePage, useDeletePage } from '../../hooks/use-pages';
+import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { showSuccessToast, showErrorToast } from '../../utils/toast';
 
 interface PageTreeItemProps {
   page: PageTreeNode;
@@ -21,6 +26,9 @@ interface PageTreeItemProps {
   expandedKeys: Set<string>;
   onToggleExpand: (pageId: string) => void;
   workspaceSlug: string;
+  activeId?: string | null;
+  overId?: string | null;
+  dropPosition?: 'before' | 'after' | 'inside' | null;
 }
 
 export function PageTreeItem({ 
@@ -28,7 +36,10 @@ export function PageTreeItem({
   depth = 0, 
   expandedKeys, 
   onToggleExpand,
-  workspaceSlug
+  workspaceSlug,
+  activeId,
+  overId,
+  dropPosition
 }: PageTreeItemProps) {
   const navigate = useNavigate();
   const params = useParams();
@@ -36,6 +47,23 @@ export function PageTreeItem({
   const isActive = activePageId === page.id;
   const isExpanded = expandedKeys.has(page.id);
   const hasChildren = Boolean(page.children && page.children.length > 0);
+  const isDragTarget = overId === page.id;
+  const showDropLine = isDragTarget && (dropPosition === 'before' || dropPosition === 'after');
+  const showDropInside = isDragTarget && dropPosition === 'inside';
+
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: page.id });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  } as React.CSSProperties;
   
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(page.title);
@@ -47,6 +75,24 @@ export function PageTreeItem({
   const createPageMutation = useCreatePage();
   const updatePageMutation = useUpdatePage();
   const deletePageMutation = useDeletePage();
+  const { data: favorites } = useFavorites(page.workspaceId || undefined);
+  const toggleFavoriteMutation = useToggleFavorite();
+
+  const isFavorite = favorites?.some(f => f.pageId === page.id) ?? false;
+
+  const handleToggleFavorite = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!page.workspaceId) return;
+    try {
+      await toggleFavoriteMutation.mutateAsync({
+        pageId: page.id,
+        isFavorite,
+        workspaceId: page.workspaceId
+      });
+    } catch (error) {
+      showErrorToast('Failed to toggle favorite');
+    }
+  };
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -89,7 +135,7 @@ export function PageTreeItem({
       });
       navigate(`/app/${workspaceSlug}/${newPage.id}`);
     } catch (error) {
-      console.error('Failed to create page', error);
+      showErrorToast('Failed to create page');
     }
   };
 
@@ -106,8 +152,9 @@ export function PageTreeItem({
           pageId: page.id, 
           updates: { title: editTitle } 
         });
+        showSuccessToast('Page renamed');
       } catch (error) {
-        console.error('Failed to rename page', error);
+        showErrorToast('Failed to rename page');
         setEditTitle(page.title);
       }
     } else {
@@ -133,11 +180,12 @@ export function PageTreeItem({
     try {
       await deletePageMutation.mutateAsync(page.id);
       setShowDeleteDialog(false);
+      showSuccessToast("Moved to trash");
       if (isActive) {
         navigate(`/app/${workspaceSlug}`);
       }
     } catch (error) {
-      console.error('Failed to delete page', error);
+      showErrorToast('Failed to delete page');
     }
   };
 
@@ -164,37 +212,60 @@ export function PageTreeItem({
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      showSuccessToast('Exported to markdown');
     } catch (error) {
-      console.error("Failed to export page", error);
+      showErrorToast('Failed to export page');
     }
   };
 
   return (
     <>
-      <div className="select-none">
-        <div 
+      <div className="select-none" ref={setNodeRef} style={style}>
+        <div
           className={clsx(
-            "group flex items-center h-8 pr-2 py-1 cursor-pointer transition-colors relative",
-            isActive ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100"
+            "group flex items-center h-8 pr-2 py-1 cursor-pointer transition-all duration-200 ease-in-out relative",
+            isActive ? "bg-zinc-200 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100",
+            isDragging && "opacity-60"
           )}
           style={{ paddingLeft: `${depth * 12 + 12}px` }}
           onClick={handleNavigate}
           onDoubleClick={handleRenameStart}
           data-testid="page-tree-item"
         >
+          {showDropLine && (
+            <span
+              className={clsx(
+                "absolute left-0 right-1 h-0.5 bg-blue-500",
+                dropPosition === 'before' ? "-top-0.5" : "-bottom-0.5"
+              )}
+              style={{ marginLeft: `${depth * 12 + 12}px` }}
+            />
+          )}
+
+          {showDropInside && (
+            <span
+              className="absolute inset-0 rounded-md border border-blue-400/70 bg-blue-500/10"
+              style={{ marginLeft: `${depth * 12 + 12}px` }}
+            />
+          )}
+
           <button
             type="button"
             onClick={hasChildren ? handleToggle : undefined}
             className={clsx(
-              "flex items-center justify-center w-5 h-5 rounded-sm mr-2",
+              "flex items-center justify-center w-5 h-5 rounded-sm mr-2 cursor-grab active:cursor-grabbing",
               hasChildren
                 ? "hover:bg-zinc-300/50 dark:hover:bg-zinc-600/50 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
                 : "text-zinc-400 dark:text-zinc-500",
             )}
             aria-label={hasChildren ? "Toggle nested pages" : "Page"}
+            {...attributes}
+            {...listeners}
           >
             {hasChildren ? (
               isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+            ) : page.icon ? (
+              <span className="text-sm leading-none">{page.icon}</span>
             ) : (
               <FileText size={14} className={clsx(isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
             )}
@@ -227,11 +298,23 @@ export function PageTreeItem({
             <div
               className={clsx(
                 "absolute right-1 z-20 flex items-center gap-0.5 transition-opacity",
-                showMenu
+                showMenu || isFavorite
                   ? "opacity-100 pointer-events-auto"
                   : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
               )}
             >
+              <button
+                onClick={handleToggleFavorite}
+                className={clsx(
+                  "p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 cursor-pointer",
+                  isFavorite 
+                    ? "text-yellow-500 hover:text-yellow-600" 
+                    : "text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                )}
+                title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+              >
+                <Star size={14} fill={isFavorite ? "currentColor" : "none"} />
+              </button>
               <button 
                 onClick={handleCreateChild}
                 className="p-1 rounded hover:bg-zinc-300 dark:hover:bg-zinc-700 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
@@ -252,7 +335,7 @@ export function PageTreeItem({
                 </button>
 
                 {showMenu && (
-                  <div className="absolute right-0 top-6 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-lg rounded-md z-50 py-1 flex flex-col">
+                  <div className="absolute right-0 top-6 w-32 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 shadow-lg rounded-md z-50 py-1 flex flex-col animate-scale-in origin-top-right">
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -287,27 +370,36 @@ export function PageTreeItem({
           )}
         </div>
 
-        {isExpanded && page.children && page.children.length > 0 && (
-          <div>
-            {page.children.map((child) => (
-              <PageTreeItem
-                key={child.id}
-                page={child}
-                depth={depth + 1}
-                expandedKeys={expandedKeys}
-                onToggleExpand={onToggleExpand}
-                workspaceSlug={workspaceSlug}
-              />
-            ))}
+        {page.children && page.children.length > 0 && (
+          <div className={clsx("tree-children-wrapper", isExpanded ? "expanded" : "")}>
+            <div className="tree-children-inner">
+              <SortableContext items={page.children.map((child) => child.id)} strategy={verticalListSortingStrategy}>
+                <div>
+                  {page.children.map((child) => (
+                    <PageTreeItem
+                      key={child.id}
+                      page={child}
+                      depth={depth + 1}
+                      expandedKeys={expandedKeys}
+                      onToggleExpand={onToggleExpand}
+                      workspaceSlug={workspaceSlug}
+                      activeId={activeId ?? null}
+                      overId={overId ?? null}
+                      dropPosition={dropPosition ?? null}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </div>
           </div>
         )}
       </div>
 
       <ConfirmDialog
         isOpen={showDeleteDialog}
-        title="Delete page"
-        message={`Are you sure you want to delete "${page.title}"? This action cannot be undone.`}
-        confirmText="Delete"
+        title="Move to trash"
+        message={`Are you sure you want to move "${page.title}" to the trash?`}
+        confirmText="Move to trash"
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
         loading={deletePageMutation.isPending}

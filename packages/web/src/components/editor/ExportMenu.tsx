@@ -1,35 +1,38 @@
 import React, { useState } from "react";
+import type { BlockNoteEditor } from "@blocknote/core";
+import { showErrorToast, showSuccessToast } from "../../utils/toast";
 
 type ExportMenuProps = {
-  pageId: string;
+  pageTitle: string;
+  editor: BlockNoteEditor<any> | null;
 };
 
-export function ExportMenu({ pageId }: ExportMenuProps) {
+export function ExportMenu({ pageTitle, editor }: ExportMenuProps) {
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const handleExport = async () => {
+    if (!editor) {
+      showErrorToast("Editor not ready for export");
+      return;
+    }
+
     setIsLoading(true);
-    setError(null);
     try {
-      const res = await fetch(`/api/pages/${pageId}/export/markdown`);
-      if (!res.ok) {
-        throw new Error("Failed to export markdown");
-      }
-      const blob = await res.blob();
-      const disposition = res.headers.get("content-disposition");
-      const match = disposition?.match(/filename="?([^";]+)"?/i);
-      const filename = match?.[1] ?? "page.md";
+      const serialized = await editor.blocksToMarkdownLossy(editor.document);
+      const title = pageTitle.trim().length > 0 ? pageTitle.trim() : "Untitled";
+      const markdown = `# ${title}\n\n${serialized}`;
+      const blob = new Blob([markdown], { type: "text/markdown" });
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = `${title}.md`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
+      showSuccessToast("Markdown exported");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Export failed");
+      showErrorToast(err instanceof Error ? err.message : "Export failed");
     } finally {
       setIsLoading(false);
     }
@@ -45,7 +48,6 @@ export function ExportMenu({ pageId }: ExportMenuProps) {
       >
         {isLoading ? "Exporting..." : "Export Markdown"}
       </button>
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </div>
   );
 }

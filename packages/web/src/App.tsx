@@ -8,6 +8,7 @@ import Dashboard from './routes/Dashboard';
 import Workspace from './routes/Workspace';
 import Page from './routes/Page';
 import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
+import PublicPage from './routes/PublicPage';
 
 function App() {
   return (
@@ -30,6 +31,7 @@ function App() {
             <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
             <Route path=":workspaceSlug/:pageId" element={<Page />} />
           </Route>
+          <Route path="/public/:token" element={<PublicPage />} />
           
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />

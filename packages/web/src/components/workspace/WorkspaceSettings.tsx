@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { Download } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "../../hooks/useAuth";
+import { showSuccessToast, showErrorToast } from "../../utils/toast";
 
 type WorkspaceMember = {
   id: string;
@@ -52,6 +54,7 @@ export function WorkspaceSettings() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [isSaving, setIsSaving] = useState(false);
   const [inviteLoading, setInviteLoading] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -89,8 +92,11 @@ export function WorkspaceSettings() {
       if (updated.slug && updated.slug !== workspaceSlug) {
         navigate(`/app/${updated.slug}/settings`, { replace: true });
       }
+      showSuccessToast("Workspace updated");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to update workspace");
+      const errorMessage = err instanceof Error ? err.message : "Failed to update workspace";
+      setErrorMessage(errorMessage);
+      showErrorToast("Failed to update workspace");
     } finally {
       setIsSaving(false);
     }
@@ -117,8 +123,11 @@ export function WorkspaceSettings() {
       }
       await queryClient.invalidateQueries({ queryKey: ["workspace", workspaceSlug, "settings"] });
       setInviteEmail("");
+      showSuccessToast("Member invited");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to invite member");
+      const errorMessage = err instanceof Error ? err.message : "Failed to invite member";
+      setErrorMessage(errorMessage);
+      showErrorToast("Failed to invite member");
     } finally {
       setInviteLoading(false);
     }
@@ -135,8 +144,39 @@ export function WorkspaceSettings() {
         throw new Error("Failed to remove member");
       }
       await queryClient.invalidateQueries({ queryKey: ["workspace", workspaceSlug, "settings"] });
+      showSuccessToast("Member removed");
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : "Failed to remove member");
+      const errorMessage = err instanceof Error ? err.message : "Failed to remove member";
+      setErrorMessage(errorMessage);
+      showErrorToast("Failed to remove member");
+    }
+  };
+
+  const handleExportWorkspace = async () => {
+    if (!data?.workspace?.id) return;
+    setIsExporting(true);
+    try {
+      const res = await fetch(`/api/workspaces/${data.workspace.id}/export`);
+      if (!res.ok) {
+        throw new Error("Failed to export workspace");
+      }
+      const blob = await res.blob();
+      const disposition = res.headers.get("content-disposition");
+      const match = disposition?.match(/filename="?([^";]+)"?/i);
+      const filename = match?.[1] ?? "workspace-export.zip";
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      showSuccessToast("Workspace exported");
+    } catch (err) {
+      showErrorToast("Failed to export workspace");
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -208,6 +248,24 @@ export function WorkspaceSettings() {
             {inviteLoading ? "Inviting..." : "Invite"}
           </button>
         </form>
+      </section>
+
+      <section className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-6 space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">Export workspace</h2>
+          <p className="text-xs text-zinc-500 dark:text-zinc-400">Download all pages as markdown files in a zip.</p>
+        </div>
+        <div>
+          <button
+            type="button"
+            onClick={handleExportWorkspace}
+            disabled={isExporting}
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-700 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-600 transition-colors disabled:opacity-60"
+          >
+            <Download size={16} />
+            {isExporting ? "Exporting..." : "Export Workspace"}
+          </button>
+        </div>
       </section>
 
       <section className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-6 space-y-4">

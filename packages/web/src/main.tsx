@@ -43,7 +43,7 @@ const queryClient = new QueryClient()
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <MantineProvider theme={theme}>
-      <Notifications />
+      <Notifications transitionDuration={300} />
       <QueryClientProvider client={queryClient}>
         <App />
       </QueryClientProvider>

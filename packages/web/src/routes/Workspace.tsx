@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useWorkspace } from '../hooks/use-workspaces';
 import { usePageTree } from '../hooks/use-pages';
 import { useCreatePage } from '../hooks/use-pages';
+import { showErrorToast } from "../utils/toast"
 
 export default function Workspace() {
   const navigate = useNavigate();
@@ -24,6 +25,7 @@ export default function Workspace() {
       navigate(`/app/${workspace.slug}/${newPage.id}`);
     } catch (error) {
       console.error('Failed to create page', error);
+      showErrorToast('Failed to create page');
     }
   };
 
@@ -63,15 +65,22 @@ export default function Workspace() {
           No pages yet
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
-          {pages.map((page) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {pages.map((page, index) => (
             <Link 
               key={page.id}
               to={`/app/${workspace?.slug ?? workspaceSlug}/${page.id}`}
-              className="block p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-sm transition-all"
+              className="block p-6 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02] transition-all duration-200 animate-slide-up"
+              style={{ animationDelay: `${index * 50}ms`, animationFillMode: 'both' }}
             >
-              <div className="h-32 bg-zinc-50 dark:bg-zinc-800/50 rounded-md mb-4 flex items-center justify-center text-zinc-300 dark:text-zinc-600">
-                {page.icon ? <span className="text-4xl">{page.icon}</span> : 'Cover Image'}
+              <div 
+                className="h-32 bg-zinc-50 dark:bg-zinc-800/50 rounded-md mb-4 flex items-center justify-center text-zinc-300 dark:text-zinc-600 overflow-hidden"
+                style={{
+                  background: page.coverType === 'gradient' ? page.coverValue! : undefined,
+                  backgroundColor: page.coverType === 'solid' ? page.coverValue! : undefined,
+                }}
+              >
+                {page.icon ? <span className="text-4xl drop-shadow-sm">{page.icon}</span> : (!page.coverType && 'Cover Image')}
               </div>
               <h3 className="font-semibold text-zinc-900 dark:text-zinc-50 mb-1 truncate">
                 {page.title || 'Untitled'}

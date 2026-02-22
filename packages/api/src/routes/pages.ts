@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { randomBytes } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
 import type { ServerBlockNoteEditor } from "@blocknote/server-util";
 import { requireAuth } from "../middleware/auth";
@@ -220,6 +221,8 @@ pagesRoute.get(":id", async (c) => {
   return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null });
 });
 
+
+
 pagesRoute.patch(":id", async (c) => {
   const pageId = c.req.param("id");
   const page = await getPageById(pageId);
@@ -237,11 +240,13 @@ pagesRoute.patch(":id", async (c) => {
     throw new HTTPException(400, { message: "Invalid body" });
   }
 
-  const { title, icon, parentId, position } = body as {
+  const { title, icon, parentId, position, coverType, coverValue } = body as {
     title?: string;
     icon?: string | null;
     parentId?: string | null;
     position?: number;
+    coverType?: string | null;
+    coverValue?: string | null;
   };
 
   const hasParentId = Object.prototype.hasOwnProperty.call(body, "parentId");
@@ -259,11 +264,17 @@ pagesRoute.patch(":id", async (c) => {
   const nextIcon = typeof icon === "string" ? (icon.trim().length > 0 ? icon.trim() : null) : icon === null ? null : page.icon;
   const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
   const nextPosition = typeof position === "number" && Number.isFinite(position) ? position : page.position;
+  const hasCoverType = Object.prototype.hasOwnProperty.call(body, "coverType");
+  const hasCoverValue = Object.prototype.hasOwnProperty.call(body, "coverValue");
+  const nextCoverType = hasCoverType ? (typeof coverType === "string" && coverType.trim().length > 0 ? coverType.trim() : null) : page.coverType;
+  const nextCoverValue = hasCoverValue ? (typeof coverValue === "string" && coverValue.trim().length > 0 ? coverValue.trim() : null) : page.coverValue;
 
   const updateResult = await pool.query(
-    "update pages set title = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *",
-    [nextTitle, nextIcon, nextParent, nextPosition, pageId]
+    "update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
+    [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId]
   );
+
+
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: "Failed to update page" });
@@ -394,31 +405,20 @@ pagesRoute.get(":id/export/markdown", async (c) => {
   const user = c.get("user") as { id: string };
   await ensureWorkspaceMember(page.workspaceId!, user.id);
 
-  if (!page.ydoc || page.ydoc.length === 0) {
-    const emptyFilename = `${page.title || "Untitled"}.md`;
-    c.header("Content-Type", "text/markdown");
-    c.header("Content-Disposition", `attachment; filename="${emptyFilename}"`);
-    return c.body("");
-  }
-
-  let blocks: MarkdownBlockInput;
-  try {
-    const decoded = new TextDecoder().decode(page.ydoc);
-    const parsed = JSON.parse(decoded);
-    if (!Array.isArray(parsed)) {
-      throw new Error("Invalid block data");
-    }
-    blocks = parsed as MarkdownBlockInput;
-  } catch {
-    throw new HTTPException(500, { message: "Failed to decode page content" });
-  }
-
-  const blocknoteServer = await getBlockNoteServer();
-  const markdown = await blocknoteServer.blocksToMarkdownLossy(blocks);
   const filename = `${page.title || "Untitled"}.md`;
   c.header("Content-Type", "text/markdown");
   c.header("Content-Disposition", `attachment; filename="${filename}"`);
-  return c.body(markdown);
+  if (!page.ydoc || page.ydoc.length === 0) {
+    return c.body("");
+  }
+
+  try {
+    const decoded = new TextDecoder().decode(page.ydoc);
+    c.header("Content-Type", "text/markdown");
+    return c.body(decoded);
+  } catch {
+    throw new HTTPException(500, { message: "Failed to decode page content" });
+  }
 });
 
 pagesRoute.post(":id/import/markdown", async (c) => {

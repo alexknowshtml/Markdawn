@@ -95,6 +95,9 @@ export const pages: any = pgTable('pages', {
 
   createdBy: uuid('created_by').references(() => users.id),
 
+  isPublic: boolean('is_public').default(false),
+  publicToken: text('public_token').unique(),
+
   createdAt: timestamp('created_at').defaultNow(),
 
   updatedAt: timestamp('updated_at').defaultNow(),
@@ -103,6 +106,19 @@ export const pages: any = pgTable('pages', {
 
   deletedAt: timestamp('deleted_at'),
 
+});
+
+export const pageVersions = pgTable('page_versions', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  content: customType<{ data: unknown; notNull: true; default: false }>({
+    dataType() {
+      return 'jsonb';
+    },
+  })('content').notNull(),
+  title: text('title'),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
 });
 
 export const userFavorites = pgTable('user_favorites', {
@@ -122,3 +138,38 @@ export const pageVisits = pgTable('page_visits', {
 }, (table) => ({
   userPageUnique: unique().on(table.userId, table.pageId),
 }));
+
+export const comments = pgTable('comments', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  anchorBlockId: text('anchor_block_id'),
+  resolved: boolean('resolved').default(false),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const templates = pgTable('templates', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+  title: text('title').notNull(),
+  icon: text('icon'),
+  description: text('description'),
+  contentBlocks: customType<{ data: unknown; notNull: true; default: false }>({
+    dataType() {
+      return 'jsonb';
+    },
+  })('content_blocks').notNull(),
+  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+export const commentReplies = pgTable('comment_replies', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+  content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});

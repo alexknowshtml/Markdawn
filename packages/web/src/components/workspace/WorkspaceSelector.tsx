@@ -59,7 +59,7 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-xl z-[95] animate-slide-up">
+        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-xl z-[95] animate-scale-in origin-top">
           <div className="max-h-[60vh] overflow-y-auto p-1.5 space-y-0.5">
             {(workspaces ?? []).map((workspace) => {
               const isActive = workspace.slug === params.workspaceSlug;

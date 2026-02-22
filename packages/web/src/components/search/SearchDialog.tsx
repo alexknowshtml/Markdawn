@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { FileText, Filter } from "lucide-react";
 
 type SearchResult = {
   id: string;
@@ -7,6 +8,7 @@ type SearchResult = {
   icon: string | null;
   workspaceSlug: string;
   path: string[];
+  breadcrumb?: string[];
 };
 
 export function SearchDialog() {
@@ -17,6 +19,10 @@ export function SearchDialog() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [showFilters, setShowFilters] = useState(false);
+  const [createdAfter, setCreatedAfter] = useState("");
+  const [createdBefore, setCreatedBefore] = useState("");
+  const [parentId, setParentId] = useState("");
 
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
@@ -27,6 +33,10 @@ export function SearchDialog() {
     setResults([]);
     setIsLoading(false);
     setActiveIndex(-1);
+    setShowFilters(false);
+    setCreatedAfter("");
+    setCreatedBefore("");
+    setParentId("");
   };
 
   useEffect(() => {
@@ -105,7 +115,18 @@ export function SearchDialog() {
 
     const timeout = window.setTimeout(async () => {
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(trimmedQuery)}`,
+        const params = new URLSearchParams({ q: trimmedQuery });
+        if (createdAfter) {
+          params.set("createdAfter", createdAfter);
+        }
+        if (createdBefore) {
+          params.set("createdBefore", createdBefore);
+        }
+        if (parentId) {
+          params.set("parentId", parentId);
+        }
+
+        const res = await fetch(`/api/search?${params.toString()}`,
           { signal: controller.signal }
         );
         if (!res.ok) {
@@ -128,7 +149,7 @@ export function SearchDialog() {
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [isOpen, trimmedQuery]);
+  }, [createdAfter, createdBefore, isOpen, parentId, trimmedQuery]);
 
   useEffect(() => {
     if (!hasResults) {
@@ -151,22 +172,72 @@ export function SearchDialog() {
         className="w-full max-w-2xl rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl animate-slide-up overflow-hidden"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="relative border-b border-zinc-200 dark:border-zinc-800 p-2">
+        <div className="border-b border-zinc-200 dark:border-zinc-800 p-2 space-y-2">
+          <div className="flex items-center gap-2">
           <input
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             placeholder="Search pages..."
-            className="w-full rounded-xl bg-transparent px-4 py-3 text-lg text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-500/20 dark:focus:ring-zinc-400/20 transition-shadow"
+            className="flex-1 rounded-xl bg-transparent px-4 py-3 text-lg text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-500/20 dark:focus:ring-zinc-400/20 transition-shadow"
           />
+          <button
+            type="button"
+            onClick={() => setShowFilters((prev) => !prev)}
+            className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-zinc-600 dark:text-zinc-300 border border-zinc-200 dark:border-zinc-700 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 transition"
+          >
+            <Filter className="h-4 w-4" />
+            Filters
+          </button>
+          </div>
           {isLoading && (
             <div className="absolute right-6 top-1/2 -translate-y-1/2">
               <div className="h-5 w-5 animate-spin rounded-full border-2 border-zinc-300 dark:border-zinc-600 border-t-zinc-700 dark:border-t-zinc-300" />
             </div>
           )}
+          {showFilters && (
+            <div className="grid gap-3 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50/60 dark:bg-zinc-800/20 p-3">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  Created after
+                  <input
+                    type="date"
+                    value={createdAfter}
+                    onChange={(event) => setCreatedAfter(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100"
+                  />
+                </label>
+                <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                  Created before
+                  <input
+                    type="date"
+                    value={createdBefore}
+                    onChange={(event) => setCreatedBefore(event.target.value)}
+                    className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100"
+                  />
+                </label>
+              </div>
+              <label className="text-xs font-medium text-zinc-500 dark:text-zinc-400">
+                Parent filter
+                <select
+                  value={parentId}
+                  onChange={(event) => setParentId(event.target.value)}
+                  className="mt-1 w-full rounded-lg border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 px-3 py-2 text-sm text-zinc-900 dark:text-zinc-100"
+                >
+                  <option value="">Any parent</option>
+                  <option value="root">Root pages only</option>
+                </select>
+              </label>
+            </div>
+          )}
         </div>
 
         <div className="max-h-[60vh] overflow-y-auto p-2">
+          {trimmedQuery && !isLoading && (
+            <div className="px-4 py-2 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+              {results.length} results
+            </div>
+          )}
           {!trimmedQuery && (
             <div className="px-4 py-14 text-center">
               <p className="text-sm text-zinc-500 dark:text-zinc-400">Type to search pages...</p>
@@ -199,6 +270,9 @@ export function SearchDialog() {
                         : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
                     }`}
                   >
+                    <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-200/50 dark:bg-zinc-700/50 text-lg shrink-0">
+                      {result.icon ? result.icon : <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />}
+                    </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{result.title}</div>
                       <div
@@ -208,6 +282,11 @@ export function SearchDialog() {
                       >
                         {result.workspaceSlug}
                       </div>
+                      {result.breadcrumb && result.breadcrumb.length > 0 && (
+                        <div className="text-[11px] mt-1 text-zinc-400 dark:text-zinc-500 truncate">
+                          {result.breadcrumb.join(" > ")}
+                        </div>
+                      )}
                     </div>
                   </button>
                 </li>

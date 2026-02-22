@@ -11,7 +11,13 @@ import pagesRoute from "./routes/pages";
 import workspacesRoute from "./routes/workspaces";
 import searchRoute from "./routes/search";
 import favoritesRoute from "./routes/favorites";
+import commentsRoute from "./routes/comments";
+import versionsRoute from "./routes/versions";
+import { publicRoute, publicShareRoute } from "./routes/public";
 import { authRoutes } from "./routes";
+import templatesRoute from "./routes/templates";
+import exportRoute from "./routes/export";
+import uploadsRoute from "./routes/uploads";
 
 type OriginDecision = string | undefined;
 
@@ -49,11 +55,26 @@ app.route("/api/pages", pagesRoute);
 
 app.route("/api/workspaces", workspacesRoute);
 
+app.route("/api/workspaces", exportRoute);
+
 app.route("/api/search", searchRoute);
 
 app.route("/api/favorites", favoritesRoute);
 
+app.route("/api/pages", commentsRoute);
+
+app.route("/api/pages", versionsRoute);
+
+app.route("/api/templates", templatesRoute);
+
+app.route("/api/uploads", uploadsRoute);
+
+app.route("/api", publicRoute);
+
 app.route("/api", authRoutes);
+app.route("/api/pages", publicShareRoute);
+
+app.use("/uploads/*", serveStatic({ root: "./" }));
 
 if (isProduction) {
   app.use('/assets/*', serveStatic({ root: './dist/web' }));
