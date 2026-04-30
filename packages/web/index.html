@@ -2,11 +2,19 @@
 <html lang="en">
   <head>
     <script>
-      try {
-        if (localStorage.getItem('markdawn-theme') === 'dark' || ((!localStorage.getItem('markdawn-theme') || localStorage.getItem('markdawn-theme') === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-          document.documentElement.classList.add('dark');
-        }
-      } catch (e) {}
+      (function() {
+        try {
+          var isDark = localStorage.getItem('markdawn-theme') === 'dark' || ((!localStorage.getItem('markdawn-theme') || localStorage.getItem('markdawn-theme') === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (isDark) {
+            document.documentElement.classList.add('dark');
+            document.documentElement.style.backgroundColor = '#09090b';
+            document.body && (document.body.style.backgroundColor = '#09090b');
+          } else {
+            document.documentElement.style.backgroundColor = '#ffffff';
+            document.body && (document.body.style.backgroundColor = '#ffffff');
+          }
+        } catch (e) {}
+      })();
     </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />

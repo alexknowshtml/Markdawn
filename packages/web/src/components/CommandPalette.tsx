@@ -29,12 +29,20 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
 
+  const openSearch = () => setIsOpen(true);
   const closeDialog = () => {
     setIsOpen(false);
     setQuery("");
     setResults([]);
     setIsLoading(false);
   };
+
+  // Listen for custom open-search event
+  useEffect(() => {
+    const handleOpenSearch = () => openSearch();
+    window.addEventListener("open-search", handleOpenSearch);
+    return () => window.removeEventListener("open-search", handleOpenSearch);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {

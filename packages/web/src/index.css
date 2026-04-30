@@ -95,19 +95,4 @@
   }
 }
 
-.bn-container,
-.bn-container[data-color-scheme="dark"] {
-  --bn-colors-editor-background: transparent;
-}
 
-.bn-editor {
-  background-color: transparent !important;
-  padding-inline: 54px;
-}
-
-.bn-editor:focus,
-.bn-editor:focus-visible,
-.bn-editor *:focus-visible {
-  outline: none !important;
-  box-shadow: none !important;
-}

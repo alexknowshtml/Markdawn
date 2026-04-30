@@ -14,8 +14,10 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
         },
         "/collab": {
-          target: env.VITE_COLLAB_URL ?? "ws://localhost:1234",
+          target: "http://localhost:1234",
           ws: true,
+          changeOrigin: true,
+          rewrite: (path: string) => path.replace(/^\/collab/, ""),
         },
       },
     },

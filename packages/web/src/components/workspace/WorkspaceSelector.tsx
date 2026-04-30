@@ -44,9 +44,9 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
       <button
         type="button"
         onClick={() => setOpen((prev) => !prev)}
-        className="w-full h-10 px-3 rounded-lg border border-zinc-200/80 dark:border-zinc-800/80 bg-white dark:bg-zinc-900 text-left text-sm font-medium text-zinc-900 dark:text-zinc-100 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:border-zinc-300 dark:hover:border-zinc-700 transition-all duration-200 flex items-center gap-3 shadow-sm cursor-pointer"
+        className="w-full h-10 px-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/40 dark:bg-black/20 text-left text-sm font-medium text-zinc-900 dark:text-zinc-100 hover:bg-white/60 dark:hover:bg-white/10 transition-all duration-200 flex items-center gap-3 shadow-sm cursor-pointer"
       >
-        <span className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 shadow-sm">
+        <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-black dark:bg-white text-white dark:text-zinc-900 shadow-sm">
           <Briefcase size={14} strokeWidth={2.5} />
         </span>
         <span className="flex-1 truncate">
@@ -59,8 +59,8 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
       </button>
 
       {open && (
-        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-xl border border-zinc-200/80 dark:border-zinc-800/80 bg-white/95 dark:bg-zinc-900/95 backdrop-blur-md shadow-xl z-[95] animate-scale-in origin-top">
-          <div className="max-h-[60vh] overflow-y-auto p-1.5 space-y-0.5">
+        <div className="absolute left-0 right-0 mt-2 overflow-hidden rounded-2xl border border-white/40 dark:border-zinc-700/50 bg-white/80 dark:bg-zinc-900/80 backdrop-blur-2xl shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] z-[95] animate-scale-in origin-top">
+          <div className="max-h-[60vh] overflow-y-auto p-2 space-y-1">
             {(workspaces ?? []).map((workspace) => {
               const isActive = workspace.slug === params.workspaceSlug;
               return (
@@ -68,18 +68,18 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
                   key={workspace.id}
                   type="button"
                   onClick={() => handleNavigate(workspace.slug)}
-                  className={`w-full px-2.5 py-2 text-left text-sm rounded-md transition-all duration-150 flex items-center gap-2.5 cursor-pointer ${
+                  className={`w-full px-2.5 py-2 text-left text-sm rounded-xl transition-all duration-150 flex items-center gap-2.5 cursor-pointer ${
                     isActive 
-                      ? "bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 font-medium" 
-                      : "text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-200"
+                      ? "bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium" 
+                      : "text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-200"
                   }`}
                 >
-                  <span className={`flex h-6 w-6 items-center justify-center rounded-md ${
+                  <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${
                     isActive 
-                      ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900" 
-                      : "bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400"
+                      ? "bg-black dark:bg-white text-white dark:text-zinc-900 shadow-sm" 
+                      : "bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400"
                   }`}>
-                    <Briefcase size={12} strokeWidth={isActive ? 2.5 : 2} />
+                    <Briefcase size={14} strokeWidth={isActive ? 2.5 : 2} />
                   </span>
                   <span className="flex-1 truncate">{workspace.name}</span>
                   {isActive && <Check size={16} className="text-zinc-900 dark:text-zinc-100" />}
@@ -87,17 +87,17 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
               );
             })}
           </div>
-          <div className="p-1.5 border-t border-zinc-200/80 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-900/50">
+          <div className="p-2 border-t border-black/5 dark:border-white/5">
             <button
               type="button"
               onClick={() => {
                 setOpen(false);
                 onCreateWorkspace();
               }}
-              className="w-full px-2.5 py-2 text-left text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-md transition-all duration-150 flex items-center gap-2.5 cursor-pointer"
+              className="w-full px-2.5 py-2 text-left text-sm font-medium text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 hover:bg-black/5 dark:hover:bg-white/10 rounded-xl transition-all duration-150 flex items-center gap-2.5 cursor-pointer"
             >
-              <span className="flex h-6 w-6 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400">
-                <Plus size={14} strokeWidth={2.5} />
+              <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400">
+                <Plus size={16} strokeWidth={2.5} />
               </span>
               Create Workspace
             </button>
