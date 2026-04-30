@@ -1,0 +1,776 @@
+.milkdown-editor {
+  min-height: 500px;
+  padding: 1rem;
+}
+
+.milkdown-editor-view {
+  outline: none;
+  min-height: 500px;
+  border: none !important;
+  box-shadow: none !important;
+}
+
+.ProseMirror {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.milkdown-editor-view .ProseMirror {
+  outline: none;
+  min-height: 460px;
+  color: #e4e4e7;
+  caret-color: #fafafa;
+}
+
+.milkdown-editor-view p {
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view h1,
+.milkdown-editor-view h2,
+.milkdown-editor-view h3,
+.milkdown-editor-view h4,
+.milkdown-editor-view h5,
+.milkdown-editor-view h6 {
+  margin-top: 1.5rem;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+}
+
+.milkdown-editor-view h1 { font-size: 2.25rem; }
+.milkdown-editor-view h2 { font-size: 1.875rem; }
+.milkdown-editor-view h3 { font-size: 1.5rem; }
+.milkdown-editor-view h4 { font-size: 1.25rem; }
+
+.milkdown-editor-view ul {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view li[data-item-type="task"] {
+  list-style: none;
+  position: relative;
+  padding-left: 1.75rem;
+}
+
+.milkdown-editor-view li[data-item-type="task"]::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.38em;
+  width: 14px;
+  height: 14px;
+  border: 1px solid #6b7280;
+  border-radius: 4px;
+  background: transparent;
+}
+
+.milkdown-editor-view li[data-item-type="task"][data-checked="true"]::before {
+  background: #3b82f6;
+  border-color: #3b82f6;
+  box-shadow: inset 0 0 0 2px #111827;
+}
+
+.milkdown-editor-view li[data-item-type="task"][data-checked="true"] {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.milkdown-editor-view ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view blockquote {
+  border-left: 4px solid #e5e7eb;
+  padding-left: 1rem;
+  color: #6b7280;
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view code {
+  background-color: #f3f4f6;
+  padding: 0.2rem 0.4rem;
+  border-radius: 0.25rem;
+  font-family: monospace;
+  font-size: 0.875em;
+}
+
+.milkdown-editor-view a {
+  color: #3b82f6;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.milkdown-editor-view pre {
+  background-color: #f3f4f6;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  overflow-x: auto;
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view [data-node-type="code_block"] {
+  position: relative;
+}
+
+.milkdown-editor-view .code-block-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  opacity: 0;
+  background: rgba(17, 24, 39, 0.7);
+  color: #f9fafb;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+
+.milkdown-editor-view pre:hover .code-block-copy-btn {
+  opacity: 1;
+}
+
+.milkdown-editor-view pre.ProseMirror-selectednode {
+  background: inherit !important;
+  outline: none !important;
+}
+
+.dark .milkdown-editor-view pre.ProseMirror-selectednode {
+  background-color: #111827 !important;
+}
+
+.milkdown-editor-view pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
+.dark .milkdown-editor-view blockquote {
+  border-left-color: #374151;
+  color: #9ca3af;
+}
+
+.dark .milkdown-editor-view code {
+  background-color: #374151;
+}
+
+.dark .milkdown-editor-view a {
+  color: #60a5fa;
+}
+
+.dark .milkdown-editor-view pre {
+  background-color: #111827;
+  border: 1px solid #374151;
+}
+
+.dark .milkdown-editor-view .code-block-copy-btn {
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+  border-color: rgba(229, 231, 235, 0.25);
+}
+
+.dark .milkdown-editor-view li[data-item-type="task"]::before {
+  border-color: #9ca3af;
+}
+
+.dark .milkdown-editor-view li[data-item-type="task"][data-checked="true"]::before {
+  background: #60a5fa;
+  border-color: #60a5fa;
+  box-shadow: inset 0 0 0 2px #0a0a0a;
+}
+
+.milkdown-editor-view table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+}
+
+.milkdown-editor-view th,
+.milkdown-editor-view td {
+  border: 1px solid #e5e7eb;
+  padding: 0.5rem 0.75rem;
+  text-align: left;
+}
+
+.milkdown-editor-view th {
+  background-color: #f9fafb;
+  font-weight: 600;
+}
+
+.dark .milkdown-editor-view th,
+.dark .milkdown-editor-view td {
+  border-color: #374151;
+}
+
+.dark .milkdown-editor-view th {
+  background-color: #1f2937;
+}
+
+.milkdown-editor-view .wiki-link {
+  color: #3b82f6;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.dark .milkdown-editor-view .wiki-link {
+  color: #60a5fa;
+}
+
+.milkdown-editor-view .tag {
+  color: #3b82f6;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.dark .milkdown-editor-view .tag {
+  color: #60a5fa;
+}
+
+/* Link Hover Tooltip */
+.link-hover-tooltip {
+  position: absolute;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--mantine-color-body, #fff);
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  font-size: 13px;
+  max-width: 400px;
+}
+
+.link-hover-tooltip a {
+  color: #3b82f6;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 240px;
+}
+
+.link-hover-tooltip-edit,
+.link-hover-tooltip-remove {
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  background: transparent;
+  color: var(--mantine-color-text, #18181b);
+  transition: background-color 0.15s;
+}
+
+.link-hover-tooltip-edit:hover,
+.link-hover-tooltip-remove:hover {
+  background: var(--mantine-color-gray-1, #f4f4f5);
+}
+
+.dark .link-hover-tooltip {
+  background: #18181b;
+  border-color: #27272a;
+}
+
+.dark .link-hover-tooltip a {
+  color: #60a5fa;
+}
+
+.dark .link-hover-tooltip-edit,
+.dark .link-hover-tooltip-remove {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+.dark .link-hover-tooltip-edit:hover,
+.dark .link-hover-tooltip-remove:hover {
+  background: #27272a;
+}
+
+/* Link Editor Popup */
+.link-editor-popup {
+  position: absolute;
+  z-index: 1000;
+  background: var(--mantine-color-body, #fff);
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 320px;
+  max-width: 480px;
+  animation: math-popup-fade-in 0.15s ease-out;
+}
+
+.link-editor-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mantine-color-gray-6, #71717a);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.link-editor-input {
+  flex: 1;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  border-radius: 6px;
+  background: var(--mantine-color-input, #f4f4f5);
+  color: var(--mantine-color-text, #18181b);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.link-editor-input:focus {
+  border-color: var(--mantine-color-blue-6, #2563eb);
+  box-shadow: 0 0 0 2px var(--mantine-color-blue-light, #dbeafe);
+}
+
+.link-editor-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.link-editor-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, transform 0.1s;
+}
+
+.link-editor-btn-cancel {
+  background: transparent;
+  color: var(--mantine-color-text, #18181b);
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+}
+
+.link-editor-btn-cancel:hover {
+  background: var(--mantine-color-gray-1, #f4f4f5);
+}
+
+.link-editor-btn-save {
+  background: var(--mantine-color-blue-6, #2563eb);
+  color: white;
+  border: none;
+  font-weight: 600;
+}
+
+.link-editor-btn-save:hover {
+  background: var(--mantine-color-blue-7, #1d4ed8);
+}
+
+.link-editor-btn-remove {
+  background: transparent;
+  color: #ef4444;
+  border: 1px solid #ef4444;
+}
+
+.link-editor-btn-remove:hover {
+  background: #fef2f2;
+}
+
+.dark .link-editor-popup {
+  background: #18181b;
+  border-color: #27272a;
+}
+
+.dark .link-editor-header {
+  color: #a1a1aa;
+}
+
+.dark .link-editor-input {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+.dark .link-editor-input:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+
+.dark .link-editor-btn-cancel {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+.dark .link-editor-btn-cancel:hover {
+  background: #27272a;
+}
+
+.dark .link-editor-btn-save {
+  background: #2563eb;
+}
+
+.dark .link-editor-btn-save:hover {
+  background: #1d4ed8;
+}
+
+.dark .link-editor-btn-remove {
+  color: #f87171;
+  border-color: #f87171;
+}
+
+.dark .link-editor-btn-remove:hover {
+  background: #450a0a;
+}
+
+/* Slash Command Menu */
+.milkdown-slash-menu {
+  position: absolute;
+  z-index: 1000;
+  min-width: 200px;
+  max-width: 320px;
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  font-size: 14px;
+}
+
+.milkdown-slash-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: #e4e4e7;
+  transition: background-color 0.15s ease;
+}
+
+.milkdown-slash-menu-item:hover,
+.milkdown-slash-menu-item.selected {
+  background: #3f3f46;
+}
+
+.milkdown-slash-menu-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: #52525b;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.milkdown-slash-menu-item-label {
+  flex: 1;
+}
+
+.milkdown-slash-menu-item-hint {
+  color: #71717a;
+  font-size: 12px;
+}
+
+.dark .milkdown-slash-menu {
+  background: #18181b;
+  border-color: #27272a;
+}
+
+.dark .milkdown-slash-menu-item {
+  color: #e4e4e7;
+}
+
+.dark .milkdown-slash-menu-item:hover,
+.dark .milkdown-slash-menu-item.selected {
+  background: #27272a;
+}
+
+.dark .milkdown-slash-menu-item-icon {
+  background: #3f3f46;
+}
+
+.dark .milkdown-slash-menu-item-hint {
+  color: #a1a1aa;
+}
+
+.milkdown-editor-view span[data-type="math_inline"] {
+  display: inline;
+  cursor: pointer;
+}
+
+.milkdown-editor-view span[data-type="math_inline"] .katex {
+  font-size: 1em;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"],
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] {
+  background: transparent !important;
+  border: none !important;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] pre,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] pre,
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] textarea,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] textarea {
+  display: none !important;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] .katex-display,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] .katex-display {
+  margin: 0.5em 0;
+  text-align: center;
+}
+
+.milkdown-editor-view .code-block[data-language="LaTeX"],
+.milkdown-editor-view .code-block[data-language="latex"] {
+  background: transparent !important;
+  border: none !important;
+}
+
+.milkdown-editor-view .code-block[data-language="LaTeX"] .katex-display,
+.milkdown-editor-view .code-block[data-language="latex"] .katex-display {
+  margin: 0.5em 0;
+}
+
+/* Inline LaTeX edit tooltip */
+.milkdown-latex-inline-edit {
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 200px;
+  color: #e4e4e7;
+}
+
+.milkdown-latex-inline-edit p {
+  margin: 0;
+  outline: none;
+}
+
+.dark .milkdown-latex-inline-edit {
+  background: #18181b;
+  border-color: #27272a;
+}
+
+/* Math Editor Popup - Notion Style */
+.math-editor-popup {
+  animation: math-popup-fade-in 0.15s ease-out;
+}
+
+@keyframes math-popup-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.math-editor-popup textarea {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  transition: border-color 0.2s;
+}
+
+.math-editor-popup textarea:focus {
+  outline: none;
+  border-color: var(--mantine-color-blue-filled);
+}
+
+.math-editor-popup button {
+  transition: all 0.15s ease;
+}
+
+.math-editor-popup button:hover {
+  transform: translateY(-1px);
+}
+
+.math-editor-popup button:active {
+  transform: translateY(0);
+}
+
+/* Math node hover effect */
+.milkdown-editor-view span[data-type="math_inline"]:hover {
+  background: rgba(59, 130, 246, 0.1);
+  border-radius: 2px;
+}
+
+.dark .milkdown-editor-view span[data-type="math_inline"]:hover {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+/* Block math hover */
+.milkdown-editor-view .latex-block-math:hover {
+  background: rgba(59, 130, 246, 0.05) !important;
+}
+
+.dark .milkdown-editor-view .latex-block-math:hover {
+  background: rgba(96, 165, 250, 0.1) !important;
+}
+
+/* Math Editor Popup Dark Mode Support */
+.dark .mantine-popup-area {
+  background: #18181b !important;
+  border-color: #27272a !important;
+}
+
+.dark .mantine-popup-area textarea {
+  background: #27272a !important;
+  color: #e4e4e7 !important;
+  border-color: #3f3f46 !important;
+}
+
+.dark .mantine-popup-area button:first-child {
+  background: transparent !important;
+  color: #e4e4e7 !important;
+  border-color: #3f3f46 !important;
+}
+
+.dark .mantine-popup-area button:first-child:hover {
+  background: #27272a !important;
+}
+
+.dark .mantine-popup-area button:last-child {
+  background: #2563eb !important;
+}
+
+.dark .mantine-popup-area button:last-child:hover {
+  background: #1d4ed8 !important;
+}
+
+.dark .mantine-popup-area button:active {
+  background: #1e40af !important;
+}
+
+/* MathEditor Component */
+.math-editor-popup {
+  position: absolute;
+  z-index: 1000;
+  background: var(--mantine-color-body, #fff);
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  border-radius: 8px;
+  padding: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 320px;
+  max-width: 600px;
+  animation: math-popup-fade-in 0.15s ease-out;
+}
+
+.math-editor-header {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mantine-color-gray-6, #71717a);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.math-editor-textarea {
+  flex: 1;
+  padding: 10px 12px;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+  border-radius: 6px;
+  resize: vertical;
+  background: var(--mantine-color-input, #f4f4f5);
+  color: var(--mantine-color-text, #18181b);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  min-width: 300px;
+}
+
+.math-editor-textarea:focus {
+  border-color: var(--mantine-color-blue-6, #2563eb);
+  box-shadow: 0 0 0 2px var(--mantine-color-blue-light, #dbeafe);
+}
+
+.math-editor-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.math-editor-btn {
+  padding: 8px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background-color 0.15s, transform 0.1s;
+}
+
+.math-editor-btn-cancel {
+  background: transparent;
+  color: var(--mantine-color-text, #18181b);
+  border: 1px solid var(--mantine-color-default-border, #e4e4e7);
+}
+
+.math-editor-btn-cancel:hover {
+  background: var(--mantine-color-gray-1, #f4f4f5);
+}
+
+.math-editor-btn-done {
+  background: var(--mantine-color-blue-6, #2563eb);
+  color: white;
+  border: none;
+  font-weight: 600;
+}
+
+.math-editor-btn-done:hover {
+  background: var(--mantine-color-blue-7, #1d4ed8);
+}
+
+.math-editor-btn-done:active {
+  transform: scale(0.98);
+}
+
+.dark .math-editor-popup {
+  background: #18181b;
+  border-color: #27272a;
+}
+
+.dark .math-editor-header {
+  color: #a1a1aa;
+}
+
+.dark .math-editor-textarea {
+  background: #27272a;
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+.dark .math-editor-textarea:focus {
+  border-color: #60a5fa;
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.2);
+}
+
+.dark .math-editor-btn-cancel {
+  color: #e4e4e7;
+  border-color: #3f3f46;
+}
+
+.dark .math-editor-btn-cancel:hover {
+  background: #27272a;
+}
+
+.dark .math-editor-btn-done {
+  background: #2563eb;
+}
+
+.dark .math-editor-btn-done:hover {
+  background: #1d4ed8;
+}

@@ -33,7 +33,7 @@ export function WikiLinkSuggestions({
   const results = useMemo(() => {
     const normalized = trimmedQuery;
     const filtered = normalized
-      ? pages.filter((page) => page.title.toLowerCase().includes(normalized))
+      ? pages.filter((page) => (page.title ?? "").toLowerCase().includes(normalized))
       : pages;
     return filtered.slice(0, MAX_RESULTS);
   }, [pages, trimmedQuery]);

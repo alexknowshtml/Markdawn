@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { HocuspocusProvider } from "@hocuspocus/provider";
 import { WebSocketStatus } from "@hocuspocus/provider";
+import { Tooltip } from "../Tooltip";
 
 type CollabStatusProps = {
   provider: HocuspocusProvider | null;
@@ -51,34 +52,10 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
   }
 
   return (
-    <div className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-zinc-100/80 dark:bg-zinc-800/50 border border-zinc-200/80 dark:border-zinc-700/50 transition-all duration-300 shadow-sm">
-      <div className="relative flex h-2 w-2 items-center justify-center">
-        <span className={`relative inline-flex h-2 w-2 rounded-full transition-colors duration-300 ${dotClass}`} />
-      </div>
-      <span className="text-xs font-medium text-zinc-600 dark:text-zinc-300 transition-colors duration-300">
-        {label}
+    <Tooltip label={label} position="bottom">
+      <span className={`relative flex w-9 h-9 items-center justify-center rounded-md transition-colors duration-200 group-hover:bg-zinc-100 dark:group-hover:bg-zinc-800 cursor-pointer`}>
+        <span className={`inline-flex h-3 w-3 rounded-full transition-colors duration-300 ${dotClass}`} />
       </span>
-      {userCount > 1 && (
-        <>
-          <span className="h-3 w-px bg-zinc-300 dark:bg-zinc-600" />
-          <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400">
-            <svg
-              className="h-3 w-3"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"
-              />
-            </svg>
-            <span className="text-xs font-medium">{userCount}</span>
-          </div>
-        </>
-      )}
-    </div>
+    </Tooltip>
   );
 }

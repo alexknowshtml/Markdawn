@@ -56,7 +56,7 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
           {children}
         </div>
       </Popover.Target>
-      <Popover.Dropdown className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-lg shadow-xl w-72">
+      <Popover.Dropdown className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-lg shadow-xl w-80 min-w-[20rem]">
         <Stack gap="md">
           <div>
             <Group justify="space-between" mb="xs">
@@ -83,7 +83,7 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
               {GRADIENTS.map((gradient) => (
                 <button
                   key={gradient}
-                  className={`w-full h-10 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
+                  className={`w-full h-11 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
                     coverType === 'gradient' && coverValue === gradient ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900' : ''
                   }`}
                   style={{ background: gradient }}
@@ -105,7 +105,7 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
               {SOLID_COLORS.map((color) => (
                 <button
                   key={color}
-                  className={`w-full h-8 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
+                  className={`w-full h-9 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
                     coverType === 'solid' && coverValue === color ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900' : ''
                   }`}
                   style={{ backgroundColor: color }}

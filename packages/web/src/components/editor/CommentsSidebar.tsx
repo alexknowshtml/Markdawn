@@ -181,7 +181,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
               <div className="flex items-start justify-between gap-2 mb-2">
                 <div className="flex items-center gap-2">
                   {comment.user?.image ? (
-                    <img src={comment.user.image} alt={comment.user.name} className="w-6 h-6 rounded-full" />
+                    <img src={comment.user.image} alt={comment.user.name} className="w-6 h-6 rounded-full" referrerPolicy="no-referrer" />
                   ) : (
                     <div className="w-6 h-6 rounded-full bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center text-xs font-medium text-zinc-600 dark:text-zinc-300">
                       {comment.user?.name?.[0]?.toUpperCase() || '?'}
@@ -239,7 +239,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
                           {reply.user?.image ? (
-                            <img src={reply.user.image} alt={reply.user.name} className="w-5 h-5 rounded-full" />
+                            <img src={reply.user.image} alt={reply.user.name} className="w-5 h-5 rounded-full" referrerPolicy="no-referrer" />
                           ) : (
                             <div className="w-5 h-5 rounded-full bg-zinc-200 dark:bg-zinc-700 flex items-center justify-center text-[10px] font-medium text-zinc-600 dark:text-zinc-300">
                               {reply.user?.name?.[0]?.toUpperCase() || '?'}
