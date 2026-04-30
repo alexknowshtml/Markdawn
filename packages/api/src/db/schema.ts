@@ -81,10 +81,29 @@ export const workspaceMembers = pgTable('workspace_members', {
   joinedAt: timestamp('joined_at').defaultNow(),
 });
 
+export const folders = pgTable('folders', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+  parentId: uuid('parent_id').references((): AnyPgColumn => folders.id, { onDelete: 'cascade' }),
+  name: text('name').notNull().default('New Folder'),
+  icon: text('icon'),
+  position: text('position').notNull().default('0'),
+
+  createdBy: uuid('created_by').references(() => users.id),
+
+  createdAt: timestamp('created_at').defaultNow(),
+
+  updatedAt: timestamp('updated_at').defaultNow(),
+
+  isDeleted: boolean('is_deleted').default(false),
+
+  deletedAt: timestamp('deleted_at'),
+});
+
 export const pages: any = pgTable('pages', {
   id: uuid('id').defaultRandom().primaryKey(),
   workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
-  parentId: uuid('parent_id').references((): AnyPgColumn => pages.id, { onDelete: 'set null' }),
+  parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
   title: text('title').notNull().default('Untitled'),
   titleSearch: text('title_search').generatedAlwaysAs(sql`to_tsvector('english', coalesce(title, ''))`),
   icon: text('icon'),
@@ -92,6 +111,11 @@ export const pages: any = pgTable('pages', {
   coverValue: text('cover_value'),
   position: text('position').notNull().default('0'),
   ydoc: bytea('ydoc'),
+  properties: customType<{ data: Record<string, unknown>; notNull: false; default: false }>({
+    dataType() {
+      return 'jsonb';
+    },
+  })('properties'),
 
   createdBy: uuid('created_by').references(() => users.id),
 
@@ -172,5 +196,45 @@ export const commentReplies = pgTable('comment_replies', {
   commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'cascade' }),
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   content: text('content').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+});
+
+export const tags = pgTable('tags', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }).notNull(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  workspaceTagUnique: unique().on(table.workspaceId, table.name),
+}));
+
+export const pageTags = pgTable('page_tags', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }).notNull(),
+  tagId: uuid('tag_id').references(() => tags.id, { onDelete: 'cascade' }).notNull(),
+}, (table) => ({
+  pageTagUnique: unique().on(table.pageId, table.tagId),
+}));
+
+export const pageLinks = pgTable('page_links', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  sourcePageId: uuid('source_page_id').references(() => pages.id, { onDelete: 'cascade' }).notNull(),
+  targetPageId: uuid('target_page_id').references(() => pages.id, { onDelete: 'cascade' }),
+  targetTitle: text('target_title').notNull(),
+  linkText: text('link_text').notNull(),
+  linkType: text('link_type').default('wiki').$type<'wiki' | 'heading' | 'embed'>(),
+  createdAt: timestamp('created_at').defaultNow(),
+}, (table) => ({
+  sourceTargetUnique: unique().on(table.sourcePageId, table.targetTitle),
+}));
+
+export const uploads = pgTable('uploads', {
+  id: uuid('id').defaultRandom().primaryKey(),
+  filename: text('filename').notNull().unique(),
+  originalName: text('original_name').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }).notNull(),
+  uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'cascade' }).notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
