@@ -3,7 +3,7 @@
 Markdawn is a collaborative note-taking application built with:
 - **Monorepo**: pnpm workspaces with 4 packages (`api`, `web`, `shared`, `collab`)
 - **API**: Hono (Node.js), Drizzle ORM, PostgreSQL
-- **Web**: React 19, Vite, Tailwind CSS v4, Mantine UI, BlockNote
+- **Web**: React 19, Vite, Tailwind CSS v4, Mantine UI, Milkdown
 - **Collab**: Hocuspocus (Yjs-based) for real-time collaboration
 - **Auth**: Better Auth with OAuth support
 
@@ -180,14 +180,14 @@ See `.env.example` for required variables:
 - `hono` — Web framework
 - `drizzle-orm` — ORM
 - `drizzle-kit` — Migration tool
-- `@blocknote/server-util` — BlockNote server utilities
+- `marked` — Markdown parsing
 
 ### Web
 - `react` / `react-dom` — UI library
 - `react-router-dom` — Routing
 - `@mantine/core` — UI components
-- `@blocknote/react` — Rich text editor
-- `@hocuspocus/provider` — Yjs collab provider
+- `@milkdown/core` — Rich text editor
+- `@milkdown/plugin-collaboration` — Yjs collab integration
 - `better-auth` — Authentication client
 - `@tanstack/react-query` — Server state
 
@@ -269,7 +269,7 @@ pnpm dev  # Starts all packages in parallel
 2. **Environment detection**: Use `process.env.NODE_ENV === "production"`
 3. **CORS**: Configured in API, allowlist-based in production
 4. **Yjs documents**: Stored as binary buffers in PostgreSQL
-5. **BlockNote**: Server-side markdown conversion via `@blocknote/server-util`
+5. **Milkdown**: Server-side markdown conversion via `marked`
 
 ---
 
@@ -277,19 +277,19 @@ pnpm dev  # Starts all packages in parallel
 
 These are critical issues discovered during implementation. Do not try to "fix" these — they are known limitations.
 
-### BlockNote + Strict TypeScript
-- **Issue**: `BlockNoteView` props conflict with `useCreateBlockNote` return type when `exactOptionalPropertyTypes` is enabled
-- **Solution**: Cast editor instance to `any` in `Editor.tsx`. This is an expected workaround
-- **Reference**: `.sisyphus/notepads/markdawn/learnings.md`
+### Milkdown + Strict TypeScript
+- **Issue**: Editor types may conflict with strict TypeScript settings
+- **Solution**: Use proper type assertions or `unknown` with narrowing
+- **Reference**: Milkdown documentation on TypeScript
 
 ### Better Auth baseURL
 - **Issue**: OAuth redirect fails if baseURL points to wrong URL
 - **Solution**: `baseURL` must be the FRONTEND URL (e.g., `http://localhost:5173`), NOT the API server
 - **Reference**: Better Auth Issue #5696
 
-### BlockNote Undo/Redo with Collaboration
-- **Issue**: Undo/redo is broken when collaboration is enabled
-- **Solution**: Document in code, do NOT try to fix. This is a known BlockNote issue (#2244)
+### Milkdown Undo/Redo with Collaboration
+- **Issue**: Undo/redo may behave unexpectedly with collaboration enabled
+- **Solution**: Test and document any issues found
 
 ### Tailwind v4 Configuration
 - **Issue**: Tailwind v4 uses CSS-first config (`@import "tailwindcss"` + `@theme`), NOT `tailwind.config.js`
@@ -315,7 +315,6 @@ These are critical issues discovered during implementation. Do not try to "fix" 
 
 ### Code Quality (Known Violations)
 These are documented but not fixed:
-- `as any` in Editor.tsx (BlockNote type conflict - expected workaround)
 - Some components missing `dark:` variants (see quality.md)
 
 ### Environment Variables for URLs
@@ -325,18 +324,6 @@ URLs are parameterized via environment variables:
 - `VITE_COLLAB_URL` — Frontend uses for WebSocket (default: ws://localhost:1234)
 - Vite proxy targets are configurable via env vars in vite.config.ts
 
-
-### BlockNote Custom Block Specs
-- **Issue**: `createReactBlockSpec` returns a factory function that must be called to get the spec object
-- **Solution**: Export the result of calling the factory function:
-  ```typescript
-  // Wrong - exports the factory function
-  export const myBlockSpec = createReactBlockSpec(...);
-  
-  // Correct - exports the spec object  
-  export const myBlockSpec = createReactBlockSpec(...)(undefined);
-  ```
-- **Reference**: `packages/web/src/editor/schema.ts`
 
 ### Yjs Export Handling
 - **Issue**: `ydoc` column stores binary Yjs CRDT data, not plain text
@@ -350,13 +337,13 @@ URLs are parameterized via environment variables:
 - **Why**: Yjs binary contains null bytes, plain markdown text does not
 - **Reference**: `packages/api/src/routes/export.ts`
 
-### Wiki Links in BlockNote
-- **Issue**: Links are marks, not nodes in TipTap/BlockNote
+### Wiki Links in Milkdown
+- **Issue**: Links are marks, not nodes in Milkdown
 - **Solution**: Use text with marks format:
   ```typescript
   [{ type: "text", text: linkText, marks: [{ type: "link", attrs: { href } }] }]
   ```
-- **Reference**: `packages/web/src/components/editor/Editor.tsx`
+- **Reference**: `packages/web/src/editor/schema.ts`
 
 ### API Routes - Use pool.query
 - **Issue**: Drizzle has type mismatches between root and package installations

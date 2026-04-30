@@ -5,7 +5,7 @@ A collaborative note-taking application with real-time editing capabilities.
 ## Features
 
 - Real-time collaboration powered by Yjs and Hocuspocus
-- Rich text editing with BlockNote editor
+- Rich text editing with Milkdown editor
 - OAuth authentication (Google, GitHub)
 - Workspace-based organization
 - Dark mode support
@@ -135,7 +135,7 @@ npx playwright test e2e/app.spec.ts
 - **Vite** - Build tool
 - **Tailwind CSS v4** - Styling
 - **Mantine** - UI components
-- **BlockNote** - Rich text editor
+- **Milkdown** - Rich text editor
 - **React Query** - Server state
 
 ### Collaboration
