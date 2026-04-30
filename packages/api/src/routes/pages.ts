@@ -1,11 +1,11 @@
 import { Hono } from "hono";
 import { randomBytes } from "node:crypto";
 import { HTTPException } from "hono/http-exception";
-import type { ServerBlockNoteEditor } from "@blocknote/server-util";
-import { generatePosition } from "@markdawn/shared";
+import { marked } from "marked";
 import { requireAuth } from "../middleware/auth";
 import { pages } from "../db";
 import { pool } from "../db/connection";
+import { markdownToYjsState, stripLeadingH1 } from "../utils/markdown-to-yjs";
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -20,41 +20,17 @@ const pagesRoute = new Hono();
 
 pagesRoute.use("*", requireAuth);
 
-type BlockNoteServerInstance = ReturnType<typeof ServerBlockNoteEditor.create>;
-type MarkdownBlockInput = Parameters<BlockNoteServerInstance["blocksToMarkdownLossy"]>[0];
-
-let blocknoteServerPromise: Promise<BlockNoteServerInstance> | null = null;
-
-const getBlockNoteServer = () => {
-  if (!blocknoteServerPromise) {
-    blocknoteServerPromise = import("@blocknote/server-util").then(({ ServerBlockNoteEditor }) =>
-      ServerBlockNoteEditor.create()
-    );
-  }
-
-  return blocknoteServerPromise;
+const markdownToHtml = (markdown: string): string => {
+  return marked.parse(markdown, { async: false }) as string;
 };
 
-const buildTree = (rows: PageRow[]) => {
-  type PageNode = PageRow & { ydoc: number[] | null; children: PageNode[] };
-  const nodes: PageNode[] = rows.map((page) => ({
-    ...page,
-    ydoc: page.ydoc ? Array.from(page.ydoc) : null,
-    children: [],
-  }));
-  const map = new Map<string, (typeof nodes)[number]>();
-  nodes.forEach((node) => map.set(node.id, node));
-
-  const roots: typeof nodes = [];
-  nodes.forEach((node) => {
-    if (node.parentId && map.has(node.parentId)) {
-      map.get(node.parentId)!.children.push(node);
-    } else {
-      roots.push(node);
-    }
-  });
-
-  return roots;
+const isValidMarkdown = (markdown: string): boolean => {
+  try {
+    marked.parse(markdown, { async: false });
+    return true;
+  } catch {
+    return false;
+  }
 };
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
@@ -99,11 +75,18 @@ pagesRoute.get("/tree", async (c) => {
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    "select * from pages where workspace_id = $1 and is_deleted = false order by parent_id nulls first, position asc",
+    "select * from pages where workspace_id = $1 and is_deleted = false order by parent_id nulls first, case when parent_id is null then updated_at end desc nulls last, position asc",
     [workspaceId]
   );
 
-  return c.json(buildTree((result.rows as RawPageRow[]).map(normalizePageRow)));
+  const pagesList = (result.rows as RawPageRow[]).map(normalizePageRow);
+  return c.json(
+    pagesList.map((page) => ({
+      ...page,
+      ydoc: page.ydoc ? Array.from(page.ydoc) : null,
+      children: [],
+    }))
+  );
 });
 
 pagesRoute.post("/", async (c) => {
@@ -127,9 +110,12 @@ pagesRoute.post("/", async (c) => {
   await ensureWorkspaceMember(workspaceId, user.id);
 
   if (parentId) {
-    const parent = await getPageById(parentId);
-    if (!parent || parent.workspaceId !== workspaceId) {
-      throw new HTTPException(404, { message: "Parent page not found" });
+    const folderResult = await pool.query(
+      "select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1",
+      [parentId, workspaceId]
+    );
+    if (folderResult.rowCount === 0) {
+      throw new HTTPException(404, { message: "Parent folder not found" });
     }
   }
 
@@ -241,13 +227,14 @@ pagesRoute.patch(":id", async (c) => {
     throw new HTTPException(400, { message: "Invalid body" });
   }
 
-  const { title, icon, parentId, position, coverType, coverValue } = body as {
+  const { title, icon, parentId, position, coverType, coverValue, properties } = body as {
     title?: string;
     icon?: string | null;
     parentId?: string | null;
-    position?: number;
+    position?: string | number;
     coverType?: string | null;
     coverValue?: string | null;
+    properties?: Record<string, unknown> | null;
   };
 
   const hasParentId = Object.prototype.hasOwnProperty.call(body, "parentId");
@@ -255,27 +242,41 @@ pagesRoute.patch(":id", async (c) => {
     if (parentId === page.id) {
       throw new HTTPException(400, { message: "Cannot set parent to self" });
     }
-    const parent = await getPageById(parentId);
-    if (!parent || parent.workspaceId !== page.workspaceId) {
-      throw new HTTPException(404, { message: "Parent page not found" });
+    const folderResult = await pool.query(
+      "select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1",
+      [parentId, page.workspaceId]
+    );
+    if (folderResult.rowCount === 0) {
+      throw new HTTPException(404, { message: "Parent folder not found" });
     }
   }
 
   const nextTitle = typeof title === "string" ? (title.trim().length > 0 ? title.trim() : "Untitled") : page.title;
   const nextIcon = typeof icon === "string" ? (icon.trim().length > 0 ? icon.trim() : null) : icon === null ? null : page.icon;
   const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition = typeof position === "number" && Number.isFinite(position) ? position : page.position;
+  const nextPosition = typeof position === "string"
+    ? (position.trim().length > 0 ? position.trim() : page.position)
+    : typeof position === "number" && Number.isFinite(position)
+      ? String(position)
+      : page.position;
   const hasCoverType = Object.prototype.hasOwnProperty.call(body, "coverType");
   const hasCoverValue = Object.prototype.hasOwnProperty.call(body, "coverValue");
+  const hasProperties = Object.prototype.hasOwnProperty.call(body, "properties");
   const nextCoverType = hasCoverType ? (typeof coverType === "string" && coverType.trim().length > 0 ? coverType.trim() : null) : page.coverType;
   const nextCoverValue = hasCoverValue ? (typeof coverValue === "string" && coverValue.trim().length > 0 ? coverValue.trim() : null) : page.coverValue;
+  const nextProperties = hasProperties
+    ? (properties && typeof properties === "object" ? JSON.stringify(properties) : null)
+    : page.properties;
 
-  const updateResult = await pool.query(
-    "update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
-    [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId]
-  );
-
-
+  const updateResult = hasProperties
+    ? await pool.query(
+        "update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
+        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, nextProperties, pageId]
+      )
+    : await pool.query(
+        "update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
+        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId]
+      );
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: "Failed to update page" });
@@ -310,41 +311,6 @@ pagesRoute.patch(":id/restore", async (c) => {
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
-pagesRoute.patch(":id/content", async (c) => {
-  const pageId = c.req.param("id");
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
-  }
-
-  ensureWorkspaceForPage(page);
-  const user = c.get("user") as { id: string };
-  await ensureWorkspaceMember(page.workspaceId!, user.id);
-
-  const body = await c.req.json().catch(() => null);
-  if (!body || typeof body !== "object") {
-    throw new HTTPException(400, { message: "Invalid body" });
-  }
-
-  const { ydoc } = body as { ydoc?: number[] };
-  if (!Array.isArray(ydoc)) {
-    throw new HTTPException(400, { message: "ydoc is required" });
-  }
-
-  const ydocBuffer = Buffer.from(ydoc);
-  const updateResult = await pool.query(
-    "update pages set ydoc = $1, updated_at = now() where id = $2",
-    [ydocBuffer, pageId]
-  );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: "Failed to update page content" });
-  }
-
-  return c.json({ success: true });
-});
-
 pagesRoute.patch(":id/move", async (c) => {
   const pageId = c.req.param("id");
   const page = await getPageById(pageId);
@@ -364,7 +330,7 @@ pagesRoute.patch(":id/move", async (c) => {
 
   const { parentId, position } = body as {
     parentId?: string | null;
-    position?: number;
+    position?: string | number;
   };
 
   const hasParentId = Object.prototype.hasOwnProperty.call(body, "parentId");
@@ -372,14 +338,21 @@ pagesRoute.patch(":id/move", async (c) => {
     if (parentId === page.id) {
       throw new HTTPException(400, { message: "Cannot set parent to self" });
     }
-    const parent = await getPageById(parentId);
-    if (!parent || parent.workspaceId !== page.workspaceId) {
-      throw new HTTPException(404, { message: "Parent page not found" });
+    const folderResult = await pool.query(
+      "select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1",
+      [parentId, page.workspaceId]
+    );
+    if (folderResult.rowCount === 0) {
+      throw new HTTPException(404, { message: "Parent folder not found" });
     }
   }
 
   const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition = typeof position === "number" && Number.isFinite(position) ? position : page.position;
+  const nextPosition = typeof position === "string"
+    ? (position.trim().length > 0 ? position.trim() : page.position)
+    : typeof position === "number" && Number.isFinite(position)
+      ? String(position)
+      : page.position;
 
   const updateResult = await pool.query(
     "update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *",
@@ -459,13 +432,16 @@ pagesRoute.post(":id/import/markdown", async (c) => {
     throw new HTTPException(400, { message: "Markdown is required" });
   }
 
-  const blocknoteServer = await getBlockNoteServer();
-  const blocks = await blocknoteServer.tryParseMarkdownToBlocks(markdown);
-  const encoded = new TextEncoder().encode(JSON.stringify(blocks));
+  if (!isValidMarkdown(markdown)) {
+    throw new HTTPException(400, { message: "Invalid markdown format" });
+  }
+
+  const contentForEditor = page.title ? stripLeadingH1(markdown, page.title) : markdown;
+  const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
 
   const updateResult = await pool.query(
     "update pages set ydoc = $1, updated_at = now() where id = $2",
-    [Buffer.from(encoded), pageId]
+    [ydocBuffer, pageId]
   );
 
   if (updateResult.rowCount === 0) {
@@ -497,6 +473,55 @@ pagesRoute.delete(":id", async (c) => {
   }
 
   return c.json({ deleted: true });
+});
+
+pagesRoute.post(":id/copy", async (c) => {
+  const pageId = c.req.param("id");
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: "Page not found" });
+  }
+
+  ensureWorkspaceForPage(page);
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(page.workspaceId!, user.id);
+
+  const body = await c.req.json().catch(() => null);
+  const parentId = body && typeof body === "object" ? (body as { parentId?: string | null }).parentId ?? null : null;
+
+  if (parentId) {
+    const folderResult = await pool.query(
+      "select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1",
+      [parentId, page.workspaceId]
+    );
+    if (folderResult.rowCount === 0) {
+      throw new HTTPException(404, { message: "Parent folder not found" });
+    }
+  }
+
+  const positionResult = await pool.query(
+    parentId
+      ? "select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2"
+      : "select max(position) as max_position from pages where workspace_id = $1 and parent_id is null",
+    parentId ? [page.workspaceId, parentId] : [page.workspaceId]
+  );
+  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+
+  const insertResult = await pool.query(
+    `insert into pages (id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
+     select gen_random_uuid(), workspace_id, $1, $2, icon, cover_type, cover_value, $3, ydoc, $4
+     from pages where id = $5
+     returning *`,
+    [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId]
+  );
+
+  if (insertResult.rowCount === 0) {
+    throw new HTTPException(500, { message: "Failed to copy page" });
+  }
+
+  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
+  return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
 });
 
 pagesRoute.delete(":id/permanent", async (c) => {
