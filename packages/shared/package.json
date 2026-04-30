@@ -13,5 +13,8 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
+  },
+  "dependencies": {
+    "@logtape/logtape": "^2.0.5"
   }
 }

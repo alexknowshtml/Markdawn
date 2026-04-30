@@ -3,3 +3,4 @@ export * from './types/workspace';
 export * from './types/page';
 export * from './types/api';
 export * from './utils/position';
+export * from './logger';
