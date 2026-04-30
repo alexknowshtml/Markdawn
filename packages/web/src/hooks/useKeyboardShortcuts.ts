@@ -1,7 +1,5 @@
 import { useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { useCreatePage } from './use-pages';
-import { useWorkspaces } from './use-workspaces';
+import { useParams } from 'react-router-dom';
 import { useTheme } from './useTheme';
 
 interface UseKeyboardShortcutsOptions {
@@ -9,12 +7,8 @@ interface UseKeyboardShortcutsOptions {
 }
 
 export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOptions) {
-  const navigate = useNavigate();
   const params = useParams();
   const workspaceSlug = params.workspaceSlug;
-  
-  const { data: workspaces } = useWorkspaces();
-  const createPageMutation = useCreatePage();
   const { setTheme, isDark } = useTheme();
 
   useEffect(() => {
@@ -33,20 +27,24 @@ export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOpti
       if (modifierKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
         event.preventDefault();
         if (workspaceSlug) {
-          const currentWorkspace = workspaces?.find(w => w.slug === workspaceSlug);
-          if (currentWorkspace) {
-            createPageMutation.mutateAsync(
-              { workspaceId: currentWorkspace.id },
-              { onSuccess: (newPage) => {
-                navigate(`/app/${workspaceSlug}/${newPage.id}`);
-              }}
-            );
-          }
+          window.dispatchEvent(new CustomEvent('markdawn:create-note', {
+            detail: { workspaceSlug }
+          }));
         }
         return;
       }
 
-      if (modifierKey && event.key === '\\') {
+      if (modifierKey && event.shiftKey && event.key.toLowerCase() === 'n') {
+        event.preventDefault();
+        if (workspaceSlug) {
+          window.dispatchEvent(new CustomEvent('markdawn:create-folder', {
+            detail: { workspaceSlug }
+          }));
+        }
+        return;
+      }
+
+      if (modifierKey && event.key === '/') {
         event.preventDefault();
         toggleSidebar();
         return;
@@ -61,5 +59,5 @@ export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOpti
 
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [workspaceSlug, workspaces, createPageMutation, navigate, toggleSidebar, setTheme, isDark]);
+  }, [workspaceSlug, toggleSidebar, setTheme, isDark]);
 }

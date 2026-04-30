@@ -13,14 +13,15 @@ async function fetchPageTree(workspaceId: string): Promise<PageTreeNode[]> {
   return res.json();
 }
 
-async function createPage(workspaceId: string, parentId?: string): Promise<Page> {
+async function createPage(workspaceId: string, parentId?: string, title?: string): Promise<Page> {
   const res = await fetch(`${API_BASE}/pages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId, parentId, title: 'Untitled' }),
+    body: JSON.stringify({ workspaceId, parentId, title: title ?? 'Untitled' }),
   });
   if (!res.ok) {
-    throw new Error('Failed to create page');
+    const error = await res.json().catch(() => ({ message: 'Failed to create page' }));
+    throw new Error(error.message);
   }
   return res.json();
 }
@@ -37,13 +38,15 @@ async function updatePage(pageId: string, updates: Partial<Page>): Promise<Page>
   return res.json();
 }
 
-async function deletePage(pageId: string): Promise<void> {
+async function deletePage(pageId: string): Promise<{ deleted: boolean }> {
   const res = await fetch(`${API_BASE}/pages/${pageId}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
-    throw new Error('Failed to delete page');
+    const error = await res.json().catch(() => ({ message: 'Failed to delete page' }));
+    throw new Error(error.message);
   }
+  return res.json();
 }
 
 async function fetchTrashPages(workspaceId: string): Promise<Page[]> {
@@ -85,6 +88,21 @@ async function movePage(pageId: string, parentId: string | null, position: strin
   return res.json();
 }
 
+async function importMarkdown(workspaceId: string, file: File): Promise<Page> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/import/markdown?workspaceId=${workspaceId}`, {
+    method: 'POST',
+    body: formData },
+  );
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to import markdown' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
 export function usePageTree(workspaceId: string) {
   return useQuery({
     queryKey: ['pageTree', workspaceId],
@@ -98,14 +116,14 @@ export function usePageTree(workspaceId: string) {
 export function useCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ workspaceId, parentId }: { workspaceId: string; parentId?: string }) =>
-      createPage(workspaceId, parentId),
+    mutationFn: ({ workspaceId, parentId, title }: { workspaceId: string; parentId?: string; title?: string }) =>
+      createPage(workspaceId, parentId, title),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
       showSuccessToast('Page created');
     },
-    onError: () => {
-      showErrorToast('Failed to create page');
+    onError: (error: Error) => {
+      showErrorToast(error.message);
     },
   });
 }
@@ -117,6 +135,7 @@ export function useUpdatePage() {
       updatePage(pageId, updates),
     onSuccess: (_, { pageId }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
       showSuccessToast('Page updated');
     },
     onError: () => {
@@ -134,8 +153,8 @@ export function useDeletePage() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Moved to trash');
     },
-    onError: () => {
-      showErrorToast('Failed to delete page');
+    onError: (error: Error) => {
+      showErrorToast(error.message);
     },
   });
 }
@@ -188,6 +207,23 @@ export function useMovePage() {
     },
     onError: () => {
       showErrorToast('Failed to move page');
+    },
+  });
+}
+
+export function useImportMarkdown() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workspaceId, file }: { workspaceId: string; file: File }) =>
+      importMarkdown(workspaceId, file),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'content'] });
+      showSuccessToast('Note imported');
+    },
+    onError: (error: Error) => {
+      showErrorToast(error.message);
     },
   });
 }

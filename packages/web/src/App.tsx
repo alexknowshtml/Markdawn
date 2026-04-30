@@ -10,6 +10,8 @@ import Page from './routes/Page';
 import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
 import PublicPage from './routes/PublicPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ClipboardProvider } from './contexts/ClipboardContext';
+import { SelectionProvider } from './contexts/SelectionContext';
 
 function App() {
   return (
@@ -24,12 +26,17 @@ function App() {
               path="/app"
               element={
                 <ProtectedRoute>
-                  <AppShell />
+                  <ClipboardProvider>
+                    <SelectionProvider>
+                      <AppShell />
+                    </SelectionProvider>
+                  </ClipboardProvider>
                 </ProtectedRoute>
               }
             >
               <Route index element={<Dashboard />} />
               <Route path=":workspaceSlug" element={<Workspace />} />
+              <Route path=":workspaceSlug/folder/:folderId" element={<Workspace />} />
               <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
               <Route path=":workspaceSlug/:pageId" element={<Page />} />
             </Route>
