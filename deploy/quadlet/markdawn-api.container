@@ -11,12 +11,7 @@ Environment=PORT=3001
 EnvironmentFile=/var/www/markdawn/.env
 WorkingDir=/app
 Exec=node /app/packages/api/dist/index.mjs
-HealthCmd=CMD-SHELL curl -fsS http://localhost:3001/api/health || exit 1
-HealthInterval=15s
-HealthTimeout=10s
-HealthRetries=3
-HealthStartPeriod=30s
-Notify=healthy
+
 
 [Service]
 Restart=on-failure
