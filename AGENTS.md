@@ -158,7 +158,7 @@ export default route;
 
 ## Environment Variables
 
-See `.env.example` for required variables:
+See `.env.dev` for required variables:
 
 | Variable | Description |
 |----------|-------------|

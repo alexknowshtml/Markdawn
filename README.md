@@ -37,10 +37,10 @@ pnpm install
 
 ### Environment Variables
 
-Copy `.env.example` to `.env` and configure:
+Copy `.env.dev` to `.env` and configure:
 
 ```bash
-cp .env.example .env
+cp .env.dev .env
 ```
 
 Required variables:
