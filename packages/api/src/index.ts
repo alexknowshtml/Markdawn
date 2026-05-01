@@ -47,7 +47,7 @@ async function main() {
           return origin ?? "*";
         }
         if (!origin) {
-          return undefined;
+          return allowedOrigins[0];
         }
         return allowedOrigins.includes(origin) ? origin : undefined;
       },

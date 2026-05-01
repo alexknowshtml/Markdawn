@@ -7,6 +7,28 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react(), tailwindcss()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: (id) => {
+            if (id.includes("node_modules")) {
+              if (id.includes("@milkdown") || id.includes("prosemirror")) {
+                return "editor";
+              }
+              if (id.includes("yjs") || id.includes("@hocuspocus")) {
+                return "collab";
+              }
+              if (id.includes("@mantine")) {
+                return "mantine";
+              }
+              if (id.includes("react") || id.includes("react-dom")) {
+                return "react";
+              }
+            }
+          },
+        },
+      },
+    },
     server: {
       proxy: {
         "/api": {
