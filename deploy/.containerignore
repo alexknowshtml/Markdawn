@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+.env.*
+*.log
+e2e
+playwright-report
+test-results
+.turbo
+.cache
+.DS_Store
+docs
+.agents
