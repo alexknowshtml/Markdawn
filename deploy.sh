@@ -9,11 +9,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-if [ "$EUID" -eq 0 ]; then
-   echo -e "${RED}[ERROR] Don't run this as root${NC}"
-   exit 1
-fi
-
 if [ -z "$DATABASE_URL" ]; then
     echo -e "${RED}[ERROR] DATABASE_URL is not set${NC}"
     exit 1
