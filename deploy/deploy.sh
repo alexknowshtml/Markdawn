@@ -51,11 +51,15 @@ echo -e "${YELLOW}[STEP 5/6] Building API and collab server...${NC}"
 pnpm --filter @markdawn/api build
 pnpm --filter @markdawn/collab build
 
-echo -e "${YELLOW}[STEP 6/6] Reloading PM2 processes...${NC}"
-pm2 reload ecosystem.config.js
+echo -e "${YELLOW}[STEP 6/6] Building and restarting Podman containers...${NC}"
+podman build -t localhost/markdawn-api:latest -f deploy/Containerfile.api .
+podman build -t localhost/markdawn-collab:latest -f deploy/Containerfile.collab .
+
+systemctl --user restart markdawn-api.service
+systemctl --user restart markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Deployment complete!${NC}"
 echo ""
-echo "Check status: pm2 status"
-echo "View logs:    pm2 logs"
-echo "API health:   curl https://markdawn.duckdns.org/api/health"
+echo "Check status: systemctl --user status markdawn-api.service markdawn-collab.service"
+echo "View logs:    journalctl --user -u markdawn-api.service -f"
+echo "API health:   curl https://markdawn.space/api/health"
