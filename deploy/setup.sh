@@ -81,6 +81,7 @@ sudo cp "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
 sudo systemctl enable --now caddy
 
 systemctl --user daemon-reload
+systemctl --user start markdawn-pod.service
 systemctl --user start markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Setup complete!${NC}"
