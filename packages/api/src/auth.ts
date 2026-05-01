@@ -71,6 +71,7 @@ const ensurePersonalWorkspace = async ({
 
 export const auth = betterAuth({
   baseURL: FRONTEND_URL,
+  trustedOrigins: [FRONTEND_URL],
   database: drizzleAdapter(db, {
     provider: "pg",
     schema: {
