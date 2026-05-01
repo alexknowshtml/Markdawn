@@ -78,6 +78,14 @@ podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerf
 
 echo -e "${YELLOW}[STEP 8/8] Configuring Caddy reverse proxy...${NC}"
 sudo cp "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+
+# Ensure Caddy can read static files (SELinux)
+if command -v semanage &>/dev/null && command -v restorecon &>/dev/null; then
+    echo -e "${YELLOW}[SELinux] Setting httpd_sys_content_t on web dist...${NC}"
+    sudo semanage fcontext -a -t httpd_sys_content_t "$REPO_DIR/packages/web/dist(/.*)?" 2>/dev/null || true
+    sudo restorecon -R "$REPO_DIR/packages/web/dist"
+fi
+
 sudo systemctl enable --now caddy
 
 systemctl --user daemon-reload
