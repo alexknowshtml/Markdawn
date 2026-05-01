@@ -25,7 +25,7 @@ npm install -g pnpm pm2
 ```bash
 sudo mkdir -p /var/www
 sudo chown $USER:$USER /var/www
-git clone https://github.com/yourusername/markdawn.git /var/www/markdawn
+git clone https://github.com/atharva-again/markdawn.git /var/www/markdawn
 cd /var/www/markdawn
 ```
 

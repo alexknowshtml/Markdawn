@@ -354,3 +354,4 @@ URLs are parameterized via environment variables:
 
 - Each button should have cursor pointer instead of normal one
 - No emojis in the codebase
+- Never commit without GPG signing
