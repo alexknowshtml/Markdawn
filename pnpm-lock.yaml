@@ -115,6 +115,9 @@ importers:
       '@logtape/logtape':
         specifier: ^2.0.5
         version: 2.0.5
+      '@markdawn/shared':
+        specifier: workspace:*
+        version: link:../shared
       better-auth:
         specifier: ^1.4.18
         version: 1.4.18(drizzle-kit@0.31.9)(drizzle-orm@0.45.1(@types/pg@8.16.0)(kysely@0.28.11)(pg@8.18.0))(pg@8.18.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(vue@3.5.32(typescript@5.9.3))
