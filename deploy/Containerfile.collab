@@ -21,7 +21,7 @@ FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV COLLAB_PORT=1234
-COPY --from=build /app/node_modules /app/node_modules
+COPY --from=deps /app/node_modules /app/node_modules
 COPY --from=build /app/packages/shared /app/packages/shared
 COPY --from=build /app/packages/collab /app/packages/collab
 EXPOSE 1234
