@@ -17,9 +17,7 @@ Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and
 The `setup.sh` script installs everything automatically, but if doing it manually:
 
 ```bash
-sudo dnf install -y git nano curl podman
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-sudo dnf install -y nodejs
+sudo dnf install -y git nano curl podman nodejs npm
 corepack enable
 ```
 

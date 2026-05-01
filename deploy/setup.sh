@@ -36,8 +36,7 @@ fi
 cd "$REPO_DIR"
 
 echo -e "${YELLOW}[STEP 4/7] Installing Node.js and pnpm...${NC}"
-curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
-sudo dnf install -y nodejs
+sudo dnf install -y nodejs npm
 corepack enable
 
 echo -e "${YELLOW}[STEP 5/7] Configuring environment...${NC}"
