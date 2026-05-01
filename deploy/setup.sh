@@ -36,8 +36,14 @@ fi
 cd "$REPO_DIR"
 
 echo -e "${YELLOW}[STEP 4/7] Installing Node.js and pnpm...${NC}"
-sudo dnf install -y nodejs npm
-corepack enable
+curl -fsSL https://fnm.vercel.app/install | bash
+export PATH="$HOME/.local/share/fnm:$PATH"
+eval "$(fnm env)"
+fnm install 24
+fnm use 24
+node -v
+corepack enable pnpm
+pnpm -v
 
 echo -e "${YELLOW}[STEP 5/7] Configuring environment...${NC}"
 if [ -f ".env" ]; then

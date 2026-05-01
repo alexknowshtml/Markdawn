@@ -17,8 +17,13 @@ Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and
 The `setup.sh` script installs everything automatically, but if doing it manually:
 
 ```bash
-sudo dnf install -y git nano curl podman nodejs npm
-corepack enable
+sudo dnf install -y git nano curl podman
+curl -fsSL https://fnm.vercel.app/install | bash
+export PATH="$HOME/.local/share/fnm:$PATH"
+eval "$(fnm env)"
+fnm install 24
+fnm use 24
+corepack enable pnpm
 ```
 
 ### 2. Clone Repository
