@@ -1,0 +1,27 @@
+[Unit]
+Description=Markdawn API Server (Hono)
+After=network-online.target
+
+[Container]
+Image=localhost/markdawn-api:latest
+ContainerName=markdawn-api
+Pod=markdawn.pod
+Environment=NODE_ENV=production
+Environment=PORT=3001
+EnvironmentFile=%h/.config/containers/systemd/env/markdawn-api.env
+WorkingDir=/app
+Exec=node /app/packages/api/dist/index.mjs
+HealthCmd=CMD-SHELL curl -fsS http://localhost:3001/api/health || exit 1
+HealthInterval=15s
+HealthTimeout=10s
+HealthRetries=3
+HealthStartPeriod=30s
+Notify=healthy
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

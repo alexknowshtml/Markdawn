@@ -1,0 +1,9 @@
+[Unit]
+Description=Markdawn Application Pod
+
+[Pod]
+PublishPort=3001:3001
+PublishPort=1234:1234
+
+[Install]
+WantedBy=default.target
