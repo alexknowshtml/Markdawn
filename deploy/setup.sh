@@ -14,13 +14,18 @@ if [ "$EUID" -eq 0 ]; then
     exit 1
 fi
 
-echo -e "${YELLOW}[STEP 1/7] Installing common tools and Podman...${NC}"
-sudo dnf install -y git nano curl podman
+echo -e "${YELLOW}[STEP 1/8] Installing common tools, Podman, and Caddy...${NC}"
+sudo dnf install -y git nano curl podman dnf5-plugins
+sudo dnf copr enable -y @caddy/caddy
+sudo dnf install -y caddy
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
 
-echo -e "${YELLOW}[STEP 2/7] Enabling lingering for user systemd services...${NC}"
+echo -e "${YELLOW}[STEP 2/8] Enabling lingering for user systemd services...${NC}"
 loginctl enable-linger "$(whoami)"
 
-echo -e "${YELLOW}[STEP 3/7] Preparing repository...${NC}"
+echo -e "${YELLOW}[STEP 3/8] Preparing repository...${NC}"
 sudo mkdir -p /var/www
 sudo chown "$(whoami):$(whoami)" /var/www
 
@@ -35,7 +40,7 @@ fi
 
 cd "$REPO_DIR"
 
-echo -e "${YELLOW}[STEP 4/7] Installing Node.js and pnpm...${NC}"
+echo -e "${YELLOW}[STEP 4/8] Installing Node.js and pnpm...${NC}"
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
 eval "$(fnm env)"
@@ -45,7 +50,7 @@ node -v
 corepack enable pnpm
 pnpm -v
 
-echo -e "${YELLOW}[STEP 5/7] Configuring environment...${NC}"
+echo -e "${YELLOW}[STEP 5/8] Configuring environment...${NC}"
 if [ -f ".env" ]; then
     echo -e "${GREEN}[OK] .env already exists. Skipping creation.${NC}"
 else
@@ -54,14 +59,14 @@ else
     nano .env
 fi
 
-echo -e "${YELLOW}[STEP 6/7] Building application...${NC}"
+echo -e "${YELLOW}[STEP 6/8] Building application...${NC}"
 pnpm install
 pnpm --filter @markdawn/shared build
 pnpm --filter @markdawn/web build
 pnpm --filter @markdawn/api build
 pnpm --filter @markdawn/collab build
 
-echo -e "${YELLOW}[STEP 7/7] Setting up Podman Quadlet services...${NC}"
+echo -e "${YELLOW}[STEP 7/8] Setting up Podman Quadlet services...${NC}"
 mkdir -p ~/.config/containers/systemd
 
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
@@ -71,6 +76,10 @@ cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/sys
 podman build -t localhost/markdawn-api:latest -f "$REPO_DIR/deploy/Containerfile.api" "$REPO_DIR"
 podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerfile.collab" "$REPO_DIR"
 
+echo -e "${YELLOW}[STEP 8/8] Configuring Caddy reverse proxy...${NC}"
+sudo cp "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
+sudo systemctl enable --now caddy
+
 systemctl --user daemon-reload
 systemctl --user start markdawn-api.service markdawn-collab.service
 
@@ -79,5 +88,3 @@ echo ""
 echo "Check status: systemctl --user status markdawn-api.service markdawn-collab.service"
 echo "View logs:    journalctl --user -u markdawn-api.service -f"
 echo "API health:   curl https://markdawn.space/api/health"
-echo ""
-echo "Future deployments: cd /var/www/markdawn && ./deploy/deploy.sh"
