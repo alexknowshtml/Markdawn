@@ -62,25 +62,16 @@ pnpm --filter @markdawn/api build
 pnpm --filter @markdawn/collab build
 
 echo -e "${YELLOW}[STEP 7/7] Setting up Podman Quadlet services...${NC}"
-mkdir -p ~/.config/containers/systemd/env
+mkdir -p ~/.config/containers/systemd
 
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
-cp "$REPO_DIR/deploy/quadlet/env/markdawn-api.env.example" ~/.config/containers/systemd/env/markdawn-api.env
-cp "$REPO_DIR/deploy/quadlet/env/markdawn-collab.env.example" ~/.config/containers/systemd/env/markdawn-collab.env
-
-echo -e "${YELLOW}Edit the env files and fill in real values:${NC}"
-echo "  nano ~/.config/containers/systemd/env/markdawn-api.env"
-echo "  nano ~/.config/containers/systemd/env/markdawn-collab.env"
-read -rp "Press Enter after editing the env files..."
-
 podman build -t localhost/markdawn-api:latest -f "$REPO_DIR/deploy/Containerfile.api" "$REPO_DIR"
 podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerfile.collab" "$REPO_DIR"
 
 systemctl --user daemon-reload
-systemctl --user enable markdawn-api.service markdawn-collab.service
 systemctl --user start markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Setup complete!${NC}"

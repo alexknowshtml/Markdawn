@@ -9,7 +9,7 @@ ContainerName=markdawn-collab
 Pod=markdawn.pod
 Environment=NODE_ENV=production
 Environment=COLLAB_PORT=1234
-EnvironmentFile=%h/.config/containers/systemd/env/markdawn-collab.env
+EnvironmentFile=/var/www/markdawn/.env
 WorkingDir=/app
 Exec=node /app/packages/collab/dist/index.js
 
