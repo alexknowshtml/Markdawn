@@ -168,7 +168,7 @@ See `.env.example` for required variables:
 | `GOOGLE_CLIENT_SECRET` | OAuth Google |
 | `GITHUB_CLIENT_ID` | OAuth GitHub |
 | `GITHUB_CLIENT_SECRET` | OAuth GitHub |
-| `BASE_URL` | Frontend URL (used in .env, but code uses hardcoded localhost:5173) |
+| `BASE_URL` | Frontend URL (fallback to `http://localhost:5173` if `FRONTEND_URL` not set) |
 | `PORT` | API server port (default 3001) |
 | `COLLAB_PORT` | Collab server port (default 1234) |
 
@@ -196,6 +196,29 @@ See `.env.example` for required variables:
 - `yjs` — CRDT library
 
 ---
+
+## Deployment
+
+All deployment configuration lives in `deploy/`:
+
+```
+deploy/
+├── Containerfile.api          # API container image
+├── Containerfile.collab       # Collab container image
+├── Caddyfile                  # Reverse proxy config
+├── deploy.sh                  # Incremental deployment script
+├── setup.sh                   # One-time server bootstrap
+└── quadlet/
+    ├── markdawn.pod           # Pod definition (shared network)
+    ├── markdawn-api.container # API Quadlet service config
+    ├── markdawn-collab.container
+    └── env/                   # Environment file templates
+```
+
+- **setup.sh** — runs once on a fresh server. Installs Podman, clones repo, builds images, starts systemd user services.
+- **deploy.sh** — runs on every code update. Pulls, builds, rebuilds container images, restarts services.
+- Both containers run in a single Podman pod sharing `localhost` network.
+- Caddy serves the SPA directly from `packages/web/dist`. The API container does not serve static files.
 
 ## Common Development Tasks
 

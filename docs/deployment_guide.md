@@ -1,23 +1,26 @@
 # Markdawn Deployment Guide
 
-Single-VPS deployment on Vultr (Fedora 44) with Caddy reverse proxy, PM2 process manager, and Neon PostgreSQL.
+Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and Neon PostgreSQL.
 
 ## Prerequisites
 
 - Vultr VM with Fedora 44
-- Domain or subdomain pointing to VM IP (e.g., `markdawn.duckdns.org`)
+- Domain or subdomain pointing to VM IP (e.g., `markdawn.space`)
 - Neon PostgreSQL database
 - Caddy installed on the VM
 - GitHub and Google OAuth apps configured
 
 ## Initial Server Setup
 
-### 1. Install Node.js and pnpm
+### 1. Install Dependencies
+
+The `setup.sh` script installs everything automatically, but if doing it manually:
 
 ```bash
-curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
+sudo dnf install -y git nano curl podman
+curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
 sudo dnf install -y nodejs
-npm install -g pnpm pm2
+corepack enable
 ```
 
 ### 2. Clone Repository
@@ -43,26 +46,26 @@ Required variables:
 ```bash
 DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
 BETTER_AUTH_SECRET=minimum-32-characters-secret-key
-FRONTEND_URL=https://markdawn.duckdns.org
-BASE_URL=https://markdawn.duckdns.org
+FRONTEND_URL=https://markdawn.space
+BASE_URL=https://markdawn.space
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GITHUB_CLIENT_ID=your-github-client-id
 GITHUB_CLIENT_SECRET=your-github-client-secret
-CORS_ORIGINS=https://markdawn.duckdns.org
+CORS_ORIGINS=https://markdawn.space
 NODE_ENV=production
 PORT=3001
 COLLAB_PORT=1234
-VITE_API_URL=https://markdawn.duckdns.org
-VITE_COLLAB_URL=wss://markdawn.duckdns.org/collab
+VITE_API_URL=https://markdawn.space
+VITE_COLLAB_URL=wss://markdawn.space/collab
 ```
 
 ### 4. Configure OAuth Providers
 
 Register these redirect URLs in your OAuth provider dashboards:
 
-- Google Cloud Console: `https://markdawn.duckdns.org/api/auth/callback/google`
-- GitHub Settings: `https://markdawn.duckdns.org/api/auth/callback/github`
+- Google Cloud Console: `https://markdawn.space/api/auth/callback/google`
+- GitHub Settings: `https://markdawn.space/api/auth/callback/github`
 
 ### 5. Build Application
 
@@ -79,23 +82,27 @@ pnpm --filter @markdawn/collab build
 Copy the Caddyfile and reload:
 
 ```bash
-sudo cp Caddyfile /etc/caddy/Caddyfile
+sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 sudo systemctl reload caddy
 ```
 
-### 7. Start Services with PM2
+### 7. Start Services with Podman
 
 ```bash
-pm2 start ecosystem.config.js
-pm2 save
-pm2 startup
-# Run the command PM2 outputs for systemd auto-start
+./deploy/setup.sh
 ```
+
+This script will:
+1. Install Podman and common tools
+2. Enable lingering for user systemd services
+3. Copy Quadlet files to `~/.config/containers/systemd/`
+4. Build container images
+5. Start systemd user services
 
 ### 8. Verify Deployment
 
 ```bash
-curl https://markdawn.duckdns.org/api/health
+curl https://markdawn.space/api/health
 ```
 
 Expected response: `{"status":"ok","timestamp":...}`
@@ -106,24 +113,48 @@ After initial setup, deploy updates with:
 
 ```bash
 cd /var/www/markdawn
-./deploy.sh
+./deploy/deploy.sh
 ```
 
 The script will:
 1. Pull latest code
 2. Install dependencies
 3. Build all packages
-4. Reload PM2 processes with zero downtime
+4. Rebuild container images
+5. Restart Podman services
+
+## Managing Services
+
+```bash
+# View status
+systemctl --user status markdawn-api.service markdawn-collab.service
+
+# View logs
+journalctl --user -u markdawn-api.service -f
+journalctl --user -u markdawn-collab.service -f
+
+# Restart services
+systemctl --user restart markdawn-api.service
+systemctl --user restart markdawn-collab.service
+
+# Stop services
+systemctl --user stop markdawn-api.service markdawn-collab.service
+
+# Enable auto-start on boot
+systemctl --user enable markdawn-api.service markdawn-collab.service
+```
 
 ## Architecture
 
 ```
-markdawn.duckdns.org
-├── /                    → Vite SPA (static files)
-├── /api/*              → Hono API (port 3001)
-├── /collab             → Hocuspocus WebSocket (port 1234)
-└── /assets/*           → Cached for 1 year
+markdawn.space
+├── /                    -> Vite SPA (static files served by Caddy)
+├── /api/*              -> Hono API (port 3001)
+├── /collab             -> Hocuspocus WebSocket (port 1234)
+└── /assets/*           -> Cached for 1 year
 ```
+
+Both API and collab run inside a single Podman pod sharing the `localhost` network namespace.
 
 ## Troubleshooting
 
@@ -131,12 +162,17 @@ markdawn.duckdns.org
 
 Ensure port 80 and 443 are open in the Vultr firewall and that the domain resolves to the VM IP.
 
-### PM2 processes crash on startup
+### Containers fail to start
 
 Check logs:
 ```bash
-pm2 logs markdawn-api
-pm2 logs markdawn-collab
+journalctl --user -u markdawn-api.service --no-pager
+journalctl --user -u markdawn-collab.service --no-pager
+```
+
+Verify the environment files exist:
+```bash
+ls ~/.config/containers/systemd/env/
 ```
 
 ### Database connection errors

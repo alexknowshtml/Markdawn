@@ -122,6 +122,21 @@ cd packages/web
 npx playwright test e2e/app.spec.ts
 ```
 
+## Deployment
+
+For production deployment with Podman containers and Caddy, see:
+
+- [Deployment Guide](docs/deployment_guide.md) — full step-by-step instructions
+- `deploy/` — Containerfiles, Quadlet configs, Caddyfile, and deployment scripts
+
+```bash
+# One-time server setup
+./deploy/setup.sh
+
+# Future deployments
+./deploy/deploy.sh
+```
+
 ## Tech Stack
 
 ### API
