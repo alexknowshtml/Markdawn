@@ -36,7 +36,19 @@ async function main() {
   const { Pool } = await import("pg");
   const { applyUpdate, encodeStateAsUpdate } = await import("yjs");
 
-  const pool = new Pool({ connectionString: databaseUrl });
+  const isProduction = process.env.NODE_ENV === "production";
+
+  const pool = new Pool({
+    connectionString: databaseUrl,
+    max: 5,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 15000,
+    ssl: isProduction ? { rejectUnauthorized: false } : false,
+  });
+
+  pool.on("error", (err) => {
+    logger.error(`Database pool error: ${err.message}`);
+  });
   const SERVER_DEBOUNCE_MS = 500;
   const SERVER_MAX_DEBOUNCE_MS = 3000;
 
