@@ -14,3 +14,10 @@ dist/
 test-results/
 
 # agent skills
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Runtime uploads
+packages/api/uploads/
+
