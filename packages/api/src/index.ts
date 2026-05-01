@@ -1,11 +1,9 @@
 import "./env";
 import { serve } from "@hono/node-server";
-import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { timing } from "hono/timing";
-import { readFileSync } from "fs";
 import { honoLogger } from "@logtape/hono";
 import pagesRoute from "./routes/pages";
 import workspacesRoute from "./routes/workspaces";
@@ -93,16 +91,7 @@ async function main() {
   app.route("/api", authRoutes);
   app.route("/api/pages", publicShareRoute);
 
-  if (isProduction) {
-    app.use('/assets/*', serveStatic({ root: './dist/web' }));
-    app.all('*', (c) => {
-      if (c.req.path.startsWith('/api/')) {
-        return c.notFound();
-      }
-      const html = readFileSync('./dist/web/index.html', 'utf-8');
-      return c.html(html);
-    });
-  }
+
 
   app.notFound((c) => c.json({ error: "Not Found" }, 404));
 
