@@ -1,25 +1,23 @@
-FROM node:20-slim AS base
+FROM node:24-slim AS base
 WORKDIR /app
-ENV PNPM_HOME=/pnpm
-ENV PATH=$PNPM_HOME:$PATH
-RUN npm install -g pnpm@9
+RUN corepack enable
 
 FROM base AS deps
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml tsconfig.base.json ./
-COPY packages/shared/package.json packages/shared/package.json
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY packages/api/package.json packages/api/package.json
 COPY packages/collab/package.json packages/collab/package.json
+COPY packages/shared/package.json packages/shared/package.json
 COPY packages/web/package.json packages/web/package.json
 RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
+COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/collab packages/collab
-RUN pnpm -C packages/shared run build
-RUN pnpm -C packages/collab run build
+RUN pnpm --filter @markdawn/shared build && pnpm --filter @markdawn/collab build
 RUN CI=true pnpm prune --prod
 
-FROM node:20-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV COLLAB_PORT=1234
