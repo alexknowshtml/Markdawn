@@ -349,3 +349,8 @@ URLs are parameterized via environment variables:
 - **Issue**: Drizzle has type mismatches between root and package installations
 - **Solution**: Use `pool.query` for all API route operations
 - **Reference**: `packages/api/src/routes/pages.ts`
+
+## Some Other Things To Keep In Mind
+
+- Each button should have cursor pointer instead of normal one
+- No emojis in the codebase
