@@ -1,44 +1,46 @@
-markdawn.duckdns.org {
-    # Serve Vite SPA
-    root * /var/www/markdawn/packages/web/dist
-    try_files {path} /index.html
-    file_server
-
-    # Cache hashed assets for 1 year (Vite puts hashes in filenames)
-    @hashedAssets {
-        path_regexp hashed ^/assets/.*-[a-zA-Z0-9]{8,}\.(js|css|woff2?|ttf|png|jpg|jpeg|gif|webp|svg|ico)$
-    }
-    handle @hashedAssets {
-        header Cache-Control "public, max-age=31536000, immutable"
+markdawn.space {
+    # API routes — evaluated first
+    handle /api/* {
+        reverse_proxy localhost:3001 {
+            header_up X-Real-IP {remote}
+            header_up X-Forwarded-For {header.X-Forwarded-For}
+            header_up X-Forwarded-Proto {scheme}
+        }
     }
 
-    # Never cache HTML (so new deploys show immediately)
-    @htmlFiles {
-        path *.html
-    }
-    handle @htmlFiles {
-        header Cache-Control "no-cache, no-store, must-revalidate"
-    }
-
-    # API proxy
-    reverse_proxy /api/* localhost:3001 {
-        header_up X-Real-IP {remote}
-        header_up X-Forwarded-For {header.X-Forwarded-For}
-        header_up X-Forwarded-Proto {scheme}
+    # WebSocket collab
+    handle /collab {
+        reverse_proxy localhost:1234 {
+            flush_interval -1
+        }
     }
 
-    # WebSocket proxy for collab server
-    reverse_proxy /collab localhost:1234 {
-        flush_interval -1
-    }
+    # Static files and SPA fallback — catch-all
+    handle {
+        root * /var/www/markdawn/packages/web/dist
 
-    # Security headers
-    header {
-        X-Frame-Options "SAMEORIGIN"
-        X-Content-Type-Options "nosniff"
-        Referrer-Policy "strict-origin-when-cross-origin"
-    }
+        # Cache hashed assets for 1 year
+        @hashedAssets {
+            path_regexp hashed ^/assets/.*-[a-zA-Z0-9]{8,}\.(js|css|woff2?|ttf|png|jpg|jpeg|gif|webp|svg|ico)$
+        }
+        header @hashedAssets Cache-Control "public, max-age=31536000, immutable"
 
-    # Compress responses
-    encode gzip
+        # Never cache HTML
+        @htmlFiles {
+            path *.html
+        }
+        header @htmlFiles Cache-Control "no-cache, no-store, must-revalidate"
+
+        try_files {path} /index.html
+        file_server
+
+        # Security headers
+        header {
+            X-Frame-Options "SAMEORIGIN"
+            X-Content-Type-Options "nosniff"
+            Referrer-Policy "strict-origin-when-cross-origin"
+        }
+
+        encode gzip
+    }
 }
