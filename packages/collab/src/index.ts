@@ -36,14 +36,12 @@ async function main() {
   const { Pool } = await import("pg");
   const { applyUpdate, encodeStateAsUpdate } = await import("yjs");
 
-  const isProduction = process.env.NODE_ENV === "production";
-
   const pool = new Pool({
     connectionString: databaseUrl,
     max: 5,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 15000,
-    ssl: isProduction ? { rejectUnauthorized: false } : false,
+    ssl: false,
   });
 
   pool.on("error", (err) => {

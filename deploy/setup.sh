@@ -40,6 +40,16 @@ fi
 
 cd "$REPO_DIR"
 
+# Load PostgreSQL credentials from .env for readiness checks
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+POSTGRES_USER="${POSTGRES_USER:-markdawn}"
+POSTGRES_DB="${POSTGRES_DB:-markdawn}"
+
 echo -e "${YELLOW}[STEP 4/8] Installing Node.js and pnpm...${NC}"
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
@@ -99,7 +109,7 @@ systemctl --user start markdawn-postgres.service
 # Wait for PostgreSQL to be ready before pushing schema
 echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
 for i in {1..30}; do
-    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+    if podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
         echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
         break
     fi

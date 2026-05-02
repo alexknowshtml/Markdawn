@@ -13,6 +13,16 @@ NC='\033[0m'
 
 cd "$REPO_DIR"
 
+# Load PostgreSQL credentials from .env for readiness checks
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+POSTGRES_USER="${POSTGRES_USER:-markdawn}"
+POSTGRES_DB="${POSTGRES_DB:-markdawn}"
+
 echo -e "${YELLOW}[STEP 1/6] Pulling latest code...${NC}"
 git pull origin master
 
@@ -25,8 +35,12 @@ pnpm --filter @markdawn/web build
 pnpm --filter @markdawn/api build
 pnpm --filter @markdawn/collab build
 
-echo -e "${YELLOW}[STEP 4/6] Pushing database schema...${NC}"
-pnpm --filter @markdawn/api db:push
+echo -e "${YELLOW}[STEP 4/6] Updating Podman Quadlet units...${NC}"
+podman volume create postgres-data 2>/dev/null || true
+cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
+cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
+cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
+cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
 echo -e "${YELLOW}[STEP 5/6] Rebuilding container images...${NC}"
 podman build -t localhost/markdawn-api:latest -f "$REPO_DIR/deploy/Containerfile.api" "$REPO_DIR"
@@ -36,9 +50,8 @@ echo -e "${YELLOW}[STEP 6/6] Restarting services...${NC}"
 systemctl --user daemon-reload
 systemctl --user restart markdawn-postgres.service
 
-# Wait for PostgreSQL to be ready
 for i in {1..30}; do
-    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+    if podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
         echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
         break
     fi
@@ -48,6 +61,9 @@ for i in {1..30}; do
     fi
     sleep 2
 done
+
+echo -e "${YELLOW}[SCHEMA] Pushing database schema...${NC}"
+pnpm --filter @markdawn/api db:push
 
 systemctl --user restart markdawn-api.service markdawn-collab.service
 
