@@ -164,6 +164,56 @@ pagesRoute.get("/trash", async (c) => {
   return c.json((result.rows as RawPageRow[]).map(normalizePageRow));
 });
 
+pagesRoute.delete("/trash/empty-all", async (c) => {
+  const workspaceId = c.req.query("workspaceId");
+  if (!workspaceId) {
+    throw new HTTPException(400, { message: "workspaceId is required" });
+  }
+
+  const user = c.get("user") as { id: string };
+  await ensureWorkspaceMember(workspaceId, user.id);
+
+  const workspacePages = await pool.query(
+    "select id, parent_id, is_deleted from pages where workspace_id = $1",
+    [workspaceId]
+  );
+
+  const childMap = new Map<string, string[]>();
+  const trashedPageIds = new Set<string>();
+
+  (workspacePages.rows as { id: string; parent_id: string | null; is_deleted: boolean }[]).forEach((item) => {
+    if (item.is_deleted) {
+      trashedPageIds.add(item.id);
+    }
+    if (!item.parent_id) {
+      return;
+    }
+    const list = childMap.get(item.parent_id) ?? [];
+    list.push(item.id);
+    childMap.set(item.parent_id, list);
+  });
+
+  const toDelete = new Set<string>();
+  const stack = Array.from(trashedPageIds);
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current || toDelete.has(current)) {
+      continue;
+    }
+    toDelete.add(current);
+    const children = childMap.get(current);
+    if (children) {
+      children.forEach((child) => stack.push(child));
+    }
+  }
+
+  if (toDelete.size > 0) {
+    await pool.query("delete from pages where id = any($1)", [Array.from(toDelete)]);
+  }
+
+  return c.json({ deleted: true, count: toDelete.size });
+});
+
 pagesRoute.get("/recent", async (c) => {
   const workspaceId = c.req.query("workspaceId");
   if (!workspaceId) {
