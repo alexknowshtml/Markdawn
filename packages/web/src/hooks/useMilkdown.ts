@@ -25,7 +25,6 @@ import { linkEditor } from '../editor/components/LinkEditor';
 import 'katex/dist/katex.min.css';
 import type * as Y from 'yjs';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
-import type { Page } from '@markdawn/shared';
 import { getLogger } from '../logger-init';
 
 interface UseMilkdownProps {
@@ -33,7 +32,6 @@ interface UseMilkdownProps {
   onChange?: (markdown: string) => void;
   doc?: Y.Doc;
   provider?: HocuspocusProvider;
-  pages?: Page[] | undefined;
   onWikiLinkClick?: ((path: string) => void) | undefined;
 }
 
@@ -80,10 +78,12 @@ function scrollToHeading(headingText: string): void {
   }
 }
 
-export function useMilkdown({ initialValue, onChange, doc, provider, pages, onWikiLinkClick }: UseMilkdownProps) {
+export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkClick }: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
+  const onWikiLinkClickRef = useRef(onWikiLinkClick);
+  onWikiLinkClickRef.current = onWikiLinkClick;
   const hasCollab = Boolean(doc && provider);
   const fallbackInitialValue = hasCollab ? undefined : initialValue;
 
@@ -240,8 +240,8 @@ export function useMilkdown({ initialValue, onChange, doc, provider, pages, onWi
 
                   linkEditor.close();
 
-                  if (path && onWikiLinkClick) {
-                    onWikiLinkClick(path);
+                  if (path && onWikiLinkClickRef.current) {
+                    onWikiLinkClickRef.current(path);
                   } else if (heading) {
                     scrollToHeading(heading);
                   }
@@ -473,7 +473,7 @@ export function useMilkdown({ initialValue, onChange, doc, provider, pages, onWi
         floatingCopyBtn = null;
       }
     };
-  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider, pages, onWikiLinkClick]);
+  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider]);
 
   return { setContainer, editor: editorInstance };
 }

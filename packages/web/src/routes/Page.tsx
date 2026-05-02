@@ -183,7 +183,6 @@ export default function Page() {
         initialValue={decodePageContent(page?.ydoc)}
         onProviderReady={setProvider}
         onStatusChange={handleStatusChange}
-        pages={flatPages}
         onWikiLinkClick={handleWikiLinkClick}
       />
       <BacklinksPanel pageId={pageId} workspaceSlug={workspaceSlug} />
