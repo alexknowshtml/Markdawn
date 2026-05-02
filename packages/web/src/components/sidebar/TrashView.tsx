@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Trash2, RotateCcw, FileText, X } from 'lucide-react';
-import { useTrashPages, useRestorePage, usePermanentDeletePage } from '../../hooks/use-pages';
+import { useTrashPages, useRestorePage, usePermanentDeletePage, useEmptyTrash } from '../../hooks/use-pages';
 import { showSuccessToast, showErrorToast } from '../../utils/toast';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EmptyState } from '../EmptyState';
@@ -14,8 +14,10 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
   const { data: trashPages, isLoading } = useTrashPages(workspaceId);
   const restoreMutation = useRestorePage();
   const permanentDeleteMutation = usePermanentDeletePage();
+  const emptyTrashMutation = useEmptyTrash();
 
   const [pageToDelete, setPageToDelete] = useState<{ id: string; title: string } | null>(null);
+  const [showEmptyAllConfirm, setShowEmptyAllConfirm] = useState(false);
 
   const handleRestore = async (pageId: string) => {
     try {
@@ -37,6 +39,15 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
     }
   };
 
+  const handleEmptyAll = async () => {
+    try {
+      await emptyTrashMutation.mutateAsync(workspaceId);
+      setShowEmptyAllConfirm(false);
+    } catch (error) {
+      showErrorToast("Failed to empty trash");
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in">
       <div className="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl animate-slide-up">
@@ -45,12 +56,24 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
             <Trash2 size={18} />
             <h2 className="text-lg font-semibold">Trash</h2>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2">
+            {trashPages && trashPages.length > 0 && (
+              <button
+                onClick={() => setShowEmptyAllConfirm(true)}
+                disabled={emptyTrashMutation.isPending}
+                className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-800 transition-colors disabled:opacity-50 cursor-pointer"
+              >
+                <Trash2 size={14} />
+                <span>Empty all</span>
+              </button>
+            )}
+            <button
+              onClick={onClose}
+              className="p-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         <div className="flex-1 overflow-y-auto p-4">
@@ -123,6 +146,16 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
         onConfirm={handlePermanentDelete}
         onCancel={() => setPageToDelete(null)}
         loading={permanentDeleteMutation.isPending}
+      />
+
+      <ConfirmDialog
+        isOpen={showEmptyAllConfirm}
+        title="Empty trash"
+        message="Are you sure you want to permanently delete all items in the trash? This action cannot be undone."
+        confirmText="Empty trash"
+        onConfirm={handleEmptyAll}
+        onCancel={() => setShowEmptyAllConfirm(false)}
+        loading={emptyTrashMutation.isPending}
       />
     </div>
   );

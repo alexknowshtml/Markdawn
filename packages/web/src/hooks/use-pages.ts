@@ -76,6 +76,15 @@ async function permanentDeletePage(pageId: string): Promise<void> {
   }
 }
 
+async function emptyTrash(workspaceId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/pages/trash/empty-all?workspaceId=${workspaceId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    throw new Error('Failed to empty trash');
+  }
+}
+
 async function movePage(pageId: string, parentId: string | null, position: string): Promise<Page> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/move`, {
     method: 'PATCH',
@@ -192,6 +201,20 @@ export function usePermanentDeletePage() {
     },
     onError: () => {
       showErrorToast('Failed to permanently delete page');
+    },
+  });
+}
+
+export function useEmptyTrash() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (workspaceId: string) => emptyTrash(workspaceId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      showSuccessToast('Trash emptied');
+    },
+    onError: () => {
+      showErrorToast('Failed to empty trash');
     },
   });
 }
