@@ -69,7 +69,11 @@ pnpm --filter @markdawn/collab build
 echo -e "${YELLOW}[STEP 7/8] Setting up Podman Quadlet services...${NC}"
 mkdir -p ~/.config/containers/systemd
 
+# Create persistent volume for PostgreSQL
+podman volume create postgres-data 2>/dev/null || true
+
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
+cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
@@ -90,10 +94,31 @@ sudo systemctl enable --now caddy
 
 systemctl --user daemon-reload
 systemctl --user start markdawn-pod.service
+systemctl --user start markdawn-postgres.service
+
+# Wait for PostgreSQL to be ready before pushing schema
+echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
+for i in {1..30}; do
+    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+        echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo -e "${RED}[ERROR] PostgreSQL did not become ready in time.${NC}"
+        exit 1
+    fi
+    sleep 2
+done
+
+# Initialize database schema
+echo -e "${YELLOW}[SCHEMA] Running db:push to initialize database...${NC}"
+pnpm --filter @markdawn/api db:push
+
+# Start API and Collab services
 systemctl --user start markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Setup complete!${NC}"
 echo ""
-echo "Check status: systemctl --user status markdawn-api.service markdawn-collab.service"
+echo "Check status: systemctl --user status markdawn-postgres.service markdawn-api.service markdawn-collab.service"
 echo "View logs:    journalctl --user -u markdawn-api.service -f"
 echo "API health:   curl https://markdawn.space/api/health"
