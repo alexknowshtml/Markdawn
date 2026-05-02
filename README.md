@@ -48,6 +48,9 @@ Required variables:
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL connection string |
+| `POSTGRES_USER` | PostgreSQL username |
+| `POSTGRES_PASSWORD` | PostgreSQL password |
+| `POSTGRES_DB` | PostgreSQL database name |
 | `BETTER_AUTH_SECRET` | Auth secret (min 32 chars) |
 | `GOOGLE_CLIENT_ID` | OAuth Google |
 | `GOOGLE_CLIENT_SECRET` | OAuth Google |

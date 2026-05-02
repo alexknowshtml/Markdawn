@@ -1,12 +1,11 @@
 # Markdawn Deployment Guide
 
-Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and Neon PostgreSQL.
+Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and self-hosted PostgreSQL 17.
 
 ## Prerequisites
 
-- Vultr VM with Fedora 44
+- Vultr VM with Fedora 44 (4GB RAM minimum)
 - Domain or subdomain pointing to VM IP (e.g., `markdawn.space`)
-- Neon PostgreSQL database
 - Caddy installed on the VM
 - GitHub and Google OAuth apps configured
 
@@ -47,7 +46,10 @@ nano .env
 Required variables:
 
 ```bash
-DATABASE_URL=postgresql://user:pass@host/db?sslmode=require
+POSTGRES_USER=markdawn
+POSTGRES_PASSWORD=your-secure-password
+POSTGRES_DB=markdawn
+DATABASE_URL=postgresql://markdawn:your-secure-password@localhost:5432/markdawn
 BETTER_AUTH_SECRET=minimum-32-characters-secret-key
 FRONTEND_URL=https://markdawn.space
 BASE_URL=https://markdawn.space
@@ -98,9 +100,12 @@ sudo systemctl reload caddy
 This script will:
 1. Install Podman and common tools
 2. Enable lingering for user systemd services
-3. Copy Quadlet files to `~/.config/containers/systemd/`
-4. Build container images
-5. Start systemd user services
+3. Create a persistent Podman volume for PostgreSQL
+4. Copy Quadlet files to `~/.config/containers/systemd/`
+5. Build container images
+6. Start PostgreSQL and wait for it to be healthy
+7. Run `db:push` to initialize the database schema
+8. Start API and Collab systemd user services
 
 ### 8. Verify Deployment
 
@@ -123,41 +128,47 @@ The script will:
 1. Pull latest code
 2. Install dependencies
 3. Build all packages
-4. Rebuild container images
-5. Restart Podman services
+4. Push any database schema updates
+5. Rebuild container images
+6. Restart Podman services
 
 ## Managing Services
 
 ```bash
 # View status
-systemctl --user status markdawn-api.service markdawn-collab.service
+systemctl --user status markdawn-postgres.service markdawn-api.service markdawn-collab.service
 
 # View logs
+journalctl --user -u markdawn-postgres.service -f
 journalctl --user -u markdawn-api.service -f
 journalctl --user -u markdawn-collab.service -f
 
 # Restart services
+systemctl --user restart markdawn-postgres.service
 systemctl --user restart markdawn-api.service
 systemctl --user restart markdawn-collab.service
 
 # Stop services
-systemctl --user stop markdawn-api.service markdawn-collab.service
+systemctl --user stop markdawn-postgres.service markdawn-api.service markdawn-collab.service
 
 # Enable auto-start on boot
-systemctl --user enable markdawn-api.service markdawn-collab.service
+systemctl --user enable markdawn-postgres.service markdawn-api.service markdawn-collab.service
 ```
 
 ## Architecture
 
 ```
-markdawn.space
-├── /                    -> Vite SPA (static files served by Caddy)
-├── /api/*              -> Hono API (port 3001)
-├── /collab             -> Hocuspocus WebSocket (port 1234)
-└── /assets/*           -> Cached for 1 year
+Vultr VPS (Fedora, 4GB RAM)
+├── Caddy (systemd, host) -> reverse proxy
+├── Podman Pod (markdawn.pod)
+│   ├── markdawn-postgres.container (PostgreSQL 17, port 5432)
+│   ├── markdawn-api.container (Hono, port 3001)
+│   └── markdawn-collab.container (Hocuspocus, port 1234)
+└── Persistent Volume: postgres-data
 ```
 
-Both API and collab run inside a single Podman pod sharing the `localhost` network namespace.
+All containers run inside a single Podman pod sharing the `localhost` network namespace.
+PostgreSQL port 5432 is bound to `127.0.0.1` only (localhost), not exposed externally.
 
 ## Troubleshooting
 
@@ -180,7 +191,13 @@ ls ~/.config/containers/systemd/env/
 
 ### Database connection errors
 
-Verify `DATABASE_URL` includes `sslmode=require` for Neon.
+Verify `DATABASE_URL` points to `localhost:5432` and does NOT include `sslmode=require`.
+Check PostgreSQL is running:
+
+```bash
+systemctl --user status markdawn-postgres.service
+podman exec markdawn-postgres pg_isready -U markdawn -d markdawn
+```
 
 ### OAuth login fails
 
