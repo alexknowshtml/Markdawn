@@ -2,6 +2,20 @@
 
 Single-VPS deployment on Fedora with Caddy reverse proxy, Podman containers, and self-hosted PostgreSQL 17.
 
+## Quick Start (Hands-Off)
+
+Run these commands on your VM as a non-root user with `sudo` access:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/atharva-again/Markdawn/master/deploy/setup.sh -o setup.sh
+chmod +x setup.sh
+./setup.sh
+```
+
+The script will prompt you to edit `.env` with your credentials during setup. After it completes, the app will be running at your configured domain.
+
+---
+
 ## Prerequisites
 
 - Vultr VM with Fedora 44 (4GB RAM minimum)
