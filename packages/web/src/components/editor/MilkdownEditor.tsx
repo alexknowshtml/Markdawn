@@ -13,8 +13,6 @@ import type { EditorState } from 'prosemirror-state';
 import type { MarkType, NodeType } from 'prosemirror-model';
 import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import type { Page } from '@markdawn/shared';
-
 interface MilkdownEditorProps {
   pageId: string;
   workspaceId: string;
@@ -23,7 +21,6 @@ interface MilkdownEditorProps {
   onEditorReady?: (editor: unknown) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
-  pages?: Page[];
   onWikiLinkClick?: (path: string) => void;
 }
 
@@ -37,7 +34,6 @@ export function MilkdownEditor({
   onEditorReady,
   onStatusChange,
   onProviderReady,
-  pages,
   onWikiLinkClick,
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), [pageId]);
@@ -105,47 +101,51 @@ export function MilkdownEditor({
   const updateActiveStates = useCallback(() => {
     const editorInstance = editorRef.current as unknown as { action: (cb: (ctx: unknown) => void) => void } | null;
     if (!editorInstance) return;
-    editorInstance.action((ctx) => {
-      const view = (ctx as unknown as { get: (key: unknown) => unknown }).get(editorViewCtx);
-      if (!view) return;
-      const { state } = view as { state: EditorState };
-      const schema = state.schema as unknown as { marks: Record<string, MarkType>; nodes: Record<string, NodeType> };
-      const marks = schema.marks;
-      const nodes = schema.nodes;
+    try {
+      editorInstance.action((ctx) => {
+        const view = (ctx as unknown as { get: (key: unknown) => unknown }).get(editorViewCtx);
+        if (!view) return;
+        const { state } = view as { state: EditorState };
+        const schema = state.schema as unknown as { marks: Record<string, MarkType>; nodes: Record<string, NodeType> };
+        const marks = schema.marks;
+        const nodes = schema.nodes;
 
-      const listItemNode = nodes.list_item;
-      const isInListItem = listItemNode ? hasParentBlockType(state, listItemNode) : false;
-      const listItemChecked = isInListItem && listItemNode
-        ? (() => {
-            const { $from } = state.selection;
-            for (let d = $from.depth; d > 0; d--) {
-              const node = $from.node(d);
-              if (node.type === listItemNode) {
-                const checked = node.attrs.checked;
-                return checked === true || checked === 'true';
+        const listItemNode = nodes.list_item;
+        const isInListItem = listItemNode ? hasParentBlockType(state, listItemNode) : false;
+        const listItemChecked = isInListItem && listItemNode
+          ? (() => {
+              const { $from } = state.selection;
+              for (let d = $from.depth; d > 0; d--) {
+                const node = $from.node(d);
+                if (node.type === listItemNode) {
+                  const checked = node.attrs.checked;
+                  return checked === true || checked === 'true';
+                }
               }
-            }
-            return false;
-          })()
-        : false;
+              return false;
+            })()
+          : false;
 
-      setActiveStates({
-        isBoldActive: hasMark(state, marks.strong),
-        isItalicActive: hasMark(state, marks.emphasis),
-        isStrikeActive: hasMark(state, marks.strike_through),
-        isCodeActive: hasMark(state, marks.inlineCode) || hasBlockType(state, nodes.code_block),
-        isLinkActive: hasMark(state, marks.link),
-        isH1Active: hasBlockType(state, nodes.heading, { level: 1 }),
-        isH2Active: hasBlockType(state, nodes.heading, { level: 2 }),
-        isH3Active: hasBlockType(state, nodes.heading, { level: 3 }),
-        isH4Active: hasBlockType(state, nodes.heading, { level: 4 }),
-        isH5Active: hasBlockType(state, nodes.heading, { level: 5 }),
-        isH6Active: hasBlockType(state, nodes.heading, { level: 6 }),
-        isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !listItemChecked,
-        isOrderedListActive: hasParentBlockType(state, nodes.ordered_list),
-        isTaskListActive: listItemChecked,
+        setActiveStates({
+          isBoldActive: hasMark(state, marks.strong),
+          isItalicActive: hasMark(state, marks.emphasis),
+          isStrikeActive: hasMark(state, marks.strike_through),
+          isCodeActive: hasMark(state, marks.inlineCode) || hasBlockType(state, nodes.code_block),
+          isLinkActive: hasMark(state, marks.link),
+          isH1Active: hasBlockType(state, nodes.heading, { level: 1 }),
+          isH2Active: hasBlockType(state, nodes.heading, { level: 2 }),
+          isH3Active: hasBlockType(state, nodes.heading, { level: 3 }),
+          isH4Active: hasBlockType(state, nodes.heading, { level: 4 }),
+          isH5Active: hasBlockType(state, nodes.heading, { level: 5 }),
+          isH6Active: hasBlockType(state, nodes.heading, { level: 6 }),
+          isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !listItemChecked,
+          isOrderedListActive: hasParentBlockType(state, nodes.ordered_list),
+          isTaskListActive: listItemChecked,
+        });
       });
-    });
+    } catch {
+      // Editor may have been destroyed
+    }
   }, [hasMark, hasBlockType, hasParentBlockType]);
 
   const provider = useMemo(() => {
@@ -168,7 +168,6 @@ export function MilkdownEditor({
     ...(onChange !== undefined && { onChange }),
     doc,
     provider,
-    pages,
     onWikiLinkClick,
   });
 
@@ -536,6 +535,8 @@ useEffect(() => {
       };
       
       onEditorReady?.(editorWrapper);
+    } else {
+      editorRef.current = null;
     }
   }, [editor, onEditorReady]);
 
@@ -592,12 +593,16 @@ useEffect(() => {
 
     return () => {
       isMounted = false;
-      editorInstanceRef.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        if (!view) return;
-        view.dom.removeEventListener('keyup', handleSelectionChange);
-        view.dom.removeEventListener('mouseup', handleSelectionChange);
-      });
+      try {
+        editorInstanceRef.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          if (!view) return;
+          view.dom.removeEventListener('keyup', handleSelectionChange);
+          view.dom.removeEventListener('mouseup', handleSelectionChange);
+        });
+      } catch {
+        // Editor may have been destroyed during cleanup race condition
+      }
     };
   }, [editor, updateActiveStates]);
 
