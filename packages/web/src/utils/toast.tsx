@@ -8,7 +8,8 @@ export function showSuccessToast(message: string) {
     icon: <IconCheck size={16} />,
     autoClose: 4000,
     withBorder: true,
-    className: 'animate-slide-up',
+    withCloseButton: true,
+    className: 'animate-slide-down',
   })
 }
 
@@ -19,7 +20,8 @@ export function showErrorToast(message: string) {
     icon: <IconX size={16} />,
     autoClose: 5000,
     withBorder: true,
-    className: 'animate-slide-up',
+    withCloseButton: true,
+    className: 'animate-slide-down',
   })
 }
 
@@ -30,6 +32,7 @@ export function showInfoToast(message: string) {
     icon: <IconInfoCircle size={16} />,
     autoClose: 4000,
     withBorder: true,
-    className: 'animate-slide-up',
+    withCloseButton: true,
+    className: 'animate-slide-down',
   })
 }
