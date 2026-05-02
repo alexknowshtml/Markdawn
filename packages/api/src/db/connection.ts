@@ -2,15 +2,24 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import * as pg from 'pg';
 const { Pool } = pg;
 
-const isProduction = process.env.NODE_ENV === "production";
+function getDbHostname(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
 
-// Uses PgBouncer (-pooler endpoint) — keep pool small to avoid double-pooling
+const dbHostname = getDbHostname(process.env.DATABASE_URL);
+const isLocalDb = dbHostname === "localhost" || dbHostname === "127.0.0.1";
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   max: 5,
   idleTimeoutMillis: 30000,
   connectionTimeoutMillis: 15000,
-  ssl: isProduction ? { rejectUnauthorized: false } : false,
+  ssl: isLocalDb ? false : undefined,
 });
 
 pool.on("error", (err) => {

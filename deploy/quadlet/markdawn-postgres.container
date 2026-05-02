@@ -1,0 +1,24 @@
+[Unit]
+Description=Markdawn PostgreSQL Database
+After=network-online.target
+
+[Container]
+Image=docker.io/library/postgres:17-alpine
+ContainerName=markdawn-postgres
+Pod=markdawn.pod
+Environment=POSTGRES_USER=markdawn
+Environment=POSTGRES_DB=markdawn
+EnvironmentFile=/var/www/markdawn/.env
+Volume=postgres-data:/var/lib/postgresql/data:Z
+HealthCmd=CMD-SHELL pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+HealthInterval=10s
+HealthTimeout=5s
+HealthRetries=5
+
+[Service]
+Restart=on-failure
+RestartSec=5
+TimeoutStartSec=300
+
+[Install]
+WantedBy=default.target

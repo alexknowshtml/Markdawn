@@ -69,7 +69,10 @@ pnpm --filter @markdawn/collab build
 echo -e "${YELLOW}[STEP 7/8] Setting up Podman Quadlet services...${NC}"
 mkdir -p ~/.config/containers/systemd
 
+podman volume create postgres-data 2>/dev/null || true
+
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
+cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
@@ -79,7 +82,6 @@ podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerf
 echo -e "${YELLOW}[STEP 8/8] Configuring Caddy reverse proxy...${NC}"
 sudo cp "$REPO_DIR/deploy/Caddyfile" /etc/caddy/Caddyfile
 
-# Ensure Caddy can read static files (SELinux)
 if command -v semanage &>/dev/null && command -v restorecon &>/dev/null; then
     echo -e "${YELLOW}[SELinux] Setting httpd_sys_content_t on web dist...${NC}"
     sudo semanage fcontext -a -t httpd_sys_content_t "$REPO_DIR/packages/web/dist(/.*)?" 2>/dev/null || true
@@ -90,10 +92,28 @@ sudo systemctl enable --now caddy
 
 systemctl --user daemon-reload
 systemctl --user start markdawn-pod.service
+systemctl --user start markdawn-postgres.service
+
+echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
+for i in {1..30}; do
+    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+        echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
+        break
+    fi
+    if [ "$i" -eq 30 ]; then
+        echo -e "${RED}[ERROR] PostgreSQL did not become ready in time.${NC}"
+        exit 1
+    fi
+    sleep 2
+done
+
+echo -e "${YELLOW}[SCHEMA] Running db:push to initialize database...${NC}"
+pnpm --filter @markdawn/api db:push
+
 systemctl --user start markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Setup complete!${NC}"
 echo ""
-echo "Check status: systemctl --user status markdawn-api.service markdawn-collab.service"
+echo "Check status: systemctl --user status markdawn-postgres.service markdawn-api.service markdawn-collab.service"
 echo "View logs:    journalctl --user -u markdawn-api.service -f"
 echo "API health:   curl https://markdawn.space/api/health"
