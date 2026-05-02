@@ -5,7 +5,7 @@ CONTAINER_NAME="markdawn-postgres-dev"
 VOLUME_NAME="markdawn-postgres-dev-data"
 ENV_FILE=".env"
 
-# Load credentials from .env.dev if present
+# Load credentials from .env if present (typically copied from .env.dev)
 DB_USER="markdawn"
 DB_PASSWORD="password"
 DB_NAME="markdawn"
