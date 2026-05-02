@@ -196,7 +196,7 @@ Check PostgreSQL is running:
 
 ```bash
 systemctl --user status markdawn-postgres.service
-podman exec markdawn-postgres pg_isready -U markdawn -d markdawn
+podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 ```
 
 ### OAuth login fails

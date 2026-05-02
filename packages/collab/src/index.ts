@@ -36,7 +36,16 @@ async function main() {
   const { Pool } = await import("pg");
   const { applyUpdate, encodeStateAsUpdate } = await import("yjs");
 
-  const isLocalDb = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1");
+  function getDbHostname(url: string): string {
+    try {
+      return new URL(url).hostname;
+    } catch {
+      return "";
+    }
+  }
+
+  const dbHostname = getDbHostname(databaseUrl);
+  const isLocalDb = dbHostname === "localhost" || dbHostname === "127.0.0.1";
 
   const pool = new Pool({
     connectionString: databaseUrl,

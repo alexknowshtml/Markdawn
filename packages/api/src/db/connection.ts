@@ -2,7 +2,17 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import * as pg from 'pg';
 const { Pool } = pg;
 
-const isLocalDb = process.env.DATABASE_URL?.includes("localhost") || process.env.DATABASE_URL?.includes("127.0.0.1");
+function getDbHostname(url: string | undefined): string {
+  if (!url) return "";
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "";
+  }
+}
+
+const dbHostname = getDbHostname(process.env.DATABASE_URL);
+const isLocalDb = dbHostname === "localhost" || dbHostname === "127.0.0.1";
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

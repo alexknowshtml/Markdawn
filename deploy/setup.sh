@@ -71,52 +71,6 @@ mkdir -p ~/.config/containers/systemd
 
 podman volume create postgres-data 2>/dev/null || true
 
-dotenv_get() {
-  local file="$1"
-  local key="$2"
-  grep -m1 -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
-    | sed -E "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/"
-}
-
-validate_database_url() {
-  local database_url="$1"
-  local postgres_user="$2"
-  local postgres_db="$3"
-
-  python3 -c 'import sys
-from urllib.parse import urlparse, unquote
-
-database_url, expected_user, expected_db = sys.argv[1:4]
-parsed = urlparse(database_url)
-actual_user = unquote(parsed.username or "")
-actual_db = unquote(parsed.path[1:] if parsed.path.startswith("/") else parsed.path)
-
-if actual_user != expected_user:
-    print(f"POSTGRES_USER mismatch: DATABASE_URL uses {actual_user or '<empty>'}, expected {expected_user}", file=sys.stderr)
-    raise SystemExit(1)
-
-if actual_db != expected_db:
-    print(f"POSTGRES_DB mismatch: DATABASE_URL uses {actual_db or '<empty>'}, expected {expected_db}", file=sys.stderr)
-    raise SystemExit(1)
-' "$database_url" "$postgres_user" "$postgres_db"
-}
-
-if [ -f "$REPO_DIR/.env" ]; then
-  POSTGRES_USER="$(dotenv_get "$REPO_DIR/.env" POSTGRES_USER)"
-  POSTGRES_DB="$(dotenv_get "$REPO_DIR/.env" POSTGRES_DB)"
-  DATABASE_URL="$(dotenv_get "$REPO_DIR/.env" DATABASE_URL)"
-fi
-
-POSTGRES_USER="${POSTGRES_USER:-markdawn}"
-POSTGRES_DB="${POSTGRES_DB:-markdawn}"
-
-if [ -n "$DATABASE_URL" ]; then
-  if ! validate_database_url "$DATABASE_URL" "$POSTGRES_USER" "$POSTGRES_DB"; then
-    echo -e "${RED}[ERROR] DATABASE_URL must match POSTGRES_USER and POSTGRES_DB.${NC}"
-    exit 1
-  fi
-fi
-
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
@@ -142,7 +96,7 @@ systemctl --user start markdawn-postgres.service
 
 echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
 for i in {1..30}; do
-    if podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
         echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
         break
     fi
