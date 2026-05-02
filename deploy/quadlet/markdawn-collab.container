@@ -1,7 +1,7 @@
 [Unit]
 Description=Markdawn Collaboration Server (Hocuspocus)
-After=markdawn-api.service
-Requires=markdawn-api.service
+After=markdawn-api.service markdawn-postgres.service
+Requires=markdawn-api.service markdawn-postgres.service
 
 [Container]
 Image=localhost/markdawn-collab:latest
