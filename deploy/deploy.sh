@@ -11,12 +11,6 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-if [ -z "$SKIP_MIGRATION_WARNING" ]; then
-  echo -e "${YELLOW}[WARNING] This deploys a fresh local PostgreSQL instance.${NC}"
-  echo -e "${YELLOW}          If migrating from Neon, export your data first.${NC}"
-  echo ""
-fi
-
 cd "$REPO_DIR"
 
 echo -e "${YELLOW}[STEP 1/6] Pulling latest code...${NC}"
