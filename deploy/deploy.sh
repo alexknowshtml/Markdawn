@@ -11,13 +11,24 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
+if [ -z "$SKIP_MIGRATION_WARNING" ]; then
+  echo -e "${YELLOW}[WARNING] This deploys a fresh local PostgreSQL instance.${NC}"
+  echo -e "${YELLOW}          If migrating from Neon, export your data first.${NC}"
+  echo ""
+fi
+
+dotenv_get() {
+  local file="$1"
+  local key="$2"
+  grep -m1 -E "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null \
+    | sed -E "s/^[[:space:]]*${key}[[:space:]]*=[[:space:]]*//; s/^\"(.*)\"$/\1/; s/^'(.*)'$/\1/"
+}
+
 cd "$REPO_DIR"
 
-# Load PostgreSQL credentials from .env for readiness checks
 if [ -f "$REPO_DIR/.env" ]; then
-  set -a
-  source "$REPO_DIR/.env"
-  set +a
+  POSTGRES_USER="$(dotenv_get "$REPO_DIR/.env" POSTGRES_USER)"
+  POSTGRES_DB="$(dotenv_get "$REPO_DIR/.env" POSTGRES_DB)"
 fi
 
 POSTGRES_USER="${POSTGRES_USER:-markdawn}"
@@ -48,7 +59,11 @@ podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerf
 
 echo -e "${YELLOW}[STEP 6/6] Restarting services...${NC}"
 systemctl --user daemon-reload
-systemctl --user restart markdawn-pod.service
+systemctl --user restart \
+  markdawn-pod.service \
+  markdawn-postgres.service \
+  markdawn-api.service \
+  markdawn-collab.service
 
 for i in {1..30}; do
     if podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then

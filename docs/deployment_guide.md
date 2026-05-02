@@ -128,9 +128,9 @@ The script will:
 1. Pull latest code
 2. Install dependencies
 3. Build all packages
-4. Push any database schema updates
-5. Rebuild container images
-6. Restart Podman services
+4. Rebuild container images
+5. Restart Podman services
+6. Push any database schema updates
 
 ## Managing Services
 
