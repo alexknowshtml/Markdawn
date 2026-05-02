@@ -6,14 +6,11 @@ After=network-online.target
 Image=docker.io/library/postgres:17-alpine
 ContainerName=markdawn-postgres
 Pod=markdawn.pod
-# NOTE: EnvironmentFile values override Environment= defaults below.
-# If you change POSTGRES_USER or POSTGRES_DB in .env, you must also
-# update the HealthCmd since it cannot expand environment variables.
 Environment=POSTGRES_USER=markdawn
 Environment=POSTGRES_DB=markdawn
 EnvironmentFile=/var/www/markdawn/.env
 Volume=postgres-data:/var/lib/postgresql/data:Z
-HealthCmd=pg_isready -U markdawn -d markdawn
+HealthCmd=CMD-SHELL pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
 HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=5

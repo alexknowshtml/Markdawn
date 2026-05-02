@@ -40,16 +40,6 @@ fi
 
 cd "$REPO_DIR"
 
-# Load PostgreSQL credentials from .env for readiness checks
-if [ -f "$REPO_DIR/.env" ]; then
-  set -a
-  source "$REPO_DIR/.env"
-  set +a
-fi
-
-POSTGRES_USER="${POSTGRES_USER:-markdawn}"
-POSTGRES_DB="${POSTGRES_DB:-markdawn}"
-
 echo -e "${YELLOW}[STEP 4/8] Installing Node.js and pnpm...${NC}"
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
@@ -81,6 +71,15 @@ mkdir -p ~/.config/containers/systemd
 
 # Create persistent volume for PostgreSQL
 podman volume create postgres-data 2>/dev/null || true
+
+if [ -f "$REPO_DIR/.env" ]; then
+  set -a
+  source "$REPO_DIR/.env"
+  set +a
+fi
+
+POSTGRES_USER="${POSTGRES_USER:-markdawn}"
+POSTGRES_DB="${POSTGRES_DB:-markdawn}"
 
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/

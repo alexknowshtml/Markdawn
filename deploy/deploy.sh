@@ -48,7 +48,7 @@ podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerf
 
 echo -e "${YELLOW}[STEP 6/6] Restarting services...${NC}"
 systemctl --user daemon-reload
-systemctl --user restart markdawn-postgres.service
+systemctl --user restart markdawn-pod.service
 
 for i in {1..30}; do
     if podman exec markdawn-postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
@@ -64,8 +64,6 @@ done
 
 echo -e "${YELLOW}[SCHEMA] Pushing database schema...${NC}"
 pnpm --filter @markdawn/api db:push
-
-systemctl --user restart markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Deployment complete!${NC}"
 echo ""
