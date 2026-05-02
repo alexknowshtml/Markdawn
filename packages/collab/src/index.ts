@@ -36,12 +36,14 @@ async function main() {
   const { Pool } = await import("pg");
   const { applyUpdate, encodeStateAsUpdate } = await import("yjs");
 
+  const isLocalDb = databaseUrl.includes("localhost") || databaseUrl.includes("127.0.0.1");
+
   const pool = new Pool({
     connectionString: databaseUrl,
     max: 5,
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 15000,
-    ssl: false,
+    ssl: isLocalDb ? false : undefined,
   });
 
   pool.on("error", (err) => {

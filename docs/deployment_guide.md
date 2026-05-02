@@ -184,9 +184,9 @@ journalctl --user -u markdawn-api.service --no-pager
 journalctl --user -u markdawn-collab.service --no-pager
 ```
 
-Verify the environment files exist:
+Verify the environment file exists:
 ```bash
-ls ~/.config/containers/systemd/env/
+ls /var/www/markdawn/.env
 ```
 
 ### Database connection errors
