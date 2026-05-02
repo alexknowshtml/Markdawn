@@ -37,6 +37,11 @@ const theme = createTheme({
           backgroundColor: 'var(--color-surface-elevated)',
           border: `1px solid var(--color-border)`,
           color: 'var(--color-text)',
+          width: 'fit-content',
+          minWidth: '240px',
+          maxWidth: '420px',
+          marginLeft: 'auto',
+          marginRight: 'auto',
         },
         title: {
           color: 'var(--color-text)',
@@ -54,7 +59,7 @@ const queryClient = new QueryClient()
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <MantineProvider theme={theme}>
-      <Notifications transitionDuration={300} />
+      <Notifications position="top-center" transitionDuration={300} />
       <QueryClientProvider client={queryClient}>
         <App />
       </QueryClientProvider>
