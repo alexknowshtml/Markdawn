@@ -1,11 +1,57 @@
 import { defineConfig } from 'vitest/config';
 
+const coverageConfig = {
+  provider: 'v8' as const,
+  reporter: ['text', 'json-summary', 'html', 'lcov'] as string[],
+  reportsDirectory: './coverage',
+  include: ['src/**/*.ts'],
+  exclude: [
+    'src/**/*.test.ts',
+    'src/**/*.unit.test.ts',
+    'src/**/*.bench.ts',
+    'src/index.ts',
+    'src/env.ts',
+    'src/db/**',
+    'src/auth.ts',
+  ],
+  thresholds: {
+    perFile: true,
+    statements: 80,
+    branches: 70,
+    functions: 80,
+    lines: 80,
+  },
+};
+
 export default defineConfig({
   test: {
-    environment: 'node',
+    name: '@markdawn/api',
+    hookTimeout: 120_000,
+    testTimeout: 60_000,
     globals: true,
-    include: ['src/**/*.test.ts'],
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    environment: 'node',
+    coverage: coverageConfig,
+    projects: [
+      {
+        test: {
+          name: 'unit',
+          include: ['src/**/*.unit.test.ts'],
+          pool: 'threads',
+          coverage: coverageConfig,
+        },
+      },
+      {
+        test: {
+          name: 'integration',
+          include: ['src/**/*.test.ts'],
+          exclude: ['src/**/*.unit.test.ts'],
+          pool: 'forks',
+          fileParallelism: false,
+          globalSetup: ['./test/global-setup.ts'],
+          setupFiles: ['./test/setup.ts'],
+          coverage: coverageConfig,
+        },
+      },
+    ],
   },
 });
