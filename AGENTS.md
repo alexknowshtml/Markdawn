@@ -296,7 +296,89 @@ pnpm dev  # Starts all packages in parallel
 
 ---
 
-## Important Gotchas
+## Testing Rollout Conventions
+
+This section documents reusable testing conventions for adding or expanding test coverage
+in any monorepo package, avoiding the need to re-derive the approach package by package.
+
+### Package Type Determination
+
+Each package should choose a testing setup based on its dependencies and runtime needs:
+
+| Package | Type | DB Needed? | Config Approach |
+|---------|------|-----------|-----------------|
+| `@markdawn/api` | **multi-project** | Yes (real Postgres) | `vitest.config.ts` with `test.projects` — unit + integration split |
+| `@markdawn/web` | **single-config** | No (jsdom) | `vitest.config.ts` — browser-like environment |  
+| `@markdawn/collab` | **single-config** | No | `vitest.config.ts` — standard node environment |
+| `@markdawn/shared` | **single-config** | No | `vitest.config.ts` — standard node environment |
+
+Use **multi-project** when your package has tests that require different environments (e.g., unit
+tests with threads vs. integration tests with a database container). Use **single-config** when
+all tests share the same environment.
+
+### File Naming Conventions
+
+- Unit tests: `*.unit.test.ts` — pure logic, no DB/network/filesystem
+- Integration tests: `*.test.ts` — tests that touch DB, network, or filesystem
+- Test helpers: `src/test-utils.ts` — shared factory functions for creating test fixtures
+- Test harness: `test/` — global setup, setup hooks, environment configuration
+- Smoke suites: `src/test-harness/` — focused validation of helper infrastructure
+
+### Factory Pattern
+
+All route-level integration tests should use factories from `src/test-utils.ts` rather than
+inline SQL. This keeps test logic readable and avoids duplication. Available factories:
+
+- `createTestUser()` — user + personal workspace + workspace membership
+- `createTestSession(userId)` — signed session cookie
+- `createTestWorkspace(ownerId)` — non-personal workspace
+- `createTestPage(workspaceId, createdBy)` — page within a workspace
+- `createTestFolder(workspaceId, createdBy)` — folder within a workspace
+- `createTestComment(pageId, userId)` — comment on a page
+- `createTestReply(commentId, userId)` — reply to a comment
+- `createTestVersion(pageId, createdBy)` — page version snapshot
+- `createTestTemplate(workspaceId, createdBy)` — workspace template
+- `createTestTag(workspaceId)` — tag within a workspace
+- `createTestPageLink(sourcePageId, targetPageId)` — backlink between pages
+- `createTestPublicShare(pageId)` — public share token for a page
+- `createTestTempDir()` — isolated temp directory for filesystem tests
+- `createTestTempFile(dirPath, name, content)` — file within temp dir
+- `mockDbError(error)` — one-shot DB failure simulator
+
+### Integration Harness (API-specific)
+
+The API package uses a real PostgreSQL container via Podman for integration testing:
+
+- Container name: `markdawn-postgres-test`
+- Port: dynamically allocated to avoid collisions
+- Database: truncated between each test (via `SET session_replication_role = replica`)
+- Auth: session cookies signed with HMAC-SHA256 in test helpers
+- Env vars: propagated from global setup to test workers via `process.env`
+
+### CI Integration
+
+- API tests run in the `test` CI job: unit → integration → coverage
+- CI uses `continue-on-error: true` for coverage to avoid blocking PRs on coverage thresholds
+- Podman layers are cached between CI runs for faster container startup
+- Coverage reports are uploaded as CI artifacts
+
+### Adding Tests to a New Route
+
+1. Create `src/routes/{name}.test.ts`
+2. Import `createTestApp` and needed factories from `../test-utils`
+3. Start with the auth guard baseline (401 without session, 401 with invalid token)
+4. Add happy-path tests for each endpoint
+5. Add validation-failure tests (400, 404, 403)
+6. Run: `pnpm --filter @markdawn/api exec vitest run --project integration src/routes/{name}.test.ts`
+
+### Extending to Other Packages
+
+When adding testing to `web`, `collab`, or `shared`:
+
+1. Create a `vitest.config.ts` (single-config style initially)
+2. Add `test`, `test:watch` scripts to the package's `package.json`
+3. Use the API's `src/test-utils.ts` as a pattern for shared factories
+4. For packages that don't need a database, skip the integration harness entirely
 
 These are critical issues discovered during implementation. Do not try to "fix" these — they are known limitations.
 

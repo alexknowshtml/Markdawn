@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { createTestApp } from '../test-utils';
+import {
+  createTestApp,
+  createTestComment,
+  createTestPage,
+  createTestReply,
+  createTestSession,
+  createTestUser,
+} from '../test-utils';
 
 describe('comments API', () => {
   describe('auth guard', () => {
@@ -7,6 +14,159 @@ describe('comments API', () => {
       const app = await createTestApp();
       const res = await app.request('/api/pages/some-page-id/comments');
       expect(res.status).toBe(401);
+    });
+  });
+
+  describe('GET /api/pages/:pageId/comments', () => {
+    it('lists comments for a page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+      await createTestComment(page.id, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments`, {
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
+    });
+
+    it('returns 404 for non-existent page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const res = await app.request('/api/pages/non-existent/comments', {
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(404);
+    });
+  });
+
+  describe('POST /api/pages/:pageId/comments', () => {
+    it('creates a comment on a page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ content: 'Great page!' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.content).toBe('Great page!');
+    });
+
+    it('returns 400 when content is missing', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({}),
+      });
+
+      expect(res.status).toBe(400);
+    });
+  });
+
+  describe('POST /api/pages/:pageId/comments/:commentId/replies', () => {
+    it('adds a reply to a comment', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+      const comment = await createTestComment(page.id, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}/replies`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ content: 'A reply' }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.content).toBe('A reply');
+    });
+  });
+
+  describe('PATCH /api/pages/:pageId/comments/:commentId', () => {
+    it('resolves a comment', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+      const comment = await createTestComment(page.id, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ resolved: true }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.resolved).toBe(true);
+    });
+  });
+
+  describe('DELETE /api/pages/:pageId/comments/:commentId', () => {
+    it('deletes a comment', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.workspaceId, user.id);
+      const comment = await createTestComment(page.id, user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('returns 403 when deleting another user comment', async () => {
+      const app = await createTestApp();
+      const user1 = await createTestUser();
+      const user2 = await createTestUser();
+      const session2 = await createTestSession(user2.id);
+      const page = await createTestPage(user1.workspaceId, user1.id);
+      const comment = await createTestComment(page.id, user1.id);
+
+      const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session2.Cookie },
+      });
+
+      expect(res.status).toBe(403);
     });
   });
 });
