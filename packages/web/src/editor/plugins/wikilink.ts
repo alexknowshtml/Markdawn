@@ -7,22 +7,28 @@ export const wikiLink = $node('wikiLink', () => ({
   attrs: {
     path: { default: '' },
     heading: { default: '' },
-    label: { default: '' }
+    label: { default: '' },
   },
-  parseDOM: [{
-    tag: 'a.wiki-link',
-    getAttrs: (dom) => ({
-      path: (dom as HTMLElement).getAttribute('data-path'),
-      heading: (dom as HTMLElement).getAttribute('data-heading') || '',
-      label: dom.textContent
-    })
-  }],
-  toDOM: (node) => ['a', {
-    class: 'wiki-link',
-    href: '#',
-    'data-path': node.attrs.path,
-    'data-heading': node.attrs.heading || ''
-  }, node.attrs.label],
+  parseDOM: [
+    {
+      tag: 'a.wiki-link',
+      getAttrs: (dom) => ({
+        path: (dom as HTMLElement).getAttribute('data-path'),
+        heading: (dom as HTMLElement).getAttribute('data-heading') || '',
+        label: dom.textContent,
+      }),
+    },
+  ],
+  toDOM: (node) => [
+    'a',
+    {
+      class: 'wiki-link',
+      href: '#',
+      'data-path': node.attrs.path,
+      'data-heading': node.attrs.heading || '',
+    },
+    node.attrs.label,
+  ],
   parseMarkdown: {
     match: (node) =>
       node.type === 'text' &&
@@ -37,10 +43,10 @@ export const wikiLink = $node('wikiLink', () => ({
         state.addNode(nodeType, {
           path,
           heading,
-          label
+          label,
         });
       }
-    }
+    },
   },
   toMarkdown: {
     match: (node) => node.type.name === 'wikiLink',
@@ -49,10 +55,9 @@ export const wikiLink = $node('wikiLink', () => ({
       const heading = String(node.attrs.heading || '');
       const target = heading ? `${path}#${heading}` : path;
       const defaultLabel = path ? (heading ? `${path}#${heading}` : path) : `#${heading}`;
-      const text = node.attrs.label !== defaultLabel
-        ? `[[${target}|${node.attrs.label}]]`
-        : `[[${target}]]`;
+      const text =
+        node.attrs.label !== defaultLabel ? `[[${target}|${node.attrs.label}]]` : `[[${target}]]`;
       state.addNode('text', undefined, text);
-    }
-  }
+    },
+  },
 }));

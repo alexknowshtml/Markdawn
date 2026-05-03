@@ -3,11 +3,11 @@ import { Link, Navigate } from 'react-router-dom';
 import { HeaderActions } from '../components/HeaderActions';
 import { useAuth } from '../hooks/useAuth';
 
-const GITHUB_REPO = "https://github.com/atharva-again/Markdawn";
+const GITHUB_REPO = 'https://github.com/atharva-again/Markdawn';
 
 export default function Home() {
   const { data: session } = useAuth();
-  
+
   if (session?.user) {
     return <Navigate to="/app" replace />;
   }
@@ -32,19 +32,20 @@ export default function Home() {
         <h1 className="text-5xl md:text-7xl font-extrabold tracking-tight text-zinc-900 dark:text-white mb-6 leading-[1.1]">
           Welcome to Markdawn
         </h1>
-        
+
         <p className="text-lg md:text-xl text-zinc-600 dark:text-zinc-400 mb-10 max-w-2xl leading-relaxed font-medium">
-          The collaborative markdown editor designed for speed, simplicity, and seamless team synchronization. Write better, together.
+          The collaborative markdown editor designed for speed, simplicity, and seamless team
+          synchronization. Write better, together.
         </p>
-        
+
         <div className="flex flex-col sm:flex-row gap-4 w-full sm:w-auto">
-          <Link 
-            to="/login" 
+          <Link
+            to="/login"
             className="inline-flex items-center justify-center px-8 py-3.5 text-sm font-semibold text-white bg-zinc-900 dark:bg-white dark:text-zinc-900 rounded-full hover:bg-zinc-800 dark:hover:bg-zinc-100 transition-all duration-200 shadow-lg hover:shadow-xl hover:-translate-y-0.5 active:translate-y-0 ring-1 ring-zinc-900 dark:ring-white"
           >
             Get Started
           </Link>
-          <a 
+          <a
             href={GITHUB_REPO}
             target="_blank"
             rel="noopener noreferrer"
@@ -54,7 +55,7 @@ export default function Home() {
           </a>
         </div>
       </main>
-      
+
       <style>{`
         @keyframes dawn-pulse {
           0% { opacity: 0.8; transform: scale(1) translateY(-2%); }

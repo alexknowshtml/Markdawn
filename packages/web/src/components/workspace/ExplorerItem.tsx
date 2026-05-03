@@ -1,8 +1,20 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { FileText, Folder, MoreHorizontal, Trash2, Edit2, Download, Copy, Scissors, FolderInput, Check } from 'lucide-react';
+import { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
 import clsx from 'clsx';
-import { PageTreeNode, FolderTreeNode } from '@markdawn/shared';
+import {
+  Check,
+  Copy,
+  Download,
+  Edit2,
+  FileText,
+  Folder,
+  FolderInput,
+  MoreHorizontal,
+  Scissors,
+  Trash2,
+} from 'lucide-react';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 export type ExplorerItemType = 'page' | 'folder';
@@ -91,7 +103,8 @@ export function ExplorerItem({
     onSelect(e);
   };
 
-  const updatedDate = typeof item.updatedAt === 'string' ? item.updatedAt : item.updatedAt.toISOString();
+  const updatedDate =
+    typeof item.updatedAt === 'string' ? item.updatedAt : item.updatedAt.toISOString();
 
   if (viewMode === 'list') {
     return (
@@ -101,16 +114,23 @@ export function ExplorerItem({
             'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150',
             isSelected
               ? 'bg-zinc-100 dark:bg-zinc-800'
-              : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50'
+              : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50',
           )}
           onClick={handleClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick(e as unknown as React.MouseEvent);
+            }
+          }}
         >
           <button
+            type="button"
             className={clsx(
               'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
               isSelected
                 ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
-                : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400'
+                : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
           >
@@ -152,6 +172,7 @@ export function ExplorerItem({
 
           <div className="relative shrink-0" ref={menuRef}>
             <button
+              type="button"
               className="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
@@ -165,46 +186,81 @@ export function ExplorerItem({
               <div className="absolute right-0 top-8 w-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border border-black/5 dark:border-white/5 shadow-xl rounded-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
                 {item.type === 'page' && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMenu(false); navigate(`/app/${workspaceSlug}/${item.id}`); }}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      navigate(`/app/${workspaceSlug}/${item.id}`);
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <FileText size={14} /> Open
                   </button>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onRename(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onRename();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Edit2 size={14} /> Rename
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onCopy(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onCopy();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Copy size={14} /> Copy
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onCut(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onCut();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Scissors size={14} /> Cut
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onMove(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onMove();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <FolderInput size={14} /> Move
                 </button>
                 {onExport && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMenu(false); onExport(); }}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onExport();
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <Download size={14} /> Export
                   </button>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); setShowDeleteDialog(true); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    setShowDeleteDialog(true);
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Trash2 size={14} /> Delete
@@ -219,7 +275,10 @@ export function ExplorerItem({
           title="Move to trash"
           message={`Are you sure you want to move "${item.title || 'Untitled'}" to the trash?`}
           confirmText="Move to trash"
-          onConfirm={() => { onDelete(); setShowDeleteDialog(false); }}
+          onConfirm={() => {
+            onDelete();
+            setShowDeleteDialog(false);
+          }}
           onCancel={() => setShowDeleteDialog(false)}
         />
       </>
@@ -234,17 +293,24 @@ export function ExplorerItem({
           showMenu && 'z-10',
           isSelected
             ? 'border-zinc-900 dark:border-zinc-100 ring-2 ring-zinc-900 dark:ring-zinc-100'
-            : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]'
+            : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]',
         )}
         onClick={handleClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick(e as unknown as React.MouseEvent);
+          }
+        }}
       >
         <div className="absolute top-3 left-3 z-10">
           <button
+            type="button"
             className={clsx(
               'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
               isSelected
                 ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
-                : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400'
+                : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
           >
@@ -255,8 +321,14 @@ export function ExplorerItem({
         <div
           className="h-28 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg mb-3 flex items-center justify-center text-zinc-300 dark:text-zinc-600 overflow-hidden"
           style={{
-            background: item.type === 'page' && item.coverType === 'gradient' ? item.coverValue! : undefined,
-            backgroundColor: item.type === 'page' && item.coverType === 'solid' ? item.coverValue! : undefined,
+            background:
+              item.type === 'page' && item.coverType === 'gradient'
+                ? (item.coverValue ?? undefined)
+                : undefined,
+            backgroundColor:
+              item.type === 'page' && item.coverType === 'solid'
+                ? (item.coverValue ?? undefined)
+                : undefined,
           }}
         >
           {item.type === 'folder' ? (
@@ -287,12 +359,15 @@ export function ExplorerItem({
               </h3>
             )}
             <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
-              {item.type === 'folder' ? 'Folder' : `Edited ${new Date(updatedDate).toLocaleDateString()}`}
+              {item.type === 'folder'
+                ? 'Folder'
+                : `Edited ${new Date(updatedDate).toLocaleDateString()}`}
             </p>
           </div>
 
           <div className="relative shrink-0" ref={menuRef}>
             <button
+              type="button"
               className="item-action p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors cursor-pointer"
               onClick={(e) => {
                 e.stopPropagation();
@@ -306,46 +381,81 @@ export function ExplorerItem({
               <div className="absolute right-0 top-7 w-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border border-black/5 dark:border-white/5 shadow-xl rounded-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
                 {item.type === 'page' && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMenu(false); navigate(`/app/${workspaceSlug}/${item.id}`); }}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      navigate(`/app/${workspaceSlug}/${item.id}`);
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <FileText size={14} /> Open
                   </button>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onRename(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onRename();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Edit2 size={14} /> Rename
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onCopy(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onCopy();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Copy size={14} /> Copy
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onCut(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onCut();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Scissors size={14} /> Cut
                 </button>
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); onMove(); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    onMove();
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <FolderInput size={14} /> Move
                 </button>
                 {onExport && (
                   <button
-                    onClick={(e) => { e.stopPropagation(); setShowMenu(false); onExport(); }}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onExport();
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <Download size={14} /> Export
                   </button>
                 )}
                 <button
-                  onClick={(e) => { e.stopPropagation(); setShowMenu(false); setShowDeleteDialog(true); }}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowMenu(false);
+                    setShowDeleteDialog(true);
+                  }}
                   className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                 >
                   <Trash2 size={14} /> Delete
@@ -361,7 +471,10 @@ export function ExplorerItem({
         title="Move to trash"
         message={`Are you sure you want to move "${item.title || 'Untitled'}" to the trash?`}
         confirmText="Move to trash"
-        onConfirm={() => { onDelete(); setShowDeleteDialog(false); }}
+        onConfirm={() => {
+          onDelete();
+          setShowDeleteDialog(false);
+        }}
         onCancel={() => setShowDeleteDialog(false)}
       />
     </>

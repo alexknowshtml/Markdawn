@@ -1,5 +1,15 @@
-import { pgTable, text, timestamp, uuid, boolean, integer, customType, AnyPgColumn, unique } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import {
+  type AnyPgColumn,
+  boolean,
+  customType,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  unique,
+  uuid,
+} from 'drizzle-orm/pg-core';
 
 // Custom bytea type for binary data
 const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
@@ -20,14 +30,18 @@ export const sessions = pgTable('sessions', {
   updatedAt: timestamp('updated_at').notNull(),
   ipAddress: text('ip_address'),
   userAgent: text('user_agent'),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
 });
 
 export const accounts = pgTable('accounts', {
   id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
   accountId: text('account_id').notNull(),
   providerId: text('provider_id').notNull(),
-  userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  userId: uuid('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
   accessToken: text('access_token'),
   refreshToken: text('refresh_token'),
   idToken: text('id_token'),
@@ -100,12 +114,14 @@ export const folders = pgTable('folders', {
   deletedAt: timestamp('deleted_at'),
 });
 
-export const pages: any = pgTable('pages', {
+export const pages = pgTable('pages', {
   id: uuid('id').defaultRandom().primaryKey(),
   workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
   title: text('title').notNull().default('Untitled'),
-  titleSearch: text('title_search').generatedAlwaysAs(sql`to_tsvector('english', coalesce(title, ''))`),
+  titleSearch: text('title_search').generatedAlwaysAs(
+    sql`to_tsvector('english', coalesce(title, ''))`,
+  ),
   icon: text('icon'),
   coverType: text('cover_type'),
   coverValue: text('cover_value'),
@@ -129,7 +145,6 @@ export const pages: any = pgTable('pages', {
   isDeleted: boolean('is_deleted').default(false),
 
   deletedAt: timestamp('deleted_at'),
-
 });
 
 export const pageVersions = pgTable('page_versions', {
@@ -145,24 +160,32 @@ export const pageVersions = pgTable('page_versions', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-export const userFavorites = pgTable('user_favorites', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
-  createdAt: timestamp('created_at').defaultNow(),
-}, (table) => ({
-  userPageUnique: unique().on(table.userId, table.pageId),
-}));
+export const userFavorites = pgTable(
+  'user_favorites',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    userPageUnique: unique().on(table.userId, table.pageId),
+  }),
+);
 
-export const pageVisits = pgTable('page_visits', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
-  visitedAt: timestamp('visited_at').defaultNow(),
-}, (table) => ({
-  userPageUnique: unique().on(table.userId, table.pageId),
-}));
+export const pageVisits = pgTable(
+  'page_visits',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    visitedAt: timestamp('visited_at').defaultNow(),
+  },
+  (table) => ({
+    userPageUnique: unique().on(table.userId, table.pageId),
+  }),
+);
 
 export const comments = pgTable('comments', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -199,34 +222,54 @@ export const commentReplies = pgTable('comment_replies', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-export const tags = pgTable('tags', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }).notNull(),
-  name: text('name').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-}, (table) => ({
-  workspaceTagUnique: unique().on(table.workspaceId, table.name),
-}));
+export const tags = pgTable(
+  'tags',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workspaceId: uuid('workspace_id')
+      .references(() => workspaces.id, { onDelete: 'cascade' })
+      .notNull(),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    workspaceTagUnique: unique().on(table.workspaceId, table.name),
+  }),
+);
 
-export const pageTags = pgTable('page_tags', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }).notNull(),
-  tagId: uuid('tag_id').references(() => tags.id, { onDelete: 'cascade' }).notNull(),
-}, (table) => ({
-  pageTagUnique: unique().on(table.pageId, table.tagId),
-}));
+export const pageTags = pgTable(
+  'page_tags',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pageId: uuid('page_id')
+      .references(() => pages.id, { onDelete: 'cascade' })
+      .notNull(),
+    tagId: uuid('tag_id')
+      .references(() => tags.id, { onDelete: 'cascade' })
+      .notNull(),
+  },
+  (table) => ({
+    pageTagUnique: unique().on(table.pageId, table.tagId),
+  }),
+);
 
-export const pageLinks = pgTable('page_links', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  sourcePageId: uuid('source_page_id').references(() => pages.id, { onDelete: 'cascade' }).notNull(),
-  targetPageId: uuid('target_page_id').references(() => pages.id, { onDelete: 'cascade' }),
-  targetTitle: text('target_title').notNull(),
-  linkText: text('link_text').notNull(),
-  linkType: text('link_type').default('wiki').$type<'wiki' | 'heading' | 'embed'>(),
-  createdAt: timestamp('created_at').defaultNow(),
-}, (table) => ({
-  sourceTargetUnique: unique().on(table.sourcePageId, table.targetTitle),
-}));
+export const pageLinks = pgTable(
+  'page_links',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    sourcePageId: uuid('source_page_id')
+      .references(() => pages.id, { onDelete: 'cascade' })
+      .notNull(),
+    targetPageId: uuid('target_page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    targetTitle: text('target_title').notNull(),
+    linkText: text('link_text').notNull(),
+    linkType: text('link_type').default('wiki').$type<'wiki' | 'heading' | 'embed'>(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    sourceTargetUnique: unique().on(table.sourcePageId, table.targetTitle),
+  }),
+);
 
 export const uploads = pgTable('uploads', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -234,7 +277,11 @@ export const uploads = pgTable('uploads', {
   originalName: text('original_name').notNull(),
   mimeType: text('mime_type').notNull(),
   size: integer('size').notNull(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }).notNull(),
-  uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'cascade' }).notNull(),
+  workspaceId: uuid('workspace_id')
+    .references(() => workspaces.id, { onDelete: 'cascade' })
+    .notNull(),
+  uploadedBy: uuid('uploaded_by')
+    .references(() => users.id, { onDelete: 'cascade' })
+    .notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });

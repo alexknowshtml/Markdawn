@@ -1,7 +1,7 @@
-import type { MarkType, Node as ProseNode, NodeType } from '@milkdown/kit/prose/model';
+import type { MarkType, NodeType, Node as ProseNode } from '@milkdown/kit/prose/model';
+import { Fragment } from '@milkdown/kit/prose/model';
 import type { EditorState, Transaction } from '@milkdown/kit/prose/state';
 import type { EditorView } from '@milkdown/kit/prose/view';
-import { Fragment } from '@milkdown/kit/prose/model';
 
 type TaskRepair = {
   itemPos: number;
@@ -16,10 +16,7 @@ const TAG_PATTERN = /(^|\s)#([A-Za-z0-9_-]+)(?=$|\s)/g;
 const URL_PATTERN = /https?:\/\/[^\s]+/g;
 const TASK_PREFIX_PATTERN = /^\[( |x|X)\]\s/;
 
-function buildWikiNode(
-  wikiLinkType: NodeType,
-  source: string,
-): ProseNode {
+function buildWikiNode(wikiLinkType: NodeType, source: string): ProseNode {
   const match = source.match(/^\[\[([^\]|#]*)(?:#([^\]|]+))?(?:\|(.+?))?\]\]$/);
   const path = match?.[1] ?? '';
   const heading = match?.[2] ?? '';
@@ -85,7 +82,10 @@ function splitInlineText(
   return nodes;
 }
 
-function findFirstTextInListItem(node: ProseNode, pos: number): { text: string; from: number } | null {
+function findFirstTextInListItem(
+  node: ProseNode,
+  pos: number,
+): { text: string; from: number } | null {
   let result: { text: string; from: number } | null = null;
 
   node.descendants((child, relPos) => {
@@ -129,15 +129,14 @@ function repairTaskItems(state: EditorState): Transaction | null {
   if (taskRepairs.length === 0) return null;
 
   const tr = state.tr;
-  taskRepairs
-    .sort((a, b) => b.deleteFrom - a.deleteFrom)
-    .forEach((repair) => {
-      tr.setNodeMarkup(repair.itemPos, undefined, {
-        ...repair.attrs,
-        checked: repair.checked,
-      });
-      tr.deleteRange(repair.deleteFrom, repair.deleteTo);
+  const sortedRepairs = taskRepairs.sort((a, b) => b.deleteFrom - a.deleteFrom);
+  for (const repair of sortedRepairs) {
+    tr.setNodeMarkup(repair.itemPos, undefined, {
+      ...repair.attrs,
+      checked: repair.checked,
     });
+    tr.deleteRange(repair.deleteFrom, repair.deleteTo);
+  }
 
   return tr.docChanged ? tr : null;
 }
@@ -163,7 +162,12 @@ function repairInlineNodes(state: EditorState): Transaction | null {
     WIKI_PATTERN.lastIndex = 0;
     TAG_PATTERN.lastIndex = 0;
 
-    const nodes = splitInlineText(text, state.schema.text.bind(state.schema), wikiLinkType, tagType);
+    const nodes = splitInlineText(
+      text,
+      state.schema.text.bind(state.schema),
+      wikiLinkType,
+      tagType,
+    );
 
     if (nodes.length === 1 && nodes[0]?.isText && nodes[0].text === text) {
       return true;
@@ -181,11 +185,10 @@ function repairInlineNodes(state: EditorState): Transaction | null {
   if (replacements.length === 0) return null;
 
   const tr = state.tr;
-  replacements
-    .sort((a, b) => b.from - a.from)
-    .forEach((item) => {
-      tr.replaceWith(item.from, item.to, Fragment.fromArray(item.nodes));
-    });
+  const sortedReplacements = replacements.sort((a, b) => b.from - a.from);
+  for (const item of sortedReplacements) {
+    tr.replaceWith(item.from, item.to, Fragment.fromArray(item.nodes));
+  }
 
   return tr.docChanged ? tr : null;
 }
@@ -222,11 +225,10 @@ function repairAutoLinks(state: EditorState): Transaction | null {
   if (markRanges.length === 0) return null;
 
   const tr = state.tr;
-  markRanges
-    .sort((a, b) => b.from - a.from)
-    .forEach((range) => {
-      tr.addMark(range.from, range.to, linkMarkType.create({ href: range.href }));
-    });
+  const sortedRanges = markRanges.sort((a, b) => b.from - a.from);
+  for (const range of sortedRanges) {
+    tr.addMark(range.from, range.to, linkMarkType.create({ href: range.href }));
+  }
 
   return tr.docChanged ? tr : null;
 }
@@ -252,7 +254,7 @@ export function repairDocument(view: EditorView): void {
     transactions.push(linkTr);
   }
 
-  transactions.forEach((tr) => {
+  for (const tr of transactions) {
     view.dispatch(tr);
-  });
+  }
 }

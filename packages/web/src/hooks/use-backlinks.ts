@@ -41,7 +41,10 @@ async function fetchOutgoingLinks(pageId: string): Promise<OutgoingLink[]> {
 export function useBacklinks(pageId?: string) {
   return useQuery({
     queryKey: ['backlinks', pageId],
-    queryFn: () => fetchBacklinks(pageId!),
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchBacklinks(pageId);
+    },
     enabled: !!pageId,
     staleTime: 1000 * 60 * 2,
     refetchOnWindowFocus: false,
@@ -51,7 +54,10 @@ export function useBacklinks(pageId?: string) {
 export function useOutgoingLinks(pageId?: string) {
   return useQuery({
     queryKey: ['backlinks', 'outgoing', pageId],
-    queryFn: () => fetchOutgoingLinks(pageId!),
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchOutgoingLinks(pageId);
+    },
     enabled: !!pageId,
     staleTime: 1000 * 60 * 2,
     refetchOnWindowFocus: false,

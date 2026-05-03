@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 export interface ToolbarState {
   visible: boolean;
@@ -10,7 +10,7 @@ export function useFloatingToolbar() {
     visible: false,
     position: { top: 0, left: 0 },
   });
-  
+
   const keepVisibleRef = useRef(false);
 
   const keepVisible = useCallback(() => {
@@ -27,7 +27,7 @@ export function useFloatingToolbar() {
     const handleSelectionChange = () => {
       timeoutId = setTimeout(() => {
         if (keepVisibleRef.current) return;
-        
+
         const selection = window.getSelection();
         if (!selection || selection.isCollapsed || !selection.rangeCount) {
           setToolbarState((prev) => ({ ...prev, visible: false }));
@@ -36,14 +36,14 @@ export function useFloatingToolbar() {
 
         const range = selection.getRangeAt(0);
         const container = document.querySelector('.milkdown-editor');
-        
+
         if (!container || !container.contains(range.commonAncestorContainer)) {
           setToolbarState((prev) => ({ ...prev, visible: false }));
           return;
         }
 
         const rect = range.getBoundingClientRect();
-        
+
         setToolbarState({
           visible: true,
           position: {
@@ -55,7 +55,7 @@ export function useFloatingToolbar() {
     };
 
     document.addEventListener('selectionchange', handleSelectionChange);
-    
+
     return () => {
       document.removeEventListener('selectionchange', handleSelectionChange);
       clearTimeout(timeoutId);

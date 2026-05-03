@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { showSuccessToast, showErrorToast } from '../utils/toast';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -31,7 +31,10 @@ async function createVersion(pageId: string, title: string): Promise<PageVersion
   return res.json();
 }
 
-async function restoreVersion(pageId: string, versionId: string): Promise<{ id: string; title: string | null }> {
+async function restoreVersion(
+  pageId: string,
+  versionId: string,
+): Promise<{ id: string; title: string | null }> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/versions/${versionId}/restore`, {
     method: 'POST',
   });
@@ -44,7 +47,10 @@ async function restoreVersion(pageId: string, versionId: string): Promise<{ id: 
 export function useVersions(pageId: string | undefined) {
   return useQuery({
     queryKey: ['versions', pageId],
-    queryFn: () => fetchVersions(pageId!),
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchVersions(pageId);
+    },
     enabled: !!pageId,
   });
 }
@@ -52,7 +58,10 @@ export function useVersions(pageId: string | undefined) {
 export function useCreateVersion(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (title: string) => createVersion(pageId!, title),
+    mutationFn: (title: string) => {
+      if (!pageId) throw new Error('pageId is required');
+      return createVersion(pageId, title);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['versions', pageId] });
       showSuccessToast('Snapshot saved');
@@ -66,7 +75,10 @@ export function useCreateVersion(pageId: string | undefined) {
 export function useRestoreVersion(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (versionId: string) => restoreVersion(pageId!, versionId),
+    mutationFn: (versionId: string) => {
+      if (!pageId) throw new Error('pageId is required');
+      return restoreVersion(pageId, versionId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['versions', pageId] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });

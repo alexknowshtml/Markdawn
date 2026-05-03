@@ -1,18 +1,18 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useMilkdown } from '../../hooks/useMilkdown';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
+import { useMilkdown } from '../../hooks/useMilkdown';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import './editor.css';
-import { FloatingToolbar } from './FloatingToolbar';
-import { replaceAll } from '@milkdown/utils';
-import { commandsCtx, editorViewCtx } from '@milkdown/core';
-import { toggleMark, setBlockType, wrapIn } from 'prosemirror-commands';
 import { WebSocketStatus } from '@hocuspocus/provider';
-import type { EditorState } from 'prosemirror-state';
-import type { MarkType, NodeType } from 'prosemirror-model';
-import * as Y from 'yjs';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import { commandsCtx, editorViewCtx } from '@milkdown/core';
+import { replaceAll } from '@milkdown/utils';
+import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import type { MarkType, NodeType } from 'prosemirror-model';
+import type { EditorState } from 'prosemirror-state';
+import * as Y from 'yjs';
+import { FloatingToolbar } from './FloatingToolbar';
 interface MilkdownEditorProps {
   pageId: string;
   workspaceId: string;
@@ -24,7 +24,7 @@ interface MilkdownEditorProps {
   onWikiLinkClick?: (path: string) => void;
 }
 
-const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? "ws://localhost:1234";
+const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 
 export function MilkdownEditor({
   pageId,
@@ -36,7 +36,7 @@ export function MilkdownEditor({
   onProviderReady,
   onWikiLinkClick,
 }: MilkdownEditorProps) {
-  const doc = useMemo(() => new Y.Doc(), [pageId]);
+  const doc = useMemo(() => new Y.Doc(), []);
   const editorRef = useRef<unknown>(null);
 
   const [activeStates, setActiveStates] = useState({
@@ -65,26 +65,29 @@ export function MilkdownEditor({
     return doc.rangeHasMark(selection.from, selection.to, markType);
   }, []);
 
-  const hasBlockType = useCallback((state: EditorState, nodeType?: NodeType, attrs?: Record<string, unknown>): boolean => {
-    if (!nodeType) return false;
-    const { $from } = state.selection;
+  const hasBlockType = useCallback(
+    (state: EditorState, nodeType?: NodeType, attrs?: Record<string, unknown>): boolean => {
+      if (!nodeType) return false;
+      const { $from } = state.selection;
 
-    const depth = $from.depth;
-    for (let d = depth; d > 0; d--) {
-      const node = $from.node(d);
-      if (node.type === nodeType) {
-        if (!attrs) return true;
-        for (const [key, value] of Object.entries(attrs)) {
-          const nodeValue = node.attrs[key];
-          if (String(nodeValue) !== String(value)) {
-            return false;
+      const depth = $from.depth;
+      for (let d = depth; d > 0; d--) {
+        const node = $from.node(d);
+        if (node.type === nodeType) {
+          if (!attrs) return true;
+          for (const [key, value] of Object.entries(attrs)) {
+            const nodeValue = node.attrs[key];
+            if (String(nodeValue) !== String(value)) {
+              return false;
+            }
           }
+          return true;
         }
-        return true;
       }
-    }
-    return false;
-  }, []);
+      return false;
+    },
+    [],
+  );
 
   const hasParentBlockType = useCallback((state: EditorState, nodeType?: NodeType): boolean => {
     if (!nodeType) return false;
@@ -99,32 +102,38 @@ export function MilkdownEditor({
   }, []);
 
   const updateActiveStates = useCallback(() => {
-    const editorInstance = editorRef.current as unknown as { action: (cb: (ctx: unknown) => void) => void } | null;
+    const editorInstance = editorRef.current as unknown as {
+      action: (cb: (ctx: unknown) => void) => void;
+    } | null;
     if (!editorInstance) return;
     try {
       editorInstance.action((ctx) => {
         const view = (ctx as unknown as { get: (key: unknown) => unknown }).get(editorViewCtx);
         if (!view) return;
         const { state } = view as { state: EditorState };
-        const schema = state.schema as unknown as { marks: Record<string, MarkType>; nodes: Record<string, NodeType> };
+        const schema = state.schema as unknown as {
+          marks: Record<string, MarkType>;
+          nodes: Record<string, NodeType>;
+        };
         const marks = schema.marks;
         const nodes = schema.nodes;
 
         const listItemNode = nodes.list_item;
         const isInListItem = listItemNode ? hasParentBlockType(state, listItemNode) : false;
-        const listItemChecked = isInListItem && listItemNode
-          ? (() => {
-              const { $from } = state.selection;
-              for (let d = $from.depth; d > 0; d--) {
-                const node = $from.node(d);
-                if (node.type === listItemNode) {
-                  const checked = node.attrs.checked;
-                  return checked === true || checked === 'true';
+        const listItemChecked =
+          isInListItem && listItemNode
+            ? (() => {
+                const { $from } = state.selection;
+                for (let d = $from.depth; d > 0; d--) {
+                  const node = $from.node(d);
+                  if (node.type === listItemNode) {
+                    const checked = node.attrs.checked;
+                    return checked === true || checked === 'true';
+                  }
                 }
-              }
-              return false;
-            })()
-          : false;
+                return false;
+              })()
+            : false;
 
         setActiveStates({
           isBoldActive: hasMark(state, marks.strong),
@@ -176,16 +185,16 @@ export function MilkdownEditor({
   const runMarkCommand = (markName: string, attrs?: Record<string, unknown>) => {
     if (!editor) return;
     keepVisible();
-    
+
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx);
       if (!view) return;
-      
+
       const { state, dispatch } = view;
       const marks = (state.schema as unknown as { marks: Record<string, unknown> }).marks;
       const markType = marks[markName];
       if (!markType) return;
-      
+
       const command = toggleMark(markType as never, attrs);
       command(state, dispatch);
     });
@@ -194,27 +203,27 @@ export function MilkdownEditor({
   const runBlockCommand = (nodeName: string, attrs?: Record<string, unknown>) => {
     if (!editor) return;
     keepVisible();
-    
+
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx);
       if (!view) return;
-      
+
       const { state, dispatch } = view;
       const nodes = (state.schema as unknown as { nodes: Record<string, unknown> }).nodes;
       const nodeType = nodes[nodeName];
       const paraType = nodes.paragraph;
       if (!nodeType || !paraType) return;
-      
+
       const { $from } = state.selection;
       const pos = $from.pos;
-      
+
       let currentLevel: number | null = null;
       state.doc.nodesBetween(pos, pos + 1, (node) => {
         if (node.type === nodeType && node.attrs.level) {
           currentLevel = node.attrs.level;
         }
       });
-      
+
       const targetLevel = attrs?.level as number | undefined;
       if (currentLevel === targetLevel) {
         const command = setBlockType(paraType as never);
@@ -259,9 +268,11 @@ export function MilkdownEditor({
 
         if (codeBlock && codeBlock.type === codeBlockType) {
           const content = codeBlock.textContent;
-          const lines = content.split('\n').filter((line, i, arr) => line.length > 0 || i < arr.length - 1);
+          const lines = content
+            .split('\n')
+            .filter((line, i, arr) => line.length > 0 || i < arr.length - 1);
           const paragraphNodes = lines.map((line) =>
-            (paragraphType as NodeType).create(null, state.schema.text(line))
+            (paragraphType as NodeType).create(null, state.schema.text(line)),
           );
           const tr = state.tr.replaceWith(blockStart, blockEnd, paragraphNodes);
           dispatch(tr);
@@ -271,10 +282,10 @@ export function MilkdownEditor({
 
       const { from, to } = state.selection;
       const selectedText = state.doc.textBetween(from, to, '\n', '\n');
-      const isMultiline = from !== to && (
-        selectedText.includes('\n') ||
-        state.selection.$from.start() !== state.selection.$to.start()
-      );
+      const isMultiline =
+        from !== to &&
+        (selectedText.includes('\n') ||
+          state.selection.$from.start() !== state.selection.$to.start());
 
       if (isMultiline) {
         const textNode = state.schema.text(selectedText);
@@ -313,11 +324,11 @@ export function MilkdownEditor({
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
         if (!view) return;
-        
+
         const { state, dispatch } = view;
         const linkMark = state.schema.marks.link;
         if (!linkMark) return;
-        
+
         const mark = linkMark.create({ href: url });
         const tr = state.tr.addMark(state.selection.from, state.selection.to, mark);
         dispatch(tr);
@@ -456,7 +467,8 @@ export function MilkdownEditor({
   latestOnStatusChange.current = onStatusChange;
   const logger = getLogger();
 
-useEffect(() => {
+  // biome-ignore lint/correctness/useExhaustiveDependencies: logger is stable, doc.on/off are event subscriptions
+  useEffect(() => {
     const handleStatus = ({ status }: { status: WebSocketStatus }) => {
       logger.debug`[collab] status: ${status}`;
       const cb = latestOnStatusChange.current;
@@ -518,22 +530,31 @@ useEffect(() => {
         milkdown: editor,
         document: [],
         onChange: () => () => {},
-        replaceBlocks: (_doc: unknown, blocks: Array<{ type: string; props?: Record<string, unknown>; content?: Array<{ text?: string }> }>) => {
-          const markdown = blocks.map(b => {
-            if (b.type === 'heading') {
-              const level = typeof b.props?.level === 'number' ? b.props.level : 1;
-              return `${'#'.repeat(level)} ${b.content?.[0]?.text || ''}`;
-            }
-            if (b.type === 'paragraph') {
-              return b.content?.[0]?.text || '';
-            }
-            return '';
-          }).join('\n\n');
-          
+        replaceBlocks: (
+          _doc: unknown,
+          blocks: Array<{
+            type: string;
+            props?: Record<string, unknown>;
+            content?: Array<{ text?: string }>;
+          }>,
+        ) => {
+          const markdown = blocks
+            .map((b) => {
+              if (b.type === 'heading') {
+                const level = typeof b.props?.level === 'number' ? b.props.level : 1;
+                return `${'#'.repeat(level)} ${b.content?.[0]?.text || ''}`;
+              }
+              if (b.type === 'paragraph') {
+                return b.content?.[0]?.text || '';
+              }
+              return '';
+            })
+            .join('\n\n');
+
           editor.action(replaceAll(markdown));
-        }
+        },
       };
-      
+
       onEditorReady?.(editorWrapper);
     } else {
       editorRef.current = null;

@@ -1,4 +1,4 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { showErrorToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -42,7 +42,10 @@ async function removeFavorite(pageId: string): Promise<void> {
 export function useFavorites(workspaceId: string | undefined) {
   return useQuery({
     queryKey: ['favorites', workspaceId],
-    queryFn: () => fetchFavorites(workspaceId!),
+    queryFn: () => {
+      if (!workspaceId) throw new Error('workspaceId is required');
+      return fetchFavorites(workspaceId);
+    },
     enabled: !!workspaceId,
     staleTime: 1000 * 60 * 5,
   });
@@ -50,9 +53,12 @@ export function useFavorites(workspaceId: string | undefined) {
 
 export function useToggleFavorite() {
   const queryClient = useQueryClient();
-  
+
   return useMutation({
-    mutationFn: async ({ pageId, isFavorite }: { pageId: string; isFavorite: boolean; workspaceId: string }) => {
+    mutationFn: async ({
+      pageId,
+      isFavorite,
+    }: { pageId: string; isFavorite: boolean; workspaceId: string }) => {
       if (isFavorite) {
         await removeFavorite(pageId);
       } else {

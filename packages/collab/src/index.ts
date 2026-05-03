@@ -1,14 +1,14 @@
-import { config } from "dotenv";
-import { existsSync } from "fs";
-import { dirname, resolve } from "path";
-import { fileURLToPath } from "url";
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { config } from 'dotenv';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
 const candidateEnvPaths = [
-  resolve(process.cwd(), ".env"),
-  resolve(currentDir, "../.env"),
-  resolve(currentDir, "../../../.env"),
+  resolve(process.cwd(), '.env'),
+  resolve(currentDir, '../.env'),
+  resolve(currentDir, '../../../.env'),
 ];
 
 const selectedEnvPath = candidateEnvPaths.find((envPath) => existsSync(envPath));
@@ -20,32 +20,32 @@ if (selectedEnvPath) {
 }
 
 async function main() {
-  const { setupLogger, getCollabLogger } = await import("@markdawn/shared");
+  const { setupLogger, getCollabLogger } = await import('@markdawn/shared');
   await setupLogger();
   const logger = getCollabLogger();
 
-  const port = Number(process.env.COLLAB_PORT ?? "1234");
+  const port = Number(process.env.COLLAB_PORT ?? '1234');
   const databaseUrl = process.env.DATABASE_URL;
 
   if (!databaseUrl) {
-    throw new Error("DATABASE_URL is required for collab server");
+    throw new Error('DATABASE_URL is required for collab server');
   }
 
-  const { Database } = await import("@hocuspocus/extension-database");
-  const { Server } = await import("@hocuspocus/server");
-  const { Pool } = await import("pg");
-  const { applyUpdate, encodeStateAsUpdate } = await import("yjs");
+  const { Database } = await import('@hocuspocus/extension-database');
+  const { Server } = await import('@hocuspocus/server');
+  const { Pool } = await import('pg');
+  const { applyUpdate, encodeStateAsUpdate } = await import('yjs');
 
   function getDbHostname(url: string): string {
     try {
       return new URL(url).hostname;
     } catch {
-      return "";
+      return '';
     }
   }
 
   const dbHostname = getDbHostname(databaseUrl);
-  const isLocalDb = dbHostname === "localhost" || dbHostname === "127.0.0.1";
+  const isLocalDb = dbHostname === 'localhost' || dbHostname === '127.0.0.1';
 
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -55,7 +55,7 @@ async function main() {
     ssl: isLocalDb ? false : undefined,
   });
 
-  pool.on("error", (err) => {
+  pool.on('error', (err) => {
     logger.error(`Database pool error: ${err.message}`);
   });
   const SERVER_DEBOUNCE_MS = 500;
@@ -67,14 +67,14 @@ async function main() {
     }
 
     const cookies = new Map<string, string>();
-    for (const cookie of cookieHeader.split(";")) {
-      const [rawKey, ...rawValueParts] = cookie.split("=");
+    for (const cookie of cookieHeader.split(';')) {
+      const [rawKey, ...rawValueParts] = cookie.split('=');
       const key = rawKey?.trim();
       if (!key) {
         continue;
       }
 
-      const value = rawValueParts.join("=").trim();
+      const value = rawValueParts.join('=').trim();
       if (!value) {
         continue;
       }
@@ -97,21 +97,17 @@ async function main() {
       const cookies = parseCookies(requestHeaders.cookie);
       const bearerTokenHeader = requestHeaders.authorization;
       const bearerMatch = bearerTokenHeader?.match(/^Bearer\s+(.+)$/i);
-      const bearerToken = bearerMatch?.[1]?.trim() ?? "";
-      const tokenFromParam = token?.trim() ?? "";
+      const bearerToken = bearerMatch?.[1]?.trim() ?? '';
+      const tokenFromParam = token?.trim() ?? '';
       const tokenFromCookie =
-        cookies.get("better-auth.session_token")?.trim() ||
-        cookies.get("__Secure-better-auth.session_token")?.trim() ||
-        "";
-      const sessionToken =
-        tokenFromParam ||
-        bearerToken ||
-        tokenFromCookie ||
-        "";
+        cookies.get('better-auth.session_token')?.trim() ||
+        cookies.get('__Secure-better-auth.session_token')?.trim() ||
+        '';
+      const sessionToken = tokenFromParam || bearerToken || tokenFromCookie || '';
 
       if (!sessionToken) {
-        logger.debug(`[auth] no session token provided`);
-        throw new Error("Unauthorized");
+        logger.debug('[auth] no session token provided');
+        throw new Error('Unauthorized');
       }
 
       const result = await pool.query(
@@ -125,17 +121,15 @@ async function main() {
 
       const user = result.rows[0];
       if (!user) {
-        logger.debug(`[auth] invalid/expired session`);
-        throw new Error("Unauthorized");
+        logger.debug('[auth] invalid/expired session');
+        throw new Error('Unauthorized');
       }
 
       logger.info(`[auth] authenticated user=${user.id} (${user.email})`);
       return { user };
     },
     onLoadDocument: async ({ documentName, document }) => {
-      const result = await pool.query("select ydoc from pages where id = $1", [
-        documentName,
-      ]);
+      const result = await pool.query('select ydoc from pages where id = $1', [documentName]);
 
       const ydoc = result.rows[0]?.ydoc;
       if (!ydoc || ydoc.length === 0) {
@@ -156,7 +150,7 @@ async function main() {
 
       logger.info(`[persist] saving: "${documentName}", size: ${state.length} bytes`);
       try {
-        await pool.query("update pages set ydoc = $1, updated_at = NOW() where id = $2", [
+        await pool.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
           state,
           documentName,
         ]);
@@ -179,7 +173,7 @@ async function main() {
 
       logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
       try {
-        await pool.query("update pages set ydoc = $1, updated_at = NOW() where id = $2", [
+        await pool.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
           state,
           documentName,
         ]);

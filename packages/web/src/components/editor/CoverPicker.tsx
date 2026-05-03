@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Popover, Button, Group, Text, Stack, ActionIcon, Tooltip } from '@mantine/core';
+import { ActionIcon, Button, Group, Popover, Stack, Text, Tooltip } from '@mantine/core';
 import { IconPhoto, IconTrash } from '@tabler/icons-react';
+import type React from 'react';
+import { useState } from 'react';
 
 interface CoverPickerProps {
   coverType: string | null;
@@ -43,18 +44,22 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
   const [opened, setOpened] = useState(false);
 
   return (
-    <Popover 
-      opened={opened} 
-      onChange={setOpened} 
-      position="bottom-start" 
-      withArrow 
+    <Popover
+      opened={opened}
+      onChange={setOpened}
+      position="bottom-start"
+      withArrow
       shadow="md"
       transitionProps={{ transition: 'pop', duration: 150 }}
     >
       <Popover.Target>
-        <div onClick={() => setOpened((o) => !o)} className="cursor-pointer inline-block">
+        <button
+          type="button"
+          onClick={() => setOpened((o) => !o)}
+          className="cursor-pointer inline-block bg-transparent border-none p-0"
+        >
           {children}
-        </div>
+        </button>
       </Popover.Target>
       <Popover.Dropdown className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 p-4 rounded-lg shadow-xl w-80 min-w-[20rem]">
         <Stack gap="md">
@@ -82,9 +87,12 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
             <div className="grid grid-cols-4 gap-2">
               {GRADIENTS.map((gradient) => (
                 <button
+                  type="button"
                   key={gradient}
                   className={`w-full h-11 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
-                    coverType === 'gradient' && coverValue === gradient ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900' : ''
+                    coverType === 'gradient' && coverValue === gradient
+                      ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900'
+                      : ''
                   }`}
                   style={{ background: gradient }}
                   onClick={() => {
@@ -104,9 +112,12 @@ export function CoverPicker({ coverType, coverValue, onChange, children }: Cover
             <div className="grid grid-cols-6 gap-2">
               {SOLID_COLORS.map((color) => (
                 <button
+                  type="button"
                   key={color}
                   className={`w-full h-9 rounded-md cursor-pointer transition-transform hover:scale-105 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-zinc-900 ${
-                    coverType === 'solid' && coverValue === color ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900' : ''
+                    coverType === 'solid' && coverValue === color
+                      ? 'ring-2 ring-blue-500 ring-offset-2 dark:ring-offset-zinc-900'
+                      : ''
                   }`}
                   style={{ backgroundColor: color }}
                   onClick={() => {

@@ -1,30 +1,37 @@
-import { betterAuth } from "better-auth";
-import { drizzleAdapter } from "better-auth/adapters/drizzle";
-import { pool } from "./db";
-import { randomUUID } from "crypto";
-import { db } from "./db";
-import { users, sessions, accounts, verifications, workspaces, workspaceMembers } from "./db/schema";
+import { randomUUID } from 'node:crypto';
+import { betterAuth } from 'better-auth';
+import { drizzleAdapter } from 'better-auth/adapters/drizzle';
+import { pool } from './db';
+import { db } from './db';
+import {
+  accounts,
+  sessions,
+  users,
+  verifications,
+  workspaceMembers,
+  workspaces,
+} from './db/schema';
 
-const FRONTEND_URL = process.env.FRONTEND_URL ?? process.env.BASE_URL ?? "http://localhost:5173";
+const FRONTEND_URL = process.env.FRONTEND_URL ?? process.env.BASE_URL ?? 'http://localhost:5173';
 
 const slugify = (value: string) =>
   value
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)+/g, "");
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/(^-|-$)+/g, '');
 
 const getPersonalWorkspaceName = (name?: string | null, email?: string | null) => {
-  const firstName = name?.trim()?.split(" ")?.[0] || email?.split("@")?.[0] || "Personal";
-  return firstName.length > 0 ? `${firstName}'s Workspace` : "Personal Workspace";
+  const firstName = name?.trim()?.split(' ')?.[0] || email?.split('@')?.[0] || 'Personal';
+  return firstName.length > 0 ? `${firstName}'s Workspace` : 'Personal Workspace';
 };
 
 const buildWorkspaceSlug = async (name: string) => {
-  const baseSlug = slugify(name) || "personal";
+  const baseSlug = slugify(name) || 'personal';
   let slug = baseSlug;
 
   for (let attempt = 0; attempt < 5; attempt += 1) {
-    const existing = await pool.query("select id from workspaces where slug = $1 limit 1", [slug]);
+    const existing = await pool.query('select id from workspaces where slug = $1 limit 1', [slug]);
 
     if (existing.rowCount === 0) {
       return slug;
@@ -65,7 +72,7 @@ const ensurePersonalWorkspace = async ({
   await db.insert(workspaceMembers).values({
     workspaceId: workspace.id,
     userId,
-    role: "owner",
+    role: 'owner',
   });
 };
 
@@ -73,7 +80,7 @@ export const auth = betterAuth({
   baseURL: FRONTEND_URL,
   trustedOrigins: [FRONTEND_URL],
   database: drizzleAdapter(db, {
-    provider: "pg",
+    provider: 'pg',
     schema: {
       user: users,
       session: sessions,

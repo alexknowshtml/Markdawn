@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test('basic navigation and app shell', async ({ page }) => {
   // 1. Landing Page

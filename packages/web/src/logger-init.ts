@@ -1,4 +1,4 @@
-import { setupLogger, getWebLogger } from "@markdawn/shared";
+import { getWebLogger, setupLogger } from '@markdawn/shared';
 
 let initialized = false;
 

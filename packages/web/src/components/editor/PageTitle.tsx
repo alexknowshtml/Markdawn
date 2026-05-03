@@ -1,5 +1,5 @@
-import React from "react";
-import { usePageTitle } from "../../hooks/usePageTitle";
+import React from 'react';
+import { usePageTitle } from '../../hooks/usePageTitle';
 
 interface PageTitleProps {
   pageId: string;
@@ -7,7 +7,7 @@ interface PageTitleProps {
 }
 
 export function PageTitle({ pageId, initialTitle }: PageTitleProps) {
-  const { title, setTitle } = usePageTitle(pageId, initialTitle ?? "Untitled");
+  const { title, setTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled');
 
   return (
     <input
@@ -18,7 +18,7 @@ export function PageTitle({ pageId, initialTitle }: PageTitleProps) {
       placeholder="Page Title"
       autoComplete="off"
       data-testid="page-title"
-      style={{ fontSize: "clamp(1.5rem, 3vw, 2.5rem)" }}
+      style={{ fontSize: 'clamp(1.5rem, 3vw, 2.5rem)' }}
     />
   );
 }

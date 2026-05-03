@@ -1,7 +1,7 @@
-import React, { useMemo, useState, useRef, useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
-import { Briefcase, ChevronDown, Plus, Check } from "lucide-react";
-import { useWorkspaces } from "../../hooks/use-workspaces";
+import { Briefcase, Check, ChevronDown, Plus } from 'lucide-react';
+import React, { useMemo, useState, useRef, useEffect } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import { useWorkspaces } from '../../hooks/use-workspaces';
 
 type WorkspaceSelectorProps = {
   onCreateWorkspace: () => void;
@@ -27,10 +27,10 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
     };
 
     if (open) {
-      document.addEventListener("mousedown", handleClickOutside);
+      document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
-      document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [open]);
 
@@ -50,11 +50,11 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
           <Briefcase size={14} strokeWidth={2.5} />
         </span>
         <span className="flex-1 truncate">
-          {isLoading ? "Loading..." : currentWorkspace?.name ?? "Select workspace"}
+          {isLoading ? 'Loading...' : (currentWorkspace?.name ?? 'Select workspace')}
         </span>
-        <ChevronDown 
-          size={16} 
-          className={`text-zinc-400 dark:text-zinc-500 transition-transform duration-200 ${open ? "rotate-180" : ""}`} 
+        <ChevronDown
+          size={16}
+          className={`text-zinc-400 dark:text-zinc-500 transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
         />
       </button>
 
@@ -69,16 +69,18 @@ export function WorkspaceSelector({ onCreateWorkspace }: WorkspaceSelectorProps)
                   type="button"
                   onClick={() => handleNavigate(workspace.slug)}
                   className={`w-full px-2.5 py-2 text-left text-sm rounded-xl transition-all duration-150 flex items-center gap-2.5 cursor-pointer ${
-                    isActive 
-                      ? "bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium" 
-                      : "text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-200"
+                    isActive
+                      ? 'bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium'
+                      : 'text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-200'
                   }`}
                 >
-                  <span className={`flex h-7 w-7 items-center justify-center rounded-lg ${
-                    isActive 
-                      ? "bg-black dark:bg-white text-white dark:text-zinc-900 shadow-sm" 
-                      : "bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400"
-                  }`}>
+                  <span
+                    className={`flex h-7 w-7 items-center justify-center rounded-lg ${
+                      isActive
+                        ? 'bg-black dark:bg-white text-white dark:text-zinc-900 shadow-sm'
+                        : 'bg-black/5 dark:bg-white/10 text-zinc-500 dark:text-zinc-400'
+                    }`}
+                  >
                     <Briefcase size={14} strokeWidth={isActive ? 2.5 : 2} />
                   </span>
                   <span className="flex-1 truncate">{workspace.name}</span>

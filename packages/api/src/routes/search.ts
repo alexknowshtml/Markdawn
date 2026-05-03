@@ -1,6 +1,6 @@
-import { Hono } from "hono";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
+import { Hono } from 'hono';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
 
 type SearchRow = {
   id: string;
@@ -12,19 +12,19 @@ type SearchRow = {
 
 const searchRoute = new Hono();
 
-searchRoute.use("*", requireAuth);
+searchRoute.use('*', requireAuth);
 
-searchRoute.get("/", async (c) => {
-  const rawQuery = c.req.query("q")?.trim() ?? "";
+searchRoute.get('/', async (c) => {
+  const rawQuery = c.req.query('q')?.trim() ?? '';
   if (!rawQuery) {
     return c.json({ results: [] });
   }
 
-  const user = c.get("user") as { id: string };
-  const workspaceId = c.req.query("workspaceId");
-  const createdAfter = c.req.query("createdAfter");
-  const createdBefore = c.req.query("createdBefore");
-  const parentId = c.req.query("parentId");
+  const user = c.get('user') as { id: string };
+  const workspaceId = c.req.query('workspaceId');
+  const createdAfter = c.req.query('createdAfter');
+  const createdBefore = c.req.query('createdBefore');
+  const parentId = c.req.query('parentId');
   const searchPattern = `%${rawQuery}%`;
 
   const filters: string[] = [];
@@ -49,15 +49,15 @@ searchRoute.get("/", async (c) => {
     paramIndex += 1;
   }
 
-  if (parentId === "root") {
-    filters.push("p.parent_id is null");
+  if (parentId === 'root') {
+    filters.push('p.parent_id is null');
   } else if (parentId) {
     filters.push(`p.parent_id = $${paramIndex}`);
     params.push(parentId);
     paramIndex += 1;
   }
 
-  const whereClause = filters.length > 0 ? ` and ${filters.join(" and ")}` : "";
+  const whereClause = filters.length > 0 ? ` and ${filters.join(' and ')}` : '';
 
   const result = await pool.query(
     `select p.id,
@@ -84,7 +84,7 @@ searchRoute.get("/", async (c) => {
       ${whereClause}
     order by rank desc nulls last
     limit 20`,
-    params
+    params,
   );
 
   const results = (result.rows as SearchRow[]).map((row) => ({

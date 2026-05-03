@@ -1,14 +1,14 @@
-import { randomUUID } from "crypto";
-import { mkdir, writeFile } from "fs/promises";
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import path from "node:path";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
-import { markdownToYjsState, stripLeadingH1 } from "../utils/markdown-to-yjs";
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
+import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
 
 const obsidianImportRoute = new Hono();
-obsidianImportRoute.use("*", requireAuth);
+obsidianImportRoute.use('*', requireAuth);
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -32,27 +32,27 @@ type ImportResult = {
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
   const result = await pool.query(
-    "select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1",
-    [workspaceId, userId]
+    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+    [workspaceId, userId],
   );
   if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
 
 const getExtension = (filename: string): string => {
-  const lastDot = filename.lastIndexOf(".");
-  return lastDot >= 0 ? filename.slice(lastDot + 1).toLowerCase() : "";
+  const lastDot = filename.lastIndexOf('.');
+  return lastDot >= 0 ? filename.slice(lastDot + 1).toLowerCase() : '';
 };
 
-const ALLOWED_IMAGE_TYPES = new Set(["jpeg", "jpg", "png", "gif", "webp", "svg"]);
+const ALLOWED_IMAGE_TYPES = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp', 'svg']);
 
 const isImageFile = (filename: string): boolean => {
   return ALLOWED_IMAGE_TYPES.has(getExtension(filename));
 };
 
 const isMarkdownFile = (filename: string): boolean => {
-  return filename.endsWith(".md");
+  return filename.endsWith('.md');
 };
 
 /**
@@ -60,33 +60,38 @@ const isMarkdownFile = (filename: string): boolean => {
  * Returns the frontmatter object, the body without frontmatter, and extracted tags.
  */
 const parseFrontmatter = (
-  content: string
+  content: string,
 ): { frontmatter: Record<string, unknown>; body: string; tags: string[]; title: string } => {
   const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
   const match = content.match(frontmatterRegex);
 
   if (!match) {
     const h1Match = content.match(/^#\s+(.+)$/m);
-    const title = h1Match?.[1]?.trim() ?? "";
+    const title = h1Match?.[1]?.trim() ?? '';
     return { frontmatter: {}, body: content, tags: [], title };
   }
 
-  const frontmatterBlock = match[1]!;
-  const body = content.slice(match[0]!.length);
+  const frontmatterBlock = match[1] ?? '';
+  const body = content.slice(match[0]?.length);
 
   const frontmatter: Record<string, unknown> = {};
-  const lines = frontmatterBlock.split("\n");
+  const lines = frontmatterBlock.split('\n');
   let currentKey: string | null = null;
   let currentArray: string[] = [];
   let inArray = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (!trimmed || trimmed.startsWith('#')) continue;
 
-    if (trimmed.startsWith("- ")) {
+    if (trimmed.startsWith('- ')) {
       if (inArray && currentKey) {
-        currentArray.push(trimmed.slice(2).trim().replace(/^["']|["']$/g, ""));
+        currentArray.push(
+          trimmed
+            .slice(2)
+            .trim()
+            .replace(/^["']|["']$/g, ''),
+        );
       }
       continue;
     }
@@ -97,21 +102,21 @@ const parseFrontmatter = (
       currentArray = [];
     }
 
-    const colonIndex = trimmed.indexOf(":");
+    const colonIndex = trimmed.indexOf(':');
     if (colonIndex > 0) {
       currentKey = trimmed.slice(0, colonIndex).trim();
       const value = trimmed.slice(colonIndex + 1).trim();
 
-      if (value === "" || value === "[]") {
+      if (value === '' || value === '[]') {
         inArray = true;
         currentArray = [];
-      } else if (value.startsWith("[") && value.endsWith("]")) {
+      } else if (value.startsWith('[') && value.endsWith(']')) {
         frontmatter[currentKey] = value
           .slice(1, -1)
-          .split(",")
-          .map((v) => v.trim().replace(/^["']|["']$/g, ""));
+          .split(',')
+          .map((v) => v.trim().replace(/^["']|["']$/g, ''));
       } else {
-        frontmatter[currentKey] = value.replace(/^["']|["']$/g, "");
+        frontmatter[currentKey] = value.replace(/^["']|["']$/g, '');
       }
     }
   }
@@ -120,19 +125,22 @@ const parseFrontmatter = (
     frontmatter[currentKey] = currentArray;
   }
 
-  let title = "";
-  const titleValue = frontmatter["title"];
-  if (typeof titleValue === "string") {
+  let title = '';
+  const titleValue = frontmatter.title;
+  if (typeof titleValue === 'string') {
     title = titleValue;
   }
 
   const tags: string[] = [];
-  const tagValue = frontmatter["tags"];
+  const tagValue = frontmatter.tags;
   if (Array.isArray(tagValue)) {
-    tags.push(...tagValue.filter((t): t is string => typeof t === "string"));
-  } else if (typeof tagValue === "string") {
+    tags.push(...tagValue.filter((t): t is string => typeof t === 'string'));
+  } else if (typeof tagValue === 'string') {
     tags.push(
-      ...tagValue.split(",").map((t) => t.trim()).filter(Boolean)
+      ...tagValue
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean),
     );
   }
 
@@ -154,7 +162,8 @@ interface WikilinkMatch {
 
 const extractWikilinks = (content: string): WikilinkMatch[] => {
   const results: WikilinkMatch[] = [];
-  let match;
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
   while ((match = WIKILINK_REGEX.exec(content)) !== null) {
     const page = match[1];
     if (!page) continue;
@@ -172,7 +181,8 @@ const extractWikilinks = (content: string): WikilinkMatch[] => {
 const extractEmbedLinks = (content: string): WikilinkMatch[] => {
   const embedRegex = /!\[\[([^#|\]]+)(?:#(\^[^|]+)|#([^|\]]+))?(?:\|([^\]]+))?\]\]/g;
   const results: WikilinkMatch[] = [];
-  let match;
+  let match: RegExpExecArray | null;
+  // biome-ignore lint/suspicious/noAssignInExpressions: standard regex exec pattern
   while ((match = embedRegex.exec(content)) !== null) {
     const page = match[1];
     if (!page) continue;
@@ -187,54 +197,48 @@ const extractEmbedLinks = (content: string): WikilinkMatch[] => {
   return results;
 };
 
-const processMarkdownContent = (
-  content: string,
-  imageMap: Map<string, string>
-): string => {
+const processMarkdownContent = (content: string, imageMap: Map<string, string>): string => {
   let result = content;
 
   result = result.replace(
     /!\[\[([^\]|]+(?:\.jpe?g|\.png|\.gif|\.webp|\.svg))(?:\|([^\]]+))?\]\]/gi,
     (match, imagePath: string) => {
-      const normalizedPath = imagePath.replace(/\\/g, "/").trim();
+      const normalizedPath = imagePath.replace(/\\/g, '/').trim();
       const uploadedUrl = imageMap.get(normalizedPath);
       if (uploadedUrl) {
         return `![${path.basename(normalizedPath)}](${uploadedUrl})`;
       }
       return `![${path.basename(normalizedPath)}](${normalizedPath})`;
-    }
+    },
   );
 
-  result = result.replace(
-    /!\[\[([^\]]+)\]\]/g,
-    (match, filePath: string) => {
-      const normalized = filePath.replace(/\\/g, "/").trim();
-      return `[${path.basename(normalized)}](${normalized})`;
-    }
-  );
+  result = result.replace(/!\[\[([^\]]+)\]\]/g, (match, filePath: string) => {
+    const normalized = filePath.replace(/\\/g, '/').trim();
+    return `[${path.basename(normalized)}](${normalized})`;
+  });
 
   return result;
 };
 
 // ── Route Handler ───────────────────────────────────────────────────
 
-obsidianImportRoute.post("/", async (c) => {
-  const workspaceId = c.req.query("workspaceId");
+obsidianImportRoute.post('/', async (c) => {
+  const workspaceId = c.req.query('workspaceId');
   if (!workspaceId) {
-    throw new HTTPException(400, { message: "workspaceId is required" });
+    throw new HTTPException(400, { message: 'workspaceId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const body = await c.req.json().catch(() => null);
-  if (!body || typeof body !== "object") {
-    throw new HTTPException(400, { message: "Invalid body" });
+  if (!body || typeof body !== 'object') {
+    throw new HTTPException(400, { message: 'Invalid body' });
   }
 
   const { files } = body as { files?: VaultFile[] };
   if (!Array.isArray(files) || files.length === 0) {
-    throw new HTTPException(400, { message: "files array is required" });
+    throw new HTTPException(400, { message: 'files array is required' });
   }
 
   const result: ImportResult = {
@@ -246,17 +250,22 @@ obsidianImportRoute.post("/", async (c) => {
     errors: [],
   };
 
-  const hasPropertiesColumn = await pool.query(
-    `SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`
-  ).then(r => (r.rowCount ?? 0) > 0).catch(() => false);
+  const hasPropertiesColumn = await pool
+    .query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
+    )
+    .then((r) => (r.rowCount ?? 0) > 0)
+    .catch(() => false);
 
-  const hasTagsTable = await pool.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_name = 'tags' LIMIT 1`
-  ).then(r => (r.rowCount ?? 0) > 0).catch(() => false);
+  const hasTagsTable = await pool
+    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'tags' LIMIT 1`)
+    .then((r) => (r.rowCount ?? 0) > 0)
+    .catch(() => false);
 
-  const hasPageLinksTable = await pool.query(
-    `SELECT 1 FROM information_schema.tables WHERE table_name = 'page_links' LIMIT 1`
-  ).then(r => (r.rowCount ?? 0) > 0).catch(() => false);
+  const hasPageLinksTable = await pool
+    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'page_links' LIMIT 1`)
+    .then((r) => (r.rowCount ?? 0) > 0)
+    .catch(() => false);
 
   const markdownFiles: VaultFile[] = [];
   const imageFiles: VaultFile[] = [];
@@ -275,9 +284,9 @@ obsidianImportRoute.post("/", async (c) => {
 
   for (const file of files) {
     const dir = path.dirname(file.path);
-    if (dir !== "." && dir !== "/") {
+    if (dir !== '.' && dir !== '/') {
       const parts = dir.split(/[\\/]/).filter(Boolean);
-      let currentPath = "";
+      let currentPath = '';
       for (const part of parts) {
         currentPath = currentPath ? `${currentPath}/${part}` : part;
         uniqueDirs.add(currentPath);
@@ -286,33 +295,33 @@ obsidianImportRoute.post("/", async (c) => {
   }
 
   const sortedDirs = Array.from(uniqueDirs).sort((a, b) => {
-    const depthA = a.split("/").length;
-    const depthB = b.split("/").length;
+    const depthA = a.split('/').length;
+    const depthB = b.split('/').length;
     return depthA - depthB;
   });
 
   for (const dirPath of sortedDirs) {
     try {
-      const parts = dirPath.split("/");
-      const name = parts[parts.length - 1]!;
-      const parentPath = parts.length > 1 ? parts.slice(0, -1).join("/") : null;
-      const parentId = parentPath ? folderPathToId.get(parentPath) ?? null : null;
+      const parts = dirPath.split('/');
+      const name = parts[parts.length - 1] ?? '';
+      const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
+      const parentId = parentPath ? (folderPathToId.get(parentPath) ?? null) : null;
 
       const positionResult = await pool.query(
         parentId
-          ? "select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2"
-          : "select max(position) as max_position from folders where workspace_id = $1 and parent_id is null",
-        parentId ? [workspaceId, parentId] : [workspaceId]
+          ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
+          : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
+        parentId ? [workspaceId, parentId] : [workspaceId],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
       const insertResult = await pool.query(
-        "insert into folders (workspace_id, parent_id, name, position, created_by) values ($1, $2, $3, $4, $5) returning id",
-        [workspaceId, parentId, name, nextPosition, user.id]
+        'insert into folders (workspace_id, parent_id, name, position, created_by) values ($1, $2, $3, $4, $5) returning id',
+        [workspaceId, parentId, name, nextPosition, user.id],
       );
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
-        folderPathToId.set(dirPath, insertResult.rows[0]!.id);
+        folderPathToId.set(dirPath, insertResult.rows[0]?.id);
         result.foldersCreated++;
       }
     } catch (err) {
@@ -321,7 +330,7 @@ obsidianImportRoute.post("/", async (c) => {
   }
 
   const imagePathToUrl = new Map<string, string>();
-  const uploadDir = path.resolve("uploads");
+  const uploadDir = path.resolve('uploads');
   await mkdir(uploadDir, { recursive: true });
 
   for (const file of imageFiles) {
@@ -331,21 +340,21 @@ obsidianImportRoute.post("/", async (c) => {
       const ext = getExtension(file.path);
       const filename = `${randomUUID()}.${ext}`;
       const filePath = path.join(uploadDir, filename);
-      const buffer = Buffer.from(file.data, "base64");
+      const buffer = Buffer.from(file.data, 'base64');
       await writeFile(filePath, buffer);
 
       await pool.query(
         `insert into uploads (filename, original_name, mime_type, size, workspace_id, uploaded_by)
          values ($1, $2, $3, $4, $5, $6)`,
-        [filename, path.basename(file.path), file.mimeType, buffer.length, workspaceId, user.id]
+        [filename, path.basename(file.path), file.mimeType, buffer.length, workspaceId, user.id],
       );
 
       const url = `/api/uploads/${filename}`;
       imagePathToUrl.set(file.path, url);
       imagePathToUrl.set(path.basename(file.path), url);
-      const parts = file.path.split("/");
+      const parts = file.path.split('/');
       if (parts.length > 2) {
-        const withoutRoot = parts.slice(1).join("/");
+        const withoutRoot = parts.slice(1).join('/');
         imagePathToUrl.set(withoutRoot, url);
       }
       result.imagesUploaded++;
@@ -371,7 +380,10 @@ obsidianImportRoute.post("/", async (c) => {
       for (const match of inlineTags) {
         const rawTag = match[1];
         if (!rawTag) continue;
-        if (HEX_ONLY.test(rawTag) && (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)) {
+        if (
+          HEX_ONLY.test(rawTag) &&
+          (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
+        ) {
           continue;
         }
         allTags.add(rawTag.toLowerCase().trim());
@@ -381,19 +393,19 @@ obsidianImportRoute.post("/", async (c) => {
     for (const tagName of allTags) {
       try {
         const existing = await pool.query(
-          "select id from tags where workspace_id = $1 and name = $2 limit 1",
-          [workspaceId, tagName]
+          'select id from tags where workspace_id = $1 and name = $2 limit 1',
+          [workspaceId, tagName],
         );
 
         if (existing.rowCount && existing.rowCount > 0) {
-          tagNameToId.set(tagName, existing.rows[0]!.id);
+          tagNameToId.set(tagName, existing.rows[0]?.id);
         } else {
           const insertResult = await pool.query(
-            "insert into tags (workspace_id, name) values ($1, $2) returning id",
-            [workspaceId, tagName]
+            'insert into tags (workspace_id, name) values ($1, $2) returning id',
+            [workspaceId, tagName],
           );
           if (insertResult.rowCount && insertResult.rowCount > 0) {
-            tagNameToId.set(tagName, insertResult.rows[0]!.id);
+            tagNameToId.set(tagName, insertResult.rows[0]?.id);
             result.tagsCreated++;
           }
         }
@@ -411,13 +423,12 @@ obsidianImportRoute.post("/", async (c) => {
       if (!file.content) continue;
 
       const { frontmatter, body, tags, title: frontmatterTitle } = parseFrontmatter(file.content);
-      const fileName = path.basename(file.path, ".md");
+      const fileName = path.basename(file.path, '.md');
       const title = frontmatterTitle || fileName;
 
       const dir = path.dirname(file.path);
-      const parentId = dir !== "." && dir !== "/"
-        ? folderPathToId.get(dir.replace(/\\/g, "/")) ?? null
-        : null;
+      const parentId =
+        dir !== '.' && dir !== '/' ? (folderPathToId.get(dir.replace(/\\/g, '/')) ?? null) : null;
 
       const processedBody = processMarkdownContent(body, imagePathToUrl);
       const contentForEditor = stripLeadingH1(processedBody, title);
@@ -425,9 +436,9 @@ obsidianImportRoute.post("/", async (c) => {
 
       const positionResult = await pool.query(
         parentId
-          ? "select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2"
-          : "select max(position) as max_position from pages where workspace_id = $1 and parent_id is null",
-        parentId ? [workspaceId, parentId] : [workspaceId]
+          ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
+          : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
+        parentId ? [workspaceId, parentId] : [workspaceId],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -435,16 +446,24 @@ obsidianImportRoute.post("/", async (c) => {
         ? await pool.query(
             `insert into pages (workspace_id, parent_id, title, position, created_by, ydoc, properties)
              values ($1, $2, $3, $4, $5, $6, $7) returning *`,
-            [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)]
+            [
+              workspaceId,
+              parentId,
+              title,
+              nextPosition,
+              user.id,
+              ydocBuffer,
+              JSON.stringify(frontmatter),
+            ],
           )
         : await pool.query(
             `insert into pages (workspace_id, parent_id, title, position, created_by, ydoc)
              values ($1, $2, $3, $4, $5, $6) returning *`,
-            [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer]
+            [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
           );
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
-        const pageId = insertResult.rows[0]!.id;
+        const pageId = insertResult.rows[0]?.id;
         pageTitleToId.set(title.toLowerCase(), pageId);
         pagePathToId.set(file.path, pageId);
 
@@ -452,10 +471,12 @@ obsidianImportRoute.post("/", async (c) => {
           for (const tag of tags) {
             const tagId = tagNameToId.get(tag.toLowerCase().trim());
             if (tagId) {
-              await pool.query(
-                "insert into page_tags (page_id, tag_id) values ($1, $2) on conflict do nothing",
-                [pageId, tagId]
-              ).catch(() => {});
+              await pool
+                .query(
+                  'insert into page_tags (page_id, tag_id) values ($1, $2) on conflict do nothing',
+                  [pageId, tagId],
+                )
+                .catch(() => {});
             }
           }
         }
@@ -497,8 +518,8 @@ obsidianImportRoute.post("/", async (c) => {
               targetPageId,
               link.page,
               link.alias || link.page,
-              link.isEmbed ? "embed" : link.heading ? "heading" : "wiki",
-            ]
+              link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wiki',
+            ],
           );
 
           if (targetPageId) {
@@ -506,7 +527,9 @@ obsidianImportRoute.post("/", async (c) => {
           }
         }
       } catch (err) {
-        result.errors.push(`Failed to index backlinks for "${file.path}": ${(err as Error).message}`);
+        result.errors.push(
+          `Failed to index backlinks for "${file.path}": ${(err as Error).message}`,
+        );
       }
     }
   }

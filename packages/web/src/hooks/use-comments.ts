@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { showSuccessToast, showErrorToast } from '../utils/toast';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -39,7 +39,11 @@ async function fetchComments(pageId: string): Promise<Comment[]> {
   return res.json();
 }
 
-async function createComment(pageId: string, content: string, anchorBlockId?: string): Promise<Comment> {
+async function createComment(
+  pageId: string,
+  content: string,
+  anchorBlockId?: string,
+): Promise<Comment> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/comments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -63,7 +67,11 @@ async function addReply(pageId: string, commentId: string, content: string): Pro
   return res.json();
 }
 
-async function updateComment(pageId: string, commentId: string, updates: { content?: string; resolved?: boolean }): Promise<Comment> {
+async function updateComment(
+  pageId: string,
+  commentId: string,
+  updates: { content?: string; resolved?: boolean },
+): Promise<Comment> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/comments/${commentId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -87,7 +95,10 @@ async function deleteComment(pageId: string, commentId: string): Promise<void> {
 export function useComments(pageId: string | undefined) {
   return useQuery({
     queryKey: ['comments', pageId],
-    queryFn: () => fetchComments(pageId!),
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchComments(pageId);
+    },
     enabled: !!pageId,
   });
 }
@@ -95,8 +106,10 @@ export function useComments(pageId: string | undefined) {
 export function useCreateComment(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ content, anchorBlockId }: { content: string; anchorBlockId?: string }) =>
-      createComment(pageId!, content, anchorBlockId),
+    mutationFn: ({ content, anchorBlockId }: { content: string; anchorBlockId?: string }) => {
+      if (!pageId) throw new Error('pageId is required');
+      return createComment(pageId, content, anchorBlockId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Comment added');
@@ -110,8 +123,10 @@ export function useCreateComment(pageId: string | undefined) {
 export function useAddReply(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ commentId, content }: { commentId: string; content: string }) =>
-      addReply(pageId!, commentId, content),
+    mutationFn: ({ commentId, content }: { commentId: string; content: string }) => {
+      if (!pageId) throw new Error('pageId is required');
+      return addReply(pageId, commentId, content);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Reply added');
@@ -125,8 +140,13 @@ export function useAddReply(pageId: string | undefined) {
 export function useUpdateComment(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ commentId, updates }: { commentId: string; updates: { content?: string; resolved?: boolean } }) =>
-      updateComment(pageId!, commentId, updates),
+    mutationFn: ({
+      commentId,
+      updates,
+    }: { commentId: string; updates: { content?: string; resolved?: boolean } }) => {
+      if (!pageId) throw new Error('pageId is required');
+      return updateComment(pageId, commentId, updates);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
     },
@@ -139,7 +159,10 @@ export function useUpdateComment(pageId: string | undefined) {
 export function useDeleteComment(pageId: string | undefined) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (commentId: string) => deleteComment(pageId!, commentId),
+    mutationFn: (commentId: string) => {
+      if (!pageId) throw new Error('pageId is required');
+      return deleteComment(pageId, commentId);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Comment deleted');

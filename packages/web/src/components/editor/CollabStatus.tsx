@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from "react";
-import type { HocuspocusProvider } from "@hocuspocus/provider";
-import { WebSocketStatus } from "@hocuspocus/provider";
-import { Tooltip } from "../Tooltip";
+import type { HocuspocusProvider } from '@hocuspocus/provider';
+import type { WebSocketStatus } from '@hocuspocus/provider';
+import React, { useEffect, useState } from 'react';
+import { Tooltip } from '../Tooltip';
 
 type CollabStatusProps = {
   provider: HocuspocusProvider | null;
@@ -11,15 +11,15 @@ type CollabStatusProps = {
 type ProviderStatus = WebSocketStatus;
 
 const STATUS_LABELS: Record<ProviderStatus, string> = {
-  connecting: "Connecting",
-  connected: "Live",
-  disconnected: "Offline",
+  connecting: 'Connecting',
+  connected: 'Live',
+  disconnected: 'Offline',
 };
 
 const STATUS_COLORS: Record<ProviderStatus, string> = {
-  connecting: "bg-amber-500",
-  connected: "bg-emerald-500",
-  disconnected: "bg-rose-500",
+  connecting: 'bg-amber-500',
+  connected: 'bg-emerald-500',
+  disconnected: 'bg-rose-500',
 };
 
 export function CollabStatus({ provider, status }: CollabStatusProps) {
@@ -36,15 +36,15 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
       setUserCount(count || 1);
     };
 
-    provider.awareness?.on("change", updateUsers);
+    provider.awareness?.on('change', updateUsers);
     updateUsers();
 
     return () => {
-      provider.awareness?.off("change", updateUsers);
+      provider.awareness?.off('change', updateUsers);
     };
   }, [provider]);
 
-  const label = STATUS_LABELS[status] ?? "Connecting";
+  const label = STATUS_LABELS[status] ?? 'Connecting';
   const dotClass = STATUS_COLORS[status] ?? STATUS_COLORS.connecting;
 
   if (!provider) {
@@ -53,8 +53,14 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
 
   return (
     <Tooltip label={label} position="bottom">
-      <span className={`relative flex w-9 h-9 items-center justify-center rounded-md transition-colors duration-200 group-hover:bg-zinc-100 dark:group-hover:bg-zinc-800 cursor-pointer`}>
-        <span className={`inline-flex h-3 w-3 rounded-full transition-colors duration-300 ${dotClass}`} />
+      <span
+        className={
+          'relative flex w-9 h-9 items-center justify-center rounded-md transition-colors duration-200 group-hover:bg-zinc-100 dark:group-hover:bg-zinc-800 cursor-pointer'
+        }
+      >
+        <span
+          className={`inline-flex h-3 w-3 rounded-full transition-colors duration-300 ${dotClass}`}
+        />
       </span>
     </Tooltip>
   );

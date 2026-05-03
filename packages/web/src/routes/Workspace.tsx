@@ -1,25 +1,53 @@
+import type { FolderTreeNode } from '@markdawn/shared';
+import {
+  ChevronDown,
+  ChevronRight,
+  FilePlus2,
+  FileText,
+  FolderPlus,
+  Home,
+  LayoutGrid,
+  List,
+} from 'lucide-react';
 import React, { useEffect, useMemo, useState, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { LayoutGrid, List, ChevronRight, ChevronDown, FilePlus2, FolderPlus, FileText, Home } from 'lucide-react';
-import { useWorkspace } from '../hooks/use-workspaces';
-import { usePageTree, useCreatePage, useUpdatePage, useDeletePage } from '../hooks/use-pages';
-import { useFolderTree, useCreateFolder, useUpdateFolder, useDeleteFolder } from '../hooks/use-folders';
-import { useCopyPage, useCopyFolder } from '../hooks/use-copy';
-import { useBulkDeletePages, useBulkDeleteFolders, useBulkMovePages, useBulkMoveFolders } from '../hooks/use-bulk-actions';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ExplorerItem, type ExplorerItemData } from '../components/workspace/ExplorerItem';
+import { MoveDialog } from '../components/workspace/MoveDialog';
+import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
 import { useClipboard } from '../contexts/ClipboardContext';
 import { useSelection } from '../contexts/SelectionContext';
-import { FolderTreeNode } from '@markdawn/shared';
-import { ExplorerItem, ExplorerItemData } from '../components/workspace/ExplorerItem';
-import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
-import { MoveDialog } from '../components/workspace/MoveDialog';
+import {
+  useBulkDeleteFolders,
+  useBulkDeletePages,
+  useBulkMoveFolders,
+  useBulkMovePages,
+} from '../hooks/use-bulk-actions';
+import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
+import {
+  useCreateFolder,
+  useDeleteFolder,
+  useFolderTree,
+  useUpdateFolder,
+} from '../hooks/use-folders';
+import { useCreatePage, useDeletePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { useWorkspace } from '../hooks/use-workspaces';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 export default function Workspace() {
   const navigate = useNavigate();
   const { workspaceSlug, folderId } = useParams<{ workspaceSlug: string; folderId?: string }>();
   const { data: workspace } = useWorkspace(workspaceSlug);
-  const { data: pages, isLoading: isPagesLoading, error: pagesError, refetch: refetchPages } = usePageTree(workspace?.id ?? '');
-  const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree(workspace?.id ?? '');
+  const {
+    data: pages,
+    isLoading: isPagesLoading,
+    error: pagesError,
+    refetch: refetchPages,
+  } = usePageTree(workspace?.id ?? '');
+  const {
+    data: folders,
+    isLoading: isFoldersLoading,
+    error: foldersError,
+  } = useFolderTree(workspace?.id ?? '');
 
   const createPageMutation = useCreatePage();
   const createFolderMutation = useCreateFolder();
@@ -42,7 +70,11 @@ export default function Workspace() {
     return saved === 'list' ? 'list' : 'card';
   });
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
-  const [editingTarget, setEditingTarget] = useState<{ kind: 'page' | 'folder'; id: string; value: string } | null>(null);
+  const [editingTarget, setEditingTarget] = useState<{
+    kind: 'page' | 'folder';
+    id: string;
+    value: string;
+  } | null>(null);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const newMenuRef = useRef<HTMLDivElement>(null);
@@ -56,7 +88,7 @@ export default function Workspace() {
   useEffect(() => {
     selection.clear();
     setLastSelectedIndex(null);
-  }, [workspaceSlug, folderId]);
+  }, [selection]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -130,7 +162,10 @@ export default function Workspace() {
   const handleCreatePage = async () => {
     if (!workspace?.id) return;
     try {
-      const newPage = await createPageMutation.mutateAsync({ workspaceId: workspace.id, ...(folderId ? { parentId: folderId } : {}) });
+      const newPage = await createPageMutation.mutateAsync({
+        workspaceId: workspace.id,
+        ...(folderId ? { parentId: folderId } : {}),
+      });
       navigate(`/app/${workspace.slug}/${newPage.id}`);
     } catch {
       showErrorToast('Failed to create page');
@@ -140,7 +175,10 @@ export default function Workspace() {
   const handleCreateFolder = async () => {
     if (!workspace?.id) return;
     try {
-      const folder = await createFolderMutation.mutateAsync({ workspaceId: workspace.id, ...(folderId ? { parentId: folderId } : {}) });
+      const folder = await createFolderMutation.mutateAsync({
+        workspaceId: workspace.id,
+        ...(folderId ? { parentId: folderId } : {}),
+      });
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
       showErrorToast('Failed to create folder');
@@ -239,8 +277,10 @@ export default function Workspace() {
     const folderIds = selection.selectedItems.filter((i) => i.type === 'folder').map((i) => i.id);
 
     try {
-      if (pageIds.length > 0) await bulkDeletePagesMutation.mutateAsync({ pageIds, workspaceId: workspace.id });
-      if (folderIds.length > 0) await bulkDeleteFoldersMutation.mutateAsync({ folderIds, workspaceId: workspace.id });
+      if (pageIds.length > 0)
+        await bulkDeletePagesMutation.mutateAsync({ pageIds, workspaceId: workspace.id });
+      if (folderIds.length > 0)
+        await bulkDeleteFoldersMutation.mutateAsync({ folderIds, workspaceId: workspace.id });
       selection.clear();
     } catch {
       showErrorToast('Failed to delete items');
@@ -267,8 +307,18 @@ export default function Workspace() {
     const folderIds = selection.selectedItems.filter((i) => i.type === 'folder').map((i) => i.id);
 
     try {
-      if (pageIds.length > 0) await bulkMovePagesMutation.mutateAsync({ pageIds, parentId: targetFolderId, workspaceId: workspace.id });
-      if (folderIds.length > 0) await bulkMoveFoldersMutation.mutateAsync({ folderIds, parentId: targetFolderId, workspaceId: workspace.id });
+      if (pageIds.length > 0)
+        await bulkMovePagesMutation.mutateAsync({
+          pageIds,
+          parentId: targetFolderId,
+          workspaceId: workspace.id,
+        });
+      if (folderIds.length > 0)
+        await bulkMoveFoldersMutation.mutateAsync({
+          folderIds,
+          parentId: targetFolderId,
+          workspaceId: workspace.id,
+        });
       selection.clear();
       setMoveDialogOpen(false);
     } catch {
@@ -284,17 +334,35 @@ export default function Workspace() {
       if (clipboard.state.action === 'copy') {
         for (const item of clipboard.state.items) {
           if (item.type === 'page') {
-            await copyPageMutation.mutateAsync({ pageId: item.id, parentId: currentParentId, workspaceId: workspace.id });
+            await copyPageMutation.mutateAsync({
+              pageId: item.id,
+              parentId: currentParentId,
+              workspaceId: workspace.id,
+            });
           } else {
-            await copyFolderMutation.mutateAsync({ folderId: item.id, parentId: currentParentId, workspaceId: workspace.id });
+            await copyFolderMutation.mutateAsync({
+              folderId: item.id,
+              parentId: currentParentId,
+              workspaceId: workspace.id,
+            });
           }
         }
         showSuccessToast('Pasted');
       } else if (clipboard.state.action === 'cut') {
         const pageIds = clipboard.state.items.filter((i) => i.type === 'page').map((i) => i.id);
         const folderIds = clipboard.state.items.filter((i) => i.type === 'folder').map((i) => i.id);
-        if (pageIds.length > 0) await bulkMovePagesMutation.mutateAsync({ pageIds, parentId: currentParentId, workspaceId: workspace.id });
-        if (folderIds.length > 0) await bulkMoveFoldersMutation.mutateAsync({ folderIds, parentId: currentParentId, workspaceId: workspace.id });
+        if (pageIds.length > 0)
+          await bulkMovePagesMutation.mutateAsync({
+            pageIds,
+            parentId: currentParentId,
+            workspaceId: workspace.id,
+          });
+        if (folderIds.length > 0)
+          await bulkMoveFoldersMutation.mutateAsync({
+            folderIds,
+            parentId: currentParentId,
+            workspaceId: workspace.id,
+          });
         clipboard.clear();
         showSuccessToast('Moved');
       }
@@ -330,7 +398,10 @@ export default function Workspace() {
     <div className="space-y-4">
       <div className="flex flex-col gap-3">
         <div className="flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400 flex-wrap">
-          <Link to={`/app/${workspaceSlug}`} className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors">
+          <Link
+            to={`/app/${workspaceSlug}`}
+            className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+          >
             <Home size={14} />
             <span className="font-medium">{workspace?.name || workspaceSlug}</span>
           </Link>
@@ -349,19 +420,29 @@ export default function Workspace() {
 
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-zinc-900 dark:text-zinc-50">
-            {folderId ? breadcrumbPath[breadcrumbPath.length - 1]?.name || 'Folder' : workspace?.name || workspaceSlug}
+            {folderId
+              ? breadcrumbPath[breadcrumbPath.length - 1]?.name || 'Folder'
+              : workspace?.name || workspaceSlug}
           </h1>
           <div className="flex items-center gap-2">
             <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-0.5">
               <button
-                onClick={() => { setViewMode('card'); localStorage.setItem('markdawn:viewMode', 'card'); }}
+                type="button"
+                onClick={() => {
+                  setViewMode('card');
+                  localStorage.setItem('markdawn:viewMode', 'card');
+                }}
                 className={`p-1.5 rounded-md transition-colors cursor-pointer ${viewMode === 'card' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'}`}
                 title="Card view"
               >
                 <LayoutGrid size={16} />
               </button>
               <button
-                onClick={() => { setViewMode('list'); localStorage.setItem('markdawn:viewMode', 'list'); }}
+                type="button"
+                onClick={() => {
+                  setViewMode('list');
+                  localStorage.setItem('markdawn:viewMode', 'list');
+                }}
                 className={`p-1.5 rounded-md transition-colors cursor-pointer ${viewMode === 'list' ? 'bg-white dark:bg-zinc-700 shadow-sm text-zinc-900 dark:text-zinc-100' : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100'}`}
                 title="List view"
               >
@@ -370,6 +451,7 @@ export default function Workspace() {
             </div>
             <div className="relative flex items-stretch" ref={newMenuRef}>
               <button
+                type="button"
                 onClick={handleCreatePage}
                 className="flex items-center gap-1.5 pl-3 pr-2 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-l-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700 border-r-0"
               >
@@ -377,6 +459,7 @@ export default function Workspace() {
                 <span className="hidden sm:inline">New Page</span>
               </button>
               <button
+                type="button"
                 onClick={() => setShowNewMenu((prev) => !prev)}
                 className="flex items-center px-1.5 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-r-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
               >
@@ -385,13 +468,21 @@ export default function Workspace() {
               {showNewMenu && (
                 <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
                   <button
-                    onClick={() => { setShowNewMenu(false); void handleCreatePage(); }}
+                    type="button"
+                    onClick={() => {
+                      setShowNewMenu(false);
+                      void handleCreatePage();
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <FilePlus2 size={14} /> New Page
                   </button>
                   <button
-                    onClick={() => { setShowNewMenu(false); void handleCreateFolder(); }}
+                    type="button"
+                    onClick={() => {
+                      setShowNewMenu(false);
+                      void handleCreateFolder();
+                    }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
                     <FolderPlus size={14} /> New Folder
@@ -407,6 +498,7 @@ export default function Workspace() {
         <div className="p-4 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-md flex items-center justify-between">
           <span>Failed to load items.</span>
           <button
+            type="button"
             onClick={() => refetchPages()}
             className="px-3 py-1 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded text-sm transition-colors"
           >
@@ -414,9 +506,14 @@ export default function Workspace() {
           </button>
         </div>
       ) : isLoading ? (
-        <div className={`${viewMode === 'card' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-1'} animate-fade-in`}>
+        <div
+          className={`${viewMode === 'card' ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'space-y-1'} animate-fade-in`}
+        >
           {[1, 2, 3, 4, 5, 6].map((id) => (
-            <div key={id} className="block p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl">
+            <div
+              key={id}
+              className="block p-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl"
+            >
               <div className="h-28 bg-zinc-100 dark:bg-zinc-800 rounded-lg mb-3 animate-pulse" />
               <div className="h-5 bg-zinc-100 dark:bg-zinc-800 rounded w-3/4 mb-2 animate-pulse" />
               <div className="h-4 bg-zinc-100 dark:bg-zinc-800 rounded w-1/2 animate-pulse" />
@@ -450,10 +547,14 @@ export default function Workspace() {
               onCopy={() => handleCopyItem(item)}
               onCut={() => handleCutItem(item)}
               onMove={() => handleMoveItem(item)}
-              {...(item.type === 'page' ? { onExport: () => void handleExport(item.id, item.title) } : {})}
+              {...(item.type === 'page'
+                ? { onExport: () => void handleExport(item.id, item.title) }
+                : {})}
               isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
               editValue={editingTarget?.value ?? ''}
-              onEditChange={(value) => setEditingTarget((prev) => prev ? { ...prev, value } : null)}
+              onEditChange={(value) =>
+                setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+              }
               onEditSave={() => void handleSaveRename()}
               onEditKeyDown={handleEditKeyDown}
             />
@@ -486,10 +587,14 @@ export default function Workspace() {
                 onCopy={() => handleCopyItem(item)}
                 onCut={() => handleCutItem(item)}
                 onMove={() => handleMoveItem(item)}
-                {...(item.type === 'page' ? { onExport: () => void handleExport(item.id, item.title) } : {})}
+                {...(item.type === 'page'
+                  ? { onExport: () => void handleExport(item.id, item.title) }
+                  : {})}
                 isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
                 editValue={editingTarget?.value ?? ''}
-                onEditChange={(value) => setEditingTarget((prev) => prev ? { ...prev, value } : null)}
+                onEditChange={(value) =>
+                  setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+                }
                 onEditSave={() => void handleSaveRename()}
                 onEditKeyDown={handleEditKeyDown}
               />
@@ -508,7 +613,10 @@ export default function Workspace() {
         onMove={handleBulkMove}
         onPaste={() => void handlePaste()}
         onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
-        onClear={() => { selection.clear(); clipboard.clear(); }}
+        onClear={() => {
+          selection.clear();
+          clipboard.clear();
+        }}
       />
 
       <MoveDialog

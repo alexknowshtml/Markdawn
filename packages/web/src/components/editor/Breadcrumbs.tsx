@@ -1,6 +1,6 @@
-import React, { useMemo } from "react";
-import { Link } from "react-router-dom";
-import type { Page, Folder } from "@markdawn/shared";
+import type { Folder, Page } from '@markdawn/shared';
+import React, { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 
 interface BreadcrumbsProps {
   pages: Page[];
@@ -89,7 +89,7 @@ export function Breadcrumbs({
             <span className="text-zinc-300 dark:text-zinc-600">/</span>
             {isLast ? (
               <span className="text-zinc-900 dark:text-zinc-100 truncate max-w-[200px] px-1.5 py-0.5">
-                {item.title || "Untitled"}
+                {item.title || 'Untitled'}
               </span>
             ) : item.isFolder ? (
               <span className="text-zinc-600 dark:text-zinc-400 truncate max-w-[150px] px-1.5 py-0.5">
@@ -100,7 +100,7 @@ export function Breadcrumbs({
                 to={`/app/${workspaceSlug}/${item.id}`}
                 className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors px-1.5 py-0.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50 truncate max-w-[150px]"
               >
-                {item.title || "Untitled"}
+                {item.title || 'Untitled'}
               </Link>
             )}
           </React.Fragment>

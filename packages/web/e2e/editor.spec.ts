@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test.describe('Editor', () => {
   test('editor renders and accepts input', async ({ page }) => {

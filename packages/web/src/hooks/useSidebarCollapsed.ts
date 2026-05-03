@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 const STORAGE_KEY = 'markdawn-sidebar-collapsed';
 
@@ -25,7 +25,7 @@ export function useSidebarCollapsed() {
   }, []);
 
   const toggleCollapsed = useCallback(() => {
-    setCollapsedState(prev => !prev);
+    setCollapsedState((prev) => !prev);
   }, []);
 
   return { collapsed, setCollapsed, toggleCollapsed };

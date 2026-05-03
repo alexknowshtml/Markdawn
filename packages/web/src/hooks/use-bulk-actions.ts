@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { showSuccessToast, showErrorToast } from '../utils/toast';
+import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -51,7 +51,10 @@ export function useBulkDeletePages() {
 export function useBulkDeleteFolders() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ folderIds, workspaceId }: { folderIds: string[]; workspaceId: string }) => {
+    mutationFn: async ({
+      folderIds,
+      workspaceId,
+    }: { folderIds: string[]; workspaceId: string }) => {
       await Promise.all(folderIds.map((id) => deleteFolder(id)));
     },
     onSuccess: (_, { workspaceId }) => {
@@ -68,7 +71,11 @@ export function useBulkDeleteFolders() {
 export function useBulkMovePages() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ pageIds, parentId, workspaceId }: { pageIds: string[]; parentId: string | null; workspaceId: string }) => {
+    mutationFn: async ({
+      pageIds,
+      parentId,
+      workspaceId,
+    }: { pageIds: string[]; parentId: string | null; workspaceId: string }) => {
       await Promise.all(pageIds.map((id) => movePage(id, parentId)));
     },
     onSuccess: (_, { workspaceId }) => {
@@ -84,7 +91,11 @@ export function useBulkMovePages() {
 export function useBulkMoveFolders() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ folderIds, parentId, workspaceId }: { folderIds: string[]; parentId: string | null; workspaceId: string }) => {
+    mutationFn: async ({
+      folderIds,
+      parentId,
+      workspaceId,
+    }: { folderIds: string[]; parentId: string | null; workspaceId: string }) => {
       await Promise.all(folderIds.map((id) => moveFolder(id, parentId)));
     },
     onSuccess: (_, { workspaceId }) => {

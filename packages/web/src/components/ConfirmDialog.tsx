@@ -1,4 +1,4 @@
-import React from "react";
+import React from 'react';
 
 type ConfirmDialogProps = {
   isOpen: boolean;
@@ -15,8 +15,8 @@ export function ConfirmDialog({
   isOpen,
   title,
   message,
-  confirmText = "Confirm",
-  cancelText = "Cancel",
+  confirmText = 'Confirm',
+  cancelText = 'Cancel',
   onConfirm,
   onCancel,
   loading = false,
@@ -44,7 +44,7 @@ export function ConfirmDialog({
             className="px-4 py-2 text-sm font-medium text-white bg-red-600 dark:bg-red-700 rounded-md hover:bg-red-700 dark:hover:bg-red-800 transition-colors disabled:opacity-60"
             disabled={loading}
           >
-            {loading ? "Deleting..." : confirmText}
+            {loading ? 'Deleting...' : confirmText}
           </button>
         </div>
       </div>

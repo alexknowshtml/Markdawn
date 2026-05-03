@@ -1,7 +1,7 @@
-import React from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import { Loader } from '@mantine/core';
+import { useQuery } from '@tanstack/react-query';
+import React from 'react';
+import { Link, useParams } from 'react-router-dom';
 
 const API_BASE = '/api';
 
@@ -27,9 +27,16 @@ async function fetchPublicPage(token: string): Promise<PublicPageData> {
 export default function PublicPage() {
   const { token } = useParams<{ token: string }>();
 
-  const { data: page, isLoading, error } = useQuery({
+  const {
+    data: page,
+    isLoading,
+    error,
+  } = useQuery({
     queryKey: ['public-page', token],
-    queryFn: () => fetchPublicPage(token!),
+    queryFn: () => {
+      if (!token) throw new Error('token is required');
+      return fetchPublicPage(token);
+    },
     enabled: !!token,
     retry: false,
   });
@@ -38,7 +45,10 @@ export default function PublicPage() {
     return (
       <div className="min-h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
         <header className="h-14 border-b border-zinc-200 dark:border-zinc-800 flex items-center px-6">
-          <Link to="/" className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity">
+          <Link
+            to="/"
+            className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity"
+          >
             Markdawn
           </Link>
         </header>
@@ -53,7 +63,10 @@ export default function PublicPage() {
     return (
       <div className="min-h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
         <header className="h-14 border-b border-zinc-200 dark:border-zinc-800 flex items-center px-6">
-          <Link to="/" className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity">
+          <Link
+            to="/"
+            className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity"
+          >
             Markdawn
           </Link>
         </header>
@@ -70,19 +83,24 @@ export default function PublicPage() {
   return (
     <div className="min-h-screen flex flex-col bg-white dark:bg-zinc-950 text-zinc-900 dark:text-zinc-50">
       <header className="h-14 border-b border-zinc-200 dark:border-zinc-800 flex items-center px-6">
-        <Link to="/" className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity">
+        <Link
+          to="/"
+          className="font-semibold text-lg tracking-tight hover:opacity-80 transition-opacity"
+        >
           Markdawn
         </Link>
       </header>
-      
+
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-10 animate-fade-in">
           {(page.coverType || page.coverValue) && (
-            <div 
+            <div
               className="w-full h-[200px] rounded-xl mb-8 overflow-hidden"
               style={{
-                background: page.coverType === 'gradient' ? page.coverValue! : undefined,
-                backgroundColor: page.coverType === 'solid' ? page.coverValue! : undefined,
+                background:
+                  page.coverType === 'gradient' ? (page.coverValue ?? undefined) : undefined,
+                backgroundColor:
+                  page.coverType === 'solid' ? (page.coverValue ?? undefined) : undefined,
               }}
             />
           )}
@@ -98,8 +116,8 @@ export default function PublicPage() {
             <p className="text-zinc-600 dark:text-zinc-400 mb-4">
               Content preview is not available for public pages yet.
             </p>
-            <Link 
-              to="/" 
+            <Link
+              to="/"
               className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 hover:opacity-90 transition-opacity"
             >
               Open in Markdawn

@@ -1,7 +1,12 @@
+import { FileText, RotateCcw, Trash2, X } from 'lucide-react';
 import React, { useState } from 'react';
-import { Trash2, RotateCcw, FileText, X } from 'lucide-react';
-import { useTrashPages, useRestorePage, usePermanentDeletePage, useEmptyTrash } from '../../hooks/use-pages';
-import { showSuccessToast, showErrorToast } from '../../utils/toast';
+import {
+  useEmptyTrash,
+  usePermanentDeletePage,
+  useRestorePage,
+  useTrashPages,
+} from '../../hooks/use-pages';
+import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EmptyState } from '../EmptyState';
 
@@ -22,9 +27,9 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
   const handleRestore = async (pageId: string) => {
     try {
       await restoreMutation.mutateAsync(pageId);
-      showSuccessToast("Page restored");
+      showSuccessToast('Page restored');
     } catch (error) {
-      showErrorToast("Failed to restore page");
+      showErrorToast('Failed to restore page');
     }
   };
 
@@ -32,10 +37,10 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
     if (!pageToDelete) return;
     try {
       await permanentDeleteMutation.mutateAsync(pageToDelete.id);
-      showSuccessToast("Page permanently deleted");
+      showSuccessToast('Page permanently deleted');
       setPageToDelete(null);
     } catch (error) {
-      showErrorToast("Failed to permanently delete page");
+      showErrorToast('Failed to permanently delete page');
     }
   };
 
@@ -44,7 +49,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
       await emptyTrashMutation.mutateAsync(workspaceId);
       setShowEmptyAllConfirm(false);
     } catch (error) {
-      showErrorToast("Failed to empty trash");
+      showErrorToast('Failed to empty trash');
     }
   };
 
@@ -59,6 +64,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
           <div className="flex items-center gap-2">
             {trashPages && trashPages.length > 0 && (
               <button
+                type="button"
                 onClick={() => setShowEmptyAllConfirm(true)}
                 disabled={emptyTrashMutation.isPending}
                 className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-800 transition-colors disabled:opacity-50 cursor-pointer"
@@ -68,6 +74,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
               </button>
             )}
             <button
+              type="button"
               onClick={onClose}
               className="p-1 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
             >
@@ -79,7 +86,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
         <div className="flex-1 overflow-y-auto p-4">
           {isLoading ? (
             <div className="flex justify-center py-8">
-              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-zinc-900 dark:border-zinc-100"></div>
+              <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-zinc-900 dark:border-zinc-100" />
             </div>
           ) : trashPages && trashPages.length > 0 ? (
             <div className="space-y-2">
@@ -101,12 +108,14 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
                         {page.title || 'Untitled'}
                       </p>
                       <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                        Deleted {page.deletedAt ? new Date(page.deletedAt).toLocaleDateString() : 'Unknown'}
+                        Deleted{' '}
+                        {page.deletedAt ? new Date(page.deletedAt).toLocaleDateString() : 'Unknown'}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 ml-4">
                     <button
+                      type="button"
                       onClick={() => handleRestore(page.id)}
                       disabled={restoreMutation.isPending}
                       className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors disabled:opacity-50"
@@ -116,6 +125,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
                       <span className="hidden sm:inline">Restore</span>
                     </button>
                     <button
+                      type="button"
                       onClick={() => setPageToDelete({ id: page.id, title: page.title })}
                       disabled={permanentDeleteMutation.isPending}
                       className="flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded hover:bg-red-50 dark:hover:bg-red-900/20 hover:border-red-200 dark:hover:border-red-800 transition-colors disabled:opacity-50"

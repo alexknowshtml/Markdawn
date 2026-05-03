@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useEffect, useRef, useState } from 'react';
 
 const API_BASE = '/api';
 
@@ -14,16 +14,16 @@ async function updatePageTitle(pageId: string, title: string): Promise<void> {
   }
 }
 
+function normalizeTitle(value: string): string {
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : 'Untitled';
+}
+
 export function usePageTitle(pageId?: string, initialTitle?: string) {
   const [title, setTitle] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedTitleRef = useRef('Untitled');
-
-  const normalizeTitle = (value: string) => {
-    const trimmed = value.trim();
-    return trimmed.length > 0 ? trimmed : 'Untitled';
-  };
 
   useEffect(() => {
     if (typeof initialTitle === 'string') {
@@ -34,7 +34,10 @@ export function usePageTitle(pageId?: string, initialTitle?: string) {
   }, [initialTitle]);
 
   const mutation = useMutation({
-    mutationFn: (nextTitle: string) => updatePageTitle(pageId!, nextTitle),
+    mutationFn: (nextTitle: string) => {
+      if (!pageId) throw new Error('pageId is required');
+      return updatePageTitle(pageId, nextTitle);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
     },

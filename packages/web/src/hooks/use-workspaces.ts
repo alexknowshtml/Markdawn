@@ -1,5 +1,5 @@
+import type { Workspace } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
-import { Workspace } from '@markdawn/shared';
 
 const API_BASE = '/api';
 
@@ -35,7 +35,10 @@ export function useWorkspaces() {
 export function useWorkspace(slug?: string) {
   return useQuery({
     queryKey: ['workspace', slug],
-    queryFn: () => fetchWorkspaceBySlug(slug!),
+    queryFn: () => {
+      if (!slug) throw new Error('slug is required');
+      return fetchWorkspaceBySlug(slug);
+    },
     enabled: !!slug,
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
