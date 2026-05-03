@@ -6,7 +6,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsup src/index.ts --format esm --dts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "biome check src",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
