@@ -39,7 +39,7 @@ describe('comments API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request('/api/pages/non-existent/comments', {
+      const res = await app.request('/api/pages/00000000-0000-0000-0000-000000000000/comments', {
         headers: { Cookie: session.Cookie },
       });
 

@@ -223,4 +223,100 @@ describe('workspaces API', () => {
       expect(res.status).toBe(400);
     });
   });
+
+  describe('DELETE /api/workspaces/:slug/members/:userId', () => {
+    it('removes a member when caller is owner', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const ws = await createTestWorkspace(owner.id);
+
+      await app.request(`/api/workspaces/${ws.slug}/members`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ email: member.email }),
+      });
+
+      const res = await app.request(`/api/workspaces/${ws.slug}/members/${member.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('returns 403 when caller is not owner or admin', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const other = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const otherSession = await createTestSession(other.id);
+      const ws = await createTestWorkspace(owner.id);
+
+      await app.request(`/api/workspaces/${ws.slug}/members`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ email: member.email }),
+      });
+
+      const res = await app.request(`/api/workspaces/${ws.slug}/members/${member.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: otherSession.Cookie },
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('returns 404 for non-existent workspace slug', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const res = await app.request('/api/workspaces/non-existent/members/some-id', {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 404 when target user is not a member', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const nonMember = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const ws = await createTestWorkspace(owner.id);
+
+      const res = await app.request(`/api/workspaces/${ws.slug}/members/${nonMember.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(404);
+    });
+
+    it('returns 400 when trying to remove owner', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const ws = await createTestWorkspace(owner.id);
+
+      const res = await app.request(`/api/workspaces/${ws.slug}/members/${owner.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(400);
+    });
+  });
 });

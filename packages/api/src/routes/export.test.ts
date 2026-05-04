@@ -14,6 +14,14 @@ describe('export API', () => {
       const res = await app.request('/api/workspaces/some-id/export');
       expect(res.status).toBe(401);
     });
+
+    it('returns 401 with invalid session token', async () => {
+      const app = await createTestApp();
+      const res = await app.request('/api/workspaces/some-id/export', {
+        headers: { Cookie: 'better-auth.session_token=invalid-token' },
+      });
+      expect(res.status).toBe(401);
+    });
   });
 
   describe('GET /api/workspaces/:workspaceId/export', () => {
@@ -23,6 +31,21 @@ describe('export API', () => {
       const session = await createTestSession(user.id);
       const ws = await createTestWorkspace(user.id);
       await createTestPage(ws.id, user.id);
+
+      const res = await app.request(`/api/workspaces/${ws.id}/export`, {
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toBe('application/zip');
+      expect(res.headers.get('Content-Disposition')).toContain('workspace-export.zip');
+    });
+
+    it('exports empty workspace as ZIP', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const ws = await createTestWorkspace(user.id);
 
       const res = await app.request(`/api/workspaces/${ws.id}/export`, {
         headers: { Cookie: session.Cookie },
@@ -43,6 +66,26 @@ describe('export API', () => {
       });
 
       expect(res.status).toBe(403);
+    });
+
+    it('does not include deleted pages in export', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const ws = await createTestWorkspace(user.id);
+      const page = await createTestPage(ws.id, user.id, { title: 'Deleted' });
+
+      await app.request(`/api/pages/${page.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      const res = await app.request(`/api/workspaces/${ws.id}/export`, {
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toBe('application/zip');
     });
   });
 });
