@@ -1,11 +1,60 @@
 import { defineConfig } from 'vitest/config';
 
+const coverageConfig = {
+  provider: 'v8' as const,
+  reporter: ['text', 'json-summary', 'html', 'lcov'] as string[],
+  reportsDirectory: './coverage',
+  include: ['src/**/*.ts'],
+  exclude: [
+    'src/**/*.test.ts',
+    'src/**/*.unit.test.ts',
+    'src/**/*.bench.ts',
+    'src/index.ts',
+    'src/env.ts',
+    'src/test-utils.ts',
+  ],
+  thresholds: {
+    perFile: true,
+    statements: 80,
+    branches: 70,
+    functions: 80,
+    lines: 80,
+  },
+};
+
 export default defineConfig({
   test: {
-    environment: 'node',
+    name: '@markdawn/collab',
+    hookTimeout: 180_000,
+    testTimeout: 60_000,
     globals: true,
-    include: ['src/**/*.test.ts'],
-    testTimeout: 30_000,
-    hookTimeout: 60_000,
+    environment: 'node',
+    coverage: coverageConfig,
+    projects: [
+      {
+        test: {
+          name: 'unit',
+          include: ['src/**/*.unit.test.ts'],
+          pool: 'threads',
+          coverage: coverageConfig,
+        },
+      },
+      {
+        test: {
+          name: 'integration',
+          include: ['src/**/*.test.ts'],
+          exclude: ['src/**/*.unit.test.ts'],
+          pool: 'threads',
+          isolate: true,
+          fileParallelism: false,
+          maxWorkers: 1,
+          globalSetup: ['./test/global-setup.ts'],
+          setupFiles: ['./test/setup.ts'],
+          hookTimeout: 180_000,
+          testTimeout: 60_000,
+          coverage: coverageConfig,
+        },
+      },
+    ],
   },
 });
