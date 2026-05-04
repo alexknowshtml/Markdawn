@@ -12,6 +12,7 @@ dist/
 
 # test artifacts
 test-results/
+coverage/
 
 # agent skills
 
