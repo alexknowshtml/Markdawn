@@ -346,7 +346,7 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
 
   values.push(commentId, pageId);
   const result = await pool.query(
-    `UPDATE comments SET ${updates.join(', ')} WHERE id = ${paramIndex++} AND page_id = ${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
+    `UPDATE comments SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
     values,
   );
 

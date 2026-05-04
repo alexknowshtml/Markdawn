@@ -57,6 +57,8 @@ const normalizePageRow = (row: RawPageRow): PageRow => ({
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
+  isDeleted: row.isDeleted ?? row.is_deleted ?? false,
+  deletedAt: row.deletedAt ?? row.deleted_at ?? null,
 });
 
 function ensureWorkspaceForPage(page: PageRow): asserts page is PageRow & { workspaceId: string } {

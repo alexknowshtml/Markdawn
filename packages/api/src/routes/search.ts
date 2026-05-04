@@ -65,7 +65,7 @@ searchRoute.get('/', async (c) => {
       p.icon,
       w.slug as workspace_slug,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
-      ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
+      ts_rank(p.title_search::tsvector, plainto_tsquery('english', $2)) as rank
     from pages p
     join workspaces w on w.id = p.workspace_id
     join workspace_members wm on wm.workspace_id = p.workspace_id

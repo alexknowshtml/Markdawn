@@ -68,7 +68,7 @@ templatesRoute.post('/', async (c) => {
     ],
   );
 
-  return c.json(result.rows[0]);
+  return c.json(result.rows[0], 201);
 });
 
 templatesRoute.delete('/:id', async (c) => {

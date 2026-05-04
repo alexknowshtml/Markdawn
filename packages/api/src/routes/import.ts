@@ -187,7 +187,12 @@ importRoute.post('/markdown', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(workspaceId, user.id);
 
-  const formData = await c.req.formData();
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    throw new HTTPException(400, { message: 'File is required' });
+  }
   const file = formData.get('file');
 
   if (!(file instanceof File)) {
