@@ -82,7 +82,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/containers
-          key: podman-${{ runner.os }}-postgres17-${{ hashFiles('packages/api/test/global-setup.ts') }}
+          key: podman-${{ runner.os }}-postgres17-${{ hashFiles('packages/api/test/global-setup.ts', 'packages/api/src/db/schema.ts') }}
           restore-keys: |
             podman-${{ runner.os }}-postgres17-
             podman-${{ runner.os }}-
