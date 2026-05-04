@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { vi } from 'vitest';
+import { dirname, join } from 'node:path';
 import { createApp } from './app';
 import { pool } from './db/connection';
 
@@ -140,20 +139,6 @@ export async function createTestFolder(
   return { id, name, workspaceId };
 }
 
-/**
- * Mock the pool.query to throw a specific error for the next call.
- * Returns a cleanup function that restores the original.
- *
- * @example
- *   const cleanup = mockDbError(new Error('connection lost'));
- *   // ... make request, expect 500
- *   cleanup();
- */
-export function mockDbError(error: Error): () => void {
-  const spy = vi.spyOn(pool, 'query').mockRejectedValueOnce(error);
-  return () => spy.mockRestore();
-}
-
 type CreateCommentOptions = {
   content?: string;
   anchorBlockId?: string | null;
@@ -195,6 +180,7 @@ export async function createTestReply(
 
 type CreateVersionOptions = {
   title?: string;
+  content?: unknown;
 };
 
 export async function createTestVersion(
@@ -204,17 +190,18 @@ export async function createTestVersion(
 ) {
   const id = randomUUID();
   const title = overrides?.title ?? 'Version';
+  const content = overrides?.content ?? { type: 'doc', content: [] };
   await pool.query(
-    `INSERT INTO page_versions (id, page_id, title, created_by)
-     VALUES ($1, $2, $3, $4)`,
-    [id, pageId, title, userId],
+    `INSERT INTO page_versions (id, page_id, title, content, created_by)
+     VALUES ($1, $2, $3, $4::jsonb, $5)`,
+    [id, pageId, title, JSON.stringify(content), userId],
   );
   return { id, pageId, title };
 }
 
 type CreateTemplateOptions = {
-  name?: string;
-  content?: string;
+  title?: string;
+  contentBlocks?: unknown;
 };
 
 export async function createTestTemplate(
@@ -223,28 +210,27 @@ export async function createTestTemplate(
   overrides?: CreateTemplateOptions,
 ) {
   const id = randomUUID();
-  const name = overrides?.name ?? 'Test Template';
-  const content = overrides?.content ?? '# Template content';
+  const title = overrides?.title ?? 'Test Template';
+  const contentBlocks = overrides?.contentBlocks ?? { type: 'doc', content: [] };
   await pool.query(
-    `INSERT INTO templates (id, workspace_id, name, content, created_by)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, workspaceId, name, content, userId],
+    `INSERT INTO templates (id, workspace_id, title, content_blocks, created_by)
+     VALUES ($1, $2, $3, $4::jsonb, $5)`,
+    [id, workspaceId, title, JSON.stringify(contentBlocks), userId],
   );
-  return { id, workspaceId, name };
+  return { id, workspaceId, title };
 }
 
 type CreateTagOptions = {
   name?: string;
-  color?: string | null;
 };
 
 export async function createTestTag(workspaceId: string, overrides?: CreateTagOptions) {
   const id = randomUUID();
   const name = overrides?.name ?? `tag-${randomUUID().slice(0, 6)}`;
   await pool.query(
-    `INSERT INTO tags (id, workspace_id, name, color)
-     VALUES ($1, $2, $3, $4)`,
-    [id, workspaceId, name, overrides?.color ?? null],
+    `INSERT INTO tags (id, workspace_id, name)
+     VALUES ($1, $2, $3)`,
+    [id, workspaceId, name],
   );
   return { id, workspaceId, name };
 }
@@ -252,22 +238,20 @@ export async function createTestTag(workspaceId: string, overrides?: CreateTagOp
 export async function createTestPageLink(sourcePageId: string, targetPageId: string) {
   const id = randomUUID();
   await pool.query(
-    `INSERT INTO page_links (id, source_page_id, target_page_id)
-     VALUES ($1, $2, $3)`,
-    [id, sourcePageId, targetPageId],
+    `INSERT INTO page_links (id, source_page_id, target_page_id, target_title, link_text)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [id, sourcePageId, targetPageId, 'target', 'link'],
   );
   return { id, sourcePageId, targetPageId };
 }
 
 export async function createTestPublicShare(pageId: string) {
-  const id = randomUUID();
   const token = randomUUID();
-  await pool.query(
-    `INSERT INTO public_shares (id, page_id, token)
-     VALUES ($1, $2, $3)`,
-    [id, pageId, token],
-  );
-  return { id, pageId, token };
+  await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+    token,
+    pageId,
+  ]);
+  return { pageId, token };
 }
 
 /**
@@ -275,7 +259,7 @@ export async function createTestPublicShare(pageId: string) {
  * (uploads, imports, exports). Returns the path and a cleanup function.
  * The directory is created under os.tmpdir() to avoid polluting the repo.
  */
-export function createTestTempDir(prefix: string = 'markdawn-test-'): {
+export function createTestTempDir(prefix = 'markdawn-test-'): {
   path: string;
   cleanup: () => void;
 } {
@@ -306,3 +290,10 @@ export function createTestTempFile(
   writeFileSync(filePath, content);
   return filePath;
 }
+
+// NOTE: We intentionally do not export a `mockDbError` helper or test the
+// `rowCount === 0` branches after INSERT/UPDATE. In production, Postgres
+// either succeeds with rowCount > 0 or throws an exception. The rowCount === 0
+// checks are defensive guards for impossible states; testing them would require
+// mocking pool.query, which undermines the value of integration tests that use
+// a real database.

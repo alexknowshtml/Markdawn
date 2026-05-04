@@ -21,7 +21,7 @@ async function findFreePort(): Promise<number> {
 }
 
 async function waitForContainer(name: string): Promise<void> {
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 60; i++) {
     try {
       execSync(`podman exec ${name} pg_isready -U markdawn`, {
         stdio: 'pipe',
@@ -29,8 +29,20 @@ async function waitForContainer(name: string): Promise<void> {
       });
       return;
     } catch {
+      if (i >= 5 && i % 10 === 0) {
+        try {
+          execSync(`podman logs --tail=5 ${name}`, { stdio: 'inherit' });
+        } catch {
+          void 0;
+        }
+      }
       await new Promise((r) => setTimeout(r, 1000));
     }
+  }
+  try {
+    execSync(`podman logs --tail=20 ${name}`, { stdio: 'inherit' });
+  } catch {
+    void 0;
   }
   throw new Error('PostgreSQL test container failed to become ready');
 }
@@ -49,12 +61,7 @@ export default async function setup(): Promise<() => Promise<void>> {
 
   // Start the container with --replace for idempotent startup
   execSync(
-    `podman run -d --name ${CONTAINER_NAME} ` +
-      `-e POSTGRES_USER=markdawn ` +
-      `-e POSTGRES_PASSWORD=password ` +
-      `-e POSTGRES_DB=markdawn_test ` +
-      `-p ${port}:5432 ` +
-      `postgres:17-alpine`,
+    `podman run -d --name ${CONTAINER_NAME} -e POSTGRES_USER=markdawn -e POSTGRES_PASSWORD=password -e POSTGRES_DB=markdawn_test -p ${port}:5432 postgres:17-alpine -c fsync=off -c full_page_writes=off -c synchronous_commit=off`,
     { stdio: 'inherit' },
   );
 

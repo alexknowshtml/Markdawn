@@ -70,7 +70,7 @@ describe('test-utils factories', () => {
     const user = await createTestUser();
     const tmpl = await createTestTemplate(user.workspaceId, user.id);
     expect(tmpl.workspaceId).toBe(user.workspaceId);
-    expect(tmpl.name).toBe('Test Template');
+    expect(tmpl.title).toBe('Test Template');
   });
 
   it('createTestTag creates a tag in a workspace', async () => {
