@@ -82,7 +82,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.local/share/containers
-          key: podman-${{ runner.os }}-postgres17-${{ hashFiles('packages/api/test/global-setup.ts', 'packages/api/src/db/schema.ts') }}
+          key: podman-${{ runner.os }}-postgres17-${{ hashFiles('packages/api/test/global-setup.ts', 'packages/collab/test/global-setup.ts', 'packages/api/src/db/schema.ts') }}
           restore-keys: |
             podman-${{ runner.os }}-postgres17-
             podman-${{ runner.os }}-
@@ -91,23 +91,8 @@ jobs:
         if: steps.cache-podman.outputs.cache-hit != 'true'
         run: podman pull postgres:17-alpine
 
-      - name: Unit tests
-        run: pnpm --filter @markdawn/api test:unit
-
-      - name: Integration tests
-        run: pnpm --filter @markdawn/api test:integration
-
-      - name: Coverage
-        run: pnpm --filter @markdawn/api test:coverage
-        continue-on-error: true
-
-      - name: Upload coverage report
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: coverage-report
-          path: packages/api/coverage/**
-          retention-days: 14
+      - name: Run all tests
+        run: pnpm test
 
   build:
     name: Build
