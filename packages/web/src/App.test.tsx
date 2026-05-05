@@ -1,24 +1,42 @@
+import { screen } from '@testing-library/react';
+import type React from 'react';
 import { describe, expect, it, vi } from 'vitest';
+import App from './App';
+import { render } from './test-utils/render';
 
-vi.mock('./lib/auth-client', () => ({
-  authClient: {
-    getSession: vi.fn().mockResolvedValue({ data: null, error: null }),
-    signOut: vi.fn(),
-  },
+vi.mock('react-router-dom', async () => {
+  const actual = await vi.importActual('react-router-dom');
+  return {
+    ...actual,
+    BrowserRouter: ({ children }: { children: React.ReactNode }) => children,
+  };
+});
+
+vi.mock('./hooks/useAuth', () => ({
+  useAuth: () => ({
+    data: { user: null, session: null },
+    isPending: false,
+    error: null,
+    refetch: vi.fn(),
+  }),
 }));
 
 describe('App', () => {
-  it('renders without crashing', async () => {
-    const { render, screen } = await import('@testing-library/react');
-    const { MemoryRouter } = await import('react-router-dom');
-    const { default: App } = await import('./App');
+  it('renders the landing page at /', () => {
+    render(<App />, { route: '/' });
 
-    render(
-      <MemoryRouter>
-        <App />
-      </MemoryRouter>,
-    );
+    expect(screen.getByText('Welcome to Markdawn')).toBeInTheDocument();
+  });
 
-    expect(document.body).toBeTruthy();
+  it('renders login page at /login', () => {
+    render(<App />, { route: '/login' });
+
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
+  });
+
+  it('redirects protected route to login when unauthenticated', () => {
+    render(<App />, { route: '/app' });
+
+    expect(screen.getByRole('button', { name: /continue with google/i })).toBeInTheDocument();
   });
 });
