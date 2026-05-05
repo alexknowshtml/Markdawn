@@ -62,6 +62,10 @@ export function createTestYjsDoc(content?: string): Uint8Array {
   return Y.encodeStateAsUpdate(doc);
 }
 
+export function createCorruptedYjsDoc(): Uint8Array {
+  return new Uint8Array([0xff, 0xfe, 0xfd, 0xfc, 0x00, 0x01, 0x02, 0x03]);
+}
+
 export function createTestWorkspace() {
   const id = randomUUID();
   const name = `Test Workspace ${id.slice(0, 6)}`;
