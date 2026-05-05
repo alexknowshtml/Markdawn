@@ -380,6 +380,155 @@ When adding testing to `web`, `collab`, or `shared`:
 3. Use the API's `src/test-utils.ts` as a pattern for shared factories
 4. For packages that don't need a database, skip the integration harness entirely
 
+---
+
+## Frontend Testing Conventions
+
+### Test Type Decision Matrix
+
+| What you're testing | Test type | Why |
+|---------------------|-----------|-----|
+| Pure utility function | **Unit** (`*.unit.test.ts`) | No React, no DOM, no network |
+| Custom hook | **Unit** (`*.test.ts`) | Mock data layer, assert state transitions |
+| Component in isolation | **Component** (`*.test.tsx`) | Render with Testing Library, assert user-visible output |
+| Component + hook + fetch | **Integration** (`*.test.tsx`) | Use MSW or stubbed fetch, assert full data flow |
+| Full page with routing | **E2E** (`e2e/*.spec.ts`) | Playwright only |
+| Multi-user collaboration | **E2E** (`e2e/*.spec.ts`) | Requires real browser + WebSocket |
+
+### Frontend Unit/Component Testing
+
+**Framework**: Vitest + jsdom + `@testing-library/react` + `@testing-library/jest-dom` + `@testing-library/user-event`
+
+**Environment**: `packages/web/vitest.config.ts` uses `environment: 'jsdom'` with `globals: true`.
+
+**Setup**: `packages/web/src/test/setup.ts` mocks browser APIs not available in jsdom:
+- `ResizeObserver`, `PointerEvent`, `matchMedia`
+- `navigator.clipboard`, `localStorage`, `requestAnimationFrame`
+- `scrollIntoView`, `getComputedStyle`, `DOMRect`
+
+**Cleanup**: Every test file gets automatic cleanup via `afterEach`:
+- `@testing-library/react` cleanup
+- `localStorage.clear()` + `sessionStorage.clear()`
+- `vi.clearAllMocks()` + `vi.restoreAllMocks()`
+
+### Component Testing Patterns
+
+**Preferred**: Test user-visible behavior, not implementation details.
+
+```typescript
+// Good: test what the user sees and does
+it('creates a new page when submitted', async () => {
+  const user = userEvent.setup();
+  render(<CreatePageDialog workspaceId="ws1" />);
+
+  await user.type(screen.getByLabelText(/title/i), 'New Page');
+  await user.click(screen.getByRole('button', { name: /create/i }));
+
+  await waitFor(() => {
+    expect(screen.queryByText('New Page')).toBeInTheDocument();
+  });
+});
+```
+
+**Anti-pattern**: Do not test internal state, hook return values, or DOM structure that users don't see.
+
+```typescript
+// Bad: tests implementation details
+it('calls useCreatePage with correct args', () => {
+  const spy = vi.spyOn(hooks, 'useCreatePage');
+  render(<CreatePageDialog workspaceId="ws1" />);
+  expect(spy).toHaveBeenCalledWith('ws1');
+});
+```
+
+### Hook Testing Patterns
+
+**Preferred**: Mock the data layer (`fetch` or API client), not the hook itself.
+
+```typescript
+// Good: mock fetch, test hook state transitions
+vi.stubGlobal('fetch', vi.fn());
+
+it('fetches pages on mount', async () => {
+  (fetch as Mock).mockResolvedValue({
+    json: async () => [{ id: 'p1', title: 'Page 1' }],
+    ok: true,
+  });
+
+  const { result } = renderHook(() => usePages('ws1'), {
+    wrapper: createTestQueryClient(),
+  });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(result.current.data).toHaveLength(1);
+});
+```
+
+**Anti-pattern**: Do not mock the hook return value — this tests the mock, not the hook.
+
+```typescript
+// Bad: tests nothing useful
+vi.mock('../lib/auth-client', () => ({
+  authClient: { useSession: () => ({ data: { user: { id: '1' } } }) },
+}));
+```
+
+### Frontend Factories
+
+Use `packages/web/src/test/factories.ts` for consistent test data:
+
+- `createTestUser()` — user object with id, email, name
+- `createTestWorkspace()` — workspace object
+- `createTestPage(overrides?)` — page object
+- `createTestFolder(overrides?)` — folder object
+- `mockApiResponse(endpoint, data, status?)` — stub fetch for endpoint
+- `mockApiError(endpoint, status, message?)` — stub fetch error
+
+### E2E Testing Guidelines
+
+**Scope**: E2E tests cover critical user flows that span multiple components and packages:
+- Authentication (login, logout, OAuth)
+- Workspace CRUD
+- Page CRUD + editing + trash/restore
+- Real-time collaboration (multi-browser)
+- Search and navigation
+- Export/import
+
+**Framework**: Playwright
+
+**Browser coverage**:
+- PRs: Chromium only (fast feedback)
+- Scheduled: Full cross-browser (Chromium, Firefox, WebKit)
+- Release: Full cross-browser + mobile viewports
+
+**Auth**: Use `auth.setup.ts` for shared authentication state. E2E tests run with `storageState` pointing to the shared auth file.
+
+**Data isolation**: E2E tests must create their own test data via API calls in `test.beforeEach` or setup, and clean up in `test.afterEach`. Do not share state between tests.
+
+**Flakiness prevention**:
+- Prefer `await expect(...).toBeVisible()` over fixed `page.waitForTimeout()`
+- Use `data-testid` selectors for unstable text
+- Retry configuration: `retries: process.env.CI ? 2 : 0`
+- Traces on first retry: `trace: 'on-first-retry'`
+- Screenshots on failure: `screenshot: 'only-on-failure'`
+
+### Adding a New Web Test
+
+1. **Hook test**: Create `src/hooks/use{Feature}.test.ts`
+   - Mock `fetch` or API client
+   - Use `createTestQueryClient()` wrapper
+   - Assert loading → success/error states
+
+2. **Component test**: Create `src/components/{Name}.test.tsx`
+   - Render with `render()` from Testing Library
+   - Use `userEvent.setup()` for interactions
+   - Assert user-visible output with screen queries
+
+3. **E2E test**: Create `e2e/{flow}.spec.ts`
+   - Start with `test.beforeEach` to navigate and seed data
+   - Cover the critical path, edge cases, and error states
+   - Clean up in `test.afterEach`
+
 These are critical issues discovered during implementation. Do not try to "fix" these — they are known limitations.
 
 ### Milkdown + Strict TypeScript
