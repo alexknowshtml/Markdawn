@@ -11,6 +11,8 @@ type RawFolderRow = FolderRow & {
   created_by?: string | null;
   created_at?: Date | null;
   updated_at?: Date | null;
+  is_deleted?: boolean | null;
+  deleted_at?: Date | null;
 };
 
 const foldersRoute = new Hono();

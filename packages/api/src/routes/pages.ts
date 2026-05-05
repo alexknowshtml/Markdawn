@@ -14,6 +14,8 @@ type RawPageRow = PageRow & {
   created_by?: string | null;
   created_at?: Date | null;
   updated_at?: Date | null;
+  is_deleted?: boolean | null;
+  deleted_at?: Date | null;
 };
 
 const pagesRoute = new Hono();
