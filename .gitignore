@@ -13,6 +13,7 @@ dist/
 # test artifacts
 test-results/
 coverage/
+e2e/.auth/
 
 # agent skills
 
