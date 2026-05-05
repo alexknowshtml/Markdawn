@@ -6,7 +6,7 @@
     "build": "pnpm -r --workspace-concurrency=1 run build",
     "lint": "biome check",
     "format": "biome check --write",
-    "test": "pnpm -r --parallel run test",
+    "test": "pnpm -r --workspace-concurrency=1 run test",
     "test:watch": "pnpm -r --parallel run test:watch",
     "typecheck": "pnpm -r run typecheck",
     "db:start": "bash scripts/db-start.sh",
