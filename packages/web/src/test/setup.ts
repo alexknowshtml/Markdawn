@@ -4,6 +4,8 @@ import '@testing-library/jest-dom/vitest';
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
+  vi.clearAllMocks();
 });
 
 // --- Browser API mocks (not available in jsdom) ---
