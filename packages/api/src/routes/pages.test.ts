@@ -64,9 +64,13 @@ describe('pages API', () => {
         }),
       });
       expect(res.status).toBe(201);
+      expect(res.headers.get('Content-Type')).toContain('application/json');
       const body = await res.json();
       expect(body.title).toBe('My Test Page');
       expect(body.workspaceId).toBe(user.workspaceId);
+      expect(body.id).toBeTruthy();
+      expect(body.createdAt).toBeTruthy();
+      expect(body.updatedAt).toBeTruthy();
     });
 
     it('returns 404 for non-existent parentId', async () => {
@@ -107,9 +111,13 @@ describe('pages API', () => {
         },
       });
       expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toContain('application/json');
       const body = await res.json();
+      expect(Array.isArray(body)).toBe(true);
       expect(body.length).toBe(2);
       expect(body.map((p: { title: string }) => p.title).sort()).toEqual(['Page 1', 'Page 2']);
+      expect(body[0]).toHaveProperty('id');
+      expect(body[0]).toHaveProperty('workspaceId');
     });
 
     it('forbids access to workspace the user does not belong to', async () => {
@@ -319,6 +327,8 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toBe('text/markdown');
       expect(res.headers.get('Content-Disposition')).toContain('Export.md');
+      const body = await res.text();
+      expect(typeof body).toBe('string');
     });
 
     it('returns 404 for non-existent page', async () => {
