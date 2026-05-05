@@ -6,7 +6,12 @@ import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
 import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
-import { getExtension, isImageFile, isMarkdownFile, parseFrontmatter } from '../utils/obsidian-parsers';
+import {
+  getExtension,
+  isImageFile,
+  isMarkdownFile,
+  parseFrontmatter,
+} from '../utils/obsidian-parsers';
 
 const obsidianImportRoute = new Hono();
 obsidianImportRoute.use('*', requireAuth);
@@ -40,8 +45,6 @@ const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
     throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
-
-
 
 /**
  * Extract wiki links from markdown content.

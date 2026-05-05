@@ -68,7 +68,9 @@ export function createCollabServer(config: CollabServerConfig) {
       }
 
       if (documentName) {
-        const pageExists = await pool.query('SELECT 1 FROM pages WHERE id = $1 LIMIT 1', [documentName]);
+        const pageExists = await pool.query('SELECT 1 FROM pages WHERE id = $1 LIMIT 1', [
+          documentName,
+        ]);
         if (pageExists.rows.length > 0) {
           await assertPageAccess(documentName, user.id);
         }

@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  getExtension,
-  isImageFile,
-  isMarkdownFile,
-  parseFrontmatter,
-} from './obsidian-parsers';
+import { getExtension, isImageFile, isMarkdownFile, parseFrontmatter } from './obsidian-parsers';
 
 describe('obsidian-import / getExtension', () => {
   it('returns extension for a filename', () => {

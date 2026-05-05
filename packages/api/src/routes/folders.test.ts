@@ -247,7 +247,10 @@ describe('folders API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
       const parent = await createTestFolder(user.workspaceId, user.id, { name: 'Parent' });
-      const child = await createTestFolder(user.workspaceId, user.id, { name: 'Child', parentId: parent.id });
+      const child = await createTestFolder(user.workspaceId, user.id, {
+        name: 'Child',
+        parentId: parent.id,
+      });
 
       const res = await app.request(`/api/folders/${parent.id}`, {
         method: 'PATCH',

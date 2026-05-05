@@ -1,14 +1,14 @@
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { Server } from '@hocuspocus/server';
 import { HocuspocusProvider } from '@hocuspocus/provider';
+import type { Server } from '@hocuspocus/server';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import { createCollabServer } from './server';
 import {
+  createTestPage,
   createTestSession,
   createTestUser,
-  createTestPage,
-  createTestYjsDoc,
   createTestWorkspace,
+  createTestYjsDoc,
   getTestPool,
   insertTestWorkspace,
 } from './test-utils';

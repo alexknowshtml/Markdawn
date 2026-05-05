@@ -1,5 +1,5 @@
-import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 import { Pool } from 'pg';
+import { afterAll, afterEach, beforeEach, vi } from 'vitest';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,

@@ -14,7 +14,15 @@ export const getPersonalWorkspaceName = (name?: string | null, email?: string | 
   return firstName.length > 0 ? `${firstName}'s Workspace` : 'Personal Workspace';
 };
 
-export const buildWorkspaceSlug = async (name: string, pool: { query: (sql: string, params: unknown[]) => Promise<{ rowCount: number | null; rows: unknown[] }> }) => {
+export const buildWorkspaceSlug = async (
+  name: string,
+  pool: {
+    query: (
+      sql: string,
+      params: unknown[],
+    ) => Promise<{ rowCount: number | null; rows: unknown[] }>;
+  },
+) => {
   const baseSlug = slugify(name) || 'personal';
   let slug = baseSlug;
 
@@ -40,7 +48,12 @@ export const ensurePersonalWorkspace = async ({
   userId: string;
   name?: string | null;
   email?: string | null;
-  pool: { query: (sql: string, params: unknown[]) => Promise<{ rowCount: number | null; rows: unknown[] }> };
+  pool: {
+    query: (
+      sql: string,
+      params: unknown[],
+    ) => Promise<{ rowCount: number | null; rows: unknown[] }>;
+  };
 }) => {
   const workspaceName = getPersonalWorkspaceName(name, email);
   const slug = await buildWorkspaceSlug(workspaceName, pool);

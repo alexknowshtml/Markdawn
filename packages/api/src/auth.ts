@@ -3,12 +3,7 @@ import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
 import { pool } from './db';
 import { db } from './db';
-import {
-  accounts,
-  sessions,
-  users,
-  verifications,
-} from './db/schema';
+import { accounts, sessions, users, verifications } from './db/schema';
 import { ensurePersonalWorkspace } from './utils/auth-helpers';
 
 const FRONTEND_URL = process.env.FRONTEND_URL ?? process.env.BASE_URL ?? 'http://localhost:5173';
