@@ -1,5 +1,6 @@
 import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { axe } from 'jest-axe';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '../test-utils/render';
 import { CommandPalette } from './CommandPalette';
@@ -160,5 +161,18 @@ describe('CommandPalette', () => {
     await waitFor(() => {
       expect(screen.getByText('Go to Trash')).toBeInTheDocument();
     });
+  });
+
+  it('has no accessibility violations when open', async () => {
+    const user = userEvent.setup();
+    const { container } = render(<CommandPalette workspaceId="ws-1" workspaceSlug="test-ws" />);
+
+    await user.keyboard('{Control>}k{/Control}');
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Search pages...')).toBeInTheDocument();
+    });
+
+    const results = await axe(container);
+    expect(results.violations).toHaveLength(0);
   });
 });
