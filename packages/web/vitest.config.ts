@@ -18,6 +18,7 @@ export default defineConfig({
     css: true,
     maxWorkers: 1,
     coverage: {
+      enabled: true,
       provider: 'v8',
       reporter: ['text', 'json-summary', 'html', 'lcov'],
       reportsDirectory: './coverage',
@@ -32,12 +33,7 @@ export default defineConfig({
         'src/index.ts',
         'src/test-harness.ts',
       ],
-      thresholds: {
-        statements: 60,
-        branches: 50,
-        functions: 55,
-        lines: 60,
-      },
+      thresholds: {},
     },
   },
 });

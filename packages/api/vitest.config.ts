@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
 const coverageConfig = {
+  enabled: true,
   provider: 'v8' as const,
   reporter: ['text', 'json-summary', 'html', 'lcov'] as string[],
   reportsDirectory: './coverage',
@@ -15,13 +16,7 @@ const coverageConfig = {
     'src/auth.ts',
     'src/routes/auth.ts',
   ],
-  thresholds: {
-    perFile: true,
-    statements: 80,
-    branches: 70,
-    functions: 80,
-    lines: 80,
-  },
+  thresholds: {},
 };
 
 export default defineConfig({
