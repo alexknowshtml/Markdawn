@@ -55,13 +55,6 @@ pnpm --filter @markdawn/web typecheck   # Type-check
 pnpm --filter @markdawn/web lint        # ESLint
 ```
 
-**Running Single E2E Test (Playwright):**
-```bash
-cd packages/web
-npx playwright test e2e/app.spec.ts
-npx playwright test e2e/app.spec.ts --grep "test name"
-```
-
 **Collab (`packages/collab/`):**
 ```bash
 pnpm --filter @markdawn/collab dev
@@ -260,9 +253,7 @@ pnpm dev  # Starts all packages in parallel
 
 ## Testing Strategy
 
-- **E2E Tests**: Playwright (`packages/web/e2e/`)
-- **No unit tests** currently configured
-- To add tests: Use Vitest for unit tests, Playwright for e2e
+- **Unit & Integration Tests**: Vitest (all packages)
 
 ---
 
@@ -392,8 +383,6 @@ When adding testing to `web`, `collab`, or `shared`:
 | Custom hook | **Unit** (`*.test.ts`) | Mock data layer, assert state transitions |
 | Component in isolation | **Component** (`*.test.tsx`) | Render with Testing Library, assert user-visible output |
 | Component + hook + fetch | **Integration** (`*.test.tsx`) | Use MSW or stubbed fetch, assert full data flow |
-| Full page with routing | **E2E** (`e2e/*.spec.ts`) | Playwright only |
-| Multi-user collaboration | **E2E** (`e2e/*.spec.ts`) | Requires real browser + WebSocket |
 
 ### Frontend Unit/Component Testing
 
@@ -484,34 +473,6 @@ Use `packages/web/src/test/factories.ts` for consistent test data:
 - `mockApiResponse(endpoint, data, status?)` — stub fetch for endpoint
 - `mockApiError(endpoint, status, message?)` — stub fetch error
 
-### E2E Testing Guidelines
-
-**Scope**: E2E tests cover critical user flows that span multiple components and packages:
-- Authentication (login, logout, OAuth)
-- Workspace CRUD
-- Page CRUD + editing + trash/restore
-- Real-time collaboration (multi-browser)
-- Search and navigation
-- Export/import
-
-**Framework**: Playwright
-
-**Browser coverage**:
-- PRs: Chromium only (fast feedback)
-- Scheduled: Full cross-browser (Chromium, Firefox, WebKit)
-- Release: Full cross-browser + mobile viewports
-
-**Auth**: Use `auth.setup.ts` for shared authentication state. E2E tests run with `storageState` pointing to the shared auth file.
-
-**Data isolation**: E2E tests must create their own test data via API calls in `test.beforeEach` or setup, and clean up in `test.afterEach`. Do not share state between tests.
-
-**Flakiness prevention**:
-- Prefer `await expect(...).toBeVisible()` over fixed `page.waitForTimeout()`
-- Use `data-testid` selectors for unstable text
-- Retry configuration: `retries: process.env.CI ? 2 : 0`
-- Traces on first retry: `trace: 'on-first-retry'`
-- Screenshots on failure: `screenshot: 'only-on-failure'`
-
 ### Adding a New Web Test
 
 1. **Hook test**: Create `src/hooks/use{Feature}.test.ts`
@@ -523,11 +484,6 @@ Use `packages/web/src/test/factories.ts` for consistent test data:
    - Render with `render()` from Testing Library
    - Use `userEvent.setup()` for interactions
    - Assert user-visible output with screen queries
-
-3. **E2E test**: Create `e2e/{flow}.spec.ts`
-   - Start with `test.beforeEach` to navigate and seed data
-   - Cover the critical path, edge cases, and error states
-   - Clean up in `test.afterEach`
 
 These are critical issues discovered during implementation. Do not try to "fix" these — they are known limitations.
 

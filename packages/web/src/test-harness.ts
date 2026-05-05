@@ -1,4 +1,4 @@
-// Test harness for Milkdown editor - exposes globals for Playwright QA
+// Test harness for Milkdown editor - exposes globals for test QA
 // This file provides window globals that the editor component will expose
 
 export interface EditorTestHarness {
