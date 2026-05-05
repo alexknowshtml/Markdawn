@@ -152,6 +152,7 @@ export function PageTreeRow({
         style={{ paddingLeft: `${depth * 12 + 12}px`, marginLeft: '8px', marginRight: '8px' }}
         onClick={handleNavigate}
         onKeyDown={(e) => {
+          if (isEditing) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             handleNavigate();

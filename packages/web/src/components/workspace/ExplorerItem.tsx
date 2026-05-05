@@ -118,6 +118,7 @@ export function ExplorerItem({
           )}
           onClick={handleClick}
           onKeyDown={(e) => {
+            if (isEditing) return;
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault();
               handleClick(e as unknown as React.MouseEvent);
@@ -297,6 +298,7 @@ export function ExplorerItem({
         )}
         onClick={handleClick}
         onKeyDown={(e) => {
+          if (isEditing) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             handleClick(e as unknown as React.MouseEvent);

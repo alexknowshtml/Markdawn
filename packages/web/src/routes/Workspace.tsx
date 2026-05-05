@@ -88,7 +88,7 @@ export default function Workspace() {
   useEffect(() => {
     selection.clear();
     setLastSelectedIndex(null);
-  }, [selection]);
+  }, [selection.clear]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
