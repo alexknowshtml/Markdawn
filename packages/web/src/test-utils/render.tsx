@@ -45,7 +45,10 @@ interface CustomRenderOptions extends Omit<RenderOptions, 'wrapper'> {
   queryClient?: QueryClient;
 }
 
-export function render(ui: ReactElement, options: CustomRenderOptions = {}): { queryClient: QueryClient } & RenderResult {
+export function render(
+  ui: ReactElement,
+  options: CustomRenderOptions = {},
+): { queryClient: QueryClient } & RenderResult {
   const { route = '/', queryClient = createTestQueryClient(), ...renderOptions } = options;
 
   function Wrapper({ children }: { children: React.ReactNode }) {

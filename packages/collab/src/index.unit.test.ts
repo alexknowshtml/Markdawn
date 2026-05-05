@@ -1,17 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-vi.mock('dotenv', () => ({
-  config: vi.fn(),
-}));
-
-vi.mock('@hocuspocus/extension-database', () => ({
-  Database: class {},
-}));
-
 vi.mock('@hocuspocus/server', () => ({
   Server: class {
     listen() {}
   },
+}));
+
+vi.mock('@hocuspocus/extension-database', () => ({
+  Database: class {},
 }));
 
 vi.mock('pg', () => ({
@@ -37,8 +33,9 @@ vi.mock('@markdawn/shared', async () => {
   };
 });
 
-describe('collab package', () => {
-  it('starts without crashing', async () => {
-    await expect(import('./index')).resolves.toBeDefined();
+describe('collab package entry point', () => {
+  it('resolves the module graph without errors', async () => {
+    const mod = await import('./index');
+    expect(mod).toBeDefined();
   });
 });
