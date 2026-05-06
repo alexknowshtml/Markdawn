@@ -1,12 +1,12 @@
-import { randomUUID } from "crypto";
-import { mkdir } from "fs/promises";
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import path from "node:path";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
-import { pages } from "../db";
-import { markdownToYjsState, stripLeadingH1 } from "../utils/markdown-to-yjs";
+import { randomUUID } from 'node:crypto';
+import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import type { pages } from '../db';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
+import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -17,11 +17,11 @@ type RawPageRow = PageRow & {
   updated_at?: Date | null;
 };
 
-const ALLOWED_IMAGE_TYPES = new Set(["jpeg", "jpg", "png", "gif", "webp", "svg"]);
+const ALLOWED_IMAGE_TYPES = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp', 'svg']);
 
 const importRoute = new Hono();
 
-importRoute.use("*", requireAuth);
+importRoute.use('*', requireAuth);
 
 const normalizePageRow = (row: RawPageRow): PageRow => ({
   ...row,
@@ -34,18 +34,18 @@ const normalizePageRow = (row: RawPageRow): PageRow => ({
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
   const result = await pool.query(
-    "select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1",
-    [workspaceId, userId]
+    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+    [workspaceId, userId],
   );
 
   if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
 
 const getExtension = (filename: string): string => {
-  const lastDot = filename.lastIndexOf(".");
-  return lastDot >= 0 ? filename.slice(lastDot + 1).toLowerCase() : "";
+  const lastDot = filename.lastIndexOf('.');
+  return lastDot >= 0 ? filename.slice(lastDot + 1).toLowerCase() : '';
 };
 
 const isImageFile = (filename: string): boolean => {
@@ -54,14 +54,14 @@ const isImageFile = (filename: string): boolean => {
 };
 
 const parseFrontmatter = (
-  content: string
+  content: string,
 ): { title: string; body: string; properties: Record<string, unknown> } => {
   const frontmatterRegex = /^---\n([\s\S]*?)\n---\n/;
   const match = content.match(frontmatterRegex);
 
   if (!match) {
     const h1Match = content.match(/^#\s+(.+)$/m);
-    const title = h1Match?.[1]?.trim() ?? "";
+    const title = h1Match?.[1]?.trim() ?? '';
     return {
       title,
       body: content,
@@ -69,22 +69,27 @@ const parseFrontmatter = (
     };
   }
 
-  const frontmatterBlock = match[1]!;
-  const body = content.slice(match[0]!.length);
+  const frontmatterBlock = match[1] ?? '';
+  const body = content.slice(match[0]?.length);
 
   const properties: Record<string, unknown> = {};
-  const lines = frontmatterBlock.split("\n");
+  const lines = frontmatterBlock.split('\n');
   let currentKey: string | null = null;
   let currentArray: string[] = [];
   let inArray = false;
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (!trimmed || trimmed.startsWith('#')) continue;
 
-    if (trimmed.startsWith("- ")) {
+    if (trimmed.startsWith('- ')) {
       if (inArray && currentKey) {
-        currentArray.push(trimmed.slice(2).trim().replace(/^["']|["']$/g, ""));
+        currentArray.push(
+          trimmed
+            .slice(2)
+            .trim()
+            .replace(/^["']|["']$/g, ''),
+        );
       }
       continue;
     }
@@ -95,21 +100,21 @@ const parseFrontmatter = (
       currentArray = [];
     }
 
-    const colonIndex = trimmed.indexOf(":");
+    const colonIndex = trimmed.indexOf(':');
     if (colonIndex > 0) {
       currentKey = trimmed.slice(0, colonIndex).trim();
       const value = trimmed.slice(colonIndex + 1).trim();
 
-      if (value === "" || value === "[]") {
+      if (value === '' || value === '[]') {
         inArray = true;
         currentArray = [];
-      } else if (value.startsWith("[") && value.endsWith("]")) {
+      } else if (value.startsWith('[') && value.endsWith(']')) {
         properties[currentKey] = value
           .slice(1, -1)
-          .split(",")
-          .map((v) => v.trim().replace(/^["']|["']$/g, ""));
+          .split(',')
+          .map((v) => v.trim().replace(/^["']|["']$/g, ''));
       } else {
-        properties[currentKey] = value.replace(/^["']|["']$/g, "");
+        properties[currentKey] = value.replace(/^["']|["']$/g, '');
       }
     }
   }
@@ -118,82 +123,92 @@ const parseFrontmatter = (
     properties[currentKey] = currentArray;
   }
 
-  const title = typeof properties["title"] === "string" ? properties["title"] : "";
-  delete properties["title"];
+  const title = typeof properties.title === 'string' ? properties.title : '';
+  properties.title = undefined;
 
   return { title, body, properties };
 };
 
 const containsImageReferences = (content: string): boolean => {
-  return /!\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content)
-    || /\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content)
-    || /!\[(.*?)\]\(([^)]+\.(?:jpe?g|png|gif|webp|svg))\)/i.test(content)
-    || /<img\s+[^>]*src="([^"]+\.(?:jpe?g|png|gif|webp|svg))"[^>]*>/i.test(content);
+  return (
+    /!\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content) ||
+    /\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content) ||
+    /!\[(.*?)\]\(([^)]+\.(?:jpe?g|png|gif|webp|svg))\)/i.test(content) ||
+    /<img\s+[^>]*src="([^"]+\.(?:jpe?g|png|gif|webp|svg))"[^>]*>/i.test(content)
+  );
 };
 
 const normalizeVaultPath = (value: string): string => {
-  return value
-    .replace(/\\/g, "/")
-    .replace(/^\.\//, "")
-    .trim();
+  return value.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 };
 
 const processMarkdownImages = (
   content: string,
-  _files: unknown[]
+  _files: unknown[],
 ): { result: string; newImages: Map<string, string> } => {
   const newImages = new Map<string, string>();
   let result = content;
 
-  result = result.replace(/!\[(.*?)\]\(([^)]+\.(?:jpe?g|png|gif|webp|svg))\)/gi, (match, altText: string, imageRef: string) => {
-    if (!isImageFile(imageRef)) {
-      return match;
-    }
-    const ext = getExtension(imageRef);
-    const filenameNew = `${randomUUID()}.${ext}`;
-    return `![${altText}](/uploads/${filenameNew})`;
-  });
+  result = result.replace(
+    /!\[(.*?)\]\(([^)]+\.(?:jpe?g|png|gif|webp|svg))\)/gi,
+    (match, altText: string, imageRef: string) => {
+      if (!isImageFile(imageRef)) {
+        return match;
+      }
+      const ext = getExtension(imageRef);
+      const filenameNew = `${randomUUID()}.${ext}`;
+      return `![${altText}](/uploads/${filenameNew})`;
+    },
+  );
 
-  result = result.replace(/<img\s+([^>]*?)src="([^"]+\.(?:jpe?g|png|gif|webp|svg))"([^>]*)>/gi, (match, beforeSrc: string, imageRef: string, afterSrc: string) => {
-    if (!isImageFile(imageRef)) {
-      return match;
-    }
-    const ext = getExtension(imageRef);
-    const filenameNew = `${randomUUID()}.${ext}`;
-    return `<img ${beforeSrc}src="/uploads/${filenameNew}"${afterSrc}>`;
-  });
+  result = result.replace(
+    /<img\s+([^>]*?)src="([^"]+\.(?:jpe?g|png|gif|webp|svg))"([^>]*)>/gi,
+    (match, beforeSrc: string, imageRef: string, afterSrc: string) => {
+      if (!isImageFile(imageRef)) {
+        return match;
+      }
+      const ext = getExtension(imageRef);
+      const filenameNew = `${randomUUID()}.${ext}`;
+      return `<img ${beforeSrc}src="/uploads/${filenameNew}"${afterSrc}>`;
+    },
+  );
 
   return { result, newImages };
 };
 
-importRoute.post("/markdown", async (c) => {
-  const workspaceId = c.req.query("workspaceId");
-  const parentId = c.req.query("parentId") || null;
+importRoute.post('/markdown', async (c) => {
+  const workspaceId = c.req.query('workspaceId');
+  const parentId = c.req.query('parentId') || null;
 
   if (!workspaceId) {
-    throw new HTTPException(400, { message: "workspaceId is required" });
+    throw new HTTPException(400, { message: 'workspaceId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(workspaceId, user.id);
 
-  const formData = await c.req.formData();
-  const file = formData.get("file");
+  let formData: FormData;
+  try {
+    formData = await c.req.formData();
+  } catch {
+    throw new HTTPException(400, { message: 'File is required' });
+  }
+  const file = formData.get('file');
 
   if (!(file instanceof File)) {
-    throw new HTTPException(400, { message: "File is required" });
+    throw new HTTPException(400, { message: 'File is required' });
   }
 
-  if (!file.name.endsWith(".md")) {
-    throw new HTTPException(400, { message: "File must be a markdown file" });
+  if (!file.name.endsWith('.md')) {
+    throw new HTTPException(400, { message: 'File must be a markdown file' });
   }
 
   const content = await file.text();
 
   const { title: frontmatterTitle, body, properties } = parseFrontmatter(content);
-  const title = frontmatterTitle || file.name.replace(/\.md$/, "");
+  const title = frontmatterTitle || file.name.replace(/\.md$/, '');
 
-  const uploadDir = path.resolve("uploads");
+  const uploadDir = path.resolve('uploads');
   await mkdir(uploadDir, { recursive: true });
 
   const { result: processedContent } = processMarkdownImages(body, []);
@@ -202,25 +217,33 @@ importRoute.post("/markdown", async (c) => {
 
   const positionResult = await pool.query(
     parentId
-      ? "select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2"
-      : "select max(position) as max_position from pages where workspace_id = $1 and parent_id is null",
-    parentId ? [workspaceId, parentId] : [workspaceId]
+      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
+      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
+    parentId ? [workspaceId, parentId] : [workspaceId],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = hasProperties
     ? await pool.query(
-        "insert into pages (workspace_id, parent_id, title, position, created_by, ydoc, properties) values ($1, $2, $3, $4, $5, $6, $7) returning *",
-        [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)]
+        'insert into pages (workspace_id, parent_id, title, position, created_by, ydoc, properties) values ($1, $2, $3, $4, $5, $6, $7) returning *',
+        [
+          workspaceId,
+          parentId,
+          title,
+          nextPosition,
+          user.id,
+          ydocBuffer,
+          JSON.stringify(properties),
+        ],
       )
     : await pool.query(
-        "insert into pages (workspace_id, parent_id, title, position, created_by, ydoc) values ($1, $2, $3, $4, $5, $6) returning *",
-        [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer]
+        'insert into pages (workspace_id, parent_id, title, position, created_by, ydoc) values ($1, $2, $3, $4, $5, $6) returning *',
+        [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
       );
 
   if (insertResult.rowCount === 0) {
-    throw new HTTPException(500, { message: "Failed to create page" });
+    throw new HTTPException(500, { message: 'Failed to create page' });
   }
 
   const created = normalizePageRow(insertResult.rows[0] as RawPageRow);

@@ -1,6 +1,6 @@
+import type { Folder, Page } from '@markdawn/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Page, Folder } from '@markdawn/shared';
-import { showSuccessToast, showErrorToast } from '../utils/toast';
+import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -33,7 +33,11 @@ async function copyFolder(folderId: string, parentId?: string | null): Promise<F
 export function useCopyPage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ pageId, parentId, workspaceId }: { pageId: string; parentId?: string | null; workspaceId: string }) =>
+    mutationFn: ({
+      pageId,
+      parentId,
+      workspaceId,
+    }: { pageId: string; parentId?: string | null; workspaceId: string }) =>
       copyPage(pageId, parentId),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
@@ -48,7 +52,11 @@ export function useCopyPage() {
 export function useCopyFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ folderId, parentId, workspaceId }: { folderId: string; parentId?: string | null; workspaceId: string }) =>
+    mutationFn: ({
+      folderId,
+      parentId,
+      workspaceId,
+    }: { folderId: string; parentId?: string | null; workspaceId: string }) =>
       copyFolder(folderId, parentId),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });

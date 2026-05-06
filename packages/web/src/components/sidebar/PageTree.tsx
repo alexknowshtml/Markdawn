@@ -1,13 +1,24 @@
+import type { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
+import { ChevronsDown, ChevronsUp, Download, FilePlus2, FolderPlus, Home } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { FilePlus2, FolderPlus, ChevronsDown, ChevronsUp, Home, Download } from 'lucide-react';
-import { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
-import { usePageTree, useCreatePage, useDeletePage, useUpdatePage, useImportMarkdown } from '../../hooks/use-pages';
-import { useFolderTree, useCreateFolder, useDeleteFolder, useUpdateFolder } from '../../hooks/use-folders';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
-import { PageTreeRow } from './PageTreeRow';
-import { ConfirmDialog } from '../ConfirmDialog';
+import {
+  useCreateFolder,
+  useDeleteFolder,
+  useFolderTree,
+  useUpdateFolder,
+} from '../../hooks/use-folders';
+import {
+  useCreatePage,
+  useDeletePage,
+  useImportMarkdown,
+  usePageTree,
+  useUpdatePage,
+} from '../../hooks/use-pages';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
+import { ConfirmDialog } from '../ConfirmDialog';
+import { PageTreeRow } from './PageTreeRow';
 
 interface PageTreeProps {
   workspaceId: string;
@@ -25,7 +36,11 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const activePageId = params.pageId;
 
   const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree(workspaceId);
-  const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree(workspaceId);
+  const {
+    data: folders,
+    isLoading: isFoldersLoading,
+    error: foldersError,
+  } = useFolderTree(workspaceId);
   const { data: favorites } = useFavorites(workspaceId);
 
   const createPageMutation = useCreatePage();
@@ -72,21 +87,24 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
 
   const pagesByFolder = useMemo(() => {
     const map = new Map<string | null, PageTreeNode[]>();
-    (pages ?? []).forEach((page) => {
+    for (const page of pages ?? []) {
       const key = page.parentId ?? null;
       const list = map.get(key) ?? [];
       list.push(page);
       map.set(key, list);
-    });
+    }
     return map;
   }, [pages]);
 
-  const folderIdsSet = useMemo(() => new Set((folders ?? []).map((folder) => folder.id)), [folders]);
+  const folderIdsSet = useMemo(
+    () => new Set((folders ?? []).map((folder) => folder.id)),
+    [folders],
+  );
 
   const foldersByParent = useMemo(() => {
     const map = new Map<string | null, FolderTreeNode[]>();
     const walk = (nodes: FolderTreeNode[]) => {
-      nodes.forEach((folder) => {
+      for (const folder of nodes) {
         const key = folder.parentId ?? null;
         const list = map.get(key) ?? [];
         list.push(folder);
@@ -94,7 +112,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
         if (folder.children && folder.children.length > 0) {
           walk(folder.children);
         }
-      });
+      }
     };
     walk(folders ?? []);
     return map;
@@ -103,12 +121,12 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const allFolderIds = useMemo(() => {
     const ids: string[] = [];
     const walk = (nodes: FolderTreeNode[]) => {
-      nodes.forEach((folder) => {
+      for (const folder of nodes) {
         ids.push(folder.id);
         if (folder.children && folder.children.length > 0) {
           walk(folder.children);
         }
-      });
+      }
     };
     walk(folders ?? []);
     return ids;
@@ -133,7 +151,8 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     });
   };
 
-  const isAllExpanded = allFolderIds.length > 0 && allFolderIds.every((id) => expandedFolderIds.has(id));
+  const isAllExpanded =
+    allFolderIds.length > 0 && allFolderIds.every((id) => expandedFolderIds.has(id));
 
   const toggleExpandAll = () => {
     if (isAllExpanded) {
@@ -229,7 +248,10 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const handleConfirmDeleteFolder = async () => {
     if (!deleteFolderConfirm) return;
     try {
-      await deleteFolderMutation.mutateAsync({ folderId: deleteFolderConfirm.folderId, force: true });
+      await deleteFolderMutation.mutateAsync({
+        folderId: deleteFolderConfirm.folderId,
+        force: true,
+      });
       setDeleteFolderConfirm(null);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete folder';
@@ -404,7 +426,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const rootFolders = foldersByParent.get(null) ?? [];
   const rootPages = pagesByFolder.get(null) ?? [];
   const orphanNestedPages = (pages ?? []).filter(
-    (page) => page.parentId !== null && !folderIdsSet.has(page.parentId)
+    (page) => page.parentId !== null && !folderIdsSet.has(page.parentId),
   );
 
   return (
@@ -437,6 +459,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
         <div>
           <div className="flex items-center justify-center gap-1 mb-2">
             <button
+              type="button"
               onClick={() => {
                 navigate(`/app/${workspaceSlug}`);
               }}
@@ -450,15 +473,11 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
               className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
               title="Import markdown file"
             >
-              <input
-                type="file"
-                accept=".md"
-                className="hidden"
-                onChange={handleImportMarkdown}
-              />
+              <input type="file" accept=".md" className="hidden" onChange={handleImportMarkdown} />
               <Download size={16} />
             </label>
             <button
+              type="button"
               onClick={() => {
                 void handleCreateRootFolder();
               }}
@@ -469,6 +488,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
               <FolderPlus size={16} />
             </button>
             <button
+              type="button"
               onClick={() => {
                 void handleCreateRootPage();
               }}
@@ -479,6 +499,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
               <FilePlus2 size={16} />
             </button>
             <button
+              type="button"
               onClick={toggleExpandAll}
               className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
               title={isAllExpanded ? 'Collapse all folders' : 'Expand all folders'}

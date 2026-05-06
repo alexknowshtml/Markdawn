@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 
 export type SelectionItem = {
   id: string;
@@ -52,7 +52,7 @@ export function SelectionProvider({ children }: { children: ReactNode }) {
 
   const isSelected = useCallback(
     (id: string) => selectedItems.some((item) => item.id === id),
-    [selectedItems]
+    [selectedItems],
   );
 
   return (

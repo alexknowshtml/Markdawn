@@ -1,6 +1,12 @@
-import React, { useMemo, useState } from "react";
-import { FileText, Plus, Trash2, LayoutTemplate } from "lucide-react";
-import { useTemplates, useCreateTemplate, useDeleteTemplate, type Template } from "../../hooks/use-templates";
+import { FileText, LayoutTemplate, Plus, Trash2 } from 'lucide-react';
+import type React from 'react';
+import { useMemo, useState } from 'react';
+import {
+  type Template,
+  useCreateTemplate,
+  useDeleteTemplate,
+  useTemplates,
+} from '../../hooks/use-templates';
 
 interface TemplatesDialogProps {
   workspaceId: string;
@@ -10,10 +16,10 @@ interface TemplatesDialogProps {
 export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [newTemplateTitle, setNewTemplateTitle] = useState("");
-  const [newTemplateIcon, setNewTemplateIcon] = useState("");
-  const [newTemplateDescription, setNewTemplateDescription] = useState("");
-  const { data: templates, isLoading } = useTemplates(isOpen ? workspaceId : "");
+  const [newTemplateTitle, setNewTemplateTitle] = useState('');
+  const [newTemplateIcon, setNewTemplateIcon] = useState('');
+  const [newTemplateDescription, setNewTemplateDescription] = useState('');
+  const { data: templates, isLoading } = useTemplates(isOpen ? workspaceId : '');
   const createTemplateMutation = useCreateTemplate();
   const deleteTemplateMutation = useDeleteTemplate();
   const canCreate = useMemo(() => newTemplateTitle.trim().length > 0, [newTemplateTitle]);
@@ -25,20 +31,23 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
       return;
     }
 
-    createTemplateMutation.mutate({
-      workspaceId,
-      title,
-      icon: newTemplateIcon.trim() ? newTemplateIcon.trim() : null,
-      description: newTemplateDescription.trim() ? newTemplateDescription.trim() : null,
-      contentBlocks: [],
-    }, {
-      onSuccess: () => {
-        setIsCreating(false);
-        setNewTemplateTitle("");
-        setNewTemplateIcon("");
-        setNewTemplateDescription("");
+    createTemplateMutation.mutate(
+      {
+        workspaceId,
+        title,
+        icon: newTemplateIcon.trim() ? newTemplateIcon.trim() : null,
+        description: newTemplateDescription.trim() ? newTemplateDescription.trim() : null,
+        contentBlocks: [],
       },
-    });
+      {
+        onSuccess: () => {
+          setIsCreating(false);
+          setNewTemplateTitle('');
+          setNewTemplateIcon('');
+          setNewTemplateDescription('');
+        },
+      },
+    );
   };
 
   const handleUseTemplate = (template: Template) => {
@@ -57,14 +66,18 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
         Templates
       </button>
 
-        {isOpen && (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in"
-            onClick={() => setIsOpen(false)}
-          >
+      {isOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in"
+          onClick={() => setIsOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setIsOpen(false);
+          }}
+        >
           <div
             className="w-full max-w-2xl max-h-[80vh] flex flex-col rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 shadow-xl animate-slide-up overflow-hidden"
             onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
           >
             <div className="p-6 border-b border-zinc-200 dark:border-zinc-800 flex justify-between items-center">
               <h2 className="text-xl font-semibold text-zinc-900 dark:text-zinc-50 flex items-center gap-2">
@@ -72,10 +85,17 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                 Templates
               </h2>
               <button
+                type="button"
                 onClick={() => setIsCreating(!isCreating)}
                 className="px-3 py-1.5 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-800 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors flex items-center gap-1"
               >
-                {isCreating ? "Cancel" : <><Plus size={16} /> Create Template</>}
+                {isCreating ? (
+                  'Cancel'
+                ) : (
+                  <>
+                    <Plus size={16} /> Create Template
+                  </>
+                )}
               </button>
             </div>
 
@@ -83,8 +103,14 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
               {isCreating ? (
                 <form onSubmit={handleCreateTemplate} className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Template Title</label>
+                    <label
+                      htmlFor="template-title"
+                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1"
+                    >
+                      Template Title
+                    </label>
                     <input
+                      id="template-title"
                       type="text"
                       value={newTemplateTitle}
                       onChange={(e) => setNewTemplateTitle(e.target.value)}
@@ -93,8 +119,14 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Icon (optional)</label>
+                    <label
+                      htmlFor="template-icon"
+                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1"
+                    >
+                      Icon (optional)
+                    </label>
                     <input
+                      id="template-icon"
                       type="text"
                       value={newTemplateIcon}
                       onChange={(e) => setNewTemplateIcon(e.target.value)}
@@ -103,8 +135,14 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1">Description (optional)</label>
+                    <label
+                      htmlFor="template-description"
+                      className="block text-sm font-medium text-zinc-700 dark:text-zinc-300 mb-1"
+                    >
+                      Description (optional)
+                    </label>
                     <textarea
+                      id="template-description"
                       value={newTemplateDescription}
                       onChange={(e) => setNewTemplateDescription(e.target.value)}
                       placeholder="What is this template for?"
@@ -124,7 +162,7 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                       disabled={createTemplateMutation.isPending || !canCreate}
                       className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-800 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-700 transition-colors disabled:opacity-60"
                     >
-                      {createTemplateMutation.isPending ? "Saving..." : "Save Template"}
+                      {createTemplateMutation.isPending ? 'Saving...' : 'Save Template'}
                     </button>
                   </div>
                 </form>
@@ -136,34 +174,40 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                     <div className="text-center py-12 text-zinc-500 flex flex-col items-center">
                       <LayoutTemplate size={48} className="mb-4 text-zinc-300 dark:text-zinc-700" />
                       <p>No templates found in this workspace.</p>
-                      <p className="text-sm mt-1">Create one from the current page to get started.</p>
+                      <p className="text-sm mt-1">
+                        Create one from the current page to get started.
+                      </p>
                     </div>
                   ) : (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {templates?.map((template) => (
-                          <div
-                            key={template.id}
-                            className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors group relative bg-white dark:bg-zinc-900"
-                          >
-                            <div className="flex items-start justify-between mb-2">
-                              <div className="flex items-center gap-2">
-                                <div className="w-8 h-8 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-lg">
-                                  {template.icon || <FileText size={16} className="text-zinc-500" />}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {templates?.map((template) => (
+                        <div
+                          key={template.id}
+                          className="border border-zinc-200 dark:border-zinc-800 rounded-lg p-4 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors group relative bg-white dark:bg-zinc-900"
+                        >
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-8 h-8 rounded bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-lg">
+                                {template.icon || <FileText size={16} className="text-zinc-500" />}
                               </div>
                               <h3 className="font-medium text-zinc-900 dark:text-zinc-100 truncate max-w-[180px]">
                                 {template.title}
                               </h3>
                             </div>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  if (confirm("Are you sure you want to delete this template?")) {
-                                    deleteTemplateMutation.mutate({ templateId: template.id, workspaceId });
-                                  }
-                                }}
-                                className="text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
-                                title="Delete template"
-                              >
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (confirm('Are you sure you want to delete this template?')) {
+                                  deleteTemplateMutation.mutate({
+                                    templateId: template.id,
+                                    workspaceId,
+                                  });
+                                }
+                              }}
+                              className="text-zinc-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                              title="Delete template"
+                            >
                               <Trash2 size={16} />
                             </button>
                           </div>
@@ -172,14 +216,15 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                               {template.description}
                             </p>
                           )}
-                            <button
-                              onClick={() => handleUseTemplate(template)}
-                              className="w-full mt-2 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100 dark:bg-zinc-800 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-                            >
-                              Use template
-                            </button>
-                          </div>
-                        ))}
+                          <button
+                            type="button"
+                            onClick={() => handleUseTemplate(template)}
+                            className="w-full mt-2 px-3 py-1.5 text-sm font-medium text-zinc-700 dark:text-zinc-200 bg-zinc-100 dark:bg-zinc-800 rounded hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                          >
+                            Use template
+                          </button>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>

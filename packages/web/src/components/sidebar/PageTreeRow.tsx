@@ -1,17 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  ChevronRight, 
-  ChevronDown, 
-  FileText, 
-  MoreHorizontal, 
-  Plus, 
-  Trash2, 
-  Edit2,
-  Download,
-  Star
-} from 'lucide-react';
 import clsx from 'clsx';
+import {
+  ChevronDown,
+  ChevronRight,
+  Download,
+  Edit2,
+  FileText,
+  MoreHorizontal,
+  Plus,
+  Star,
+  Trash2,
+} from 'lucide-react';
+import type React from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface PageTreeRowProps {
@@ -142,43 +143,59 @@ export function PageTreeRow({
     <>
       <div
         className={clsx(
-          "group flex items-center h-8 pr-2 py-1 my-0.5 rounded-lg cursor-pointer transition-all duration-200 ease-in-out relative",
-          isActive 
-            ? "bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium shadow-[0_1px_2px_rgba(0,0,0,0.02)]" 
-            : "text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-100",
-          isDragTarget && "opacity-60"
+          'group flex items-center h-8 pr-2 py-1 my-0.5 rounded-lg cursor-pointer transition-all duration-200 ease-in-out relative',
+          isActive
+            ? 'bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium shadow-[0_1px_2px_rgba(0,0,0,0.02)]'
+            : 'text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-100',
+          isDragTarget && 'opacity-60',
         )}
         style={{ paddingLeft: `${depth * 12 + 12}px`, marginLeft: '8px', marginRight: '8px' }}
         onClick={handleNavigate}
+        onKeyDown={(e) => {
+          if (isEditing) return;
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleNavigate();
+          }
+        }}
         data-testid="page-tree-row"
       >
         <button
           type="button"
           onClick={hasChildren ? handleToggleExpand : undefined}
           className={clsx(
-            "flex items-center justify-center w-5 h-5 rounded-md mr-2 transition-colors",
-            showDragHandle ? "cursor-grab active:cursor-grabbing" : "cursor-pointer",
+            'flex items-center justify-center w-5 h-5 rounded-md mr-2 transition-colors',
+            showDragHandle ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer',
             hasChildren
-              ? "hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
-              : "text-zinc-400 dark:text-zinc-500 opacity-50",
+              ? 'hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+              : 'text-zinc-400 dark:text-zinc-500 opacity-50',
           )}
-          aria-label={hasChildren ? "Toggle nested pages" : "Page"}
+          aria-label={hasChildren ? 'Toggle nested pages' : 'Page'}
         >
           {hasChildren ? (
-            isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />
+            isExpanded ? (
+              <ChevronDown size={14} />
+            ) : (
+              <ChevronRight size={14} />
+            )
           ) : isFolder ? (
             <span className="text-sm leading-none">📁</span>
           ) : icon ? (
             <span className="text-sm leading-none">{icon}</span>
           ) : (
-            <FileText size={14} className={clsx(isActive ? "text-zinc-900 dark:text-zinc-100" : "text-zinc-400 dark:text-zinc-500")} />
+            <FileText
+              size={14}
+              className={clsx(
+                isActive ? 'text-zinc-900 dark:text-zinc-100' : 'text-zinc-400 dark:text-zinc-500',
+              )}
+            />
           )}
         </button>
 
         <div
           className={clsx(
-            "flex-1 flex items-center min-w-0 transition-[padding] duration-150",
-            showMenu ? "pr-14" : "pr-2 group-hover:pr-14",
+            'flex-1 flex items-center min-w-0 transition-[padding] duration-150',
+            showMenu ? 'pr-14' : 'pr-2 group-hover:pr-14',
           )}
         >
           {isEditing ? (
@@ -200,29 +217,31 @@ export function PageTreeRow({
         {!isEditing && (
           <div
             className={clsx(
-              "absolute right-1 z-20 flex items-center gap-0.5 transition-opacity",
+              'absolute right-1 z-20 flex items-center gap-0.5 transition-opacity',
               showMenu
-                ? "opacity-100 pointer-events-auto"
-                : "opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto",
+                ? 'opacity-100 pointer-events-auto'
+                : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto',
             )}
           >
             {onToggleFavorite && (
               <button
+                type="button"
                 onClick={handleToggleFavorite}
                 className={clsx(
-                  "p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer transition-colors",
-                  isFavorite 
-                    ? "text-yellow-500 hover:text-yellow-600" 
-                    : "text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100"
+                  'p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer transition-colors',
+                  isFavorite
+                    ? 'text-yellow-500 hover:text-yellow-600'
+                    : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100',
                 )}
-                title={isFavorite ? "Remove from favorites" : "Add to favorites"}
+                title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
               >
-                <Star size={14} fill={isFavorite ? "currentColor" : "none"} />
+                <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
               </button>
             )}
 
             {onCreateChild && (
               <button
+                type="button"
                 onClick={handleCreateChild}
                 className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors"
                 title="Add page"
@@ -230,9 +249,10 @@ export function PageTreeRow({
                 <Plus size={14} />
               </button>
             )}
-            
+
             <div className="relative" ref={menuRef}>
-              <button 
+              <button
+                type="button"
                 onClick={(e) => {
                   e.stopPropagation();
                   setShowMenu(!showMenu);
@@ -246,6 +266,7 @@ export function PageTreeRow({
                 <div className="absolute right-0 top-7 w-36 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border border-black/5 dark:border-white/5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] rounded-2xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
                   {onRename && (
                     <button
+                      type="button"
                       onClick={handleRenameClick}
                       className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                     >
@@ -254,6 +275,7 @@ export function PageTreeRow({
                   )}
                   {onExport && (
                     <button
+                      type="button"
                       onClick={handleExportClick}
                       className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                     >
@@ -261,7 +283,8 @@ export function PageTreeRow({
                     </button>
                   )}
                   {onDelete && (
-                    <button 
+                    <button
+                      type="button"
                       onClick={handleDeleteClick}
                       className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                     >

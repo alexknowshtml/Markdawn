@@ -1,7 +1,7 @@
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
 
 type PageRow = {
   id: string;
@@ -71,47 +71,52 @@ type CommentWithReplies = {
 
 const commentsRoute = new Hono();
 
-commentsRoute.use("*", requireAuth);
+commentsRoute.use('*', requireAuth);
 
 const getPageById = async (pageId: string) => {
-  const result = await pool.query("select id, workspace_id from pages where id = $1 limit 1", [pageId]);
+  const result = await pool.query('select id, workspace_id from pages where id = $1 limit 1', [
+    pageId,
+  ]);
   return (result.rows[0] as PageRow | undefined) ?? null;
 };
 
 const getUserById = async (userId: string) => {
-  const result = await pool.query("select id, name, email, avatar_url from users where id = $1 limit 1", [userId]);
+  const result = await pool.query(
+    'select id, name, email, avatar_url from users where id = $1 limit 1',
+    [userId],
+  );
   return (result.rows[0] as UserRow | undefined) ?? null;
 };
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
   const result = await pool.query(
-    "select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1",
-    [workspaceId, userId]
+    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+    [workspaceId, userId],
   );
 
   if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
 
-commentsRoute.get(":pageId/comments", async (c) => {
-  const pageId = c.req.param("pageId");
+commentsRoute.get(':pageId/comments', async (c) => {
+  const pageId = c.req.param('pageId');
   const page = await getPageById(pageId);
 
   if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
+    throw new HTTPException(404, { message: 'Page not found' });
   }
 
   if (!page.workspace_id) {
-    throw new HTTPException(400, { message: "Page has no workspace" });
+    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
 
   const commentsResult = await pool.query(
-    "select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc",
-    [pageId]
+    'select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc',
+    [pageId],
   );
 
   const commentRows = commentsResult.rows as CommentRow[];
@@ -120,14 +125,14 @@ commentsRoute.get(":pageId/comments", async (c) => {
 
   if (commentIds.length > 0) {
     const repliesResult = await pool.query(
-      "select r.id, r.comment_id, r.user_id, r.content, r.created_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comment_replies r join users u on u.id = r.user_id where r.comment_id = any($1) order by r.created_at asc",
-      [commentIds]
+      'select r.id, r.comment_id, r.user_id, r.content, r.created_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comment_replies r join users u on u.id = r.user_id where r.comment_id = any($1) order by r.created_at asc',
+      [commentIds],
     );
 
     const replyRows = repliesResult.rows as ReplyRow[];
-    replyRows.forEach((row) => {
+    for (const row of replyRows) {
       if (!row.comment_id || !row.user_id) {
-        return;
+        continue;
       }
       const list = repliesByComment.get(row.comment_id) ?? [];
       list.push({
@@ -144,12 +149,12 @@ commentsRoute.get(":pageId/comments", async (c) => {
         },
       });
       repliesByComment.set(row.comment_id, list);
-    });
+    }
   }
 
   const comments: CommentWithReplies[] = commentRows.map((row) => {
     if (!row.user_id || !row.page_id) {
-      throw new HTTPException(500, { message: "Invalid comment data" });
+      throw new HTTPException(500, { message: 'Invalid comment data' });
     }
 
     return {
@@ -175,38 +180,38 @@ commentsRoute.get(":pageId/comments", async (c) => {
 });
 
 // POST /:pageId/comments - Create a new comment
-commentsRoute.post(":pageId/comments", async (c) => {
-  const pageId = c.req.param("pageId");
+commentsRoute.post(':pageId/comments', async (c) => {
+  const pageId = c.req.param('pageId');
   const page = await getPageById(pageId);
 
   if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
+    throw new HTTPException(404, { message: 'Page not found' });
   }
 
   if (!page.workspace_id) {
-    throw new HTTPException(400, { message: "Page has no workspace" });
+    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
-    throw new HTTPException(404, { message: "User not found" });
+    throw new HTTPException(404, { message: 'User not found' });
   }
 
   const { content, anchorBlockId } = await c.req.json();
-  
-  if (!content || typeof content !== "string") {
-    throw new HTTPException(400, { message: "content is required" });
+
+  if (!content || typeof content !== 'string') {
+    throw new HTTPException(400, { message: 'content is required' });
   }
 
   const result = await pool.query(
-    "insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at",
-    [pageId, user.id, content, anchorBlockId ?? null]
+    'insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at',
+    [pageId, user.id, content, anchorBlockId ?? null],
   );
 
   const row = result.rows[0];
-  
+
   return c.json({
     id: row.id,
     pageId: row.page_id,
@@ -227,46 +232,46 @@ commentsRoute.post(":pageId/comments", async (c) => {
 });
 
 // POST /:pageId/comments/:commentId/replies - Add a reply to a comment
-commentsRoute.post(":pageId/comments/:commentId/replies", async (c) => {
-  const pageId = c.req.param("pageId");
-  const commentId = c.req.param("commentId");
-  
+commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
+  const pageId = c.req.param('pageId');
+  const commentId = c.req.param('commentId');
+
   const page = await getPageById(pageId);
   if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
+    throw new HTTPException(404, { message: 'Page not found' });
   }
   if (!page.workspace_id) {
-    throw new HTTPException(400, { message: "Page has no workspace" });
+    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
-    throw new HTTPException(404, { message: "User not found" });
+    throw new HTTPException(404, { message: 'User not found' });
   }
 
   // Verify comment exists
-  const commentResult = await pool.query(
-    "select id from comments where id = $1 and page_id = $2",
-    [commentId, pageId]
-  );
+  const commentResult = await pool.query('select id from comments where id = $1 and page_id = $2', [
+    commentId,
+    pageId,
+  ]);
   if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: "Comment not found" });
+    throw new HTTPException(404, { message: 'Comment not found' });
   }
 
   const { content } = await c.req.json();
-  if (!content || typeof content !== "string") {
-    throw new HTTPException(400, { message: "content is required" });
+  if (!content || typeof content !== 'string') {
+    throw new HTTPException(400, { message: 'content is required' });
   }
 
   const result = await pool.query(
-    "insert into comment_replies (comment_id, user_id, content) values ($1, $2, $3) returning id, comment_id, user_id, content, created_at",
-    [commentId, user.id, content]
+    'insert into comment_replies (comment_id, user_id, content) values ($1, $2, $3) returning id, comment_id, user_id, content, created_at',
+    [commentId, user.id, content],
   );
 
   const row = result.rows[0];
-  
+
   return c.json({
     id: row.id,
     commentId: row.comment_id,
@@ -282,71 +287,71 @@ commentsRoute.post(":pageId/comments/:commentId/replies", async (c) => {
   });
 });
 // PATCH /:pageId/comments/:commentId - Update comment content or resolve status
-commentsRoute.patch(":pageId/comments/:commentId", async (c) => {
-  const pageId = c.req.param("pageId");
-  const commentId = c.req.param("commentId");
-  
+commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
+  const pageId = c.req.param('pageId');
+  const commentId = c.req.param('commentId');
+
   const page = await getPageById(pageId);
   if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
+    throw new HTTPException(404, { message: 'Page not found' });
   }
   if (!page.workspace_id) {
-    throw new HTTPException(400, { message: "Page has no workspace" });
+    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
 
   const { content, resolved } = await c.req.json();
 
   const commentResult = await pool.query(
-    "SELECT user_id FROM comments WHERE id = $1 AND page_id = $2",
-    [commentId, pageId]
+    'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
+    [commentId, pageId],
   );
 
   if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: "Comment not found" });
+    throw new HTTPException(404, { message: 'Comment not found' });
   }
 
   const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
-  
+
   // Build update query dynamically
   const updates: string[] = [];
   const values: unknown[] = [];
   let paramIndex = 1;
 
   if (content !== undefined) {
-    if (typeof content !== "string") {
-      throw new HTTPException(400, { message: "content must be a string" });
+    if (typeof content !== 'string') {
+      throw new HTTPException(400, { message: 'content must be a string' });
     }
     if (!commentOwnerId || commentOwnerId !== user.id) {
-      throw new HTTPException(403, { message: "Forbidden" });
+      throw new HTTPException(403, { message: 'Forbidden' });
     }
     updates.push(`content = $${paramIndex++}`);
     values.push(content);
   }
 
   if (resolved !== undefined) {
-    if (typeof resolved !== "boolean") {
-      throw new HTTPException(400, { message: "resolved must be a boolean" });
+    if (typeof resolved !== 'boolean') {
+      throw new HTTPException(400, { message: 'resolved must be a boolean' });
     }
     updates.push(`resolved = $${paramIndex++}`);
     values.push(resolved);
   }
 
   if (updates.length === 0) {
-    throw new HTTPException(400, { message: "No fields to update" });
+    throw new HTTPException(400, { message: 'No fields to update' });
   }
-  updates.push("updated_at = NOW()");
+  updates.push('updated_at = NOW()');
 
   values.push(commentId, pageId);
   const result = await pool.query(
-    `UPDATE comments SET ${updates.join(", ")} WHERE id = ${paramIndex++} AND page_id = ${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
-    values
+    `UPDATE comments SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
+    values,
   );
 
   if (result.rowCount === 0) {
-    throw new HTTPException(404, { message: "Comment not found" });
+    throw new HTTPException(404, { message: 'Comment not found' });
   }
 
   const row = result.rows[0];
@@ -363,41 +368,38 @@ commentsRoute.patch(":pageId/comments/:commentId", async (c) => {
 });
 
 // DELETE /:pageId/comments/:commentId - Delete a comment (cascades to replies)
-commentsRoute.delete(":pageId/comments/:commentId", async (c) => {
-  const pageId = c.req.param("pageId");
-  const commentId = c.req.param("commentId");
-  
+commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
+  const pageId = c.req.param('pageId');
+  const commentId = c.req.param('commentId');
+
   const page = await getPageById(pageId);
   if (!page) {
-    throw new HTTPException(404, { message: "Page not found" });
+    throw new HTTPException(404, { message: 'Page not found' });
   }
   if (!page.workspace_id) {
-    throw new HTTPException(400, { message: "Page has no workspace" });
+    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspace_id, user.id);
 
   // Verify comment belongs to user or user is admin
   const commentResult = await pool.query(
-    "SELECT user_id FROM comments WHERE id = $1 AND page_id = $2",
-    [commentId, pageId]
+    'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
+    [commentId, pageId],
   );
-  
+
   if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: "Comment not found" });
+    throw new HTTPException(404, { message: 'Comment not found' });
   }
 
   const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
   if (!commentOwnerId || commentOwnerId !== user.id) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 
   // Delete comment (replies will cascade due to foreign key)
-  await pool.query(
-    "DELETE FROM comments WHERE id = $1 AND page_id = $2",
-    [commentId, pageId]
-  );
+  await pool.query('DELETE FROM comments WHERE id = $1 AND page_id = $2', [commentId, pageId]);
 
   return c.json({ success: true });
 });

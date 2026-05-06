@@ -4,9 +4,15 @@
   "private": true,
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsup src/index.ts --format esm --dts",
+    "build": "tsup src/index.ts --format esm --dts --tsconfig tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint src",
+    "lint": "biome check src",
+    "test": "vitest run --coverage",
+    "test:unit": "vitest run --project unit",
+    "test:integration": "vitest run --project integration",
+    "test:coverage": "vitest run --coverage",
+    "test:bench": "vitest bench",
+    "test:watch": "vitest",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio"
@@ -33,6 +39,7 @@
   "devDependencies": {
     "@types/node": "^25.3.0",
     "@types/pg": "^8.16.0",
+    "@vitest/coverage-v8": "^4.1.5",
     "drizzle-kit": "^0.31.9",
     "tsup": "^8.5.1",
     "tsx": "^4.21.0"

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from "react";
-import { FileText } from "lucide-react";
-import { useUpdatePage } from "../../hooks/use-pages";
-import { EmojiPicker } from "../EmojiPicker";
-import { showErrorToast } from "../../utils/toast";
+import { FileText } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useUpdatePage } from '../../hooks/use-pages';
+import { showErrorToast } from '../../utils/toast';
+import { EmojiPicker } from '../EmojiPicker';
 
 interface PageIconProps {
   pageId: string;
@@ -25,7 +25,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
         updates: { icon: newIcon },
       });
     } catch {
-      showErrorToast("Failed to update icon");
+      showErrorToast('Failed to update icon');
       setIcon(initialIcon);
     }
   };
@@ -33,11 +33,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
   return (
     <EmojiPicker icon={icon} onChange={handleIconChange}>
       <div className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-4xl">
-        {icon ? (
-          icon
-        ) : (
-          <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />
-        )}
+        {icon ? icon : <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />}
       </div>
     </EmojiPicker>
   );

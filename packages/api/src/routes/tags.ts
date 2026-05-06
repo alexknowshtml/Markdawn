@@ -1,28 +1,28 @@
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
 
 const tagsRoute = new Hono();
-tagsRoute.use("*", requireAuth);
+tagsRoute.use('*', requireAuth);
 
 const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
   const result = await pool.query(
-    "select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1",
-    [workspaceId, userId]
+    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
+    [workspaceId, userId],
   );
   if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
 
-tagsRoute.get("/", async (c) => {
-  const workspaceId = c.req.query("workspaceId");
+tagsRoute.get('/', async (c) => {
+  const workspaceId = c.req.query('workspaceId');
   if (!workspaceId) {
-    throw new HTTPException(400, { message: "workspaceId is required" });
+    throw new HTTPException(400, { message: 'workspaceId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
@@ -32,24 +32,24 @@ tagsRoute.get("/", async (c) => {
      where t.workspace_id = $1
      group by t.id, t.name
      order by page_count desc, t.name asc`,
-    [workspaceId]
+    [workspaceId],
   );
 
   return c.json(result.rows);
 });
 
-tagsRoute.get("/pages", async (c) => {
-  const workspaceId = c.req.query("workspaceId");
-  const tagId = c.req.query("tagId");
+tagsRoute.get('/pages', async (c) => {
+  const workspaceId = c.req.query('workspaceId');
+  const tagId = c.req.query('tagId');
 
   if (!workspaceId) {
-    throw new HTTPException(400, { message: "workspaceId is required" });
+    throw new HTTPException(400, { message: 'workspaceId is required' });
   }
   if (!tagId) {
-    throw new HTTPException(400, { message: "tagId is required" });
+    throw new HTTPException(400, { message: 'tagId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
@@ -58,7 +58,7 @@ tagsRoute.get("/pages", async (c) => {
      join page_tags pt on pt.page_id = p.id
      where pt.tag_id = $1 and p.workspace_id = $2 and p.is_deleted = false
      order by p.updated_at desc`,
-    [tagId, workspaceId]
+    [tagId, workspaceId],
   );
 
   return c.json(result.rows);

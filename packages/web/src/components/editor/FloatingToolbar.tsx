@@ -1,21 +1,22 @@
-import React, { useRef } from 'react';
 import {
   IconBold,
-  IconItalic,
-  IconStrikethrough,
   IconCode,
-  IconLink,
-  IconPhoto,
   IconH1,
   IconH2,
   IconH3,
   IconH4,
   IconH5,
   IconH6,
+  IconItalic,
+  IconLink,
   IconList,
-  IconListNumbers,
   IconListCheck,
+  IconListNumbers,
+  IconPhoto,
+  IconStrikethrough,
 } from '@tabler/icons-react';
+import type React from 'react';
+import { useRef } from 'react';
 
 export interface FloatingToolbarProps {
   onBold: () => void;

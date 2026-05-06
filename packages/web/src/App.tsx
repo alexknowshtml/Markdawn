@@ -1,17 +1,17 @@
 import React from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
-import { ProtectedRoute } from './components/auth/ProtectedRoute';
-import Home from './routes/Home';
-import Login from './routes/Login';
-import Dashboard from './routes/Dashboard';
-import Workspace from './routes/Workspace';
-import Page from './routes/Page';
-import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
-import PublicPage from './routes/PublicPage';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
 import { ClipboardProvider } from './contexts/ClipboardContext';
 import { SelectionProvider } from './contexts/SelectionContext';
+import Dashboard from './routes/Dashboard';
+import Home from './routes/Home';
+import Login from './routes/Login';
+import Page from './routes/Page';
+import PublicPage from './routes/PublicPage';
+import Workspace from './routes/Workspace';
 
 function App() {
   return (

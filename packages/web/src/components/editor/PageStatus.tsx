@@ -1,7 +1,7 @@
-import React from "react";
-import type { HocuspocusProvider } from "@hocuspocus/provider";
-import { WebSocketStatus } from "@hocuspocus/provider";
-import { CollabStatus } from "./CollabStatus";
+import type { HocuspocusProvider } from '@hocuspocus/provider';
+import type { WebSocketStatus } from '@hocuspocus/provider';
+import React from 'react';
+import { CollabStatus } from './CollabStatus';
 
 interface PageStatusProps {
   provider: HocuspocusProvider | null;

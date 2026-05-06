@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { FileText, Plus, Trash2 } from "lucide-react";
-import { useCreatePage } from "../hooks/use-pages";
+import { FileText, Plus, Trash2 } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useCreatePage } from '../hooks/use-pages';
 
-const API_BASE = import.meta.env.VITE_API_URL ?? "http://localhost:3001";
+const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
 type SearchResult = {
   id: string;
@@ -20,7 +20,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -29,20 +29,20 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
 
-  const openSearch = () => setIsOpen(true);
-  const closeDialog = () => {
+  const openSearch = useCallback(() => setIsOpen(true), []);
+  const closeDialog = useCallback(() => {
     setIsOpen(false);
-    setQuery("");
+    setQuery('');
     setResults([]);
     setIsLoading(false);
-  };
+  }, []);
 
   // Listen for custom open-search event
   useEffect(() => {
     const handleOpenSearch = () => openSearch();
-    window.addEventListener("open-search", handleOpenSearch);
-    return () => window.removeEventListener("open-search", handleOpenSearch);
-  }, []);
+    window.addEventListener('open-search', handleOpenSearch);
+    return () => window.removeEventListener('open-search', handleOpenSearch);
+  }, [openSearch]);
 
   useEffect(() => {
     if (isOpen) {
@@ -52,7 +52,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      const isShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k";
+      const isShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
       if (isShortcut) {
         event.preventDefault();
         setIsOpen(true);
@@ -63,16 +63,16 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
         return;
       }
 
-      if (event.key === "Escape") {
+      if (event.key === 'Escape') {
         event.preventDefault();
         closeDialog();
         return;
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [isOpen]);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, closeDialog]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -92,16 +92,16 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
       try {
         const res = await fetch(
           `${API_BASE}/api/search?q=${encodeURIComponent(trimmedQuery)}&workspaceId=${workspaceId}`,
-          { credentials: "include", signal: controller.signal }
+          { credentials: 'include', signal: controller.signal },
         );
         if (!res.ok) {
-          throw new Error("Failed to search");
+          throw new Error('Failed to search');
         }
         const data = await res.json();
         const nextResults = Array.isArray(data?.results) ? (data.results as SearchResult[]) : [];
         setResults(nextResults);
       } catch (error) {
-        if (error instanceof DOMException && error.name === "AbortError") {
+        if (error instanceof DOMException && error.name === 'AbortError') {
           return;
         }
         setResults([]);
@@ -124,10 +124,14 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
     <div
       className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/60 backdrop-blur-sm px-4 py-20 animate-fade-in"
       onClick={closeDialog}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') closeDialog();
+      }}
     >
       <div
         className="w-full max-w-lg rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl animate-slide-up overflow-hidden"
         onClick={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
       >
         <div className="relative border-b border-zinc-200 dark:border-zinc-800 p-2">
           <input
@@ -153,7 +157,9 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
 
           {trimmedQuery && !isLoading && !hasResults && (
             <div className="px-4 py-10 text-center">
-              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">No results found</p>
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                No results found
+              </p>
               <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
                 We couldn't find anything matching "{trimmedQuery}"
               </p>
@@ -173,7 +179,11 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                     className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
                   >
                     <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-200/50 dark:bg-zinc-700/50 text-lg shrink-0">
-                      {result.icon ? result.icon : <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />}
+                      {result.icon ? (
+                        result.icon
+                      ) : (
+                        <FileText className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
+                      )}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{result.title}</div>
@@ -200,7 +210,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                           navigate(`/app/${workspaceSlug}/${page.id}`);
                           closeDialog();
                         },
-                      }
+                      },
                     );
                   }}
                   className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"

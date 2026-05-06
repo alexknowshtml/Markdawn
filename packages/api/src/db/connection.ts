@@ -3,16 +3,16 @@ import * as pg from 'pg';
 const { Pool } = pg;
 
 function getDbHostname(url: string | undefined): string {
-  if (!url) return "";
+  if (!url) return '';
   try {
     return new URL(url).hostname;
   } catch {
-    return "";
+    return '';
   }
 }
 
 const dbHostname = getDbHostname(process.env.DATABASE_URL);
-const isLocalDb = dbHostname === "localhost" || dbHostname === "127.0.0.1";
+const isLocalDb = dbHostname === 'localhost' || dbHostname === '127.0.0.1';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -22,8 +22,8 @@ const pool = new Pool({
   ssl: isLocalDb ? false : undefined,
 });
 
-pool.on("error", (err) => {
-  console.error("Unexpected database pool error:", err.message);
+pool.on('error', (err) => {
+  console.error('Unexpected database pool error:', err.message);
 });
 
 export const db = drizzle(pool);

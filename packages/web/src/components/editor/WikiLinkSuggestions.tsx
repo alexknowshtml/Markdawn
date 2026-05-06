@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { FileText } from "lucide-react";
+import { FileText } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 type WikiLinkPage = {
   id: string;
@@ -33,32 +33,34 @@ export function WikiLinkSuggestions({
   const results = useMemo(() => {
     const normalized = trimmedQuery;
     const filtered = normalized
-      ? pages.filter((page) => (page.title ?? "").toLowerCase().includes(normalized))
+      ? pages.filter((page) => (page.title ?? '').toLowerCase().includes(normalized))
       : pages;
     return filtered.slice(0, MAX_RESULTS);
   }, [pages, trimmedQuery]);
 
   useEffect(() => {
     setSelectedIndex(0);
-  }, [trimmedQuery, isOpen]);
+  }, []);
 
   useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === 'Escape') {
         event.preventDefault();
         onClose();
         return;
       }
-      if (event.key === "ArrowDown") {
+      if (event.key === 'ArrowDown') {
         event.preventDefault();
         setSelectedIndex((prev) => (results.length === 0 ? 0 : (prev + 1) % results.length));
       }
-      if (event.key === "ArrowUp") {
+      if (event.key === 'ArrowUp') {
         event.preventDefault();
-        setSelectedIndex((prev) => (results.length === 0 ? 0 : (prev - 1 + results.length) % results.length));
+        setSelectedIndex((prev) =>
+          results.length === 0 ? 0 : (prev - 1 + results.length) % results.length,
+        );
       }
-      if (event.key === "Enter") {
+      if (event.key === 'Enter') {
         if (!results.length) return;
         event.preventDefault();
         const selected = results[selectedIndex];
@@ -68,8 +70,8 @@ export function WikiLinkSuggestions({
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose, onSelect, results, selectedIndex]);
 
   useEffect(() => {
@@ -79,8 +81,8 @@ export function WikiLinkSuggestions({
       if (containerRef.current.contains(event.target as Node)) return;
       onClose();
     };
-    window.addEventListener("mousedown", handleClickOutside);
-    return () => window.removeEventListener("mousedown", handleClickOutside);
+    window.addEventListener('mousedown', handleClickOutside);
+    return () => window.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen, onClose]);
 
   if (!isOpen || !position) {
@@ -108,8 +110,8 @@ export function WikiLinkSuggestions({
                   onClick={() => onSelect(page)}
                   className={`flex w-full items-center gap-3 rounded-md px-3 py-2 text-left text-sm transition-colors ${
                     index === selectedIndex
-                      ? "bg-zinc-700 text-zinc-50"
-                      : "text-zinc-300 hover:bg-zinc-700/60 hover:text-zinc-50"
+                      ? 'bg-zinc-700 text-zinc-50'
+                      : 'text-zinc-300 hover:bg-zinc-700/60 hover:text-zinc-50'
                   }`}
                 >
                   <span className="flex h-8 w-8 items-center justify-center rounded-md bg-zinc-700/60 text-lg">

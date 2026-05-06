@@ -118,13 +118,6 @@ pnpm --filter @markdawn/collab dev       # Start dev server
 pnpm --filter @markdawn/collab build     # Build for production
 ```
 
-### Running E2E Tests
-
-```bash
-cd packages/web
-npx playwright test e2e/app.spec.ts
-```
-
 ## Deployment
 
 For production deployment with Podman containers and Caddy, see:

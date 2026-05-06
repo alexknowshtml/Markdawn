@@ -1,5 +1,5 @@
-import React, { useEffect, useState, useRef } from 'react';
 import clsx from 'clsx';
+import React, { useEffect, useState, useRef } from 'react';
 
 export interface HeadingNode {
   id: string;
@@ -30,8 +30,8 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
       const extractedHeadings: HeadingNode[] = [];
       const stack: { level: number; node: HeadingNode }[] = [];
 
-      headingElements.forEach((el) => {
-        const level = parseInt(el.tagName[1] ?? '1', 10);
+      for (const el of headingElements) {
+        const level = Number.parseInt(el.tagName[1] ?? '1', 10);
         const text = el.textContent?.trim() || '';
         let id = el.id;
 
@@ -61,7 +61,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
         }
 
         stack.push({ level, node });
-      });
+      }
 
       setHeadings(extractedHeadings);
     };
@@ -97,24 +97,24 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
 
     observerRef.current = new IntersectionObserver(
       (entries) => {
-        entries.forEach((entry) => {
+        for (const entry of entries) {
           if (entry.isIntersecting) {
             const id = entry.target.id;
             if (id) {
               setActiveHeadingId(id);
             }
           }
-        });
+        }
       },
       {
         rootMargin: '-20% 0px -80% 0px',
         threshold: 0,
-      }
+      },
     );
 
-    headingElements.forEach((el) => {
+    for (const el of headingElements) {
       observerRef.current?.observe(el);
-    });
+    }
 
     return () => {
       observerRef.current?.disconnect();
@@ -136,6 +136,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
     return (
       <div key={heading.id}>
         <button
+          type="button"
           onClick={() => scrollToHeading(heading.id)}
           className={clsx(
             'w-full text-left py-1.5 px-2 rounded-md transition-all duration-200',
@@ -143,7 +144,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
             isActive
               ? 'bg-zinc-200 dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 font-medium'
               : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 hover:text-zinc-900 dark:hover:text-zinc-100',
-            depth > 0 && 'ml-2'
+            depth > 0 && 'ml-2',
           )}
           style={{
             paddingLeft: `${8 + depth * 12}px`,
@@ -151,8 +152,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
         >
           <span className="text-sm">{heading.text || 'Untitled'}</span>
         </button>
-        {hasChildren &&
-          heading.children?.map((child) => renderHeading(child, depth + 1))}
+        {hasChildren && heading.children?.map((child) => renderHeading(child, depth + 1))}
       </div>
     );
   };
@@ -160,12 +160,12 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
   const getAllHeadingsFlat = (nodes: HeadingNode[]): HeadingNode[] => {
     const result: HeadingNode[] = [];
     const visit = (heads: HeadingNode[]) => {
-      heads.forEach((h) => {
+      for (const h of heads) {
         result.push(h);
         if (h.children && h.children.length > 0) {
           visit(h.children);
         }
-      });
+      }
     };
     visit(nodes);
     return result;
@@ -179,13 +179,14 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
 
       return (
         <button
+          type="button"
           key={heading.id}
           onClick={() => scrollToHeading(heading.id)}
           className={clsx(
             'w-full h-[2px] rounded-full transition-all duration-300 mb-1.5',
             isActive
               ? 'bg-zinc-900 dark:bg-zinc-100'
-              : 'bg-zinc-400 dark:bg-zinc-600 hover:bg-zinc-600 dark:hover:bg-zinc-400'
+              : 'bg-zinc-400 dark:bg-zinc-600 hover:bg-zinc-600 dark:hover:bg-zinc-400',
           )}
           style={{
             width: `${width}px`,
@@ -207,7 +208,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
       ref={containerRef}
       className={clsx(
         'fixed right-2 top-1/2 -translate-y-1/2 z-30',
-        'transition-all duration-300 ease-out'
+        'transition-all duration-300 ease-out',
       )}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
@@ -219,7 +220,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
           'border border-transparent',
           'shadow-lg',
           'transition-all duration-300 ease-out',
-          isHovered ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0'
+          isHovered ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0',
         )}
       >
         <div className="flex flex-col gap-0.5 max-h-[60vh] overflow-y-auto scrollbar-hide">
@@ -236,15 +237,15 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
           'rounded-xl p-3',
           'transition-all duration-300 ease-out',
           'max-h-[70vh] overflow-y-auto',
-          !isHovered ? 'opacity-0 translate-x-4 pointer-events-none scale-95' : 'opacity-100 translate-x-0 scale-100'
+          !isHovered
+            ? 'opacity-0 translate-x-4 pointer-events-none scale-95'
+            : 'opacity-100 translate-x-0 scale-100',
         )}
       >
         <div className="text-xs font-semibold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-2 px-2">
           On this page
         </div>
-        <div className="space-y-0.5">
-          {headings.map((heading) => renderHeading(heading))}
-        </div>
+        <div className="space-y-0.5">{headings.map((heading) => renderHeading(heading))}</div>
       </div>
     </div>
   );

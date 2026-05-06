@@ -16,7 +16,7 @@ export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOpti
       const activeElement = document.activeElement;
       const tagName = activeElement?.tagName.toLowerCase();
       const isContentEditable = activeElement?.getAttribute('contenteditable') === 'true';
-      
+
       if (tagName === 'input' || tagName === 'textarea' || isContentEditable) {
         return;
       }
@@ -27,9 +27,11 @@ export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOpti
       if (modifierKey && !event.shiftKey && event.key.toLowerCase() === 'n') {
         event.preventDefault();
         if (workspaceSlug) {
-          window.dispatchEvent(new CustomEvent('markdawn:create-note', {
-            detail: { workspaceSlug }
-          }));
+          window.dispatchEvent(
+            new CustomEvent('markdawn:create-note', {
+              detail: { workspaceSlug },
+            }),
+          );
         }
         return;
       }
@@ -37,9 +39,11 @@ export function useKeyboardShortcuts({ toggleSidebar }: UseKeyboardShortcutsOpti
       if (modifierKey && event.shiftKey && event.key.toLowerCase() === 'n') {
         event.preventDefault();
         if (workspaceSlug) {
-          window.dispatchEvent(new CustomEvent('markdawn:create-folder', {
-            detail: { workspaceSlug }
-          }));
+          window.dispatchEvent(
+            new CustomEvent('markdawn:create-folder', {
+              detail: { workspaceSlug },
+            }),
+          );
         }
         return;
       }

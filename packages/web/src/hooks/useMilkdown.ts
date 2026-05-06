@@ -1,31 +1,61 @@
-import { Editor, rootCtx, defaultValueCtx, editorViewOptionsCtx, editorViewCtx } from '@milkdown/core';
+import {
+  Editor,
+  defaultValueCtx,
+  editorViewCtx,
+  editorViewOptionsCtx,
+  rootCtx,
+} from '@milkdown/core';
+import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
-import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
-import {
-  remarkMathPlugin,
-  remarkMathBlockPlugin,
-  mathInlineSchema,
-  mathInlineInputRule,
-  mathBlockInputRule,
-  toggleLatexCommand,
-  mathInlineViewPlugin,
-  latexCodeBlockViewPlugin,
-  mathEditorTooltipPlugin,
-} from '../editor/plugins/math';
+import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
 import { useEffect, useRef, useState } from 'react';
-import { replaceAll, insert, getMarkdown } from '@milkdown/utils';
-import { wikiLink } from '../editor/plugins/wikilink';
-import { callout } from '../editor/plugins/callout';
-import { tag } from '../editor/plugins/tag';
-import { autolink } from '../editor/plugins/autolink';
-import { repairDocument } from '../editor/utils/documentRepair';
 import { linkEditor } from '../editor/components/LinkEditor';
+import { autolink } from '../editor/plugins/autolink';
+import { callout } from '../editor/plugins/callout';
+import {
+  latexCodeBlockViewPlugin,
+  mathBlockInputRule,
+  mathEditorTooltipPlugin,
+  mathInlineInputRule,
+  mathInlineSchema,
+  mathInlineViewPlugin,
+  remarkMathBlockPlugin,
+  remarkMathPlugin,
+  toggleLatexCommand,
+} from '../editor/plugins/math';
+import { tag } from '../editor/plugins/tag';
+import { wikiLink } from '../editor/plugins/wikilink';
+import { repairDocument } from '../editor/utils/documentRepair';
 import 'katex/dist/katex.min.css';
-import type * as Y from 'yjs';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
+import type * as Y from 'yjs';
 import { getLogger } from '../logger-init';
+
+function isLikelyMarkdown(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+
+  const markdownSignals = [
+    /^#{1,6}\s/m,
+    /^>\s/m,
+    /^[-*+]\s/m,
+    /^\d+\.\s/m,
+    /^-{3,}$/m,
+    /^```/m,
+    /\*\*[^*]+\*\*/,
+    /`[^`]+`/,
+    /\[[^\]]+\]\([^\)]+\)/,
+    /\|.+\|/,
+    /~~[^~]+~~/,
+    /^- \[( |x)\]\s/m,
+    /\$[^$]+\$/,
+    /^\$\$[\s\S]*?\$\$$/m,
+  ];
+
+  return markdownSignals.some((pattern) => pattern.test(trimmed));
+}
 
 interface UseMilkdownProps {
   initialValue?: string;
@@ -78,7 +108,13 @@ function scrollToHeading(headingText: string): void {
   }
 }
 
-export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkClick }: UseMilkdownProps) {
+export function useMilkdown({
+  initialValue,
+  onChange,
+  doc,
+  provider,
+  onWikiLinkClick,
+}: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
@@ -86,30 +122,6 @@ export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkC
   onWikiLinkClickRef.current = onWikiLinkClick;
   const hasCollab = Boolean(doc && provider);
   const fallbackInitialValue = hasCollab ? undefined : initialValue;
-
-  const isLikelyMarkdown = (value: string): boolean => {
-    const trimmed = value.trim();
-    if (!trimmed) return false;
-
-    const markdownSignals = [
-      /^#{1,6}\s/m,
-      /^>\s/m,
-      /^[-*+]\s/m,
-      /^\d+\.\s/m,
-      /^-{3,}$/m,
-      /^```/m,
-      /\*\*[^*]+\*\*/,
-      /`[^`]+`/,
-      /\[[^\]]+\]\([^\)]+\)/,
-      /\|.+\|/,
-      /~~[^~]+~~/,
-      /^- \[( |x)\]\s/m,
-      /\$[^$]+\$/,
-      /^\$\$[\s\S]*?\$\$$/m,
-    ];
-
-    return markdownSignals.some((pattern) => pattern.test(trimmed));
-  };
 
   useEffect(() => {
     if (!container) return;
@@ -220,7 +232,7 @@ export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkC
                   if (result) {
                     const { node, pos } = result;
                     const checked = node.attrs.checked;
-                    const nextChecked = isTaskChecked(checked) ? false : true;
+                    const nextChecked = !isTaskChecked(checked);
                     const tr = view.state.tr.setNodeMarkup(pos, undefined, {
                       ...node.attrs,
                       checked: nextChecked,
@@ -423,7 +435,8 @@ export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkC
 
     const init = async () => {
       const shouldUseCollab = hasCollab;
-      getLogger().debug`Init: shouldUseCollab=${shouldUseCollab}, doc=${!!doc}, provider=${!!provider}`;
+      getLogger()
+        .debug`Init: shouldUseCollab=${shouldUseCollab}, doc=${!!doc}, provider=${!!provider}`;
       try {
         runtimeEditor = await configure(shouldUseCollab).create();
       } catch {
@@ -452,7 +465,9 @@ export function useMilkdown({ initialValue, onChange, doc, provider, onWikiLinkC
       bindWindowApi();
 
       runtimeEditor.action((ctx) => {
-        const view = ctx.get(editorViewCtx) as import('@milkdown/kit/prose/view').EditorView | undefined;
+        const view = ctx.get(editorViewCtx) as
+          | import('@milkdown/kit/prose/view').EditorView
+          | undefined;
         if (view) {
           setTimeout(() => {
             repairDocument(view);

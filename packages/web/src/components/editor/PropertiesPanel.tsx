@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from "react";
-import { Tag, Check, X, Pencil } from "lucide-react";
-import { useUpdatePage } from "../../hooks/use-pages";
+import { Check, Pencil, Tag, X } from 'lucide-react';
+import React, { useState, useCallback } from 'react';
+import { useUpdatePage } from '../../hooks/use-pages';
 
 interface PropertiesPanelProps {
   pageId: string;
@@ -16,9 +16,9 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
 
   const startEditing = useCallback(() => {
     const initial: Record<string, string> = {};
-    entries.forEach(([key, value]) => {
-      initial[key] = Array.isArray(value) ? value.join(", ") : String(value);
-    });
+    for (const [key, value] of entries) {
+      initial[key] = Array.isArray(value) ? value.join(', ') : String(value);
+    }
     setEditValues(initial);
     setIsEditing(true);
   }, [entries]);
@@ -30,16 +30,19 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
 
   const saveEditing = useCallback(() => {
     const nextProperties: Record<string, unknown> = {};
-    Object.entries(editValues).forEach(([key, value]) => {
+    for (const [key, value] of Object.entries(editValues)) {
       const trimmed = value.trim();
       if (trimmed.length > 0) {
-        if (trimmed.includes(",")) {
-          nextProperties[key] = trimmed.split(",").map((v) => v.trim()).filter(Boolean);
+        if (trimmed.includes(',')) {
+          nextProperties[key] = trimmed
+            .split(',')
+            .map((v) => v.trim())
+            .filter(Boolean);
         } else {
           nextProperties[key] = trimmed;
         }
       }
-    });
+    }
 
     updatePage.mutate(
       { pageId, updates: { properties: nextProperties } },
@@ -47,7 +50,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
         onSuccess: () => {
           setIsEditing(false);
         },
-      }
+      },
     );
   }, [editValues, pageId, updatePage]);
 
@@ -108,13 +111,13 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
             {isEditing ? (
               <input
                 type="text"
-                value={editValues[key] ?? ""}
+                value={editValues[key] ?? ''}
                 onChange={(e) => handleChange(key, e.target.value)}
                 className="flex-1 min-w-0 text-sm bg-white dark:bg-zinc-900 border border-zinc-300 dark:border-zinc-600 rounded px-2 py-0.5 text-zinc-800 dark:text-zinc-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
             ) : (
               <span className="text-sm text-zinc-800 dark:text-zinc-200">
-                {Array.isArray(value) ? value.join(", ") : String(value)}
+                {Array.isArray(value) ? value.join(', ') : String(value)}
               </span>
             )}
           </div>

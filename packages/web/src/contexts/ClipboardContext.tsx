@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useCallback, type ReactNode } from 'react';
 
 export type ClipboardItem = {
   id: string;
@@ -40,7 +40,7 @@ export function ClipboardProvider({ children }: { children: ReactNode }) {
 
   const isInClipboard = useCallback(
     (id: string) => state.items.some((item) => item.id === id),
-    [state.items]
+    [state.items],
   );
 
   return (

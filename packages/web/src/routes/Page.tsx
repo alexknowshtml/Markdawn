@@ -1,21 +1,21 @@
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
-import { MilkdownEditor } from '../components/editor/MilkdownEditor';
-import { PageTitle } from '../components/editor/PageTitle';
-import { PageIcon } from '../components/editor/PageIcon';
-import { PageActions } from '../components/editor/PageActions';
-import { Breadcrumbs } from '../components/editor/Breadcrumbs';
-import { PageStatus } from '../components/editor/PageStatus';
-import { TableOfContents } from '../components/editor/TableOfContents';
-import { PropertiesPanel } from '../components/editor/PropertiesPanel';
+import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
+import { useQuery } from '@tanstack/react-query';
+import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
-import { usePageTree } from '../hooks/use-pages';
+import { Breadcrumbs } from '../components/editor/Breadcrumbs';
+import { MilkdownEditor } from '../components/editor/MilkdownEditor';
+import { PageActions } from '../components/editor/PageActions';
+import { PageIcon } from '../components/editor/PageIcon';
+import { PageStatus } from '../components/editor/PageStatus';
+import { PageTitle } from '../components/editor/PageTitle';
+import { PropertiesPanel } from '../components/editor/PropertiesPanel';
+import { TableOfContents } from '../components/editor/TableOfContents';
 import { useFolderTree } from '../hooks/use-folders';
+import { usePageTree } from '../hooks/use-pages';
 import { useWorkspaces } from '../hooks/use-workspaces';
-import type { Page as PageType, PageTreeNode, Folder, FolderTreeNode } from '@markdawn/shared';
 
 const API_BASE = '/api';
 
@@ -61,11 +61,14 @@ export default function Page() {
     const timeoutId = setTimeout(findEditorElement, 500);
 
     return () => clearTimeout(timeoutId);
-  }, [pageId]);
+  }, []);
 
   const { data: page } = useQuery({
     queryKey: ['pages', 'detail', pageId],
-    queryFn: () => fetchPage(pageId!),
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchPage(pageId);
+    },
     enabled: !!pageId,
   });
 
@@ -102,12 +105,12 @@ export default function Page() {
     const result: PageType[] = [];
     const visit = (nodes: PageTreeNode[] | undefined) => {
       if (!nodes) return;
-      nodes.forEach((node) => {
+      for (const node of nodes) {
         result.push(node);
         if (node.children && node.children.length > 0) {
           visit(node.children);
         }
-      });
+      }
     };
     visit(pageTree as PageTreeNode[] | undefined);
     return result;
@@ -117,27 +120,28 @@ export default function Page() {
     const result: Folder[] = [];
     const visit = (nodes: FolderTreeNode[] | undefined) => {
       if (!nodes) return;
-      nodes.forEach((node) => {
+      for (const node of nodes) {
         const { children, ...folder } = node as FolderTreeNode & { children?: FolderTreeNode[] };
         result.push(folder);
         if (children && children.length > 0) {
           visit(children);
         }
-      });
+      }
     };
     visit(folderTree as FolderTreeNode[] | undefined);
     return result;
   }, [folderTree]);
 
-  const handleWikiLinkClick = useCallback((path: string) => {
-    if (!path || !workspaceSlug) return;
-    const targetPage = flatPages.find(
-      (p) => p.title.toLowerCase() === path.toLowerCase()
-    );
-    if (targetPage) {
-      navigate(`/app/${workspaceSlug}/${targetPage.id}`);
-    }
-  }, [workspaceSlug, flatPages]);
+  const handleWikiLinkClick = useCallback(
+    (path: string) => {
+      if (!path || !workspaceSlug) return;
+      const targetPage = flatPages.find((p) => p.title.toLowerCase() === path.toLowerCase());
+      if (targetPage) {
+        navigate(`/app/${workspaceSlug}/${targetPage.id}`);
+      }
+    },
+    [workspaceSlug, flatPages, navigate],
+  );
 
   if (!pageId || !workspaceSlug) {
     return (

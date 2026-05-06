@@ -1,30 +1,30 @@
-import { Hono } from "hono";
-import { HTTPException } from "hono/http-exception";
-import { requireAuth } from "../middleware/auth";
-import { pool } from "../db/connection";
+import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
+import { pool } from '../db/connection';
+import { requireAuth } from '../middleware/auth';
 
 const backlinksRoute = new Hono();
-backlinksRoute.use("*", requireAuth);
+backlinksRoute.use('*', requireAuth);
 
 const ensureWorkspaceMemberForPage = async (pageId: string, userId: string) => {
   const result = await pool.query(
     `select wm.id from workspace_members wm
      join pages p on p.workspace_id = wm.workspace_id
      where p.id = $1 and wm.user_id = $2 limit 1`,
-    [pageId, userId]
+    [pageId, userId],
   );
   if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: "Forbidden" });
+    throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
 
-backlinksRoute.get("/", async (c) => {
-  const pageId = c.req.query("pageId");
+backlinksRoute.get('/', async (c) => {
+  const pageId = c.req.query('pageId');
   if (!pageId) {
-    throw new HTTPException(400, { message: "pageId is required" });
+    throw new HTTPException(400, { message: 'pageId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMemberForPage(pageId, user.id);
 
   const result = await pool.query(
@@ -35,19 +35,19 @@ backlinksRoute.get("/", async (c) => {
      join pages p on p.id = pl.source_page_id
      where pl.target_page_id = $1 and p.is_deleted = false
      order by pl.created_at desc`,
-    [pageId]
+    [pageId],
   );
 
   return c.json(result.rows);
 });
 
-backlinksRoute.get("/outgoing", async (c) => {
-  const pageId = c.req.query("pageId");
+backlinksRoute.get('/outgoing', async (c) => {
+  const pageId = c.req.query('pageId');
   if (!pageId) {
-    throw new HTTPException(400, { message: "pageId is required" });
+    throw new HTTPException(400, { message: 'pageId is required' });
   }
 
-  const user = c.get("user") as { id: string };
+  const user = c.get('user') as { id: string };
   await ensureWorkspaceMemberForPage(pageId, user.id);
 
   const result = await pool.query(
@@ -58,7 +58,7 @@ backlinksRoute.get("/outgoing", async (c) => {
      left join pages p on p.id = pl.target_page_id
      where pl.source_page_id = $1
      order by pl.created_at desc`,
-    [pageId]
+    [pageId],
   );
 
   return c.json(result.rows);

@@ -1,5 +1,5 @@
-import { notifications } from '@mantine/notifications'
-import { IconCheck, IconX, IconInfoCircle } from '@tabler/icons-react'
+import { notifications } from '@mantine/notifications';
+import { IconCheck, IconInfoCircle, IconX } from '@tabler/icons-react';
 
 export function showSuccessToast(message: string) {
   notifications.show({
@@ -10,7 +10,7 @@ export function showSuccessToast(message: string) {
     withBorder: true,
     withCloseButton: true,
     className: 'animate-slide-down',
-  })
+  });
 }
 
 export function showErrorToast(message: string) {
@@ -22,7 +22,7 @@ export function showErrorToast(message: string) {
     withBorder: true,
     withCloseButton: true,
     className: 'animate-slide-down',
-  })
+  });
 }
 
 export function showInfoToast(message: string) {
@@ -34,5 +34,5 @@ export function showInfoToast(message: string) {
     withBorder: true,
     withCloseButton: true,
     className: 'animate-slide-down',
-  })
+  });
 }

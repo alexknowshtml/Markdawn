@@ -1,7 +1,7 @@
+import type { Page, PageTreeNode } from '@markdawn/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Page, PageTreeNode } from '@markdawn/shared';
-import { showSuccessToast, showErrorToast } from '../utils/toast';
+import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -103,8 +103,8 @@ async function importMarkdown(workspaceId: string, file: File): Promise<Page> {
 
   const res = await fetch(`${API_BASE}/import/markdown?workspaceId=${workspaceId}`, {
     method: 'POST',
-    body: formData },
-  );
+    body: formData,
+  });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to import markdown' }));
     throw new Error(error.message);
@@ -125,7 +125,11 @@ export function usePageTree(workspaceId: string) {
 export function useCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ workspaceId, parentId, title }: { workspaceId: string; parentId?: string; title?: string }) =>
+    mutationFn: ({
+      workspaceId,
+      parentId,
+      title,
+    }: { workspaceId: string; parentId?: string; title?: string }) =>
       createPage(workspaceId, parentId, title),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
@@ -222,7 +226,11 @@ export function useEmptyTrash() {
 export function useMovePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ pageId, parentId, position }: { pageId: string; parentId: string | null; position: string }) =>
+    mutationFn: ({
+      pageId,
+      parentId,
+      position,
+    }: { pageId: string; parentId: string | null; position: string }) =>
       movePage(pageId, parentId, position),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
@@ -257,12 +265,12 @@ export function usePages(workspaceId: string) {
     const result: Page[] = [];
     const walk = (nodes: PageTreeNode[] | undefined) => {
       if (!nodes) return;
-      nodes.forEach((node) => {
+      for (const node of nodes) {
         result.push(node);
         if (node.children && node.children.length > 0) {
           walk(node.children);
         }
-      });
+      }
     };
     walk(query.data);
     return result;

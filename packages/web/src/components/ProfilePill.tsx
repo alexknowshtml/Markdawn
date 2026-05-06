@@ -1,21 +1,21 @@
-import React, { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
 import clsx from 'clsx';
-import { 
-  LogOut, 
-  User,
+import {
+  LogOut,
   PanelLeftClose,
   PanelLeftOpen,
+  Search,
   Settings,
   Trash2,
-  Search
+  User,
 } from 'lucide-react';
-import { Tooltip } from './Tooltip';
-import { ThemeToggle } from './ThemeToggle';
-import { authClient } from "../lib/auth-client";
-import { useAuth } from '../hooks/useAuth';
-import { useWorkspaces } from '../hooks/use-workspaces';
+import React, { useState } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
 import { useTrashPages } from '../hooks/use-pages';
+import { useWorkspaces } from '../hooks/use-workspaces';
+import { useAuth } from '../hooks/useAuth';
+import { authClient } from '../lib/auth-client';
+import { ThemeToggle } from './ThemeToggle';
+import { Tooltip } from './Tooltip';
 import { TrashView } from './sidebar/TrashView';
 
 interface ProfilePillProps {
@@ -28,12 +28,12 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
   const navigate = useNavigate();
   const params = useParams();
   const workspaceSlug = params.workspaceSlug;
-  
+
   const { data: session } = useAuth();
   const { data: workspaces } = useWorkspaces();
   const [showTrashModal, setShowTrashModal] = useState(false);
 
-  const currentWorkspace = workspaces?.find(w => w.slug === workspaceSlug);
+  const currentWorkspace = workspaces?.find((w) => w.slug === workspaceSlug);
   const { data: trashPages } = useTrashPages(currentWorkspace?.id || '');
 
   const handleSignOut = async () => {
@@ -48,24 +48,27 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
 
   return (
     <>
-      <div 
+      <div
         className={clsx(
-          "rounded-[2rem] border border-white/60 dark:border-zinc-700/50 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-2xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] flex-shrink-0 z-50 relative overflow-visible flex flex-col justify-center",
-          collapsed ? "w-[68px] min-h-[160px] py-4" : "w-[240px] p-3",
-          className
+          'rounded-[2rem] border border-white/60 dark:border-zinc-700/50 bg-white/70 dark:bg-zinc-900/70 backdrop-blur-2xl shadow-[0_8px_30px_rgb(0,0,0,0.08)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.3)] transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] flex-shrink-0 z-50 relative overflow-visible flex flex-col justify-center',
+          collapsed ? 'w-[68px] min-h-[160px] py-4' : 'w-[240px] p-3',
+          className,
         )}
       >
         {/* Collapsed State */}
-        <div 
+        <div
           className={clsx(
-            "absolute inset-0 flex flex-col items-center justify-between py-5 transition-all duration-400 ease-[cubic-bezier(0.16,1,0.3,1)]",
-            collapsed ? "opacity-100 translate-x-0 pointer-events-auto delay-100" : "opacity-0 -translate-x-8 pointer-events-none"
+            'absolute inset-0 flex flex-col items-center justify-between py-5 transition-all duration-400 ease-[cubic-bezier(0.16,1,0.3,1)]',
+            collapsed
+              ? 'opacity-100 translate-x-0 pointer-events-auto delay-100'
+              : 'opacity-0 -translate-x-8 pointer-events-none',
           )}
         >
           <div className="flex flex-col items-center gap-4 w-full">
             <ThemeToggle />
             <Tooltip label="Expand Sidebar (Ctrl+/)" position="right">
-              <button 
+              <button
+                type="button"
                 onClick={onToggleCollapsed}
                 className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-zinc-900/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
               >
@@ -73,19 +76,25 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
               </button>
             </Tooltip>
             <div className="w-10 h-10 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden shadow-sm ring-1 ring-black/5 dark:ring-white/10">
-               {session?.user?.image ? (
-                 <img src={session.user.image} alt={session.user.name || "User"} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-               ) : (
-                 <div className="w-full h-full flex items-center justify-center text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800">
-                   <User size={18} />
-                 </div>
-               )}
+              {session?.user?.image ? (
+                <img
+                  src={session.user.image}
+                  alt={session.user.name || 'User'}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800">
+                  <User size={18} />
+                </div>
+              )}
             </div>
-            
-            <button 
-               onClick={handleSignOut}
-               className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-xl hover:bg-red-500/10 transition-colors cursor-pointer"
-               title="Sign Out"
+
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="p-2 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-xl hover:bg-red-500/10 transition-colors cursor-pointer"
+              title="Sign Out"
             >
               <LogOut size={20} />
             </button>
@@ -93,17 +102,20 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
         </div>
 
         {/* Expanded State */}
-        <div 
+        <div
           className={clsx(
-            "flex flex-col transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] w-full",
-            collapsed ? "opacity-0 translate-x-8 pointer-events-none absolute" : "opacity-100 translate-x-0 pointer-events-auto delay-100 relative"
+            'flex flex-col transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] w-full',
+            collapsed
+              ? 'opacity-0 translate-x-8 pointer-events-none absolute'
+              : 'opacity-100 translate-x-0 pointer-events-auto delay-100 relative',
           )}
         >
           <div className="flex items-center justify-between px-1 mb-2">
             <ThemeToggle />
             {workspaceSlug && (
-              <Tooltip label="Workspace Settings" position="top" >
-                <button 
+              <Tooltip label="Workspace Settings" position="top">
+                <button
+                  type="button"
                   onClick={() => navigate(`/app/${workspaceSlug}/settings`)}
                   className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
                 >
@@ -113,19 +125,21 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
             )}
             {currentWorkspace && (
               <>
-                <Tooltip label="Trash" position="top" >
+                <Tooltip label="Trash" position="top">
                   <button
+                    type="button"
                     onClick={() => setShowTrashModal(true)}
                     className="relative p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
                   >
                     <Trash2 size={18} />
                     {trashPages && trashPages.length > 0 && (
-                       <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-zinc-900 dark:bg-white shadow-sm" />
+                      <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-zinc-900 dark:bg-white shadow-sm" />
                     )}
                   </button>
                 </Tooltip>
-                <Tooltip label="Search (Ctrl+K)" position="top" >
+                <Tooltip label="Search (Ctrl+K)" position="top">
                   <button
+                    type="button"
                     onClick={() => window.dispatchEvent(new Event('open-search'))}
                     className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
                   >
@@ -134,8 +148,9 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
                 </Tooltip>
               </>
             )}
-            <Tooltip label="Collapse Sidebar (Ctrl+/)" position="top" >
-              <button 
+            <Tooltip label="Collapse Sidebar (Ctrl+/)" position="top">
+              <button
+                type="button"
                 onClick={onToggleCollapsed}
                 className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
               >
@@ -145,13 +160,18 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
           </div>
           <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-white/50 dark:hover:bg-zinc-800/50 transition-colors group cursor-pointer">
             <div className="w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 overflow-hidden flex-shrink-0 shadow-sm ring-1 ring-black/5 dark:ring-white/10">
-               {session?.user?.image ? (
-                 <img src={session.user.image} alt={session.user.name || "User"} className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-               ) : (
-                 <div className="w-full h-full flex items-center justify-center text-zinc-400">
-                   <User size={16} />
-                 </div>
-               )}
+              {session?.user?.image ? (
+                <img
+                  src={session.user.image}
+                  alt={session.user.name || 'User'}
+                  className="w-full h-full object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : (
+                <div className="w-full h-full flex items-center justify-center text-zinc-400">
+                  <User size={16} />
+                </div>
+              )}
             </div>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-zinc-900 dark:text-zinc-100 truncate">
@@ -161,10 +181,11 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
                 {session?.user?.email}
               </div>
             </div>
-            <button 
-               onClick={handleSignOut}
-               className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 transition-all cursor-pointer"
-               title="Sign Out"
+            <button
+              type="button"
+              onClick={handleSignOut}
+              className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 transition-all cursor-pointer"
+              title="Sign Out"
             >
               <LogOut size={16} />
             </button>
@@ -173,10 +194,7 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
       </div>
 
       {showTrashModal && workspaceSlug && currentWorkspace && (
-        <TrashView
-          workspaceId={currentWorkspace.id}
-          onClose={() => setShowTrashModal(false)}
-        />
+        <TrashView workspaceId={currentWorkspace.id} onClose={() => setShowTrashModal(false)} />
       )}
     </>
   );

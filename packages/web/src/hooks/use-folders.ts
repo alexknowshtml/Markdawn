@@ -1,5 +1,5 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Folder, FolderTreeNode } from '@markdawn/shared';
+import type { Folder, FolderTreeNode } from '@markdawn/shared';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -26,7 +26,9 @@ async function createFolder(workspaceId: string, parentId?: string): Promise<Fol
 }
 
 async function deleteFolder(folderId: string, force?: boolean): Promise<void> {
-  const url = force ? `${API_BASE}/folders/${folderId}?force=true` : `${API_BASE}/folders/${folderId}`;
+  const url = force
+    ? `${API_BASE}/folders/${folderId}?force=true`
+    : `${API_BASE}/folders/${folderId}`;
   const res = await fetch(url, {
     method: 'DELETE',
   });
@@ -44,7 +46,10 @@ export type DeleteFolderResponse = {
   deleted?: boolean;
 };
 
-async function updateFolder(folderId: string, updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string }): Promise<Folder> {
+async function updateFolder(
+  folderId: string,
+  updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string },
+): Promise<Folder> {
   const res = await fetch(`${API_BASE}/folders/${folderId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -85,7 +90,8 @@ export function useCreateFolder() {
 export function useDeleteFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ folderId, force }: { folderId: string; force?: boolean }) => deleteFolder(folderId, force),
+    mutationFn: ({ folderId, force }: { folderId: string; force?: boolean }) =>
+      deleteFolder(folderId, force),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
@@ -100,8 +106,13 @@ export function useDeleteFolder() {
 export function useUpdateFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ folderId, updates }: { folderId: string; updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string } }) =>
-      updateFolder(folderId, updates),
+    mutationFn: ({
+      folderId,
+      updates,
+    }: {
+      folderId: string;
+      updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string };
+    }) => updateFolder(folderId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       showSuccessToast('Folder updated');

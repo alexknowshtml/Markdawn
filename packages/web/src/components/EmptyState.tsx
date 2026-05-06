@@ -1,4 +1,4 @@
-import React from "react";
+import type React from 'react';
 
 type EmptyStateProps = {
   icon: React.ReactNode;
@@ -20,21 +20,23 @@ export function EmptyState({
   return (
     <div
       className={`flex flex-col items-center justify-center text-center ${
-        compact ? "py-6 px-3" : "py-12 px-6"
+        compact ? 'py-6 px-3' : 'py-12 px-6'
       }`}
     >
       <div
         className={`rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 dark:text-zinc-500 ${
-          compact ? "p-3" : "p-4"
+          compact ? 'p-3' : 'p-4'
         }`}
       >
         {icon}
       </div>
-      <h3 className={`mt-4 font-semibold text-zinc-900 dark:text-zinc-100 ${compact ? "text-sm" : "text-base"}`}>
+      <h3
+        className={`mt-4 font-semibold text-zinc-900 dark:text-zinc-100 ${compact ? 'text-sm' : 'text-base'}`}
+      >
         {title}
       </h3>
       {description && (
-        <p className={`mt-1 text-zinc-500 dark:text-zinc-400 ${compact ? "text-xs" : "text-sm"}`}>
+        <p className={`mt-1 text-zinc-500 dark:text-zinc-400 ${compact ? 'text-xs' : 'text-sm'}`}>
           {description}
         </p>
       )}

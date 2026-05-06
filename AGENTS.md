@@ -55,13 +55,6 @@ pnpm --filter @markdawn/web typecheck   # Type-check
 pnpm --filter @markdawn/web lint        # ESLint
 ```
 
-**Running Single E2E Test (Playwright):**
-```bash
-cd packages/web
-npx playwright test e2e/app.spec.ts
-npx playwright test e2e/app.spec.ts --grep "test name"
-```
-
 **Collab (`packages/collab/`):**
 ```bash
 pnpm --filter @markdawn/collab dev
@@ -260,9 +253,7 @@ pnpm dev  # Starts all packages in parallel
 
 ## Testing Strategy
 
-- **E2E Tests**: Playwright (`packages/web/e2e/`)
-- **No unit tests** currently configured
-- To add tests: Use Vitest for unit tests, Playwright for e2e
+- **Unit & Integration Tests**: Vitest (all packages)
 
 ---
 
@@ -296,7 +287,203 @@ pnpm dev  # Starts all packages in parallel
 
 ---
 
-## Important Gotchas
+## Testing Rollout Conventions
+
+This section documents reusable testing conventions for adding or expanding test coverage
+in any monorepo package, avoiding the need to re-derive the approach package by package.
+
+### Package Type Determination
+
+Each package should choose a testing setup based on its dependencies and runtime needs:
+
+| Package | Type | DB Needed? | Config Approach |
+|---------|------|-----------|-----------------|
+| `@markdawn/api` | **multi-project** | Yes (real Postgres) | `vitest.config.ts` with `test.projects` — unit + integration split |
+| `@markdawn/web` | **single-config** | No (jsdom) | `vitest.config.ts` — browser-like environment |  
+| `@markdawn/collab` | **single-config** | No | `vitest.config.ts` — standard node environment |
+| `@markdawn/shared` | **single-config** | No | `vitest.config.ts` — standard node environment |
+
+Use **multi-project** when your package has tests that require different environments (e.g., unit
+tests with threads vs. integration tests with a database container). Use **single-config** when
+all tests share the same environment.
+
+### File Naming Conventions
+
+- Unit tests: `*.unit.test.ts` — pure logic, no DB/network/filesystem
+- Integration tests: `*.test.ts` — tests that touch DB, network, or filesystem
+- Test helpers: `src/test-utils.ts` — shared factory functions for creating test fixtures
+- Test harness: `test/` — global setup, setup hooks, environment configuration
+- Smoke suites: `src/test-harness/` — focused validation of helper infrastructure
+
+### Factory Pattern
+
+All route-level integration tests should use factories from `src/test-utils.ts` rather than
+inline SQL. This keeps test logic readable and avoids duplication. Available factories:
+
+- `createTestUser()` — user + personal workspace + workspace membership
+- `createTestSession(userId)` — signed session cookie
+- `createTestWorkspace(ownerId)` — non-personal workspace
+- `createTestPage(workspaceId, createdBy)` — page within a workspace
+- `createTestFolder(workspaceId, createdBy)` — folder within a workspace
+- `createTestComment(pageId, userId)` — comment on a page
+- `createTestReply(commentId, userId)` — reply to a comment
+- `createTestVersion(pageId, createdBy)` — page version snapshot
+- `createTestTemplate(workspaceId, createdBy)` — workspace template
+- `createTestTag(workspaceId)` — tag within a workspace
+- `createTestPageLink(sourcePageId, targetPageId)` — backlink between pages
+- `createTestPublicShare(pageId)` — public share token for a page
+- `createTestTempDir()` — isolated temp directory for filesystem tests
+- `createTestTempFile(dirPath, name, content)` — file within temp dir
+- `mockDbError(error)` — one-shot DB failure simulator
+
+### Integration Harness (API-specific)
+
+The API package uses a real PostgreSQL container via Podman for integration testing:
+
+- Container name: `markdawn-postgres-test`
+- Port: dynamically allocated to avoid collisions
+- Database: truncated between each test (via `SET session_replication_role = replica`)
+- Auth: session cookies signed with HMAC-SHA256 in test helpers
+- Env vars: propagated from global setup to test workers via `process.env`
+
+### CI Integration
+
+- API tests run in the `test` CI job: unit → integration → coverage
+- CI uses `continue-on-error: true` for coverage to avoid blocking PRs on coverage thresholds
+- Podman layers are cached between CI runs for faster container startup
+- Coverage reports are uploaded as CI artifacts
+
+### Adding Tests to a New Route
+
+1. Create `src/routes/{name}.test.ts`
+2. Import `createTestApp` and needed factories from `../test-utils`
+3. Start with the auth guard baseline (401 without session, 401 with invalid token)
+4. Add happy-path tests for each endpoint
+5. Add validation-failure tests (400, 404, 403)
+6. Run: `pnpm --filter @markdawn/api exec vitest run --project integration src/routes/{name}.test.ts`
+
+### Extending to Other Packages
+
+When adding testing to `web`, `collab`, or `shared`:
+
+1. Create a `vitest.config.ts` (single-config style initially)
+2. Add `test`, `test:watch` scripts to the package's `package.json`
+3. Use the API's `src/test-utils.ts` as a pattern for shared factories
+4. For packages that don't need a database, skip the integration harness entirely
+
+---
+
+## Frontend Testing Conventions
+
+### Test Type Decision Matrix
+
+| What you're testing | Test type | Why |
+|---------------------|-----------|-----|
+| Pure utility function | **Unit** (`*.unit.test.ts`) | No React, no DOM, no network |
+| Custom hook | **Unit** (`*.test.ts`) | Mock data layer, assert state transitions |
+| Component in isolation | **Component** (`*.test.tsx`) | Render with Testing Library, assert user-visible output |
+| Component + hook + fetch | **Integration** (`*.test.tsx`) | Use MSW or stubbed fetch, assert full data flow |
+
+### Frontend Unit/Component Testing
+
+**Framework**: Vitest + jsdom + `@testing-library/react` + `@testing-library/jest-dom` + `@testing-library/user-event`
+
+**Environment**: `packages/web/vitest.config.ts` uses `environment: 'jsdom'` with `globals: true`.
+
+**Setup**: `packages/web/src/test/setup.ts` mocks browser APIs not available in jsdom:
+- `ResizeObserver`, `PointerEvent`, `matchMedia`
+- `navigator.clipboard`, `localStorage`, `requestAnimationFrame`
+- `scrollIntoView`, `getComputedStyle`, `DOMRect`
+
+**Cleanup**: Every test file gets automatic cleanup via `afterEach`:
+- `@testing-library/react` cleanup
+- `localStorage.clear()` + `sessionStorage.clear()`
+- `vi.clearAllMocks()` + `vi.restoreAllMocks()`
+
+### Component Testing Patterns
+
+**Preferred**: Test user-visible behavior, not implementation details.
+
+```typescript
+// Good: test what the user sees and does
+it('creates a new page when submitted', async () => {
+  const user = userEvent.setup();
+  render(<CreatePageDialog workspaceId="ws1" />);
+
+  await user.type(screen.getByLabelText(/title/i), 'New Page');
+  await user.click(screen.getByRole('button', { name: /create/i }));
+
+  await waitFor(() => {
+    expect(screen.queryByText('New Page')).toBeInTheDocument();
+  });
+});
+```
+
+**Anti-pattern**: Do not test internal state, hook return values, or DOM structure that users don't see.
+
+```typescript
+// Bad: tests implementation details
+it('calls useCreatePage with correct args', () => {
+  const spy = vi.spyOn(hooks, 'useCreatePage');
+  render(<CreatePageDialog workspaceId="ws1" />);
+  expect(spy).toHaveBeenCalledWith('ws1');
+});
+```
+
+### Hook Testing Patterns
+
+**Preferred**: Mock the data layer (`fetch` or API client), not the hook itself.
+
+```typescript
+// Good: mock fetch, test hook state transitions
+vi.stubGlobal('fetch', vi.fn());
+
+it('fetches pages on mount', async () => {
+  (fetch as Mock).mockResolvedValue({
+    json: async () => [{ id: 'p1', title: 'Page 1' }],
+    ok: true,
+  });
+
+  const { result } = renderHook(() => usePages('ws1'), {
+    wrapper: createTestQueryClient(),
+  });
+
+  await waitFor(() => expect(result.current.isSuccess).toBe(true));
+  expect(result.current.data).toHaveLength(1);
+});
+```
+
+**Anti-pattern**: Do not mock the hook return value — this tests the mock, not the hook.
+
+```typescript
+// Bad: tests nothing useful
+vi.mock('../lib/auth-client', () => ({
+  authClient: { useSession: () => ({ data: { user: { id: '1' } } }) },
+}));
+```
+
+### Frontend Factories
+
+Use `packages/web/src/test/factories.ts` for consistent test data:
+
+- `createTestUser()` — user object with id, email, name
+- `createTestWorkspace()` — workspace object
+- `createTestPage(overrides?)` — page object
+- `createTestFolder(overrides?)` — folder object
+- `mockApiResponse(endpoint, data, status?)` — stub fetch for endpoint
+- `mockApiError(endpoint, status, message?)` — stub fetch error
+
+### Adding a New Web Test
+
+1. **Hook test**: Create `src/hooks/use{Feature}.test.ts`
+   - Mock `fetch` or API client
+   - Use `createTestQueryClient()` wrapper
+   - Assert loading → success/error states
+
+2. **Component test**: Create `src/components/{Name}.test.tsx`
+   - Render with `render()` from Testing Library
+   - Use `userEvent.setup()` for interactions
+   - Assert user-visible output with screen queries
 
 These are critical issues discovered during implementation. Do not try to "fix" these — they are known limitations.
 
