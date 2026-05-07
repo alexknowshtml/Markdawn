@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { Menu } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
@@ -11,6 +12,7 @@ import { WorkspacePill } from './workspace/WorkspacePill';
 
 export function AppShell() {
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
+  const [isHovered, setIsHovered] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const location = useLocation();
@@ -27,24 +29,51 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-full bg-zinc-50 dark:bg-zinc-950 overflow-hidden text-zinc-900 dark:text-zinc-50 font-sans">
-      <div className="hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-[100vh]">
+      {/* Layout Spacer - ensures center content animates smoothly when sidebar is pinned/unpinned */}
+      <div
+        className={clsx(
+          'hidden md:block transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] flex-shrink-0 overflow-hidden',
+          collapsed ? 'w-0' : 'w-[252px]',
+        )}
+      />
+
+      {/* Visual Sidebar - handles the slide/fade animation and hover overlay */}
+      <div
+        className={clsx(
+          'hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-screen transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] z-40 w-[252px] fixed left-0',
+          collapsed
+            ? isHovered
+              ? 'opacity-100 translate-x-0 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-xl pointer-events-auto'
+              : 'opacity-0 -translate-x-full pointer-events-none'
+            : 'opacity-100 translate-x-0 pointer-events-auto',
+        )}
+        onMouseLeave={() => collapsed && setIsHovered(false)}
+      >
         <WorkspacePill
-          collapsed={collapsed}
+          collapsed={collapsed && !isHovered}
           onToggleCollapsed={toggleCollapsed}
           onCreateWorkspace={() => setShowCreateWorkspace(true)}
           className="flex-shrink-0"
         />
         <Sidebar
           className="flex-1 w-full"
-          collapsed={collapsed}
+          collapsed={collapsed && !isHovered}
           onToggleCollapsed={toggleCollapsed}
         />
         <ProfilePill
-          collapsed={collapsed}
+          collapsed={collapsed && !isHovered}
+          isActuallyCollapsed={collapsed}
           onToggleCollapsed={toggleCollapsed}
           className="flex-shrink-0"
         />
       </div>
+
+      {collapsed && !isHovered && (
+        <div
+          className="hidden md:block fixed left-0 top-0 bottom-0 w-16 z-50 cursor-pointer"
+          onMouseEnter={() => setIsHovered(true)}
+        />
+      )}
 
       {isMobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex">
