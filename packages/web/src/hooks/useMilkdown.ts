@@ -58,7 +58,7 @@ function isLikelyMarkdown(value: string): boolean {
   return markdownSignals.some((pattern) => pattern.test(trimmed));
 }
 
-function isLikelyTableData(text: string): boolean {
+export function isLikelyTableData(text: string): boolean {
   const lines = text.trim().split('\n');
   if (lines.length < 2) return false;
 
@@ -71,7 +71,7 @@ function isLikelyTableData(text: string): boolean {
   return fieldCounts.every((c) => c >= 2) && new Set(fieldCounts).size === 1;
 }
 
-function convertDelimitedToMarkdown(text: string): string {
+export function convertDelimitedToMarkdown(text: string): string {
   const delimiter = text.includes('\t') ? '\t' : ',';
   const lines = text.trim().split('\n');
   const rows = lines.map((line) => line.split(delimiter).map((cell) => cell.trim()));
