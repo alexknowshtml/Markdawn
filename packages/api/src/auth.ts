@@ -6,7 +6,7 @@ import { db } from './db';
 import { accounts, sessions, users, verifications } from './db/schema';
 import { ensurePersonalWorkspace } from './utils/auth-helpers';
 
-const FRONTEND_URL = process.env.FRONTEND_URL ?? process.env.BASE_URL ?? 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:5173';
 
 export const auth = betterAuth({
   baseURL: FRONTEND_URL,

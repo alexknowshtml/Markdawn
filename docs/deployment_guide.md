@@ -66,7 +66,6 @@ POSTGRES_DB=markdawn
 DATABASE_URL=postgresql://markdawn:your-secure-password@localhost:5432/markdawn
 BETTER_AUTH_SECRET=minimum-32-characters-secret-key
 FRONTEND_URL=https://markdawn.space
-BASE_URL=https://markdawn.space
 GOOGLE_CLIENT_ID=your-google-client-id
 GOOGLE_CLIENT_SECRET=your-google-client-secret
 GITHUB_CLIENT_ID=your-github-client-id
