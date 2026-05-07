@@ -21,10 +21,16 @@ import { TrashView } from './sidebar/TrashView';
 interface ProfilePillProps {
   className?: string;
   collapsed?: boolean;
+  isActuallyCollapsed?: boolean;
   onToggleCollapsed?: () => void;
 }
 
-export function ProfilePill({ className, collapsed = false, onToggleCollapsed }: ProfilePillProps) {
+export function ProfilePill({
+  className,
+  collapsed = false,
+  isActuallyCollapsed,
+  onToggleCollapsed,
+}: ProfilePillProps) {
   const navigate = useNavigate();
   const params = useParams();
   const workspaceSlug = params.workspaceSlug;
@@ -66,7 +72,7 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
         >
           <div className="flex flex-col items-center gap-4 w-full">
             <ThemeToggle />
-            <Tooltip label="Expand Sidebar (Ctrl+/)" position="right">
+            <Tooltip label="Open Sidebar (Ctrl+/)" position="right">
               <button
                 type="button"
                 onClick={onToggleCollapsed}
@@ -148,13 +154,20 @@ export function ProfilePill({ className, collapsed = false, onToggleCollapsed }:
                 </Tooltip>
               </>
             )}
-            <Tooltip label="Collapse Sidebar (Ctrl+/)" position="top">
+            <Tooltip
+              label={`${(isActuallyCollapsed ?? collapsed) ? 'Open' : 'Close'} Sidebar (Ctrl+/)`}
+              position="top"
+            >
               <button
                 type="button"
                 onClick={onToggleCollapsed}
                 className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
               >
-                <PanelLeftClose size={18} />
+                {(isActuallyCollapsed ?? collapsed) ? (
+                  <PanelLeftOpen size={18} />
+                ) : (
+                  <PanelLeftClose size={18} />
+                )}
               </button>
             </Tooltip>
           </div>
