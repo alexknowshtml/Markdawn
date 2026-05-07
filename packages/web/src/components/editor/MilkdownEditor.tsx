@@ -7,10 +7,22 @@ import './editor.css';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { commandsCtx, editorViewCtx } from '@milkdown/core';
+import type { EditorView } from '@milkdown/kit/prose/view';
+import { insertTableCommand } from '@milkdown/preset-gfm';
 import { replaceAll } from '@milkdown/utils';
 import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
 import type { EditorState } from 'prosemirror-state';
+import {
+  addColumnAfter,
+  addColumnBefore,
+  addRowAfter,
+  addRowBefore,
+  deleteColumn,
+  deleteRow,
+  deleteTable,
+  isInTable,
+} from 'prosemirror-tables';
 import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
 interface MilkdownEditorProps {
@@ -54,6 +66,7 @@ export function MilkdownEditor({
     isBulletListActive: false,
     isOrderedListActive: false,
     isTaskListActive: false,
+    isInTableActive: false,
   });
 
   const hasMark = useCallback((state: EditorState, markType?: MarkType): boolean => {
@@ -150,6 +163,7 @@ export function MilkdownEditor({
           isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !listItemChecked,
           isOrderedListActive: hasParentBlockType(state, nodes.ordered_list),
           isTaskListActive: listItemChecked,
+          isInTableActive: isInTable(state),
         });
       });
     } catch {
@@ -459,6 +473,73 @@ export function MilkdownEditor({
     setTimeout(updateActiveStates, 0);
   };
 
+  const handleInsertTable = () => {
+    if (!editor) return;
+    keepVisible();
+
+    editor.action((ctx) => {
+      const commands = ctx.get(commandsCtx);
+      commands.call(insertTableCommand.key, { row: 3, col: 3 });
+    });
+    setTimeout(updateActiveStates, 0);
+  };
+
+  const handleTableAction = (
+    action:
+      | 'addRowBefore'
+      | 'addRowAfter'
+      | 'addColBefore'
+      | 'addColAfter'
+      | 'deleteRow'
+      | 'deleteCol'
+      | 'deleteTable',
+  ) => {
+    if (!editor) return;
+    keepVisible();
+
+    editor.action((ctx) => {
+      const viewInstance = ctx.get(editorViewCtx) as EditorView | undefined;
+      if (!viewInstance) return;
+
+      const { state, dispatch } = viewInstance;
+
+      if (!isInTable(state)) return;
+
+      switch (action) {
+        case 'addRowBefore':
+          addRowBefore(state, dispatch);
+          break;
+        case 'addRowAfter':
+          addRowAfter(state, dispatch);
+          break;
+        case 'addColBefore':
+          addColumnBefore(state, dispatch);
+          break;
+        case 'addColAfter':
+          addColumnAfter(state, dispatch);
+          break;
+        case 'deleteRow':
+          deleteRow(state, dispatch);
+          break;
+        case 'deleteCol':
+          deleteColumn(state, dispatch);
+          break;
+        case 'deleteTable':
+          deleteTable(state, dispatch);
+          break;
+      }
+    });
+    setTimeout(updateActiveStates, 0);
+  };
+
+  const handleAddRowBefore = () => handleTableAction('addRowBefore');
+  const handleAddRowAfter = () => handleTableAction('addRowAfter');
+  const handleAddColBefore = () => handleTableAction('addColBefore');
+  const handleAddColAfter = () => handleTableAction('addColAfter');
+  const handleDeleteRow = () => handleTableAction('deleteRow');
+  const handleDeleteCol = () => handleTableAction('deleteCol');
+  const handleDeleteTable = () => handleTableAction('deleteTable');
+
   useEffect(() => {
     onProviderReady?.(provider);
   }, [provider, onProviderReady]);
@@ -647,6 +728,14 @@ export function MilkdownEditor({
         onBulletList={handleBulletList}
         onOrderedList={handleOrderedList}
         onTaskList={handleTaskList}
+        onInsertTable={handleInsertTable}
+        onAddRowBefore={handleAddRowBefore}
+        onAddRowAfter={handleAddRowAfter}
+        onAddColBefore={handleAddColBefore}
+        onAddColAfter={handleAddColAfter}
+        onDeleteRow={handleDeleteRow}
+        onDeleteCol={handleDeleteCol}
+        onDeleteTable={handleDeleteTable}
         {...activeStates}
       />
       <div ref={setContainer} className="milkdown-editor" />

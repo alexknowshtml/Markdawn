@@ -10,6 +10,8 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
+import Papa from 'papaparse';
+import { goToNextCell, isInTable } from 'prosemirror-tables';
 import { useEffect, useRef, useState } from 'react';
 import { linkEditor } from '../editor/components/LinkEditor';
 import { autolink } from '../editor/plugins/autolink';
@@ -55,6 +57,58 @@ function isLikelyMarkdown(value: string): boolean {
   ];
 
   return markdownSignals.some((pattern) => pattern.test(trimmed));
+}
+
+export function isLikelyTableData(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+
+  const lines = trimmed.split('\n');
+  if (lines.length < 2) return false;
+
+  const result = Papa.parse(trimmed, {
+    delimiter: '',
+    preview: 5,
+  });
+
+  if (!result.data || result.data.length === 0) return false;
+
+  const data = result.data as unknown[][];
+  const colCount = data[0]?.length ?? 0;
+
+  if (colCount < 2) return false;
+
+  const isConsistent = data.every((row) => row.length === colCount);
+
+  return isConsistent;
+}
+
+export function convertDelimitedToMarkdown(text: string): string {
+  const trimmed = text.trim();
+
+  const result = Papa.parse(trimmed, {
+    delimiter: '',
+  });
+
+  const data = result.data as unknown[][];
+  if (!data || data.length === 0) return '';
+
+  const rows = data.map((row) => row.map((cell) => String(cell ?? '').trim()));
+
+  const maxCols = Math.max(...rows.map((r) => r.length));
+  const padded = rows.map((r) => {
+    while (r.length < maxCols) {
+      r.push('');
+    }
+    return r;
+  });
+
+  const firstRow = padded[0] ?? [];
+  const header = `| ${firstRow.join(' | ')} |`;
+  const separator = `| ${firstRow.map(() => '---').join(' | ')} |`;
+  const body = padded.slice(1).map((r) => `| ${r.join(' | ')} |`);
+
+  return [header, separator, ...body].join('\n');
 }
 
 interface UseMilkdownProps {
@@ -205,6 +259,14 @@ export function useMilkdown({
             },
             handlePaste: (_view, event) => {
               const text = event.clipboardData?.getData('text/plain') ?? '';
+              if (!text) return false;
+
+              if (isLikelyTableData(text)) {
+                const markdown = convertDelimitedToMarkdown(text);
+                editorRef.current?.action(insert(markdown));
+                return true;
+              }
+
               if (!isLikelyMarkdown(text)) {
                 return false;
               }
@@ -213,6 +275,18 @@ export function useMilkdown({
               return true;
             },
             handleDOMEvents: {
+              keydown: (view, event) => {
+                const { state, dispatch } = view;
+                if (!isInTable(state)) return false;
+
+                if (event.key === 'Tab') {
+                  event.preventDefault();
+                  const direction = event.shiftKey ? -1 : 1;
+                  goToNextCell(direction)(state, dispatch);
+                  return true;
+                }
+                return false;
+              },
               mousedown: (view, event) => {
                 const target = event.target;
                 if (!(target instanceof HTMLElement)) return false;
