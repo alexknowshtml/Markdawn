@@ -84,6 +84,4 @@ describe('generatePosition', () => {
     const result = generatePosition('zzz', null);
     expect(result > 'zzz').toBe(true);
   });
-
-
 });
