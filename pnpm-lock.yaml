@@ -322,6 +322,9 @@ importers:
       prosemirror-state:
         specifier: ^1.4.3
         version: 1.4.4
+      prosemirror-tables:
+        specifier: ^1.7.1
+        version: 1.8.5
       tailwindcss:
         specifier: ^4.0.0
         version: 4.2.0

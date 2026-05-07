@@ -63,6 +63,7 @@
     "prosemirror-commands": "^1.5.2",
     "prosemirror-model": "^1.19.4",
     "prosemirror-state": "^1.4.3",
+    "prosemirror-tables": "^1.7.1",
     "tailwindcss": "^4.0.0",
     "unist-util-visit": "^5.0.0",
     "vite": "^6.4.1"
