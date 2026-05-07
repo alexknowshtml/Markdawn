@@ -13,6 +13,7 @@
   },
   "exports": {
     ".": {
+      "development": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     }
