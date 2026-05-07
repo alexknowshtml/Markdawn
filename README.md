@@ -1,168 +1,67 @@
 # Markdawn
 
-A collaborative note-taking application with real-time editing capabilities.
+A knowledge base for humans and their AI agents.
 
-## Features
+Notion is a human tool with an API bolted on. Obsidian is a local vault you sync. Markdawn is built different. The same product works headful in a browser and headless via REST API. Write a page in your browser. Have an agent read, edit, and link to it via the same endpoints. No wrappers, no adapters, no dual-mode.
 
-- Real-time collaboration powered by Yjs and Hocuspocus
-- Rich text editing with Milkdown editor
-- OAuth authentication (Google, GitHub)
-- Workspace-based organization
-- Dark mode support
-- Responsive design
+---
 
-## Monorepo Structure
+## What's Built
 
-```
-packages/
-├── api/       # REST API server (Hono, port 3001)
-├── web/       # Frontend app (Vite, port 5173)
-├── shared/    # Shared types and utilities
-└── collab/    # Collaboration server (Hocuspocus, port 1234)
-```
+### Editor
+- Real-time collaborative editing via WebSocket (CRDT-based — concurrent edits merge cleanly)
+- Markdown-first: GFM (tables, task lists, strikethrough), LaTeX math, inline code, images
+- `[[Wiki links]]` to link pages — backlinks are tracked automatically
+- Table of contents generated from headings
+- Page titles, icons, and cover images
+- Properties panel for page metadata
 
-## Prerequisites
+### Organization
+- Workspaces (team or project spaces)
+- Folders with nesting — create, rename, delete, move pages between them
+- Search with filters (date range, parent folder)
+- Command palette (`Cmd+K` / `Ctrl+K`)
+- Tags, favorites, and trash
+- Dark mode
 
-- Node.js 20+
-- pnpm 9+
-- PostgreSQL 15+
+### Security
+- OAuth login (Google, GitHub)
+- Public share links for any page — no account required to view
+- Workspace-level access control
 
-## Setup
-
-### Install Dependencies
-
-```bash
-pnpm install
-```
-
-### Environment Variables
-
-Copy `.env.dev` to `.env` and configure:
-
-```bash
-cp .env.dev .env
-```
-
-Required variables:
-
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `POSTGRES_USER` | PostgreSQL username |
-| `POSTGRES_PASSWORD` | PostgreSQL password |
-| `POSTGRES_DB` | PostgreSQL database name |
-| `BETTER_AUTH_SECRET` | Auth secret (min 32 chars) |
-| `GOOGLE_CLIENT_ID` | OAuth Google |
-| `GOOGLE_CLIENT_SECRET` | OAuth Google |
-| `GITHUB_CLIENT_ID` | OAuth GitHub |
-| `GITHUB_CLIENT_SECRET` | OAuth GitHub |
-| `FRONTEND_URL` | Frontend URL |
-| `PORT` | API server port (default 3001) |
-| `COLLAB_PORT` | Collab server port (default 1234) |
-
-### Database Setup
-
-```bash
-pnpm --filter @markdawn/api db:push
-```
-
-### Run Development Servers
-
-```bash
-pnpm dev
-```
-
-This starts all packages in parallel:
-- API: http://localhost:3001
-- Web: http://localhost:5173
-- Collab: ws://localhost:1234
-
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `pnpm dev` | Start all packages in development mode |
-| `pnpm build` | Build all packages |
-| `pnpm typecheck` | Type-check all packages |
-| `pnpm lint` | Lint all packages |
-| `pnpm test` | Run all tests |
-
-## Package-Specific Commands
+### Import
+- Obsidian vault import — wiki links, folders, and markdown files map directly
+- Markdown export
 
 ### API
+- REST API from day one — the same API the browser uses
+- Pages as structured data: titles, content, tags, timestamps, relationships
 
-```bash
-pnpm --filter @markdawn/api dev          # Start dev server
-pnpm --filter @markdawn/api build        # Build for production
-pnpm --filter @markdawn/api typecheck    # Type-check
-pnpm --filter @markdawn/api lint         # Run ESLint
-pnpm --filter @markdawn/api db:generate  # Generate migrations
-pnpm --filter @markdawn/api db:push      # Push schema to DB
-pnpm --filter @markdawn/api db:studio    # Open Drizzle Studio
-```
+---
 
-### Web
+## The Product Thesis
 
-```bash
-pnpm --filter @markdawn/web dev          # Start Vite dev server
-pnpm --filter @markdawn/web build        # Build for production
-pnpm --filter @markdawn/web preview      # Preview production build
-pnpm --filter @markdawn/web typecheck    # Type-check
-pnpm --filter @markdawn/web lint         # Run ESLint
-```
+Most "AI + docs" tools are a human app with an agent API wrapper. Markdawn inverts this: the content layer works identically headful and headless. Agents aren't "supported" — they're first-class users. A page created by an agent looks exactly like a page created by a human. A wiki link from a human to an agent-created page works the same as any other link.
 
-### Collab
+This means:
+- No "agent mode" toggle
+- No separate data stores for human vs. agent content
+- No sync layer between "your notes" and "agent memory"
+- The graph is unified. The API is the product.
 
-```bash
-pnpm --filter @markdawn/collab dev       # Start dev server
-pnpm --filter @markdawn/collab build     # Build for production
-```
+---
 
-## Deployment
+## Self-Hosted
 
-For production deployment with Podman containers and Caddy, see:
+Open source under GNU AGPL v3. Run it on your own infrastructure.
 
-- [Deployment Guide](docs/deployment_guide.md) — full step-by-step instructions
-- `deploy/` — Containerfiles, Quadlet configs, Caddyfile, and deployment scripts
+- [Deployment Guide](docs/deployment_guide.md) — step-by-step for a single VPS with Caddy, Podman, and PostgreSQL
+- [deploy/](deploy/) — `setup.sh` (one-time server bootstrap) and `deploy.sh` (incremental deploy)
 
-```bash
-# One-time server setup
-./deploy/setup.sh
-
-# Future deployments
-./deploy/deploy.sh
-```
-
-## Tech Stack
-
-### API
-- **Hono** - Web framework
-- **Drizzle ORM** - Database ORM
-- **PostgreSQL** - Database
-- **Better Auth** - Authentication
-
-### Web
-- **React 19** - UI library
-- **Vite** - Build tool
-- **Tailwind CSS v4** - Styling
-- **Mantine** - UI components
-- **Milkdown** - Rich text editor
-- **React Query** - Server state
-
-### Collaboration
-- **Hocuspocus** - Yjs server
-- **Yjs** - CRDT library
-
-## License
-
-This project is licensed under the GNU Affero General Public License v3.0 (or later).
-
-- Self-hosting is free under AGPL terms.
-- If you run a modified network service, you must provide corresponding source code to users.
-
-See [LICENSE](LICENSE) for full text.
+---
 
 ## Author
 
 Atharva Verma  
-atharva.verma18@gmail.com
+[GitHub](https://github.com/atharva-again/Markdawn)  
+[atharva.verma18@gmail.com](mailto:atharva.verma18@gmail.com)
