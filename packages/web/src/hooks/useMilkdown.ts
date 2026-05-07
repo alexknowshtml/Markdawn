@@ -10,6 +10,7 @@ import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { commonmark } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
+import { goToNextCell, isInTable } from 'prosemirror-tables';
 import { useEffect, useRef, useState } from 'react';
 import { linkEditor } from '../editor/components/LinkEditor';
 import { autolink } from '../editor/plugins/autolink';
@@ -55,6 +56,40 @@ function isLikelyMarkdown(value: string): boolean {
   ];
 
   return markdownSignals.some((pattern) => pattern.test(trimmed));
+}
+
+function isLikelyTableData(text: string): boolean {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return false;
+
+  if (text.includes('\t')) {
+    const tabCounts = lines.map((l) => l.split('\t').length);
+    return tabCounts.every((c) => c >= 2) && new Set(tabCounts).size === 1;
+  }
+
+  const commaCounts = lines.map((l) => (l.match(/,/g) || []).length);
+  return commaCounts.every((c) => c >= 2) && new Set(commaCounts).size === 1;
+}
+
+function convertTSVToMarkdown(text: string): string {
+  const delimiter = text.includes('\t') ? '\t' : ',';
+  const lines = text.trim().split('\n');
+  const rows = lines.map((line) => line.split(delimiter).map((cell) => cell.trim()));
+
+  const colCount = Math.max(...rows.map((r) => r.length));
+  const padded = rows.map((r) => {
+    while (r.length < colCount) {
+      r.push('');
+    }
+    return r;
+  });
+
+  const firstRow = padded[0] ?? [];
+  const header = `| ${firstRow.join(' | ')} |`;
+  const separator = `| ${firstRow.map(() => '---').join(' | ')} |`;
+  const body = padded.slice(1).map((r) => `| ${r.join(' | ')} |`);
+
+  return [header, separator, ...body].join('\n');
 }
 
 interface UseMilkdownProps {
@@ -205,6 +240,14 @@ export function useMilkdown({
             },
             handlePaste: (_view, event) => {
               const text = event.clipboardData?.getData('text/plain') ?? '';
+              if (!text) return false;
+
+              if (isLikelyTableData(text)) {
+                const markdown = convertTSVToMarkdown(text);
+                editorRef.current?.action(insert(markdown));
+                return true;
+              }
+
               if (!isLikelyMarkdown(text)) {
                 return false;
               }
@@ -213,6 +256,22 @@ export function useMilkdown({
               return true;
             },
             handleDOMEvents: {
+              keydown: (view, event) => {
+                const { state, dispatch } = view;
+                if (!isInTable(state)) return false;
+
+                if (event.key === 'Tab') {
+                  event.preventDefault();
+                  goToNextCell(1)(state, dispatch);
+                  return true;
+                }
+                if (event.key === 'Tab' && event.shiftKey) {
+                  event.preventDefault();
+                  goToNextCell(-1)(state, dispatch);
+                  return true;
+                }
+                return false;
+              },
               mousedown: (view, event) => {
                 const target = event.target;
                 if (!(target instanceof HTMLElement)) return false;
