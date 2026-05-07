@@ -7,6 +7,7 @@ import './editor.css';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { commandsCtx, editorViewCtx } from '@milkdown/core';
+import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
 import { replaceAll } from '@milkdown/utils';
 import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
@@ -497,10 +498,10 @@ export function MilkdownEditor({
     keepVisible();
 
     editor.action((ctx) => {
-      const view = ctx.get(editorViewCtx);
-      if (!view) return;
+      const viewInstance = ctx.get(editorViewCtx) as EditorView | undefined;
+      if (!viewInstance) return;
 
-      const { state, dispatch } = view as { state: EditorState; dispatch: (tr: unknown) => void };
+      const { state, dispatch } = viewInstance;
 
       if (!isInTable(state)) return;
 
