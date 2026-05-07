@@ -4,7 +4,7 @@
 
 1. **Better Auth baseURL** — must be FRONTEND URL (e.g., `http://localhost:5173`), NOT the API server
 2. **Buttons** — `cursor-pointer`
-3. **No emojis** in the codebase
+3. Users can pick emoji icons for pages via the emoji picker
 
 ## Milkdown Editor
 

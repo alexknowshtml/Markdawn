@@ -2,13 +2,17 @@
 
 ## Key Decisions
 
-### Use `pool.query` instead of Drizzle's `db.select/insert`
+### Use `pool.query` in Route Handlers
 
-Type mismatches between root and package installations. All route operations use `pool.query`:
+Due to type mismatches between root and package installations, prefer `pool.query` over Drizzle's `db.select/insert` in route handlers. Auth helpers and migrations may use Drizzle directly.
 
 ```typescript
-import { pool } from "../db/connection";
-const result = await pool.query(`SELECT * FROM pages WHERE workspace_id = $1`, [workspaceId]);
+import { pool } from '../db/connection';
+
+const result = await pool.query(
+  'SELECT * FROM pages WHERE workspace_id = $1',
+  [workspaceId],
+);
 ```
 
 ### Yjs Binary Export

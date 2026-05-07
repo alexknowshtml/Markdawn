@@ -14,7 +14,7 @@
 ## Code Style
 
 - **No `any`** — use `unknown` with narrowing
-- **No emojis** in code
+- **No emojis** in commit messages or log output (emoji is fine in user-facing content like page icons)
 - **Named imports** preferred
 - **File naming**: `camelCase.ts` utils, `PascalCase.tsx` components, `use*.ts` hooks
 - **Strict TypeScript**: `noImplicitReturns`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`

@@ -2,6 +2,8 @@
 
 A knowledge base for humans and their AI agents.
 
+Try it out at [markdawn.space](https://markdawn.space) — currently in public beta.
+
 Notion is a human tool with an API bolted on. Obsidian is a local vault you sync. Markdawn is built different. The same product works headful in a browser and headless via REST API. Write a page in your browser. Have an agent read, edit, and link to it via the same endpoints. No wrappers, no adapters, no dual-mode.
 
 ---
@@ -26,7 +28,7 @@ Notion is a human tool with an API bolted on. Obsidian is a local vault you sync
 
 ### Security
 - OAuth login (Google, GitHub)
-- Public share links for any page — no account required to view
+- Public share links for any page via URL
 - Workspace-level access control
 
 ### Import
