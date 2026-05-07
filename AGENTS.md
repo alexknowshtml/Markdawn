@@ -161,7 +161,7 @@ See `.env.dev` for required variables:
 | `GOOGLE_CLIENT_SECRET` | OAuth Google |
 | `GITHUB_CLIENT_ID` | OAuth GitHub |
 | `GITHUB_CLIENT_SECRET` | OAuth GitHub |
-| `BASE_URL` | Frontend URL (fallback to `http://localhost:5173` if `FRONTEND_URL` not set) |
+| `FRONTEND_URL` | Frontend URL (fallback to `http://localhost:5173` if not set) |
 | `PORT` | API server port (default 3001) |
 | `COLLAB_PORT` | Collab server port (default 1234) |
 
@@ -529,7 +529,7 @@ These are documented but not fixed:
 
 ### Environment Variables for URLs
 URLs are parameterized via environment variables:
-- `FRONTEND_URL` / `BASE_URL` — API server uses for OAuth redirects
+- `FRONTEND_URL` — API server uses for OAuth redirects
 - `VITE_API_URL` — Frontend uses for API calls (default: http://localhost:3001)
 - `VITE_COLLAB_URL` — Frontend uses for WebSocket (default: ws://localhost:1234)
 - Vite proxy targets are configurable via env vars in vite.config.ts

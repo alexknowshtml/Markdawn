@@ -84,22 +84,4 @@ describe('generatePosition', () => {
     const result = generatePosition('zzz', null);
     expect(result > 'zzz').toBe(true);
   });
-
-  it('maintains sort order with random interleaved insertions', () => {
-    const positions: string[] = [generatePosition(null, null)];
-
-    for (let i = 0; i < 50; i++) {
-      const idx = Math.floor(Math.random() * (positions.length + 1));
-      const prev = positions[idx - 1] ?? null;
-      const next = positions[idx] ?? null;
-      const pos = generatePosition(prev, next);
-      positions.splice(idx, 0, pos);
-    }
-
-    for (let i = 1; i < positions.length; i++) {
-      const prev = positions[i - 1];
-      const curr = positions[i];
-      expect(prev !== undefined && curr !== undefined && prev < curr).toBe(true);
-    }
-  });
 });

@@ -56,7 +56,7 @@ Required variables:
 | `GOOGLE_CLIENT_SECRET` | OAuth Google |
 | `GITHUB_CLIENT_ID` | OAuth GitHub |
 | `GITHUB_CLIENT_SECRET` | OAuth GitHub |
-| `BASE_URL` | Frontend URL |
+| `FRONTEND_URL` | Frontend URL |
 | `PORT` | API server port (default 3001) |
 | `COLLAB_PORT` | Collab server port (default 1234) |
 
