@@ -1,5 +1,11 @@
 import { Pool } from 'pg';
 import { afterAll, afterEach, beforeEach, vi } from 'vitest';
+import WebSocket from 'ws';
+
+// HocuspocusProvider requires a WebSocket global in Node.js
+// TODO: Remove this polyfill when upgrading to Node.js 24, which has built-in WebSocket
+// See: https://github.com/nodejs/node/issues/46096
+(globalThis as { WebSocket?: typeof WebSocket }).WebSocket = WebSocket;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
