@@ -67,11 +67,11 @@ function isLikelyTableData(text: string): boolean {
     return tabCounts.every((c) => c >= 2) && new Set(tabCounts).size === 1;
   }
 
-  const commaCounts = lines.map((l) => (l.match(/,/g) || []).length);
-  return commaCounts.every((c) => c >= 2) && new Set(commaCounts).size === 1;
+  const fieldCounts = lines.map((l) => l.split(',').length);
+  return fieldCounts.every((c) => c >= 2) && new Set(fieldCounts).size === 1;
 }
 
-function convertTSVToMarkdown(text: string): string {
+function convertDelimitedToMarkdown(text: string): string {
   const delimiter = text.includes('\t') ? '\t' : ',';
   const lines = text.trim().split('\n');
   const rows = lines.map((line) => line.split(delimiter).map((cell) => cell.trim()));
@@ -243,7 +243,7 @@ export function useMilkdown({
               if (!text) return false;
 
               if (isLikelyTableData(text)) {
-                const markdown = convertTSVToMarkdown(text);
+                const markdown = convertDelimitedToMarkdown(text);
                 editorRef.current?.action(insert(markdown));
                 return true;
               }
@@ -262,12 +262,8 @@ export function useMilkdown({
 
                 if (event.key === 'Tab') {
                   event.preventDefault();
-                  goToNextCell(1)(state, dispatch);
-                  return true;
-                }
-                if (event.key === 'Tab' && event.shiftKey) {
-                  event.preventDefault();
-                  goToNextCell(-1)(state, dispatch);
+                  const direction = event.shiftKey ? -1 : 1;
+                  goToNextCell(direction)(state, dispatch);
                   return true;
                 }
                 return false;

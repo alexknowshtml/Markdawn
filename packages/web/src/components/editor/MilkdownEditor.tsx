@@ -20,7 +20,6 @@ import {
   deleteColumn,
   deleteRow,
   deleteTable,
-  goToNextCell,
   isInTable,
 } from 'prosemirror-tables';
 import * as Y from 'yjs';
@@ -495,6 +494,7 @@ export function MilkdownEditor({
       | 'deleteTable',
   ) => {
     if (!editor) return;
+    keepVisible();
 
     editor.action((ctx) => {
       const view = ctx.get(editorViewCtx);
