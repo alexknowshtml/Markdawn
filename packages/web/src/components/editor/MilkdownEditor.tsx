@@ -1,18 +1,22 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
+import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import './editor.css';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import { HocuspocusProvider } from '@hocuspocus/provider';
 import { commandsCtx, editorViewCtx } from '@milkdown/core';
+import type { Editor } from '@milkdown/core';
 import { replaceAll } from '@milkdown/utils';
 import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
 import type { EditorState } from 'prosemirror-state';
 import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
+import { WikiLinkSuggestions } from './WikiLinkSuggestions';
+
 interface MilkdownEditorProps {
   pageId: string;
   workspaceId: string;
@@ -37,7 +41,16 @@ export function MilkdownEditor({
   onWikiLinkClick,
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), []);
-  const editorRef = useRef<unknown>(null);
+  const editorRef = useRef<Editor | null>(null);
+
+  const {
+    suggestions,
+    allPages,
+    handleWikiLinkSuggest,
+    handleWikiLinkSelect,
+    handleAddPage,
+    closeSuggestions,
+  } = useWikiLinkSuggestions(workspaceId, editorRef);
 
   const [activeStates, setActiveStates] = useState({
     isBoldActive: false,
@@ -178,6 +191,7 @@ export function MilkdownEditor({
     doc,
     provider,
     onWikiLinkClick,
+    onWikiLinkSuggest: handleWikiLinkSuggest,
   });
 
   const { visible, position, keepVisible } = useFloatingToolbar();
@@ -629,6 +643,15 @@ export function MilkdownEditor({
 
   return (
     <div className="editor-wrapper min-h-[500px] relative">
+      <WikiLinkSuggestions
+        isOpen={suggestions.isOpen}
+        query={suggestions.query}
+        pages={allPages}
+        position={suggestions.position}
+        onSelect={handleWikiLinkSelect}
+        onClose={closeSuggestions}
+        onAddPage={handleAddPage}
+      />
       <FloatingToolbar
         visible={visible}
         position={position}
