@@ -171,6 +171,9 @@ importers:
       '@types/node':
         specifier: ^22.0.0
         version: 22.19.17
+      yjs:
+        specifier: 13.6.29
+        version: 13.6.29
 
   packages/web:
     dependencies:
@@ -258,6 +261,9 @@ importers:
       clsx:
         specifier: ^2.1.1
         version: 2.1.1
+      fuse.js:
+        specifier: ^7.3.0
+        version: 7.3.0
       katex:
         specifier: ^0.16.45
         version: 0.16.45
@@ -2145,6 +2151,10 @@ packages:
     resolution: {integrity: sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==}
     engines: {node: ^8.16.0 || ^10.6.0 || >=11.0.0}
     os: [darwin]
+
+  fuse.js@7.3.0:
+    resolution: {integrity: sha512-plz8RVjfcDedTGfVngWH1jmJvBvAwi1v2jecfDerbEnMcmOYUEEwKFTHbNoCiYyzaK2Ws8lABkTCcRSqCY1q4w==}
+    engines: {node: '>=10'}
 
   gensync@1.0.0-beta.2:
     resolution: {integrity: sha512-3hN7NaskYvMDLQY55gnW3NQ+mesEAepTqlg+VEbj7zzqEMBVNhzcGYYeqFo/TlYz6eQiFcp1HcsCZO+nGgS8zg==}
@@ -4972,6 +4982,8 @@ snapshots:
 
   fsevents@2.3.3:
     optional: true
+
+  fuse.js@7.3.0: {}
 
   gensync@1.0.0-beta.2: {}
 
