@@ -34,7 +34,7 @@ vi.mock('@markdawn/shared', async () => {
 });
 
 vi.mock('@markdawn/shared/yjs-helpers', () => ({
-  yDocToMarkdown: vi.fn().mockResolvedValue(''),
+  yDocToMarkdown: vi.fn(() => ''),
   extractWikilinks: vi.fn(() => []),
 }));
 

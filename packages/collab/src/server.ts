@@ -10,84 +10,84 @@ async function updateBacklinks(pool: Pool, pageId: string, ydocUpdate: Uint8Arra
     const markdown = yDocToMarkdown(ydocUpdate);
     const links = extractWikilinks(markdown);
 
-    const existingResult = await pool.query(
-      'select target_title, target_page_id from page_links where source_page_id = $1',
-      [pageId],
-    );
-    const existingTargetIds = new Map(
-      existingResult.rows.map((r) => [r.target_title.toLowerCase(), r.target_page_id]),
-    );
-
-    const uniqueTitles = [...new Set(links.map((l) => l.page))];
+    const uniqueTitles = [...new Set(links.map((l) => l.page.toLowerCase()))];
     if (uniqueTitles.length === 0) {
       await pool.query('delete from page_links where source_page_id = $1', [pageId]);
       return;
     }
 
-    const titlesNeedingLookup = uniqueTitles.filter(
-      (title) => !existingTargetIds.has(title.toLowerCase()),
-    );
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const titleToId = new Map<string, string | null>();
 
-    const titleToId = new Map(existingTargetIds);
-    if (titlesNeedingLookup.length > 0) {
-      const titleResult = await pool.query(
-        'select id, title from pages where title = any($1) and is_deleted = false',
-        [titlesNeedingLookup],
-      );
-      for (const row of titleResult.rows) {
-        titleToId.set(row.title.toLowerCase(), row.id);
+    const pageResult = await pool.query('select workspace_id from pages where id = $1', [pageId]);
+    const workspaceId: string | null = pageResult.rows[0]?.workspace_id ?? null;
+
+    const uuidTargets: string[] = [];
+    const titleTargets: string[] = [];
+    for (const title of uniqueTitles) {
+      if (uuidRegex.test(title)) {
+        uuidTargets.push(title);
+      } else {
+        titleTargets.push(title);
       }
     }
 
-    const titlesNeedingRefresh = uniqueTitles.filter(
-      (title) =>
-        existingTargetIds.has(title.toLowerCase()) &&
-        existingTargetIds.get(title.toLowerCase()) == null,
-    );
-    if (titlesNeedingRefresh.length > 0) {
-      const refreshResult = await pool.query(
-        'select id, title from pages where title = any($1) and is_deleted = false',
-        [titlesNeedingRefresh],
+    if (uuidTargets.length > 0) {
+      const result = await pool.query(
+        'select id from pages where lower(id::text) = any($1::text[]) and is_deleted = false',
+        [uuidTargets],
       );
-      const refreshMap = new Map(refreshResult.rows.map((r) => [r.title.toLowerCase(), r.id]));
-      for (const title of titlesNeedingRefresh) {
-        titleToId.set(title.toLowerCase(), refreshMap.get(title.toLowerCase()) ?? null);
+      for (const row of result.rows) {
+        titleToId.set(row.id.toLowerCase(), row.id);
+      }
+    }
+
+    if (titleTargets.length > 0) {
+      const params: unknown[] = [titleTargets];
+      let query =
+        'select id, title from pages where lower(title) = any($1::text[]) and is_deleted = false';
+      if (workspaceId) {
+        query += ' and workspace_id = $2';
+        params.push(workspaceId);
+      }
+      const result = await pool.query(query, params);
+      for (const row of result.rows) {
+        titleToId.set(row.title.toLowerCase(), row.id);
       }
     }
 
     const placeholders: string[] = [];
     const linkParams: (string | null)[] = [];
-    const paramIdx = 2;
-
-    for (let i = 0; i < links.length; i++) {
-      const link = links[i];
-      if (!link) continue;
-      const targetPageId = titleToId.get(link.page.toLowerCase()) || null;
-      const base = paramIdx + i * 4;
+    for (const [i, lowerTitle] of uniqueTitles.entries()) {
+      const firstLink = links.find((l) => l.page.toLowerCase() === lowerTitle);
+      const originalTitle = firstLink?.page ?? lowerTitle;
+      const alias = firstLink?.alias ?? originalTitle;
+      const targetPageId = titleToId.get(lowerTitle) ?? null;
+      const base = 2 + i * 4;
       placeholders.push(`($1, $${base}, $${base + 1}, $${base + 2}, $${base + 3})`);
-      linkParams.push(targetPageId, link.page, link.alias || link.page, 'wiki');
+      linkParams.push(targetPageId, originalTitle, alias, 'wiki');
     }
 
-    await pool.query('BEGIN');
+    const client = await pool.connect();
     try {
-      await pool.query('delete from page_links where source_page_id = $1', [pageId]);
-
-      if (links.length > 0) {
-        await pool.query(
-          `insert into page_links (source_page_id, target_page_id, target_title, link_text, link_type)
-           values ${placeholders.join(',')}
-           on conflict (source_page_id, target_title) do update set
-             target_page_id = excluded.target_page_id,
-             link_text = excluded.link_text,
-             link_type = excluded.link_type`,
-          [pageId, ...linkParams],
-        );
-      }
-      await pool.query('COMMIT');
-      logger.debug(`[backlinks] updated ${links.length} links for page ${pageId}`);
+      await client.query('BEGIN');
+      await client.query('delete from page_links where source_page_id = $1', [pageId]);
+      await client.query(
+        `insert into page_links (source_page_id, target_page_id, target_title, link_text, link_type)
+         values ${placeholders.join(',')}
+         on conflict (source_page_id, target_title) do update set
+           target_page_id = excluded.target_page_id,
+           link_text = excluded.link_text,
+           link_type = excluded.link_type`,
+        [pageId, ...linkParams],
+      );
+      await client.query('COMMIT');
+      logger.debug(`[backlinks] updated ${uniqueTitles.length} links for page ${pageId}`);
     } catch (err) {
-      await pool.query('ROLLBACK');
+      await client.query('ROLLBACK');
       throw err;
+    } finally {
+      client.release();
     }
   } catch (err) {
     logger.error(`[backlinks] failed to update for page ${pageId}: ${err}`);

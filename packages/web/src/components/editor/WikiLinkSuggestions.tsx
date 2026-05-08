@@ -21,7 +21,7 @@ interface WikiLinkSuggestionsProps {
 
 const MAX_RESULTS = 10;
 const MENU_WIDTH = 320;
-const MENU_MAX_HEIGHT = 300;
+const MENU_OVERFLOW_THRESHOLD = 320;
 
 export function WikiLinkSuggestions({
   isOpen,
@@ -63,8 +63,10 @@ export function WikiLinkSuggestions({
   const totalItems = results.length + (onAddPage ? 1 : 0);
 
   useEffect(() => {
-    setSelectedIndex(0);
-  }, []);
+    if (isOpen) {
+      setSelectedIndex(0);
+    }
+  }, [isOpen]);
 
   useLayoutEffect(() => {
     if (!isOpen || !position || !containerRef.current) {
@@ -80,11 +82,10 @@ export function WikiLinkSuggestions({
     const x = position.x;
     let newPlacement: 'top' | 'bottom' = 'bottom';
 
-    const threshold = 320;
     const bottomCoord = position.bottom ?? position.y;
     const topCoord = position.top ?? position.y - 20;
 
-    if (bottomCoord + threshold > viewportHeight - 20) {
+    if (bottomCoord + MENU_OVERFLOW_THRESHOLD > viewportHeight - 20) {
       newPlacement = 'top';
     }
 

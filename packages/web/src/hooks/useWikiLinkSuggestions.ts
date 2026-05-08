@@ -3,7 +3,6 @@ import { editorViewCtx } from '@milkdown/core';
 import { useQueryClient } from '@tanstack/react-query';
 import { Selection } from 'prosemirror-state';
 import { useCallback, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useCreatePage, usePages } from './use-pages';
 
 type WikiLinkPage = {
@@ -23,7 +22,6 @@ export function useWikiLinkSuggestions(
   workspaceId: string,
   editorRef: React.RefObject<Editor | null>,
 ) {
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
   const createPageMutation = useCreatePage();
   const { data: allPages = [] } = usePages(workspaceId);
@@ -99,7 +97,6 @@ export function useWikiLinkSuggestions(
 
             setTimeout(() => {
               queryClient.invalidateQueries({ queryKey: ['backlinks'] });
-              queryClient.invalidateQueries({ queryKey: ['outgoingLinks'] });
             }, 1000);
           }
         }
