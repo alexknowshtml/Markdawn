@@ -33,6 +33,11 @@ vi.mock('@markdawn/shared', async () => {
   };
 });
 
+vi.mock('@markdawn/shared/yjs-helpers', () => ({
+  yDocToMarkdown: vi.fn().mockResolvedValue(''),
+  extractWikilinks: vi.fn(() => []),
+}));
+
 describe('collab package entry point', () => {
   it('resolves the module graph without errors', async () => {
     const mod = await import('./index');
