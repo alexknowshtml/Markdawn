@@ -40,7 +40,9 @@ async function updateBacklinks(pool: Pool, pageId: string, ydocUpdate: Uint8Arra
     }
 
     const titlesNeedingRefresh = uniqueTitles.filter(
-      (title) => existingTargetIds.has(title.toLowerCase()) && existingTargetIds.get(title.toLowerCase()) == null,
+      (title) =>
+        existingTargetIds.has(title.toLowerCase()) &&
+        existingTargetIds.get(title.toLowerCase()) == null,
     );
     if (titlesNeedingRefresh.length > 0) {
       const refreshResult = await pool.query(
