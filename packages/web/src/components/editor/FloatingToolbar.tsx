@@ -1,6 +1,9 @@
 import {
   IconBold,
   IconCode,
+  IconColumnInsertLeft,
+  IconColumnInsertRight,
+  IconColumnRemove,
   IconH1,
   IconH2,
   IconH3,
@@ -13,7 +16,12 @@ import {
   IconListCheck,
   IconListNumbers,
   IconPhoto,
+  IconRowInsertBottom,
+  IconRowInsertTop,
+  IconRowRemove,
   IconStrikethrough,
+  IconTable,
+  IconTrash,
 } from '@tabler/icons-react';
 import type React from 'react';
 import { useRef } from 'react';
@@ -25,6 +33,14 @@ export interface FloatingToolbarProps {
   onCode: () => void;
   onLink: () => void;
   onImageUpload: (file: File) => void;
+  onInsertTable: () => void;
+  onAddRowBefore: () => void;
+  onAddRowAfter: () => void;
+  onAddColBefore: () => void;
+  onAddColAfter: () => void;
+  onDeleteRow: () => void;
+  onDeleteCol: () => void;
+  onDeleteTable: () => void;
   onH1: () => void;
   onH2: () => void;
   onH3: () => void;
@@ -50,6 +66,7 @@ export interface FloatingToolbarProps {
   isBulletListActive?: boolean;
   isOrderedListActive?: boolean;
   isTaskListActive?: boolean;
+  isInTableActive?: boolean;
 }
 
 export function FloatingToolbar({
@@ -59,6 +76,14 @@ export function FloatingToolbar({
   onCode,
   onLink,
   onImageUpload,
+  onInsertTable,
+  onAddRowBefore,
+  onAddRowAfter,
+  onAddColBefore,
+  onAddColAfter,
+  onDeleteRow,
+  onDeleteCol,
+  onDeleteTable,
   onH1,
   onH2,
   onH3,
@@ -84,6 +109,7 @@ export function FloatingToolbar({
   isBulletListActive,
   isOrderedListActive,
   isTaskListActive,
+  isInTableActive,
 }: FloatingToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -227,6 +253,76 @@ export function FloatingToolbar({
       >
         <IconListCheck size={16} />
       </button>
+      <button
+        type="button"
+        onClick={onInsertTable}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isInTableActive ? 'bg-zinc-600 text-white' : ''}`}
+        title="Insert Table"
+      >
+        <IconTable size={16} />
+      </button>
+      {isInTableActive && (
+        <>
+          <div className="w-px h-5 bg-zinc-600 mx-1" />
+          <button
+            type="button"
+            onClick={onAddRowBefore}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            title="Add Row Above"
+          >
+            <IconRowInsertTop size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onAddRowAfter}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            title="Add Row Below"
+          >
+            <IconRowInsertBottom size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onAddColBefore}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            title="Add Column Left"
+          >
+            <IconColumnInsertLeft size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onAddColAfter}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            title="Add Column Right"
+          >
+            <IconColumnInsertRight size={16} />
+          </button>
+          <div className="w-px h-5 bg-zinc-600 mx-1" />
+          <button
+            type="button"
+            onClick={onDeleteRow}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            title="Delete Row"
+          >
+            <IconRowRemove size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onDeleteCol}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            title="Delete Column"
+          >
+            <IconColumnRemove size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={onDeleteTable}
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            title="Delete Table"
+          >
+            <IconTrash size={16} />
+          </button>
+        </>
+      )}
       <input
         ref={fileInputRef}
         type="file"

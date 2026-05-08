@@ -782,3 +782,18 @@
 .dark .math-editor-btn-done:hover {
   background: #1d4ed8;
 }
+
+.milkdown-editor-view .selectedCell {
+  background-color: rgba(59, 130, 246, 0.15);
+  outline: 2px solid #3b82f6;
+}
+
+.dark .milkdown-editor-view .selectedCell {
+  background-color: rgba(96, 165, 250, 0.2);
+  outline: 2px solid #60a5fa;
+}
+
+.milkdown-editor-view th.selectedCell,
+.milkdown-editor-view td.selectedCell {
+  outline-offset: -2px;
+}
