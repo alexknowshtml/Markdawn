@@ -1,8 +1,109 @@
 import { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
+import { extractWikilinks, yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
 import type { Pool } from 'pg';
 import * as Y from 'yjs';
 import { parseCookies } from './utils';
+
+async function updateBacklinks(pool: Pool, pageId: string, ydocUpdate: Uint8Array, logger: Logger) {
+  try {
+    const markdown = yDocToMarkdown(ydocUpdate);
+    const links = extractWikilinks(markdown);
+
+    const existingResult = await pool.query(
+      'select target_title, target_page_id from page_links where source_page_id = $1',
+      [pageId],
+    );
+    const existingTargetIds = new Map(
+      existingResult.rows.map((r) => [r.target_title.toLowerCase(), r.target_page_id]),
+    );
+
+    const uniqueTitles = [...new Set(links.map((l) => l.page))];
+    if (uniqueTitles.length === 0) {
+      await pool.query('delete from page_links where source_page_id = $1', [pageId]);
+      return;
+    }
+
+    const titlesNeedingLookup = uniqueTitles.filter(
+      (title) => !existingTargetIds.has(title.toLowerCase()),
+    );
+
+    const titleToId = new Map(existingTargetIds);
+    if (titlesNeedingLookup.length > 0) {
+      const titleResult = await pool.query(
+        'select id, title from pages where title = any($1) and is_deleted = false',
+        [titlesNeedingLookup],
+      );
+      for (const row of titleResult.rows) {
+        titleToId.set(row.title.toLowerCase(), row.id);
+      }
+    }
+
+    const titlesNeedingRefresh = uniqueTitles.filter(
+      (title) => existingTargetIds.has(title.toLowerCase()) && existingTargetIds.get(title.toLowerCase()) == null,
+    );
+    if (titlesNeedingRefresh.length > 0) {
+      const refreshResult = await pool.query(
+        'select id, title from pages where title = any($1) and is_deleted = false',
+        [titlesNeedingRefresh],
+      );
+      const refreshMap = new Map(refreshResult.rows.map((r) => [r.title.toLowerCase(), r.id]));
+      for (const title of titlesNeedingRefresh) {
+        titleToId.set(title.toLowerCase(), refreshMap.get(title.toLowerCase()) ?? null);
+      }
+    }
+
+    const placeholders: string[] = [];
+    const linkParams: (string | null)[] = [];
+    const paramIdx = 2;
+
+    for (let i = 0; i < links.length; i++) {
+      const link = links[i];
+      if (!link) continue;
+      const targetPageId = titleToId.get(link.page.toLowerCase()) || null;
+      const base = paramIdx + i * 4;
+      placeholders.push(`($1, $${base}, $${base + 1}, $${base + 2}, $${base + 3})`);
+      linkParams.push(targetPageId, link.page, link.alias || link.page, 'wiki');
+    }
+
+    await pool.query('BEGIN');
+    try {
+      await pool.query('delete from page_links where source_page_id = $1', [pageId]);
+
+      if (links.length > 0) {
+        await pool.query(
+          `insert into page_links (source_page_id, target_page_id, target_title, link_text, link_type)
+           values ${placeholders.join(',')}
+           on conflict (source_page_id, target_title) do update set
+             target_page_id = excluded.target_page_id,
+             link_text = excluded.link_text,
+             link_type = excluded.link_type`,
+          [pageId, ...linkParams],
+        );
+      }
+      await pool.query('COMMIT');
+      logger.debug(`[backlinks] updated ${links.length} links for page ${pageId}`);
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      throw err;
+    }
+  } catch (err) {
+    logger.error(`[backlinks] failed to update for page ${pageId}: ${err}`);
+  }
+}
+
+async function persistDocument(
+  pool: Pool,
+  documentName: string,
+  state: Uint8Array,
+  logger: Logger,
+) {
+  await pool.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
+    state,
+    documentName,
+  ]);
+  await updateBacklinks(pool, documentName, state, logger);
+}
 
 export interface CollabServerConfig {
   port: number;
@@ -121,10 +222,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
       logger.info(`[persist] saving: "${documentName}", size: ${state.length} bytes`);
       try {
-        await pool.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
-          state,
-          documentName,
-        ]);
+        await persistDocument(pool, documentName, state, logger);
         logger.debug(`[persist] saved: ${documentName}`);
       } catch (err) {
         logger.error(`[persist] failed to save "${documentName}": ${err}`);
@@ -144,10 +242,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
       logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
       try {
-        await pool.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
-          state,
-          documentName,
-        ]);
+        await persistDocument(pool, documentName, state, logger);
         logger.debug(`[disconnect] force saved: ${documentName}`);
       } catch (err) {
         logger.error(`[disconnect] force save failed for "${documentName}": ${err}`);
