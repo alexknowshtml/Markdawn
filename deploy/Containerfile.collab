@@ -1,29 +1,62 @@
 FROM node:24-slim AS base
 WORKDIR /app
-RUN corepack enable
+RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 
+# --- Deps: install production-only deps ---
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/api/package.json packages/api/package.json
-COPY packages/collab/package.json packages/collab/package.json
+WORKDIR /app
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY packages/shared/package.json packages/shared/package.json
-COPY packages/web/package.json packages/web/package.json
-RUN pnpm install --frozen-lockfile
+COPY packages/collab/package.json packages/collab/package.json
 
-FROM deps AS build
+# Install ONLY collab + shared deps, production-only (prunes devDependencies)
+RUN pnpm install --frozen-lockfile --filter @markdawn/collab --filter @markdawn/shared --prod && pnpm store prune
+
+# --- Build Deps: install all deps (including devDependencies for building) ---
+FROM base AS build-deps
+WORKDIR /app
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/collab/package.json packages/collab/package.json
+RUN pnpm install --frozen-lockfile --filter @markdawn/collab --filter @markdawn/shared
+
+# --- Build: compile source ---
+FROM build-deps AS build
+WORKDIR /app
 COPY tsconfig.base.json ./
 COPY packages/shared packages/shared
 COPY packages/collab packages/collab
-RUN pnpm --filter @markdawn/shared build && pnpm --filter @markdawn/collab build
+RUN pnpm -C packages/shared run build
+RUN pnpm -C packages/collab run build
 
+# --- Runner: final image ---
 FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV COLLAB_PORT=1234
-COPY --from=deps /app/node_modules /app/node_modules
-COPY --from=build /app/packages/shared /app/packages/shared
-COPY --from=deps /app/packages/shared/node_modules /app/packages/shared/node_modules
-COPY --from=build /app/packages/collab /app/packages/collab
-COPY --from=deps /app/packages/collab/node_modules /app/packages/collab/node_modules
+
+# Copy production node_modules (no devDependencies)
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/pnpm-workspace.yaml /app/package.json /app/pnpm-lock.yaml ./
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=deps /app/packages/collab/node_modules ./packages/collab/node_modules
+
+# Copy built packages (dist + package.json only)
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build /app/packages/collab/dist ./packages/collab/dist
+COPY --from=build /app/packages/collab/package.json ./packages/collab/package.json
+
+# Install dumb-init for proper signal handling (PID 1 problem)
+RUN apt-get update && apt-get install -y --no-install-recommends dumb-init && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Health check for orchestrator visibility (TCP check since collab is WebSocket-only)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD node -e "require('net').connect(1234, '127.0.0.1').end()" || exit 1
+
 EXPOSE 1234
+
+# dumb-init ensures SIGTERM reaches Node properly
+ENTRYPOINT ["dumb-init", "--"]
 CMD ["node", "/app/packages/collab/dist/index.js"]
