@@ -51,10 +51,6 @@ COPY --from=build /app/packages/collab/package.json ./packages/collab/package.js
 RUN apt-get update && apt-get install -y --no-install-recommends dumb-init && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Health check for orchestrator visibility (TCP check since collab is WebSocket-only)
-HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD node -e "require('net').connect(1234, '127.0.0.1').end()" || exit 1
-
 EXPOSE 1234
 
 # dumb-init ensures SIGTERM reaches Node properly
