@@ -16,12 +16,21 @@
       "development": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./yjs-helpers": {
+      "development": "./src/utils/yjs-helpers.ts",
+      "types": "./src/utils/yjs-helpers.ts",
+      "default": "./dist/utils/yjs-helpers.js"
     }
   },
   "dependencies": {
     "@logtape/logtape": "^2.0.5"
   },
+  "peerDependencies": {
+    "yjs": "^13.6.29"
+  },
   "devDependencies": {
-    "@types/node": "^22.0.0"
+    "@types/node": "^22.0.0",
+    "yjs": "^13.6.29"
   }
 }

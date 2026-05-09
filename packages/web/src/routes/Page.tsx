@@ -135,7 +135,9 @@ export default function Page() {
   const handleWikiLinkClick = useCallback(
     (path: string) => {
       if (!path || !workspaceSlug) return;
-      const targetPage = flatPages.find((p) => p.title.toLowerCase() === path.toLowerCase());
+      const targetPage = flatPages.find(
+        (p) => p.id === path || p.title.toLowerCase() === path.toLowerCase(),
+      );
       if (targetPage) {
         navigate(`/app/${workspaceSlug}/${targetPage.id}`);
       }

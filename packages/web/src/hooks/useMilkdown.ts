@@ -117,6 +117,11 @@ interface UseMilkdownProps {
   doc?: Y.Doc;
   provider?: HocuspocusProvider;
   onWikiLinkClick?: ((path: string) => void) | undefined;
+  onWikiLinkSuggest?: (
+    isOpen: boolean,
+    query: string,
+    position: { x: number; y: number; top?: number; bottom?: number } | null,
+  ) => void;
 }
 
 function isTaskChecked(checked: unknown): boolean {
@@ -168,12 +173,15 @@ export function useMilkdown({
   doc,
   provider,
   onWikiLinkClick,
+  onWikiLinkSuggest,
 }: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
   const [editorInstance, setEditorInstance] = useState<Editor | null>(null);
   const onWikiLinkClickRef = useRef(onWikiLinkClick);
   onWikiLinkClickRef.current = onWikiLinkClick;
+  const onWikiLinkSuggestRef = useRef(onWikiLinkSuggest);
+  onWikiLinkSuggestRef.current = onWikiLinkSuggest;
   const hasCollab = Boolean(doc && provider);
   const fallbackInitialValue = hasCollab ? undefined : initialValue;
 
@@ -249,6 +257,36 @@ export function useMilkdown({
 
           ctx.get(listenerCtx).markdownUpdated((_ctx, markdown) => {
             onChange?.(markdown);
+          });
+
+          ctx.get(listenerCtx).updated((_ctx) => {
+            const suggest = onWikiLinkSuggestRef.current;
+            if (!suggest) return;
+
+            const view = _ctx.get(editorViewCtx);
+            const { selection } = view.state;
+
+            if (!selection.empty) {
+              suggest(false, '', null);
+              return;
+            }
+
+            const { $from } = selection;
+            const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
+
+            const match = textBefore.match(/\[\[([^\]]*)$/);
+            if (match) {
+              const query = match[1] || '';
+              const coords = view.coordsAtPos($from.pos);
+              suggest(true, query, {
+                x: coords.left,
+                y: coords.bottom + 5,
+                top: coords.top,
+                bottom: coords.bottom,
+              });
+            } else {
+              suggest(false, '', null);
+            }
           });
 
           ctx.update(editorViewOptionsCtx, (prev) => ({
