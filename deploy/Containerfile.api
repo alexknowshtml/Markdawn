@@ -34,20 +34,17 @@ FROM node:24-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# Create non-root user for security
-RUN groupadd -g 1000 markdawn && useradd -u 1000 -g markdawn -s /sbin/nologin -m markdawn
+# Copy production node_modules (no devDependencies)
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/pnpm-workspace.yaml /app/package.json /app/pnpm-lock.yaml ./
+COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
+COPY --from=deps /app/packages/api/node_modules ./packages/api/node_modules
 
-# Copy production node_modules (no devDependencies), owned by markdawn
-COPY --from=deps --chown=markdawn:markdawn /app/node_modules ./node_modules
-COPY --from=deps --chown=markdawn:markdawn /app/pnpm-workspace.yaml /app/package.json /app/pnpm-lock.yaml ./
-COPY --from=deps --chown=markdawn:markdawn /app/packages/shared/node_modules ./packages/shared/node_modules
-COPY --from=deps --chown=markdawn:markdawn /app/packages/api/node_modules ./packages/api/node_modules
-
-# Copy built packages (dist + package.json, owned by markdawn)
-COPY --from=build --chown=markdawn:markdawn /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build --chown=markdawn:markdawn /app/packages/shared/package.json ./packages/shared/package.json
-COPY --from=build --chown=markdawn:markdawn /app/packages/api/dist ./packages/api/dist
-COPY --from=build --chown=markdawn:markdawn /app/packages/api/package.json ./packages/api/package.json
+# Copy built packages (dist + package.json only)
+COPY --from=build /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build /app/packages/shared/package.json ./packages/shared/package.json
+COPY --from=build /app/packages/api/dist ./packages/api/dist
+COPY --from=build /app/packages/api/package.json ./packages/api/package.json
 
 # Install dumb-init and wget for proper signal handling and health checks
 RUN apt-get update && apt-get install -y --no-install-recommends dumb-init wget && \
@@ -58,9 +55,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
     CMD wget -qO- http://localhost:3001/api/health || exit 1
 
 EXPOSE 3001
-
-# Switch to non-root before running
-USER markdawn
 
 # dumb-init ensures SIGTERM reaches Node properly
 ENTRYPOINT ["dumb-init", "--"]

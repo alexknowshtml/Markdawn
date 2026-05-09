@@ -4,7 +4,7 @@ node_modules
 .vscode
 .idea
 *.md
-!.dockerignore
+!.containerignore
 .env
 .env.*
 .env.local
