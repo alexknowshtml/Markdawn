@@ -170,6 +170,9 @@ importers:
       '@logtape/logtape':
         specifier: ^2.0.5
         version: 2.0.5
+      yjs:
+        specifier: 13.6.29
+        version: 13.6.29
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -177,9 +180,6 @@ importers:
       typescript:
         specifier: ^5.7.0
         version: 5.9.3
-      yjs:
-        specifier: 13.6.29
-        version: 13.6.29
 
   packages/web:
     dependencies:
