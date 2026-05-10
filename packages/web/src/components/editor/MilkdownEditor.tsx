@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
 import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
@@ -11,7 +12,6 @@ import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import type { Editor } from '@milkdown/core';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
-import { replaceAll } from '@milkdown/utils';
 import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
 import type { EditorState } from 'prosemirror-state';
@@ -34,7 +34,6 @@ interface MilkdownEditorProps {
   workspaceId: string;
   initialValue?: string;
   onChange?: (markdown: string) => void;
-  onEditorReady?: (editor: unknown) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
   onWikiLinkClick?: (path: string) => void;
@@ -47,7 +46,6 @@ export function MilkdownEditor({
   workspaceId,
   initialValue,
   onChange,
-  onEditorReady,
   onStatusChange,
   onProviderReady,
   onWikiLinkClick,
@@ -207,6 +205,8 @@ export function MilkdownEditor({
     onWikiLinkClick,
     onWikiLinkSuggest: handleWikiLinkSuggest,
   });
+
+  useAwareness(provider);
 
   const { visible, position, keepVisible } = useFloatingToolbar();
 
@@ -619,42 +619,8 @@ export function MilkdownEditor({
   }, [provider, pageId]);
 
   useEffect(() => {
-    if (editor) {
-      editorRef.current = editor;
-      const editorWrapper = {
-        milkdown: editor,
-        document: [],
-        onChange: () => () => {},
-        replaceBlocks: (
-          _doc: unknown,
-          blocks: Array<{
-            type: string;
-            props?: Record<string, unknown>;
-            content?: Array<{ text?: string }>;
-          }>,
-        ) => {
-          const markdown = blocks
-            .map((b) => {
-              if (b.type === 'heading') {
-                const level = typeof b.props?.level === 'number' ? b.props.level : 1;
-                return `${'#'.repeat(level)} ${b.content?.[0]?.text || ''}`;
-              }
-              if (b.type === 'paragraph') {
-                return b.content?.[0]?.text || '';
-              }
-              return '';
-            })
-            .join('\n\n');
-
-          editor.action(replaceAll(markdown));
-        },
-      };
-
-      onEditorReady?.(editorWrapper);
-    } else {
-      editorRef.current = null;
-    }
-  }, [editor, onEditorReady]);
+    editorRef.current = editor;
+  }, [editor]);
 
   const isMountedRef = useRef(true);
   const latestProviderRef = useRef(provider);

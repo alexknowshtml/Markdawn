@@ -797,3 +797,95 @@
 .milkdown-editor-view td.selectedCell {
   outline-offset: -2px;
 }
+
+/* Collaborative Cursors */
+.ProseMirror-yjs-cursor {
+  position: absolute;
+  border-left: 2px solid;
+  height: 1.2em;
+  word-break: normal;
+  /* Remove pointer-events: none so hover works */
+  user-select: none;
+  z-index: 5;
+}
+
+/* Larger invisible hitarea to make hovering easier */
+.ProseMirror-yjs-cursor-hitarea {
+  position: absolute;
+  top: -4px;
+  left: -10px;
+  width: 20px;
+  height: calc(100% + 8px);
+  background: transparent;
+  pointer-events: auto;
+  cursor: pointer;
+  z-index: 10;
+}
+
+.ProseMirror-yjs-cursor > .ProseMirror-yjs-cursor-pill {
+  position: absolute;
+  top: -26px;
+  left: -2px;
+  display: inline-flex;
+  width: max-content;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 10px 2px 2px;
+  border-radius: 4px;
+  color: white;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(2px);
+  transition: all 0.15s ease-out;
+  pointer-events: none;
+  z-index: 20;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+/* Reveal pill when hovering either the line or the hitarea */
+.ProseMirror-yjs-cursor:hover > .ProseMirror-yjs-cursor-pill {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+/* The tiny flag/cap at the top */
+.ProseMirror-yjs-cursor::after {
+  content: "";
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background-color: inherit;
+  z-index: 10;
+}
+
+.ProseMirror-yjs-cursor-pill img {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.ProseMirror-yjs-cursor-initials {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background-color: rgba(255, 255, 255, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+/* Collaborative Selection */
+.yjs-selection {
+  opacity: 0.3;
+  pointer-events: none;
+}
