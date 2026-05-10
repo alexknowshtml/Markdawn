@@ -34,9 +34,11 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
       if (!awareness) return;
 
       const states = awareness.getStates();
+      const localClientId = awareness.clientID;
       const activeUsers: AwarenessUser[] = [];
 
       for (const [clientId, state] of states.entries()) {
+        if (clientId === localClientId) continue;
         if (state.user && typeof state.user === 'object') {
           const user = state.user as { name?: string; color?: string; avatar?: string };
           activeUsers.push({
@@ -83,7 +85,7 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
       </Tooltip>
 
       {/* User Avatars */}
-      {users.length > 1 && (
+      {users.length > 0 && (
         <div className="flex items-center -space-x-2">
           {users.slice(0, 5).map((user) => (
             <Tooltip key={user.id} label={user.name} position="bottom">
