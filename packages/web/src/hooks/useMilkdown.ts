@@ -34,6 +34,40 @@ import 'katex/dist/katex.min.css';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import type * as Y from 'yjs';
 import { getLogger } from '../logger-init';
+import { getInitial } from '../utils/avatar';
+
+const cursorBuilder = (user: { name: string; color: string; avatar?: string }) => {
+  const cursor = document.createElement('span');
+  cursor.classList.add('ProseMirror-yjs-cursor');
+  cursor.style.borderColor = user.color;
+
+  const hitArea = document.createElement('div');
+  hitArea.classList.add('ProseMirror-yjs-cursor-hitarea');
+  cursor.appendChild(hitArea);
+
+  const pill = document.createElement('div');
+  pill.classList.add('ProseMirror-yjs-cursor-pill');
+  pill.style.backgroundColor = user.color;
+
+  if (user.avatar) {
+    const img = document.createElement('img');
+    img.src = user.avatar;
+    img.alt = user.name;
+    pill.appendChild(img);
+  } else {
+    const initials = document.createElement('div');
+    initials.classList.add('ProseMirror-yjs-cursor-initials');
+    initials.innerText = getInitial(user.name);
+    pill.appendChild(initials);
+  }
+
+  const name = document.createElement('span');
+  name.innerText = user.name;
+  pill.appendChild(name);
+
+  cursor.appendChild(pill);
+  return cursor;
+};
 
 function isLikelyMarkdown(value: string): boolean {
   const trimmed = value.trim();
@@ -288,6 +322,14 @@ export function useMilkdown({
               suggest(false, '', null);
             }
           });
+
+          if (withCollab) {
+            ctx.get(collabServiceCtx).setOptions({
+              yCursorOpts: {
+                cursorBuilder,
+              },
+            });
+          }
 
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
