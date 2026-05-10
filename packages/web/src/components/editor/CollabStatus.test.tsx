@@ -6,8 +6,8 @@ import { CollabStatus } from './CollabStatus';
 const mockAwareness = {
   getStates: vi.fn().mockReturnValue(
     new Map([
-      ['u1', {}],
-      ['u2', {}],
+      ['u1', { user: { name: 'User 1', color: '#ff0000' } }],
+      ['u2', { user: { name: 'User 2', color: '#00ff00' } }],
     ]),
   ),
   on: vi.fn(),
@@ -29,28 +29,31 @@ describe('CollabStatus', () => {
     expect(container.firstChild).toBeNull();
   });
 
-  it('shows connecting status with amber dot', () => {
+  it('shows connecting status label and amber dot', () => {
     const provider = createMockProvider(WebSocketStatus.Connecting);
     render(<CollabStatus provider={provider} status={WebSocketStatus.Connecting} />);
 
+    expect(screen.getByText('User 1')).toBeInTheDocument();
     expect(screen.getByText('Connecting')).toBeInTheDocument();
     const dot = document.querySelector('.bg-amber-500');
     expect(dot).toBeInTheDocument();
   });
 
-  it('shows connected status with emerald dot', () => {
+  it('shows connected status label and emerald dot', () => {
     const provider = createMockProvider(WebSocketStatus.Connected);
     render(<CollabStatus provider={provider} status={WebSocketStatus.Connected} />);
 
+    expect(screen.getByText('User 1')).toBeInTheDocument();
     expect(screen.getByText('Live')).toBeInTheDocument();
     const dot = document.querySelector('.bg-emerald-500');
     expect(dot).toBeInTheDocument();
   });
 
-  it('shows disconnected status with rose dot', () => {
+  it('shows disconnected status label and rose dot', () => {
     const provider = createMockProvider(WebSocketStatus.Disconnected);
     render(<CollabStatus provider={provider} status={WebSocketStatus.Disconnected} />);
 
+    expect(screen.getByText('User 1')).toBeInTheDocument();
     expect(screen.getByText('Offline')).toBeInTheDocument();
     const dot = document.querySelector('.bg-rose-500');
     expect(dot).toBeInTheDocument();

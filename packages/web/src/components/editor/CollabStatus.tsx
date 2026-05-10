@@ -1,29 +1,28 @@
-import type { HocuspocusProvider } from '@hocuspocus/provider';
-import type { WebSocketStatus } from '@hocuspocus/provider';
+import type { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import React, { useEffect, useState } from 'react';
+import { getInitial } from '../../utils/avatar';
 import { Tooltip } from '../Tooltip';
 
 type CollabStatusProps = {
   provider: HocuspocusProvider | null;
-  status: ProviderStatus;
+  status: WebSocketStatus;
 };
 
-type ProviderStatus = WebSocketStatus;
+type AwarenessUser = {
+  id: number;
+  name: string;
+  color: string;
+  avatar?: string;
+};
 
-const STATUS_LABELS: Record<ProviderStatus, string> = {
+const STATUS_LABELS: Record<WebSocketStatus, string> = {
   connecting: 'Connecting',
   connected: 'Live',
   disconnected: 'Offline',
 };
 
-const STATUS_COLORS: Record<ProviderStatus, string> = {
-  connecting: 'bg-amber-500',
-  connected: 'bg-emerald-500',
-  disconnected: 'bg-rose-500',
-};
-
 export function CollabStatus({ provider, status }: CollabStatusProps) {
-  const [userCount, setUserCount] = useState(1);
+  const [users, setUsers] = useState<AwarenessUser[]>([]);
 
   useEffect(() => {
     if (!provider) {
@@ -32,8 +31,24 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
 
     const updateUsers = () => {
       const awareness = provider.awareness;
-      const count = awareness ? awareness.getStates().size : 1;
-      setUserCount(count || 1);
+      if (!awareness) return;
+
+      const states = awareness.getStates();
+      const activeUsers: AwarenessUser[] = [];
+
+      for (const [clientId, state] of states.entries()) {
+        if (state.user && typeof state.user === 'object') {
+          const user = state.user as { name?: string; color?: string; avatar?: string };
+          activeUsers.push({
+            id: clientId,
+            name: user.name ?? 'Anonymous',
+            color: user.color ?? '#000000',
+            ...(user.avatar ? { avatar: user.avatar } : {}),
+          });
+        }
+      }
+
+      setUsers(activeUsers);
     };
 
     provider.awareness?.on('change', updateUsers);
@@ -45,23 +60,62 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
   }, [provider]);
 
   const label = STATUS_LABELS[status] ?? 'Connecting';
-  const dotClass = STATUS_COLORS[status] ?? STATUS_COLORS.connecting;
+  const statusColor =
+    status === 'connected'
+      ? 'bg-emerald-500'
+      : status === 'connecting'
+        ? 'bg-amber-500'
+        : 'bg-rose-500';
 
   if (!provider) {
     return null;
   }
 
   return (
-    <Tooltip label={label} position="bottom">
-      <span
-        className={
-          'relative flex w-9 h-9 items-center justify-center rounded-md transition-colors duration-200 group-hover:bg-zinc-100 dark:group-hover:bg-zinc-800 cursor-pointer'
-        }
-      >
-        <span
-          className={`inline-flex h-3 w-3 rounded-full transition-colors duration-300 ${dotClass}`}
-        />
-      </span>
-    </Tooltip>
+    <div className="flex items-center gap-3">
+      {/* Status Indicator */}
+      <Tooltip label={label} position="bottom">
+        <span className="relative flex w-9 h-9 items-center justify-center rounded-md transition-colors duration-200 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer">
+          <span
+            className={`inline-flex h-3 w-3 rounded-full transition-colors duration-300 ${statusColor}`}
+          />
+        </span>
+      </Tooltip>
+
+      {/* User Avatars */}
+      {users.length > 1 && (
+        <div className="flex items-center -space-x-2">
+          {users.slice(0, 5).map((user) => (
+            <Tooltip key={user.id} label={user.name} position="bottom">
+              <div
+                className="relative w-8 h-8 rounded-full border-[2.5px] bg-zinc-100 dark:bg-zinc-800 overflow-hidden flex items-center justify-center transition-transform hover:scale-110 hover:z-10"
+                style={{
+                  borderColor: user.color,
+                  backgroundColor: user.avatar ? undefined : user.color,
+                }}
+              >
+                {user.avatar ? (
+                  <img
+                    src={user.avatar}
+                    alt={user.name}
+                    className="w-full h-full object-cover"
+                    referrerPolicy="no-referrer"
+                  />
+                ) : (
+                  <span className="text-white text-xs font-bold">{getInitial(user.name)}</span>
+                )}
+              </div>
+            </Tooltip>
+          ))}
+          {users.length > 5 && (
+            <Tooltip label={`${users.length - 5} more users`} position="bottom">
+              <div className="w-8 h-8 rounded-full border-2 border-zinc-200 dark:border-zinc-700 bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-[10px] font-bold text-zinc-500 dark:text-zinc-400">
+                +{users.length - 5}
+              </div>
+            </Tooltip>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
