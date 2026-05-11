@@ -58,7 +58,7 @@ for i in {1..30}; do
 done
 
 echo -e "${YELLOW}[SCHEMA] Pushing database schema...${NC}"
-pnpm --filter @markdawn/api db:push
+pnpm --filter @markdawn/api db:migrate
 
 echo -e "${GREEN}[DONE] Deployment complete!${NC}"
 echo ""
