@@ -34,8 +34,8 @@ vi.mock('@markdawn/shared', async () => {
 });
 
 vi.mock('@markdawn/shared/yjs-helpers', () => ({
-  yDocToMarkdown: vi.fn(() => ''),
-  extractWikilinks: vi.fn(() => []),
+  extractConnectionsFromYDoc: vi.fn(() => []),
+  normalizeTagSlug: vi.fn((value: string) => `#${value.replace(/^#+/, '').toLowerCase()}`),
 }));
 
 describe('collab package entry point', () => {
