@@ -5,6 +5,7 @@ import { Outlet, useLocation } from 'react-router-dom';
 import { useWorkspaces } from '../hooks/use-workspaces';
 import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
+import { useWorkspaceMeta } from '../hooks/useWorkspaceMeta';
 import { CommandPalette } from './CommandPalette';
 import { ProfilePill } from './ProfilePill';
 import { Sidebar } from './Sidebar';
@@ -21,6 +22,8 @@ export function AppShell() {
   const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
 
   useKeyboardShortcuts({ toggleSidebar: toggleCollapsed });
+
+  useWorkspaceMeta(workspace?.id);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: location.pathname triggers mobile menu close on navigation
   useEffect(() => {
