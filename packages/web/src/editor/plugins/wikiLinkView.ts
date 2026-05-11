@@ -65,7 +65,7 @@ const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos) => {
     const displayText = resolvedTitle || storedLabel || currentTargetId || 'wiki link';
     const pathDisplay = currentHeading ? `${displayText}#${currentHeading}` : displayText;
 
-    dom.textContent = displayText;
+    dom.textContent = pathDisplay;
     dom.dataset.targetId = currentTargetId || resolvedTargetId;
     dom.dataset.path = pathDisplay;
     dom.dataset.heading = currentHeading;
@@ -75,7 +75,9 @@ const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos) => {
     // extracts the correct slug on next persist, avoiding a stale-target
     // fallback lookup.
     const currentPath = node.attrs.path as string;
-    if (resolvedTitle && (currentPath !== resolvedTitle || storedLabel !== resolvedTitle)) {
+    if (resolvedTitle && currentPath !== resolvedTitle) {
+      // Only auto-update label when it was a default label (matched the old path),
+      // not when the user intentionally set a custom alias.
       const newLabel = storedLabel === currentPath ? resolvedTitle : storedLabel;
       const pos = getPos();
       if (typeof pos === 'number' && pos >= 0) {

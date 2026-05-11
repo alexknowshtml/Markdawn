@@ -768,9 +768,13 @@ export function createCollabServer(config: CollabServerConfig) {
             if (!workspaceId || !pageId) return;
 
             if (msg.channel === 'page_deleted') {
-              handlePageDeleted(workspaceId, pageId);
+              void handlePageDeleted(workspaceId, pageId).catch((err) =>
+                logger.error(`[listen] handlePageDeleted failed: ${err}`),
+              );
             } else if (msg.channel === 'page_renamed' && newTitle) {
-              handlePageRenamed(workspaceId, pageId, newTitle);
+              void handlePageRenamed(workspaceId, pageId, newTitle).catch((err) =>
+                logger.error(`[listen] handlePageRenamed failed: ${err}`),
+              );
             }
           } catch (err) {
             logger.error(`[listen] failed to process notification: ${err}`);

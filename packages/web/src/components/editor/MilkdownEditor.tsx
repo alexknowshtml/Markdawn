@@ -204,12 +204,12 @@ export function MilkdownEditor({
       forceSyncInterval: 2000,
       token: async () => {
         const cached = cachedTokenRef.current;
+        if (cached && Date.now() < cached.expiresAt) {
+          return cached.token;
+        }
         const session = await authClient.getSession();
         const token = session.data?.session?.token ?? '';
         const userId = session.data?.user?.id ?? '';
-        if (cached && cached.userId === userId && Date.now() < cached.expiresAt) {
-          return cached.token;
-        }
         cachedTokenRef.current = { token, userId, expiresAt: Date.now() + 5 * 60 * 1000 };
         return token;
       },

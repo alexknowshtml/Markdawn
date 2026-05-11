@@ -40,9 +40,10 @@ function decodePageContent(ydoc: unknown): string {
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function extractUuidFromSlug(slug: string): string {
+function extractUuidFromSlug(slug: string): string | undefined {
   const uuidMatch = slug.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-  return uuidMatch?.[1] ?? slug;
+  const candidate = uuidMatch?.[1];
+  return candidate && UUID_REGEX.test(candidate) ? candidate : undefined;
 }
 
 function slugifyTitle(title: string): string {

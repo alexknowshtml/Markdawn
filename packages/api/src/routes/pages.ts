@@ -657,7 +657,7 @@ pagesRoute.post(':id/copy', async (c) => {
     `insert into pages (id, workspace_id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
      select gen_random_uuid(), workspace_id, $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
      from pages where id = $5
-     returning id, workspace_id, title, icon, cover_type, cover_value, position, created_by, created_at, updated_at, is_deleted`,
+     returning id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
     [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
   );
 

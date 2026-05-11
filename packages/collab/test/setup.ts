@@ -15,17 +15,20 @@ async function truncateTables(): Promise<void> {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
       await pool.query('SET session_replication_role = replica');
-      await pool.query(`
-        DO $$ DECLARE t RECORD;
-        BEGIN
-          FOR t IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
-          LOOP
-            EXECUTE 'TRUNCATE TABLE ' || quote_ident(t.tablename) || ' RESTART IDENTITY CASCADE';
-          END LOOP;
-        END $$;
-      `);
-      await pool.query('SET session_replication_role = default');
-      return;
+      try {
+        await pool.query(`
+          DO $$ DECLARE t RECORD;
+          BEGIN
+            FOR t IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
+            LOOP
+              EXECUTE 'TRUNCATE TABLE ' || quote_ident(t.tablename) || ' RESTART IDENTITY CASCADE';
+            END LOOP;
+          END $$;
+        `);
+        return;
+      } finally {
+        await pool.query('SET session_replication_role = default');
+      }
     } catch (err) {
       const pgErr = err as { code?: string } | undefined;
       if (pgErr?.code === '40P01' && attempt < 3) {
