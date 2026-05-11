@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { pool } from '../db/connection';
 import {
   createTestApp,
   createTestPage,
@@ -140,6 +141,85 @@ describe('backlinks API', () => {
       });
 
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('rename handling', () => {
+    it('sends a pg_notify on rename and does not mutate connections', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const source = await createTestPage(user.workspaceId, user.id, { title: 'Source' });
+      const target = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      await createTestPageLink(source.id, target.id);
+
+      const renameRes = await app.request(`/api/pages/${target.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ title: 'Renamed' }),
+      });
+      expect(renameRes.status).toBe(200);
+
+      // Connections should NOT be mutated by the REST API; they are rebuilt
+      // from Yjs content by the collab server on next save.
+      const connectionsResult = await pool.query(
+        `select target_slug, target_label from connections
+         where source_id = $1 and target_id = $2`,
+        [source.id, target.id],
+      );
+      expect(connectionsResult.rows[0]?.target_slug).toBe('original');
+      expect(connectionsResult.rows[0]?.target_label).toBe('Original');
+    });
+
+    it('does not mutate connections when title has not changed', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const target = await createTestPage(user.workspaceId, user.id, { title: 'Target' });
+
+      const patchRes = await app.request(`/api/pages/${target.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ title: 'Target' }),
+      });
+      expect(patchRes.status).toBe(200);
+    });
+
+    it('supports multiple renames for the same target', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const target = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+
+      const res1 = await app.request(`/api/pages/${target.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ title: 'Renamed' }),
+      });
+      expect(res1.status).toBe(200);
+
+      const res2 = await app.request(`/api/pages/${target.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ title: 'Renamed Again' }),
+      });
+      expect(res2.status).toBe(200);
     });
   });
 });

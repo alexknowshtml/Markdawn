@@ -28,13 +28,16 @@ backlinksRoute.get('/', async (c) => {
   await ensureWorkspaceMemberForPage(pageId, user.id);
 
   const result = await pool.query(
-    `select pl.id, pl.source_page_id as "sourcePageId", pl.link_text as "linkText",
-            pl.link_type as "linkType", pl.created_at as "createdAt",
+    `select c.id, c.source_id as "sourcePageId", c.link_text as "linkText",
+            c.connection_type as "linkType", c.updated_at as "createdAt",
             p.title as "sourceTitle", p.icon as "sourceIcon"
-     from page_links pl
-     join pages p on p.id = pl.source_page_id
-     where pl.target_page_id = $1 and p.is_deleted = false
-     order by pl.created_at desc`,
+     from connections c
+     join pages p on p.id = c.source_id
+     where c.target_type = 'page'
+       and c.target_id = $1
+       and c.connection_type in ('wikilink', 'heading', 'embed')
+       and p.is_deleted = false
+     order by c.updated_at desc`,
     [pageId],
   );
 
@@ -51,13 +54,15 @@ backlinksRoute.get('/outgoing', async (c) => {
   await ensureWorkspaceMemberForPage(pageId, user.id);
 
   const result = await pool.query(
-    `select pl.id, pl.target_page_id as "targetPageId", pl.target_title as "targetTitle",
-            pl.link_text as "linkText", pl.link_type as "linkType",
+    `select c.id, c.target_id as "targetPageId", c.target_label as "targetTitle",
+            c.link_text as "linkText", c.connection_type as "linkType",
             p.title as "targetPageTitle", p.icon as "targetPageIcon"
-     from page_links pl
-     left join pages p on p.id = pl.target_page_id
-     where pl.source_page_id = $1
-     order by pl.created_at desc`,
+     from connections c
+     left join pages p on p.id = c.target_id
+     where c.source_id = $1
+       and c.target_type = 'page'
+       and c.connection_type in ('wikilink', 'heading', 'embed')
+     order by c.updated_at desc`,
     [pageId],
   );
 
