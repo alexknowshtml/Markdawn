@@ -5,6 +5,35 @@ import { unified } from 'unified';
 import type { Node as UnistNode } from 'unist';
 import * as Y from 'yjs';
 
+// Reference-counted console.warn suppression for a harmless Yjs warning
+// that fires when pushing to detached XmlElements during doc construction.
+// The ref count ensures concurrent callers don't restore warn prematurely.
+let warnSuppressionCount = 0;
+const originalWarn = console.warn;
+
+function suppressYjsWarn(): void {
+  if (warnSuppressionCount === 0) {
+    console.warn = (...args: unknown[]) => {
+      const msg = args[0];
+      if (
+        typeof msg === 'string' &&
+        msg.includes('Add Yjs type to a document before reading data')
+      ) {
+        return;
+      }
+      originalWarn.apply(console, args);
+    };
+  }
+  warnSuppressionCount++;
+}
+
+function restoreWarn(): void {
+  warnSuppressionCount--;
+  if (warnSuppressionCount === 0) {
+    console.warn = originalWarn;
+  }
+}
+
 /**
  * Converts markdown text to a Yjs-encoded binary state that Milkdown's
  * collab plugin can render. Uses remark-math to parse $...$ and $$...$$
@@ -18,17 +47,7 @@ import * as Y from 'yjs';
 export function markdownToYjsState(markdown: string): Uint8Array {
   const doc = new Y.Doc();
 
-  // Yjs logs a harmless warning when pushing to detached XmlElements.
-  // We suppress it here to avoid frightening users during vault import.
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => {
-    const msg = args[0];
-    if (typeof msg === 'string' && msg.includes('Add Yjs type to a document before reading data')) {
-      return;
-    }
-    originalWarn.apply(console, args);
-  };
-
+  suppressYjsWarn();
   try {
     doc.transact(() => {
       const fragment = doc.getXmlFragment('prosemirror');
@@ -47,7 +66,7 @@ export function markdownToYjsState(markdown: string): Uint8Array {
 
     return Y.encodeStateAsUpdate(doc);
   } finally {
-    console.warn = originalWarn;
+    restoreWarn();
   }
 }
 
@@ -60,15 +79,8 @@ export function markdownToYjsState(markdown: string): Uint8Array {
  */
 export function createYjsDocWithTitle(title: string, markdown: string): Uint8Array {
   const doc = new Y.Doc();
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => {
-    const msg = args[0];
-    if (typeof msg === 'string' && msg.includes('Add Yjs type to a document before reading data')) {
-      return;
-    }
-    originalWarn.apply(console, args);
-  };
 
+  suppressYjsWarn();
   try {
     doc.transact(() => {
       doc.getText('title').insert(0, title || 'Untitled');
@@ -83,7 +95,7 @@ export function createYjsDocWithTitle(title: string, markdown: string): Uint8Arr
     });
     return Y.encodeStateAsUpdate(doc);
   } finally {
-    console.warn = originalWarn;
+    restoreWarn();
   }
 }
 

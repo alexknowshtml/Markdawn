@@ -13,10 +13,10 @@ const META_ROOM_PREFIX = 'workspace-meta:';
  * Set by `useWorkspaceMeta` when the meta room connects, read by the
  * wiki link node view to resolve targetId → current title at render time.
  *
- * A generation counter prevents the effect cleanup from nulling the map
- * during a workspace switch (where React runs cleanup before the new
- * effect). The generation is bumped during render via a ref comparison,
- * so it reflects the incoming workspace before the old cleanup executes.
+ * An effect-local ID (`effectIdRef`) prevents the cleanup from nulling
+ * the map during a workspace switch. The ID is bumped inside the effect
+ * (not during render), so it's safe under concurrent React — replayed
+ * renders can't corrupt it.
  */
 let _pageIndex: Y.Map<unknown> | null = null;
 
@@ -37,19 +37,16 @@ export function getPageIndexMap(): Y.Map<unknown> | null {
 export function useWorkspaceMeta(workspaceId: string | undefined) {
   const queryClient = useQueryClient();
 
-  // Bump a generation counter during render whenever workspaceId changes.
-  // This runs before effect cleanups, so on workspace switch the old
-  // effect's cleanup sees a generation mismatch and skips nulling _pageIndex.
-  const workspaceGenRef = useRef(0);
-  const prevWorkspaceRef = useRef(workspaceId);
-  if (prevWorkspaceRef.current !== workspaceId) {
-    prevWorkspaceRef.current = workspaceId;
-    workspaceGenRef.current += 1;
-  }
-  const thisGen = workspaceGenRef.current;
+  // Effect-local ID bumped inside the effect, not during render.
+  // On cleanup, only null _pageIndex when no new effect has started,
+  // which is safe under concurrent React (replayed renders can't
+  // cause a bump without a committed effect).
+  const effectIdRef = useRef(0);
 
   useEffect(() => {
     if (!workspaceId) return undefined;
+
+    const effectId = ++effectIdRef.current;
 
     const doc = new Y.Doc();
     const provider = new HocuspocusProvider({
@@ -91,10 +88,10 @@ export function useWorkspaceMeta(workspaceId: string | undefined) {
     map.observe(pageIndexObserver);
 
     return () => {
-      // Only null _pageIndex on actual unmount, not on workspace switch.
-      // The generation was already bumped during render for the new
-      // workspace, so the cleanup sees a mismatch and skips nulling.
-      if (thisGen === workspaceGenRef.current) {
+      // Only null _pageIndex when this is the last active effect.
+      // On a workspace switch, the new effect bumps the ref first,
+      // so this cleanup sees a mismatch and skips nulling.
+      if (effectId === effectIdRef.current) {
         _pageIndex = null;
       }
       if (pageTreeTimerRef.current) clearTimeout(pageTreeTimerRef.current);
@@ -111,5 +108,5 @@ export function useWorkspaceMeta(workspaceId: string | undefined) {
       provider.destroy();
       doc.destroy();
     };
-  }, [workspaceId, queryClient, thisGen]);
+  }, [workspaceId, queryClient]);
 }

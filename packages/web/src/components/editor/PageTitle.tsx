@@ -1,5 +1,5 @@
 import type React from 'react';
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import type * as Y from 'yjs';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
@@ -11,18 +11,20 @@ interface PageTitleProps {
 
 export function PageTitle({ pageId, initialTitle, ydoc }: PageTitleProps) {
   const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   const handleBlurOrEnter = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement> | React.FocusEvent<HTMLInputElement>) => {
-      // Handle keyboard events (Enter) and blur events
       if ('key' in e && e.key !== 'Enter') return;
-      commitTitle(title);
+      const liveValue = inputRef.current?.value ?? title;
+      commitTitle(liveValue);
     },
-    [title, commitTitle],
+    [commitTitle, title],
   );
 
   return (
     <input
+      ref={inputRef}
       type="text"
       value={title}
       onChange={(e) => setTitle(e.target.value)}

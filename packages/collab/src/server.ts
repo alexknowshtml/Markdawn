@@ -671,7 +671,7 @@ export function createCollabServer(config: CollabServerConfig) {
     let listenClient: Client | null = null;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectAttempts = 0;
-    const stopped = false;
+    let stopped = false;
     const MAX_RECONNECT_DELAY = 30000;
 
     async function handlePageRenamed(
@@ -802,6 +802,28 @@ export function createCollabServer(config: CollabServerConfig) {
     }
 
     connectListenClient();
+
+    // Clean up the listen client and reconnect timers when the server is
+    // destroyed (e.g. graceful shutdown or test teardown). Without this,
+    // the dangling pg.Client and its timers would leak and keep retrying.
+    const origDestroy = server.destroy.bind(server);
+    Object.defineProperty(server, 'destroy', {
+      value() {
+        stopped = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        if (listenClient) {
+          try {
+            listenClient.end();
+          } catch {
+            // ignore cleanup errors
+          }
+          listenClient = null;
+        }
+        return origDestroy();
+      },
+      writable: true,
+      configurable: true,
+    });
   } else {
     logger.warn('[listen] DATABASE_URL not configured — pg_notify subscriptions disabled');
   }

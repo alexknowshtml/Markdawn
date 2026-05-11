@@ -684,6 +684,59 @@ pagesRoute.post(':id/copy', async (c) => {
     }
   }
 
+  // Copy connections from the original page so wiki links and tags
+  // appear immediately — without this, the copied page's backlinks
+  // panel and tag queries would be empty until a user opens it and
+  // triggers a collab persist.
+  if (page.workspaceId) {
+    const originalConnections = await pool.query(
+      `select id, target_type, target_id, target_slug, target_label, connection_type,
+              link_text, link_context, occurrence_count
+       from connections
+       where source_type = 'page' and source_id = $1`,
+      [pageId],
+    );
+    for (const conn of originalConnections.rows as {
+      id: string;
+      target_type: string;
+      target_id: string | null;
+      target_slug: string;
+      target_label: string;
+      connection_type: string;
+      link_text: string | null;
+      link_context: string | null;
+      occurrence_count: number;
+    }[]) {
+      const insertResult = await pool.query(
+        `insert into connections (
+           workspace_id, source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text, link_context, occurrence_count, updated_at
+         ) values ($1, 'page', $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         returning id`,
+        [
+          page.workspaceId,
+          newPageId,
+          conn.target_type,
+          conn.target_id,
+          conn.target_slug,
+          conn.target_label,
+          conn.connection_type,
+          conn.link_text,
+          conn.link_context,
+          conn.occurrence_count,
+        ],
+      );
+      const newConnectionId = insertResult.rows[0]?.id;
+      if (newConnectionId && conn.link_context) {
+        await pool.query(
+          `insert into connection_occurrences (connection_id, context)
+           values ($1, $2)`,
+          [newConnectionId, conn.link_context],
+        );
+      }
+    }
+  }
+
   const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
   return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
 });
