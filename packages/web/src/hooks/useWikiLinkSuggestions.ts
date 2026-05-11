@@ -1,6 +1,5 @@
 import type { Editor } from '@milkdown/core';
 import { editorViewCtx } from '@milkdown/core';
-import { useQueryClient } from '@tanstack/react-query';
 import { Selection } from 'prosemirror-state';
 import { useCallback, useRef, useState } from 'react';
 import { useCreatePage, usePages } from './use-pages';
@@ -22,7 +21,6 @@ export function useWikiLinkSuggestions(
   workspaceId: string,
   editorRef: React.RefObject<Editor | null>,
 ) {
-  const queryClient = useQueryClient();
   const createPageMutation = useCreatePage();
   const { data: allPages = [] } = usePages(workspaceId);
 
@@ -64,47 +62,49 @@ export function useWikiLinkSuggestions(
       const editor = editorRef.current;
       if (!editor) return;
 
-      editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        const { state, dispatch } = view;
-        const { selection } = state;
-        const { $from } = selection;
+      try {
+        editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          if (!view) return;
+          const { state, dispatch } = view;
+          const { selection } = state;
+          const { $from } = selection;
 
-        const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
-        const match = textBefore.match(/\[\[([^\]]*)$/);
+          const textBefore = $from.parent.textBetween(0, $from.parentOffset, undefined, '\ufffc');
+          const match = textBefore.match(/\[\[([^\]]*)$/);
 
-        if (match) {
-          const start = $from.pos - match[0].length;
-          const end = $from.pos;
+          if (match) {
+            const start = $from.pos - match[0].length;
+            const end = $from.pos;
 
-          const wikiLinkNode = state.schema.nodes.wikiLink;
-          if (wikiLinkNode) {
-            const tr = state.tr.replaceWith(
-              start,
-              end,
-              wikiLinkNode.create({
-                path: page.title,
-                label: page.title,
-              }),
-            );
+            const wikiLinkNode = state.schema.nodes.wikiLink;
+            if (wikiLinkNode) {
+              const tr = state.tr.replaceWith(
+                start,
+                end,
+                wikiLinkNode.create({
+                  targetId: page.id,
+                  path: page.title,
+                  label: page.title,
+                }),
+              );
 
-            const nextPos = start + 1;
-            const $pos = tr.doc.resolve(nextPos);
-            tr.setSelection(Selection.near($pos));
+              const nextPos = start + 1;
+              const $pos = tr.doc.resolve(nextPos);
+              tr.setSelection(Selection.near($pos));
 
-            dispatch(tr);
-            view.focus();
-
-            setTimeout(() => {
-              queryClient.invalidateQueries({ queryKey: ['backlinks'] });
-            }, 1000);
+              dispatch(tr);
+              view.focus();
+            }
           }
-        }
-      });
+        });
+      } catch {
+        // Editor may have been destroyed
+      }
 
       setSuggestions((prev) => ({ ...prev, isOpen: false }));
     },
-    [editorRef, queryClient],
+    [editorRef],
   );
 
   const handleAddPage = useCallback(
