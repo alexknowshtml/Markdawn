@@ -14,6 +14,23 @@ const searchRoute = new Hono();
 
 searchRoute.use('*', requireAuth);
 
+function parseTagSearch(query: string): { textQuery: string; tagSlugs: string[] } {
+  const tagMatch = query.match(/(?:^|\s)tags:\s*(.+)$/i);
+  if (!tagMatch) {
+    return { textQuery: query, tagSlugs: [] };
+  }
+
+  const tagPart = tagMatch[1] ?? '';
+  const textQuery = query.slice(0, tagMatch.index).trim();
+  const tagSlugs = tagPart
+    .split(',')
+    .map((tag) => tag.trim().replace(/^#+/, '').toLowerCase())
+    .filter(Boolean)
+    .map((tag) => `#${tag}`);
+
+  return { textQuery, tagSlugs: [...new Set(tagSlugs)] };
+}
+
 searchRoute.get('/', async (c) => {
   const rawQuery = c.req.query('q')?.trim() ?? '';
   if (!rawQuery) {
@@ -21,14 +38,15 @@ searchRoute.get('/', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  const { textQuery, tagSlugs } = parseTagSearch(rawQuery);
   const workspaceId = c.req.query('workspaceId');
   const createdAfter = c.req.query('createdAfter');
   const createdBefore = c.req.query('createdBefore');
   const parentId = c.req.query('parentId');
-  const searchPattern = `%${rawQuery}%`;
+  const searchPattern = `%${textQuery}%`;
 
   const filters: string[] = [];
-  const params: (string | null)[] = [user.id, rawQuery, searchPattern];
+  const params: unknown[] = [user.id, textQuery, searchPattern];
   let paramIndex = 4;
 
   if (workspaceId) {
@@ -57,7 +75,24 @@ searchRoute.get('/', async (c) => {
     paramIndex += 1;
   }
 
+  if (tagSlugs.length > 0) {
+    filters.push(`p.id in (
+      select c.source_id
+      from connections c
+      where c.workspace_id = p.workspace_id
+        and c.connection_type = 'tag'
+        and c.target_slug = any($${paramIndex}::text[])
+      group by c.source_id
+      having count(distinct c.target_slug) = $${paramIndex + 1}
+    )`);
+    params.push(tagSlugs, tagSlugs.length);
+    paramIndex += 2;
+  }
+
   const whereClause = filters.length > 0 ? ` and ${filters.join(' and ')}` : '';
+  const textSearchClause = textQuery
+    ? `and (p.title_search @@ plainto_tsquery('english', $2) or p.title ilike $3)`
+    : '';
 
   const result = await pool.query(
     `select p.id,
@@ -65,7 +100,7 @@ searchRoute.get('/', async (c) => {
       p.icon,
       w.slug as workspace_slug,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
-      ts_rank(p.title_search::tsvector, plainto_tsquery('english', $2)) as rank
+      ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
     from pages p
     join workspaces w on w.id = p.workspace_id
     join workspace_members wm on wm.workspace_id = p.workspace_id
@@ -80,7 +115,7 @@ searchRoute.get('/', async (c) => {
     ) breadcrumbs on true
     where wm.user_id = $1
       and p.is_deleted = false
-      and (p.title_search @@ plainto_tsquery('english', $2) or p.title ilike $3)
+      ${textSearchClause}
       ${whereClause}
     order by rank desc nulls last
     limit 20`,
