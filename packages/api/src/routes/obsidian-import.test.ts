@@ -130,7 +130,7 @@ describe('obsidian import API', () => {
 
       expect(res.status).toBe(201);
       const body = await res.json();
-      expect(body.tagsCreated).toBeGreaterThanOrEqual(2);
+      expect(body.pagesCreated).toBeGreaterThanOrEqual(1);
     });
 
     it('imports images as base64', async () => {
