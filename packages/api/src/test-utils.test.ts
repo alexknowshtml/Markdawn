@@ -7,7 +7,6 @@ import {
   createTestPublicShare,
   createTestReply,
   createTestSession,
-  createTestTag,
   createTestTemplate,
   createTestUser,
   createTestVersion,
@@ -71,13 +70,6 @@ describe('test-utils factories', () => {
     const tmpl = await createTestTemplate(user.workspaceId, user.id);
     expect(tmpl.workspaceId).toBe(user.workspaceId);
     expect(tmpl.title).toBe('Test Template');
-  });
-
-  it('createTestTag creates a tag in a workspace', async () => {
-    const user = await createTestUser();
-    const tag = await createTestTag(user.workspaceId);
-    expect(tag.workspaceId).toBe(user.workspaceId);
-    expect(tag.name).toMatch(/^tag-/);
   });
 
   it('createTestPageLink creates a backlink between pages', async () => {

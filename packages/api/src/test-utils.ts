@@ -220,27 +220,29 @@ export async function createTestTemplate(
   return { id, workspaceId, title };
 }
 
-type CreateTagOptions = {
-  name?: string;
-};
-
-export async function createTestTag(workspaceId: string, overrides?: CreateTagOptions) {
-  const id = randomUUID();
-  const name = overrides?.name ?? `tag-${randomUUID().slice(0, 6)}`;
-  await pool.query(
-    `INSERT INTO tags (id, workspace_id, name)
-     VALUES ($1, $2, $3)`,
-    [id, workspaceId, name],
-  );
-  return { id, workspaceId, name };
-}
-
 export async function createTestPageLink(sourcePageId: string, targetPageId: string) {
   const id = randomUUID();
+  const sourceResult = await pool.query<{ workspace_id: string }>(
+    'select workspace_id from pages where id = $1 limit 1',
+    [sourcePageId],
+  );
+  const targetResult = await pool.query<{ title: string }>(
+    'select title from pages where id = $1 limit 1',
+    [targetPageId],
+  );
+  const workspaceId = sourceResult.rows[0]?.workspace_id;
+  const targetTitle = targetResult.rows[0]?.title ?? 'target';
+  if (!workspaceId) {
+    throw new Error(`source page not found: ${sourcePageId}`);
+  }
+
   await pool.query(
-    `INSERT INTO page_links (id, source_page_id, target_page_id, target_title, link_text)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, sourcePageId, targetPageId, 'target', 'link'],
+    `INSERT INTO connections (
+       id, workspace_id, source_type, source_id, target_type, target_id, target_slug,
+       target_label, connection_type, link_text, occurrence_count, updated_at
+     )
+     VALUES ($1, $2, 'page', $3, 'page', $4, $5, $6, 'wikilink', 'link', 1, NOW())`,
+    [id, workspaceId, sourcePageId, targetPageId, targetTitle.toLowerCase(), targetTitle],
   );
   return { id, sourcePageId, targetPageId };
 }
