@@ -1,10 +1,25 @@
 import { $node } from '@milkdown/utils';
+import { getPageIndexMap } from '../../hooks/useWorkspaceMeta';
+
+function resolveTargetId(path: string): string {
+  const pageIndex = getPageIndexMap();
+  if (!pageIndex || !path) return '';
+  const lowerPath = path.toLowerCase();
+  for (const [id, data] of pageIndex.entries()) {
+    const entry = data as { title?: string } | undefined;
+    if (entry?.title && entry.title.toLowerCase() === lowerPath) {
+      return id;
+    }
+  }
+  return '';
+}
 
 export const wikiLink = $node('wikiLink', () => ({
   group: 'inline',
   inline: true,
   atom: true,
   attrs: {
+    targetId: { default: '' },
     path: { default: '' },
     heading: { default: '' },
     label: { default: '' },
@@ -13,6 +28,7 @@ export const wikiLink = $node('wikiLink', () => ({
     {
       tag: 'a.wiki-link',
       getAttrs: (dom) => ({
+        targetId: (dom as HTMLElement).getAttribute('data-target-id') || '',
         path: (dom as HTMLElement).getAttribute('data-path'),
         heading: (dom as HTMLElement).getAttribute('data-heading') || '',
         label: dom.textContent,
@@ -24,6 +40,7 @@ export const wikiLink = $node('wikiLink', () => ({
     {
       class: 'wiki-link',
       href: '#',
+      'data-target-id': node.attrs.targetId || '',
       'data-path': node.attrs.path,
       'data-heading': node.attrs.heading || '',
     },
@@ -44,6 +61,7 @@ export const wikiLink = $node('wikiLink', () => ({
           path,
           heading,
           label,
+          targetId: resolveTargetId(path),
         });
       }
     },
