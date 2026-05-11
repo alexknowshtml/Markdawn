@@ -171,6 +171,11 @@
   background-color: #374151;
 }
 
+.dark .milkdown-editor-view pre code {
+  background-color: transparent;
+  padding: 0;
+}
+
 .dark .milkdown-editor-view a {
   color: #60a5fa;
 }
