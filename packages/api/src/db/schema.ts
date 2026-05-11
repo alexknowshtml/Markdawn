@@ -3,6 +3,7 @@ import {
   type AnyPgColumn,
   boolean,
   customType,
+  index,
   integer,
   pgTable,
   text,
@@ -15,6 +16,12 @@ import {
 const bytea = customType<{ data: Buffer; notNull: false; default: false }>({
   dataType() {
     return 'bytea';
+  },
+});
+
+const tsvector = customType<{ data: string; notNull: false; default: false }>({
+  dataType() {
+    return 'tsvector';
   },
 });
 
@@ -114,38 +121,43 @@ export const folders = pgTable('folders', {
   deletedAt: timestamp('deleted_at'),
 });
 
-export const pages = pgTable('pages', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
-  parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
-  title: text('title').notNull().default('Untitled'),
-  titleSearch: text('title_search').generatedAlwaysAs(
-    sql`to_tsvector('english', coalesce(title, ''))`,
-  ),
-  icon: text('icon'),
-  coverType: text('cover_type'),
-  coverValue: text('cover_value'),
-  position: text('position').notNull().default('0'),
-  ydoc: bytea('ydoc'),
-  properties: customType<{ data: Record<string, unknown>; notNull: false; default: false }>({
-    dataType() {
-      return 'jsonb';
-    },
-  })('properties'),
+export const pages = pgTable(
+  'pages',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
+    title: text('title').notNull().default('Untitled'),
+    titleSearch: tsvector('title_search'),
+    contentSearch: text('content_search'),
+    icon: text('icon'),
+    coverType: text('cover_type'),
+    coverValue: text('cover_value'),
+    position: text('position').notNull().default('0'),
+    ydoc: bytea('ydoc'),
+    properties: customType<{ data: Record<string, unknown>; notNull: false; default: false }>({
+      dataType() {
+        return 'jsonb';
+      },
+    })('properties'),
 
-  createdBy: uuid('created_by').references(() => users.id),
+    createdBy: uuid('created_by').references(() => users.id),
 
-  isPublic: boolean('is_public').default(false),
-  publicToken: text('public_token').unique(),
+    isPublic: boolean('is_public').default(false),
+    publicToken: text('public_token').unique(),
 
-  createdAt: timestamp('created_at').defaultNow(),
+    createdAt: timestamp('created_at').defaultNow(),
 
-  updatedAt: timestamp('updated_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
 
-  isDeleted: boolean('is_deleted').default(false),
+    isDeleted: boolean('is_deleted').default(false),
 
-  deletedAt: timestamp('deleted_at'),
-});
+    deletedAt: timestamp('deleted_at'),
+  },
+  (table) => ({
+    titleSearchIdx: index('pages_title_search_idx').using('gin', table.titleSearch),
+  }),
+);
 
 export const pageVersions = pgTable('page_versions', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -222,52 +234,74 @@ export const commentReplies = pgTable('comment_replies', {
   createdAt: timestamp('created_at').defaultNow(),
 });
 
-export const tags = pgTable(
-  'tags',
+export const connections = pgTable(
+  'connections',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     workspaceId: uuid('workspace_id')
       .references(() => workspaces.id, { onDelete: 'cascade' })
       .notNull(),
-    name: text('name').notNull(),
-    createdAt: timestamp('created_at').defaultNow(),
+    sourceType: text('source_type').notNull().default('page'),
+    sourceId: uuid('source_id')
+      .references(() => pages.id, { onDelete: 'cascade' })
+      .notNull(),
+    targetType: text('target_type').notNull().$type<'page' | 'tag' | 'user' | 'external'>(),
+    targetId: uuid('target_id'),
+    targetSlug: text('target_slug').notNull(),
+    targetLabel: text('target_label').notNull(),
+    connectionType: text('connection_type')
+      .notNull()
+      .$type<'wikilink' | 'tag' | 'mention' | 'embed' | 'heading' | 'url'>(),
+    linkText: text('link_text'),
+    linkContext: text('link_context'),
+    occurrenceCount: integer('occurrence_count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
   },
   (table) => ({
-    workspaceTagUnique: unique().on(table.workspaceId, table.name),
+    connectionUnique: unique().on(
+      table.workspaceId,
+      table.sourceType,
+      table.sourceId,
+      table.targetType,
+      table.targetSlug,
+      table.connectionType,
+    ),
+    sourceIdx: index('connections_source_idx').on(
+      table.workspaceId,
+      table.sourceType,
+      table.sourceId,
+      table.connectionType,
+    ),
+    targetIdIdx: index('connections_target_id_idx').on(
+      table.workspaceId,
+      table.targetType,
+      table.targetId,
+      table.connectionType,
+    ),
+    targetSlugIdx: index('connections_target_slug_idx').on(
+      table.workspaceId,
+      table.targetType,
+      table.targetSlug,
+      table.connectionType,
+    ),
   }),
 );
 
-export const pageTags = pgTable(
-  'page_tags',
+export const connectionOccurrences = pgTable(
+  'connection_occurrences',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    pageId: uuid('page_id')
-      .references(() => pages.id, { onDelete: 'cascade' })
+    connectionId: uuid('connection_id')
+      .references(() => connections.id, { onDelete: 'cascade' })
       .notNull(),
-    tagId: uuid('tag_id')
-      .references(() => tags.id, { onDelete: 'cascade' })
-      .notNull(),
-  },
-  (table) => ({
-    pageTagUnique: unique().on(table.pageId, table.tagId),
-  }),
-);
-
-export const pageLinks = pgTable(
-  'page_links',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    sourcePageId: uuid('source_page_id')
-      .references(() => pages.id, { onDelete: 'cascade' })
-      .notNull(),
-    targetPageId: uuid('target_page_id').references(() => pages.id, { onDelete: 'cascade' }),
-    targetTitle: text('target_title').notNull(),
-    linkText: text('link_text').notNull(),
-    linkType: text('link_type').default('wiki').$type<'wiki' | 'heading' | 'embed'>(),
+    sourceBlockId: text('source_block_id'),
+    position: integer('position'),
+    context: text('context'),
     createdAt: timestamp('created_at').defaultNow(),
   },
   (table) => ({
-    sourceTargetUnique: unique().on(table.sourcePageId, table.targetTitle),
+    connectionIdx: index('connection_occurrences_connection_idx').on(table.connectionId),
   }),
 );
 

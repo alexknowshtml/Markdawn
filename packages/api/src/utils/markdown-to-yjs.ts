@@ -5,6 +5,35 @@ import { unified } from 'unified';
 import type { Node as UnistNode } from 'unist';
 import * as Y from 'yjs';
 
+// Reference-counted console.warn suppression for a harmless Yjs warning
+// that fires when pushing to detached XmlElements during doc construction.
+// The ref count ensures concurrent callers don't restore warn prematurely.
+let warnSuppressionCount = 0;
+const originalWarn = console.warn;
+
+function suppressYjsWarn(): void {
+  if (warnSuppressionCount === 0) {
+    console.warn = (...args: unknown[]) => {
+      const msg = args[0];
+      if (
+        typeof msg === 'string' &&
+        msg.includes('Add Yjs type to a document before reading data')
+      ) {
+        return;
+      }
+      originalWarn.apply(console, args);
+    };
+  }
+  warnSuppressionCount++;
+}
+
+function restoreWarn(): void {
+  warnSuppressionCount--;
+  if (warnSuppressionCount === 0) {
+    console.warn = originalWarn;
+  }
+}
+
 /**
  * Converts markdown text to a Yjs-encoded binary state that Milkdown's
  * collab plugin can render. Uses remark-math to parse $...$ and $$...$$
@@ -18,17 +47,7 @@ import * as Y from 'yjs';
 export function markdownToYjsState(markdown: string): Uint8Array {
   const doc = new Y.Doc();
 
-  // Yjs logs a harmless warning when pushing to detached XmlElements.
-  // We suppress it here to avoid frightening users during vault import.
-  const originalWarn = console.warn;
-  console.warn = (...args: unknown[]) => {
-    const msg = args[0];
-    if (typeof msg === 'string' && msg.includes('Add Yjs type to a document before reading data')) {
-      return;
-    }
-    originalWarn.apply(console, args);
-  };
-
+  suppressYjsWarn();
   try {
     doc.transact(() => {
       const fragment = doc.getXmlFragment('prosemirror');
@@ -47,8 +66,100 @@ export function markdownToYjsState(markdown: string): Uint8Array {
 
     return Y.encodeStateAsUpdate(doc);
   } finally {
-    console.warn = originalWarn;
+    restoreWarn();
   }
+}
+
+/**
+ * Creates a Yjs document binary with both a title text field and body content.
+ *
+ * The Yjs doc has two top-level types:
+ *   - "title" → Y.Text (page title, independent of any H1 in body)
+ *   - "prosemirror" → XmlFragment (body content)
+ */
+export function createYjsDocWithTitle(title: string, markdown: string): Uint8Array {
+  const doc = new Y.Doc();
+
+  suppressYjsWarn();
+  try {
+    doc.transact(() => {
+      doc.getText('title').insert(0, title || 'Untitled');
+      const fragment = doc.getXmlFragment('prosemirror');
+      const ast = unified().use(remarkParse).use(remarkGfm).use(remarkMath).parse(markdown);
+      for (const node of ast.children) {
+        const yNode = unistToYNode(node);
+        if (yNode) {
+          fragment.push([yNode]);
+        }
+      }
+    });
+    return Y.encodeStateAsUpdate(doc);
+  } finally {
+    restoreWarn();
+  }
+}
+
+export function createEmptyYjsDoc(title: string): Uint8Array {
+  return createYjsDocWithTitle(title, '');
+}
+
+/**
+ * Loads a Yjs document from binary and extracts the title text.
+ * Returns 'Untitled' if no title field exists.
+ */
+function visitWikiLinks(
+  element: Y.XmlFragment | Y.XmlElement,
+  fn: (link: Y.XmlElement) => void,
+): void {
+  for (let i = 0; i < element.length; i++) {
+    const item = element.get(i);
+    if (!(item instanceof Y.XmlElement)) continue;
+    if (item.nodeName === 'wikiLink') {
+      fn(item);
+    }
+    visitWikiLinks(item, fn);
+  }
+}
+
+/**
+ * Post-processes a Yjs binary to backfill the `targetId` attribute on every
+ * wikiLink element whose `path` matches a page title in the lookup map.
+ *
+ * This is used by import routes where the conversion from markdown to Yjs
+ * cannot resolve UUIDs (no access to the pageIndex map available in the
+ * browser). After creating the binary with `markdownToYjsState` or
+ * `createYjsDocWithTitle`, call this to populate `targetId` from the
+ * workspace's existing pages.
+ */
+export function resolveWikilinkTargets(
+  ydocBinary: Uint8Array,
+  pageLookup: Map<string, string>,
+): Uint8Array {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, ydocBinary);
+  const fragment = doc.getXmlFragment('prosemirror');
+
+  visitWikiLinks(fragment, (link) => {
+    const path = link.getAttribute('path') || '';
+    // Strip heading suffix if present ([[Title#Heading]])
+    const slug = path.split('#')[0]?.trim().toLowerCase();
+    if (!slug) return;
+    const existingTargetId = link.getAttribute('targetId') || '';
+    if (existingTargetId) return; // already resolved
+    const resolvedId = pageLookup.get(slug);
+    if (resolvedId) {
+      link.setAttribute('targetId', resolvedId);
+    }
+  });
+
+  return Y.encodeStateAsUpdate(doc);
+}
+
+export function extractTitleFromYjs(ydocBinary: Uint8Array): string {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, ydocBinary);
+  const titleText = doc.getText('title');
+  return titleText.toString() || 'Untitled';
 }
 
 /**
@@ -466,6 +577,7 @@ function createInlineContentFromText(
       const label = (match[2] ?? path).trim();
       if (path.length > 0) {
         const wikiLink = new Y.XmlElement('wikiLink');
+        wikiLink.setAttribute('targetId', '');
         wikiLink.setAttribute('path', path);
         wikiLink.setAttribute('label', label);
         result.push(wikiLink);

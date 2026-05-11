@@ -50,7 +50,7 @@ async function main() {
     logger.error(`Database pool error: ${err.message}`);
   });
 
-  const server = createCollabServer({ port, pool, logger });
+  const server = createCollabServer({ port, pool, logger, databaseUrl });
   server.listen();
 }
 

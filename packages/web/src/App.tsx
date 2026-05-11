@@ -38,7 +38,7 @@ function App() {
               <Route path=":workspaceSlug" element={<Workspace />} />
               <Route path=":workspaceSlug/folder/:folderId" element={<Workspace />} />
               <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
-              <Route path=":workspaceSlug/:pageId" element={<Page />} />
+              <Route path=":workspaceSlug/:slugAndId" element={<Page />} />
             </Route>
             <Route path="/public/:token" element={<PublicPage />} />
 

@@ -1,11 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
-import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
+import {
+  markdownToYjsState,
+  resolveWikilinkTargets,
+  stripLeadingH1,
+} from '../utils/markdown-to-yjs';
 import {
   getExtension,
   isImageFile,
@@ -29,7 +34,6 @@ type ImportResult = {
   foldersCreated: number;
   pagesCreated: number;
   imagesUploaded: number;
-  tagsCreated: number;
   backlinksCreated: number;
   errors: string[];
 };
@@ -96,6 +100,27 @@ const extractEmbedLinks = (content: string): WikilinkMatch[] => {
   return results;
 };
 
+const extractInlineTags = (content: string): string[] => {
+  const tags = new Set<string>();
+  const hexOnly = /^[0-9a-fA-F]+$/;
+  const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-\/]+)/g);
+
+  for (const match of inlineTags) {
+    const rawTag = match[1];
+    if (!rawTag) continue;
+    if (
+      hexOnly.test(rawTag) &&
+      (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
+    ) {
+      continue;
+    }
+    const slug = normalizeTagSlug(rawTag);
+    if (slug) tags.add(slug);
+  }
+
+  return [...tags];
+};
+
 const processMarkdownContent = (content: string, imageMap: Map<string, string>): string => {
   let result = content;
 
@@ -144,7 +169,6 @@ obsidianImportRoute.post('/', async (c) => {
     foldersCreated: 0,
     pagesCreated: 0,
     imagesUploaded: 0,
-    tagsCreated: 0,
     backlinksCreated: 0,
     errors: [],
   };
@@ -156,13 +180,8 @@ obsidianImportRoute.post('/', async (c) => {
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
 
-  const hasTagsTable = await pool
-    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'tags' LIMIT 1`)
-    .then((r) => (r.rowCount ?? 0) > 0)
-    .catch(() => false);
-
-  const hasPageLinksTable = await pool
-    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'page_links' LIMIT 1`)
+  const hasConnectionsTable = await pool
+    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`)
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
 
@@ -262,60 +281,9 @@ obsidianImportRoute.post('/', async (c) => {
     }
   }
 
-  const tagNameToId = new Map<string, string>();
-  const allTags = new Set<string>();
-
-  if (hasTagsTable) {
-    for (const file of markdownFiles) {
-      if (!file.content) continue;
-      const { tags } = parseFrontmatter(file.content);
-      for (const tag of tags) {
-        allTags.add(tag.toLowerCase().trim());
-      }
-
-      // Extract inline #tags from markdown body (same logic as frontend preview)
-      const HEX_ONLY = /^[0-9a-fA-F]+$/;
-      const inlineTags = file.content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-\/]+)/g);
-      for (const match of inlineTags) {
-        const rawTag = match[1];
-        if (!rawTag) continue;
-        if (
-          HEX_ONLY.test(rawTag) &&
-          (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
-        ) {
-          continue;
-        }
-        allTags.add(rawTag.toLowerCase().trim());
-      }
-    }
-
-    for (const tagName of allTags) {
-      try {
-        const existing = await pool.query(
-          'select id from tags where workspace_id = $1 and name = $2 limit 1',
-          [workspaceId, tagName],
-        );
-
-        if (existing.rowCount && existing.rowCount > 0) {
-          tagNameToId.set(tagName, existing.rows[0]?.id);
-        } else {
-          const insertResult = await pool.query(
-            'insert into tags (workspace_id, name) values ($1, $2) returning id',
-            [workspaceId, tagName],
-          );
-          if (insertResult.rowCount && insertResult.rowCount > 0) {
-            tagNameToId.set(tagName, insertResult.rows[0]?.id);
-            result.tagsCreated++;
-          }
-        }
-      } catch (err) {
-        result.errors.push(`Failed to create tag "${tagName}": ${(err as Error).message}`);
-      }
-    }
-  }
-
   const pageTitleToId = new Map<string, string>();
   const pagePathToId = new Map<string, string>();
+  const pageYdocs = new Map<string, Buffer>();
 
   for (const file of markdownFiles) {
     try {
@@ -332,6 +300,8 @@ obsidianImportRoute.post('/', async (c) => {
       const processedBody = processMarkdownContent(body, imagePathToUrl);
       const contentForEditor = stripLeadingH1(processedBody, title);
       const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
+      // Store for deferred targetId resolution after all pages are known
+      pageYdocs.set(file.path, ydocBuffer);
 
       const positionResult = await pool.query(
         parentId
@@ -343,8 +313,8 @@ obsidianImportRoute.post('/', async (c) => {
 
       const insertResult = hasPropertiesColumn
         ? await pool.query(
-            `insert into pages (workspace_id, parent_id, title, position, created_by, ydoc, properties)
-             values ($1, $2, $3, $4, $5, $6, $7) returning *`,
+            `insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc, properties)
+             values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *`,
             [
               workspaceId,
               parentId,
@@ -356,8 +326,8 @@ obsidianImportRoute.post('/', async (c) => {
             ],
           )
         : await pool.query(
-            `insert into pages (workspace_id, parent_id, title, position, created_by, ydoc)
-             values ($1, $2, $3, $4, $5, $6) returning *`,
+            `insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc)
+             values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6) returning *`,
             [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
           );
 
@@ -366,18 +336,22 @@ obsidianImportRoute.post('/', async (c) => {
         pageTitleToId.set(title.toLowerCase(), pageId);
         pagePathToId.set(file.path, pageId);
 
-        if (hasTagsTable) {
-          for (const tag of tags) {
-            const tagId = tagNameToId.get(tag.toLowerCase().trim());
-            if (tagId) {
-              await pool
-                .query(
-                  'insert into page_tags (page_id, tag_id) values ($1, $2) on conflict do nothing',
-                  [pageId, tagId],
-                )
-                .catch(() => {});
-            }
-          }
+        const pageTagSlugs = new Set([
+          ...tags.map((tag) => normalizeTagSlug(tag)).filter(Boolean),
+          ...extractInlineTags(file.content),
+        ]);
+
+        for (const tagSlug of pageTagSlugs) {
+          await pool.query(
+            `insert into connections (
+               workspace_id, source_type, source_id, target_type, target_slug,
+               target_label, connection_type, link_text, occurrence_count, updated_at
+             )
+             values ($1, 'page', $2, 'tag', $3, $3, 'tag', $3, 1, now())
+             on conflict (workspace_id, source_type, source_id, target_type, target_slug, connection_type)
+             do update set updated_at = now(), occurrence_count = excluded.occurrence_count`,
+            [workspaceId, pageId, tagSlug],
+          );
         }
 
         result.pagesCreated++;
@@ -387,7 +361,7 @@ obsidianImportRoute.post('/', async (c) => {
     }
   }
 
-  if (hasPageLinksTable) {
+  if (hasConnectionsTable) {
     for (const file of markdownFiles) {
       try {
         if (!file.content) continue;
@@ -404,20 +378,29 @@ obsidianImportRoute.post('/', async (c) => {
 
           const targetTitleLower = link.page.toLowerCase();
           const targetPageId = pageTitleToId.get(targetTitleLower) ?? null;
+          const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
 
           await pool.query(
-            `insert into page_links (source_page_id, target_page_id, target_title, link_text, link_type)
-             values ($1, $2, $3, $4, $5)
-             on conflict (source_page_id, target_title) do update set
-               target_page_id = excluded.target_page_id,
+            `insert into connections (
+               workspace_id, source_type, source_id, target_type, target_id, target_slug,
+               target_label, connection_type, link_text, occurrence_count, updated_at
+             )
+             values ($1, 'page', $2, 'page', $3, $4, $5, $6, $7, 1, now())
+             on conflict (workspace_id, source_type, source_id, target_type, target_slug, connection_type)
+             do update set
+               target_id = excluded.target_id,
+               target_label = excluded.target_label,
                link_text = excluded.link_text,
-               link_type = excluded.link_type`,
+               occurrence_count = connections.occurrence_count + 1,
+               updated_at = now()`,
             [
+              workspaceId,
               pageId,
               targetPageId,
+              targetTitleLower,
               link.page,
+              connectionType,
               link.alias || link.page,
-              link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wiki',
             ],
           );
 
@@ -430,6 +413,17 @@ obsidianImportRoute.post('/', async (c) => {
           `Failed to index backlinks for "${file.path}": ${(err as Error).message}`,
         );
       }
+    }
+  }
+
+  // Resolve wiki link targetId in Yjs binaries now that pageTitleToId
+  // contains every page created during the import.
+  if (pageTitleToId.size > 0) {
+    for (const [filePath, pageId] of pagePathToId) {
+      const rawYdoc = pageYdocs.get(filePath);
+      if (!rawYdoc) continue;
+      const resolved = resolveWikilinkTargets(rawYdoc, pageTitleToId);
+      await pool.query('update pages set ydoc = $1 where id = $2', [Buffer.from(resolved), pageId]);
     }
   }
 

@@ -112,7 +112,12 @@ describe('collab server stress', () => {
       provider.destroy();
     }
 
-    const finalDocCount = server.hocuspocus.documents.size;
-    expect(finalDocCount).toBeLessThanOrEqual(1);
+    // Wait for async disconnect cleanup to complete (force-save is async)
+    await waitFor(
+      () => server.hocuspocus.documents.size <= 1,
+      3_000,
+      'document cleanup after rapid connect/disconnect',
+    );
+    expect(server.hocuspocus.documents.size).toBeLessThanOrEqual(1);
   });
 });

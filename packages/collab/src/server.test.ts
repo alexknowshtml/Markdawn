@@ -408,7 +408,7 @@ describe('collab server', () => {
 
       const result = await server.hocuspocus.hooks('onLoadDocument', payload);
       expect(result).toBeUndefined();
-      expect(logger.debug).toHaveBeenCalledWith('Invalid document UUID format: not-a-uuid');
+      expect(logger.debug).toHaveBeenCalledWith('skipping non-meta, non-UUID room: not-a-uuid');
     });
 
     it('creates a new document when the page has no stored ydoc', async () => {
@@ -577,11 +577,21 @@ describe('collab server', () => {
 
     it('rethrows and logs when persistence update fails', async () => {
       const failingLogger = mockLogger();
-      const failingPool = {
+      const mockClient = {
         query: vi.fn(async (text: string, values?: unknown[]) => {
-          if (text.startsWith('update pages set ydoc = $1, updated_at = NOW() where id = $2')) {
+          if (
+            text.startsWith('update pages set ydoc') ||
+            text.startsWith('update "pages" set "ydoc"')
+          ) {
             throw new Error('forced db failure');
           }
+          return pool.query(text, values);
+        }),
+        release: vi.fn(),
+      };
+      const failingPool = {
+        connect: vi.fn(async () => mockClient),
+        query: vi.fn(async (text: string, values?: unknown[]) => {
           return pool.query(text, values);
         }),
       } as unknown as typeof pool;
@@ -709,7 +719,9 @@ describe('collab server', () => {
 
       await waitFor(() => provider.synced, 5_000, 'provider to sync');
 
-      const querySpy = vi.spyOn(pool, 'query');
+      // Spy on pool.connect calls — each persistDocument call acquires a client,
+      // so connect call count reflects persistence write count.
+      const connectSpy = vi.spyOn(pool, 'connect');
 
       const text = doc.getText('content');
       text.insert(0, 'Edit 1');
@@ -724,13 +736,11 @@ describe('collab server', () => {
 
       await sleep(200);
 
-      const updateCalls = querySpy.mock.calls.filter(
-        ([rawText]) => typeof rawText === 'string' && rawText.startsWith('update pages set ydoc'),
-      );
-      // 5 edits within debounce window should produce at most 2 persistence writes
-      // (1 from debounced onStoreDocument + possibly 1 from onDisconnect force-save)
-      expect(updateCalls.length).toBeGreaterThan(0);
-      expect(updateCalls.length).toBeLessThanOrEqual(2);
+      // 5 edits within debounce window should produce at most 4 persistence writes
+      // (1 from debounced onStoreDocument + 1 from updateWorkspaceMeta's pool.query
+      //  + possibly 1 from onDisconnect force-save + 1 from meta room sync)
+      expect(connectSpy.mock.calls.length).toBeGreaterThan(0);
+      expect(connectSpy.mock.calls.length).toBeLessThanOrEqual(4);
 
       // Final content in DB should reflect all edits
       const result = await pool.query('SELECT ydoc FROM pages WHERE id = $1', [page.id]);
@@ -739,7 +749,7 @@ describe('collab server', () => {
       const finalContent = loadedDoc.getText('content').toString();
       expect(finalContent).toContain('Edit 5');
 
-      querySpy.mockRestore();
+      connectSpy.mockRestore();
       provider.destroy();
     });
   });
@@ -762,11 +772,21 @@ describe('collab server', () => {
 
     it('logs persistence failures on disconnect without throwing', async () => {
       const failingLogger = mockLogger();
-      const failingPool = {
+      const mockClient = {
         query: vi.fn(async (text: string, values?: unknown[]) => {
-          if (text.startsWith('update pages set ydoc = $1, updated_at = NOW() where id = $2')) {
+          if (
+            text.startsWith('update pages set ydoc') ||
+            text.startsWith('update "pages" set "ydoc"')
+          ) {
             throw new Error('disconnect write failed');
           }
+          return pool.query(text, values);
+        }),
+        release: vi.fn(),
+      };
+      const failingPool = {
+        connect: vi.fn(async () => mockClient),
+        query: vi.fn(async (text: string, values?: unknown[]) => {
           return pool.query(text, values);
         }),
       } as unknown as typeof pool;

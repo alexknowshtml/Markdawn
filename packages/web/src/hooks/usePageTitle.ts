@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type * as Y from 'yjs';
 
 const API_BASE = '/api';
 
@@ -19,11 +20,29 @@ function normalizeTitle(value: string): string {
   return trimmed.length > 0 ? trimmed : 'Untitled';
 }
 
-export function usePageTitle(pageId?: string, initialTitle?: string) {
+export function usePageTitle(pageId?: string, initialTitle?: string, ydoc?: Y.Doc | null) {
   const [title, setTitle] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedTitleRef = useRef('Untitled');
+  const ydocRef = useRef(ydoc);
+  ydocRef.current = ydoc;
+
+  // Listen for title changes from Yjs (sync from other clients or offline reconnect)
+  useEffect(() => {
+    if (!ydoc) return undefined;
+
+    const titleText = ydoc.getText('title');
+    const observer = () => {
+      const newTitle = titleText.toString() || 'Untitled';
+      setTitle(newTitle);
+      lastSavedTitleRef.current = newTitle;
+    };
+    titleText.observe(observer);
+
+    return () => {
+      titleText.unobserve(observer);
+    };
+  }, [ydoc]);
 
   useEffect(() => {
     if (typeof initialTitle === 'string') {
@@ -43,33 +62,28 @@ export function usePageTitle(pageId?: string, initialTitle?: string) {
     },
   });
 
-  useEffect(() => {
-    if (!pageId) {
-      return undefined;
-    }
-    const nextTitle = normalizeTitle(title);
+  const commitTitle = useCallback(
+    (newTitle: string) => {
+      const nextTitle = normalizeTitle(newTitle);
+      if (nextTitle === lastSavedTitleRef.current) return;
 
-    if (nextTitle === lastSavedTitleRef.current) {
-      return undefined;
-    }
+      // Write to Yjs doc for offline queue and real-time sync
+      const currentDoc = ydocRef.current;
+      if (currentDoc) {
+        const titleText = currentDoc.getText('title');
+        titleText.delete(0, titleText.length);
+        titleText.insert(0, nextTitle);
+      }
 
-    if (debounceRef.current) {
-      clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = setTimeout(() => {
+      // Send PATCH for DB column update (fast-path cache)
       mutation.mutate(nextTitle, {
         onSuccess: () => {
           lastSavedTitleRef.current = nextTitle;
         },
       });
-    }, 1000);
+    },
+    [mutation],
+  );
 
-    return () => {
-      if (debounceRef.current) {
-        clearTimeout(debounceRef.current);
-      }
-    };
-  }, [mutation, pageId, title]);
-
-  return { title, setTitle };
+  return { title, setTitle, commitTitle };
 }

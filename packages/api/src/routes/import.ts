@@ -6,7 +6,11 @@ import { HTTPException } from 'hono/http-exception';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
-import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
+import {
+  createYjsDocWithTitle,
+  resolveWikilinkTargets,
+  stripLeadingH1,
+} from '../utils/markdown-to-yjs';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -213,7 +217,20 @@ importRoute.post('/markdown', async (c) => {
 
   const { result: processedContent } = processMarkdownImages(body, []);
   const contentForEditor = stripLeadingH1(processedContent, title);
-  const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
+  let ydocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
+
+  // Resolve wiki link titles to page UUIDs so backlinks survive renames.
+  const existingPages = await pool.query(
+    'select id, title from pages where workspace_id = $1 and is_deleted = false',
+    [workspaceId],
+  );
+  const pageLookup = new Map<string, string>();
+  for (const row of existingPages.rows as { id: string; title: string }[]) {
+    pageLookup.set(row.title.trim().toLowerCase(), row.id);
+  }
+  if (pageLookup.size > 0) {
+    ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
+  }
 
   const positionResult = await pool.query(
     parentId
@@ -226,7 +243,7 @@ importRoute.post('/markdown', async (c) => {
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = hasProperties
     ? await pool.query(
-        'insert into pages (workspace_id, parent_id, title, position, created_by, ydoc, properties) values ($1, $2, $3, $4, $5, $6, $7) returning *',
+        "insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *",
         [
           workspaceId,
           parentId,
@@ -238,7 +255,7 @@ importRoute.post('/markdown', async (c) => {
         ],
       )
     : await pool.query(
-        'insert into pages (workspace_id, parent_id, title, position, created_by, ydoc) values ($1, $2, $3, $4, $5, $6) returning *',
+        "insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6) returning *",
         [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
       );
 

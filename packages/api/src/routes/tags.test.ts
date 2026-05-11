@@ -1,14 +1,23 @@
-import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { pool } from '../db/connection';
 import {
   createTestApp,
   createTestPage,
   createTestSession,
-  createTestTag,
   createTestUser,
   createTestWorkspace,
 } from '../test-utils';
+
+async function createTagConnection(workspaceId: string, pageId: string, tag: string) {
+  await pool.query(
+    `insert into connections (
+       workspace_id, source_type, source_id, target_type, target_slug,
+       target_label, connection_type, link_text, occurrence_count, updated_at
+     )
+     values ($1, 'page', $2, 'tag', $3, $3, 'tag', $3, 1, now())`,
+    [workspaceId, pageId, `#${tag}`],
+  );
+}
 
 describe('tags API', () => {
   describe('auth guard', () => {
@@ -32,7 +41,8 @@ describe('tags API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      await createTestTag(user.workspaceId, { name: 'todo' });
+      const page = await createTestPage(user.workspaceId, user.id);
+      await createTagConnection(user.workspaceId, page.id, 'todo');
 
       const res = await app.request(`/api/tags?workspaceId=${user.workspaceId}`, {
         headers: { Cookie: session.Cookie },
@@ -63,7 +73,8 @@ describe('tags API', () => {
       const user2 = await createTestUser();
       const session2 = await createTestSession(user2.id);
       const ws = await createTestWorkspace(user1.id);
-      await createTestTag(ws.id, { name: 'secret' });
+      const page = await createTestPage(ws.id, user1.id);
+      await createTagConnection(ws.id, page.id, 'secret');
 
       const res = await app.request(`/api/tags?workspaceId=${ws.id}`, {
         headers: { Cookie: session2.Cookie },
@@ -79,15 +90,10 @@ describe('tags API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
       const page = await createTestPage(user.workspaceId, user.id);
-      const tag = await createTestTag(user.workspaceId, { name: 'review' });
-
-      await pool.query('insert into page_tags (page_id, tag_id) values ($1, $2)', [
-        page.id,
-        tag.id,
-      ]);
+      await createTagConnection(user.workspaceId, page.id, 'review');
 
       const res = await app.request(
-        `/api/tags/pages?workspaceId=${user.workspaceId}&tagId=${tag.id}`,
+        `/api/tags/pages?workspaceId=${user.workspaceId}&tagId=%23review`,
         { headers: { Cookie: session.Cookie } },
       );
 
@@ -101,9 +107,7 @@ describe('tags API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const tag = await createTestTag(user.workspaceId);
-
-      const res = await app.request(`/api/tags/pages?tagId=${tag.id}`, {
+      const res = await app.request('/api/tags/pages?tagId=anything', {
         headers: { Cookie: session.Cookie },
       });
 
@@ -128,9 +132,7 @@ describe('tags API', () => {
       const user2 = await createTestUser();
       const session2 = await createTestSession(user2.id);
       const ws = await createTestWorkspace(user1.id);
-      const tag = await createTestTag(ws.id);
-
-      const res = await app.request(`/api/tags/pages?workspaceId=${ws.id}&tagId=${tag.id}`, {
+      const res = await app.request(`/api/tags/pages?workspaceId=${ws.id}&tagId=anything`, {
         headers: { Cookie: session2.Cookie },
       });
 

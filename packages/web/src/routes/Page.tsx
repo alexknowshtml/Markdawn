@@ -38,8 +38,24 @@ function decodePageContent(ydoc: unknown): string {
   return '';
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function extractUuidFromSlug(slug: string): string | undefined {
+  const uuidMatch = slug.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  const candidate = uuidMatch?.[1];
+  return candidate && UUID_REGEX.test(candidate) ? candidate : undefined;
+}
+
+function slugifyTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export default function Page() {
-  const { pageId, workspaceSlug } = useParams<{ pageId: string; workspaceSlug: string }>();
+  const { slugAndId, workspaceSlug } = useParams<{ slugAndId: string; workspaceSlug: string }>();
+  const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
@@ -89,11 +105,33 @@ export default function Page() {
     } else if (existingLink) {
       existingLink.href = '/vite.svg';
     }
-  }, [page]);
+
+    const slug = slugifyTitle(page.title);
+    const canonicalSlug = `${slug}-${page.id}`;
+    let canonicalLink = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!canonicalLink) {
+      canonicalLink = document.createElement('link');
+      canonicalLink.rel = 'canonical';
+      document.head.appendChild(canonicalLink);
+    }
+    canonicalLink.href = `${window.location.origin}/app/${workspaceSlug}/${canonicalSlug}`;
+  }, [page, workspaceSlug]);
 
   useEffect(() => {
     updateDocumentMeta();
   }, [updateDocumentMeta]);
+
+  useEffect(() => {
+    if (!page || !slugAndId) return;
+
+    const slug = slugifyTitle(page.title);
+    const expectedPath = `${slug}-${page.id}`;
+
+    if (slugAndId !== expectedPath) {
+      const newPath = window.location.pathname.replace(/\/[^/]+$/, `/${expectedPath}`);
+      window.history.replaceState(null, '', newPath);
+    }
+  }, [page, slugAndId]);
 
   const { data: workspaces } = useWorkspaces();
   const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
@@ -177,7 +215,11 @@ export default function Page() {
             <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
           </div>
           <div className="pl-[54px] w-full">
-            <PageTitle pageId={pageId} initialTitle={page?.title ?? 'Untitled'} />
+            <PageTitle
+              pageId={pageId}
+              initialTitle={page?.title ?? 'Untitled'}
+              ydoc={provider?.document ?? null}
+            />
           </div>
         </div>
       </div>

@@ -61,9 +61,9 @@ describe('usePageTitle', () => {
     });
 
     act(() => {
-      result.current.setTitle('First');
-      result.current.setTitle('Second');
-      result.current.setTitle('Final');
+      result.current.commitTitle('First');
+      result.current.commitTitle('Second');
+      result.current.commitTitle('Final');
     });
 
     await waitFor(

@@ -2,10 +2,17 @@ import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { marked } from 'marked';
+import * as Y from 'yjs';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
-import { markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
+import {
+  createEmptyYjsDoc,
+  createYjsDocWithTitle,
+  extractTitleFromYjs,
+  markdownToYjsState,
+  resolveWikilinkTargets,
+} from '../utils/markdown-to-yjs';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -131,15 +138,21 @@ pagesRoute.post('/', async (c) => {
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
+  const pageTitle =
+    typeof title === 'string' && title.trim().length > 0 ? title.trim() : 'Untitled';
+
+  const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
+
   const insertResult = await pool.query(
-    'insert into pages (workspace_id, parent_id, title, icon, position, created_by) values ($1, $2, $3, $4, $5, $6) returning *',
+    "insert into pages (workspace_id, parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *",
     [
       workspaceId,
       parentId ?? null,
-      typeof title === 'string' && title.trim().length > 0 ? title.trim() : 'Untitled',
+      pageTitle,
       typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
       nextPosition,
       user.id,
+      ydocBuffer,
     ],
   );
 
@@ -313,6 +326,7 @@ pagesRoute.patch(':id', async (c) => {
 
   const nextTitle =
     typeof title === 'string' ? (title.trim().length > 0 ? title.trim() : 'Untitled') : page.title;
+
   const nextIcon =
     typeof icon === 'string'
       ? icon.trim().length > 0
@@ -351,7 +365,7 @@ pagesRoute.patch(':id', async (c) => {
 
   const updateResult = hasProperties
     ? await pool.query(
-        'update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *',
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
         [
           nextTitle,
           nextIcon,
@@ -364,12 +378,25 @@ pagesRoute.patch(':id', async (c) => {
         ],
       )
     : await pool.query(
-        'update pages set title = $1, icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *',
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
         [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
       );
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to update page' });
+  }
+
+  // Notify the collab server so it can update the meta room sidebar and
+  // push the new title into any active in-memory Yjs session.
+  if (page.title !== nextTitle) {
+    await pool.query('select pg_notify($1, $2)', [
+      'page_renamed',
+      JSON.stringify({
+        workspaceId: page.workspaceId,
+        pageId,
+        newTitle: nextTitle,
+      }),
+    ]);
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -389,7 +416,7 @@ pagesRoute.patch(':id/restore', async (c) => {
   await ensureWorkspaceMember(page.workspaceId, user.id);
 
   const updateResult = await pool.query(
-    'update pages set is_deleted = false, deleted_at = null, updated_at = now() where id = $1 returning *',
+    "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
     [pageId],
   );
 
@@ -529,12 +556,28 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     throw new HTTPException(400, { message: 'Invalid markdown format' });
   }
 
-  const contentForEditor = page.title ? stripLeadingH1(markdown, page.title) : markdown;
-  const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
+  // Build Yjs doc with both title and body content
+  // Title and H1 are independent — we don't strip the first H1 anymore
+  let ydocBuffer = Buffer.from(createYjsDocWithTitle(page.title || 'Untitled', markdown));
+
+  // Resolve wiki link titles to page UUIDs so backlinks survive renames.
+  if (page.workspaceId) {
+    const existingPages = await pool.query(
+      'select id, title from pages where workspace_id = $1 and is_deleted = false',
+      [page.workspaceId],
+    );
+    const pageLookup = new Map<string, string>();
+    for (const row of existingPages.rows as { id: string; title: string }[]) {
+      pageLookup.set(row.title.trim().toLowerCase(), row.id);
+    }
+    if (pageLookup.size > 0) {
+      ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
+    }
+  }
 
   const updateResult = await pool.query(
-    'update pages set ydoc = $1, updated_at = now() where id = $2',
-    [ydocBuffer, pageId],
+    "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
+    [ydocBuffer, page.title || 'Untitled', pageId],
   );
 
   if (updateResult.rowCount === 0) {
@@ -564,6 +607,12 @@ pagesRoute.delete(':id', async (c) => {
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to delete page' });
   }
+
+  // Notify the collab server so it removes the page from the meta room.
+  await pool.query('select pg_notify($1, $2)', [
+    'page_deleted',
+    JSON.stringify({ workspaceId: page.workspaceId, pageId }),
+  ]);
 
   return c.json({ deleted: true });
 });
@@ -605,15 +654,87 @@ pagesRoute.post(':id/copy', async (c) => {
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const insertResult = await pool.query(
-    `insert into pages (id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
-     select gen_random_uuid(), workspace_id, $1, $2, icon, cover_type, cover_value, $3, ydoc, $4
+    `insert into pages (id, workspace_id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
+     select gen_random_uuid(), workspace_id, $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
      from pages where id = $5
-     returning *`,
+     returning id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
     [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
   );
 
   if (insertResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to copy page' });
+  }
+
+  const copiedPage = insertResult.rows[0] as RawPageRow;
+  const newPageId = copiedPage.id;
+
+  if (page.ydoc && page.ydoc.length > 0) {
+    try {
+      const ydoc = new Y.Doc();
+      Y.applyUpdate(ydoc, new Uint8Array(page.ydoc));
+      const titleText = ydoc.getText('title');
+      if (titleText.length > 0) {
+        titleText.delete(0, titleText.length);
+      }
+      titleText.insert(0, `Copy of ${page.title}`);
+      const newBinary = Buffer.from(Y.encodeStateAsUpdate(ydoc));
+      await pool.query('update pages set ydoc = $1 where id = $2', [newBinary, newPageId]);
+    } catch {
+      // If Yjs decode fails, the title column is already set
+    }
+  }
+
+  // Copy connections from the original page so wiki links and tags
+  // appear immediately — without this, the copied page's backlinks
+  // panel and tag queries would be empty until a user opens it and
+  // triggers a collab persist.
+  if (page.workspaceId) {
+    const originalConnections = await pool.query(
+      `select id, target_type, target_id, target_slug, target_label, connection_type,
+              link_text, link_context, occurrence_count
+       from connections
+       where source_type = 'page' and source_id = $1`,
+      [pageId],
+    );
+    for (const conn of originalConnections.rows as {
+      id: string;
+      target_type: string;
+      target_id: string | null;
+      target_slug: string;
+      target_label: string;
+      connection_type: string;
+      link_text: string | null;
+      link_context: string | null;
+      occurrence_count: number;
+    }[]) {
+      const insertResult = await pool.query(
+        `insert into connections (
+           workspace_id, source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text, link_context, occurrence_count, updated_at
+         ) values ($1, 'page', $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         returning id`,
+        [
+          page.workspaceId,
+          newPageId,
+          conn.target_type,
+          conn.target_id,
+          conn.target_slug,
+          conn.target_label,
+          conn.connection_type,
+          conn.link_text,
+          conn.link_context,
+          conn.occurrence_count,
+        ],
+      );
+      const newConnectionId = insertResult.rows[0]?.id;
+      if (newConnectionId && conn.link_context) {
+        await pool.query(
+          `insert into connection_occurrences (connection_id, context)
+           values ($1, $2)`,
+          [newConnectionId, conn.link_context],
+        );
+      }
+    }
   }
 
   const created = normalizePageRow(insertResult.rows[0] as RawPageRow);

@@ -14,7 +14,11 @@ const mockUsePageTitle = vi.mocked(usePageTitle);
 
 describe('PageTitle', () => {
   beforeEach(() => {
-    mockUsePageTitle.mockReturnValue({ title: 'Test Page', setTitle: vi.fn() });
+    mockUsePageTitle.mockReturnValue({
+      title: 'Test Page',
+      setTitle: vi.fn(),
+      commitTitle: vi.fn(),
+    });
   });
 
   afterEach(() => {
@@ -31,7 +35,7 @@ describe('PageTitle', () => {
   it('calls setTitle on user input', async () => {
     function Wrapper() {
       const [title, setTitle] = useState('Test Page');
-      mockUsePageTitle.mockReturnValue({ title, setTitle });
+      mockUsePageTitle.mockReturnValue({ title, setTitle, commitTitle: vi.fn() });
       return <PageTitle pageId="p1" initialTitle="Test Page" />;
     }
 

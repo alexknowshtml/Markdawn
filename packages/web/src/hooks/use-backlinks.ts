@@ -46,8 +46,8 @@ export function useBacklinks(pageId?: string) {
       return fetchBacklinks(pageId);
     },
     enabled: !!pageId,
-    staleTime: 1000 * 60 * 2,
-    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -59,7 +59,7 @@ export function useOutgoingLinks(pageId?: string) {
       return fetchOutgoingLinks(pageId);
     },
     enabled: !!pageId,
-    staleTime: 1000 * 60 * 2,
-    refetchOnWindowFocus: false,
+    staleTime: 30_000,
+    refetchOnWindowFocus: true,
   });
 }
