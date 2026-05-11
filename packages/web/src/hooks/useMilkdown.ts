@@ -28,6 +28,7 @@ import {
   toggleLatexCommand,
 } from '../editor/plugins/math';
 import { tag } from '../editor/plugins/tag';
+import { wikiLinkView } from '../editor/plugins/wikiLinkView';
 import { wikiLink } from '../editor/plugins/wikilink';
 import { repairDocument } from '../editor/utils/documentRepair';
 import 'katex/dist/katex.min.css';
@@ -405,15 +406,30 @@ export function useMilkdown({
                   event.preventDefault();
                   event.stopPropagation();
 
-                  const path = anchor.getAttribute('data-path') || '';
-                  const heading = anchor.getAttribute('data-heading') || '';
-
                   linkEditor.close();
 
-                  if (path && onWikiLinkClickRef.current) {
-                    onWikiLinkClickRef.current(path);
-                  } else if (heading) {
-                    scrollToHeading(heading);
+                  // Resolve by UUID first (stable across renames), fall back to
+                  // title-based path matching for legacy links without targetId.
+                  const targetId = anchor.getAttribute('data-target-id') || '';
+                  if (targetId && onWikiLinkClickRef.current) {
+                    // handleWikiLinkClick checks p.id === targetId, which is a
+                    // UUID match — resilient to title changes.
+                    onWikiLinkClickRef.current(targetId);
+                  } else {
+                    const path = anchor.getAttribute('data-path') || '';
+                    const heading = anchor.getAttribute('data-heading') || '';
+                    // Strip #heading suffix from path if present, since
+                    // handleWikiLinkClick resolves by title match and a
+                    // "#Heading" suffix would never match a page title.
+                    const pagePath =
+                      heading && path.endsWith(`#${heading}`)
+                        ? path.slice(0, -(heading.length + 1))
+                        : path;
+                    if (pagePath && onWikiLinkClickRef.current) {
+                      onWikiLinkClickRef.current(pagePath);
+                    } else if (heading) {
+                      scrollToHeading(heading);
+                    }
                   }
                   return true;
                 }
@@ -466,43 +482,7 @@ export function useMilkdown({
                 if (!(anchor instanceof HTMLAnchorElement)) return false;
 
                 if (anchor.classList.contains('wiki-link')) {
-                  const path = anchor.getAttribute('data-path') || '';
-                  const heading = anchor.getAttribute('data-heading') || '';
-                  const displayText = heading
-                    ? path
-                      ? `${path}#${heading}`
-                      : `#${heading}`
-                    : path || 'Wiki link';
-
-                  const pos = view.posAtDOM(anchor, 0);
-                  let wikiNode = view.state.doc.nodeAt(pos);
-                  let from = pos;
-                  let to = pos;
-                  if (wikiNode && wikiNode.type.name === 'wikiLink') {
-                    to = pos + wikiNode.nodeSize;
-                  } else {
-                    wikiNode = view.state.doc.nodeAt(pos - 1);
-                    if (wikiNode && wikiNode.type.name === 'wikiLink') {
-                      from = pos - 1;
-                      to = from + wikiNode.nodeSize;
-                    } else {
-                      return false;
-                    }
-                  }
-
-                  linkEditor.open(view, anchor, {
-                    initialUrl: displayText,
-                    initialText: anchor.textContent || displayText,
-                    onConfirm: ({ text }) => {
-                      const tr = view.state.tr;
-                      tr.setNodeMarkup(from, undefined, { ...wikiNode.attrs, label: text });
-                      view.dispatch(tr);
-                    },
-                    onRemove: () => {
-                      const tr = view.state.tr.delete(from, to);
-                      view.dispatch(tr);
-                    },
-                  });
+                  // Wiki links resolve automatically — no link editor needed.
                   return true;
                 }
 
@@ -553,6 +533,7 @@ export function useMilkdown({
         .use(commonmark)
         .use(gfm)
         .use(wikiLink)
+        .use(wikiLinkView)
         .use(callout)
         .use(tag)
         .use(autolink)
@@ -628,6 +609,7 @@ export function useMilkdown({
           | undefined;
         if (view) {
           setTimeout(() => {
+            if (disposed) return;
             repairDocument(view);
           }, 500);
         }
@@ -638,6 +620,17 @@ export function useMilkdown({
 
     return () => {
       disposed = true;
+      // Disconnect collab before destroying the editor so Yjs updates
+      // arriving as the WebSocket closes don't dispatch on destroyed context
+      if (hasCollab && runtimeEditor) {
+        try {
+          runtimeEditor.action((ctx) => {
+            ctx.get(collabServiceCtx).disconnect();
+          });
+        } catch {
+          // Editor or collab already torn down
+        }
+      }
       runtimeEditor?.destroy();
       editorRef.current = null;
       setEditorInstance(null);

@@ -41,6 +41,15 @@ interface MilkdownEditorProps {
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 
+function execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): void {
+  if (!editor) return;
+  try {
+    editor.action(fn);
+  } catch {
+    /* Editor may have been destroyed */
+  }
+}
+
 export function MilkdownEditor({
   pageId,
   workspaceId,
@@ -182,6 +191,11 @@ export function MilkdownEditor({
     }
   }, [hasMark, hasBlockType, hasParentBlockType]);
 
+  // Cache the collab session token so HocuspocusProvider reconnection
+  // doesn't fire a redundant get-session API call on every retry.
+  // Key the cache by user ID to avoid session fixation on shared machines.
+  const cachedTokenRef = useRef<{ token: string; userId: string; expiresAt: number } | null>(null);
+
   const provider = useMemo(() => {
     const instance = new HocuspocusProvider({
       url: COLLAB_URL,
@@ -189,8 +203,15 @@ export function MilkdownEditor({
       document: doc,
       forceSyncInterval: 2000,
       token: async () => {
+        const cached = cachedTokenRef.current;
         const session = await authClient.getSession();
-        return session.data?.session?.token ?? '';
+        const token = session.data?.session?.token ?? '';
+        const userId = session.data?.user?.id ?? '';
+        if (cached && cached.userId === userId && Date.now() < cached.expiresAt) {
+          return cached.token;
+        }
+        cachedTokenRef.current = { token, userId, expiresAt: Date.now() + 5 * 60 * 1000 };
+        return token;
       },
     });
 
