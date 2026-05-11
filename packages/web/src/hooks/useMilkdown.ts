@@ -231,18 +231,55 @@ export function useMilkdown({
     let floatingCopyBtn: HTMLButtonElement | null = null;
     let currentPre: HTMLElement | null = null;
 
+    const copyIconSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>';
+    const checkIconSvg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
     const getCopyButton = (): HTMLButtonElement => {
       if (!floatingCopyBtn) {
         floatingCopyBtn = document.createElement('button');
         floatingCopyBtn.className = 'code-block-copy-btn';
-        floatingCopyBtn.textContent = 'Copy';
         floatingCopyBtn.type = 'button';
-        floatingCopyBtn.style.position = 'fixed';
-        floatingCopyBtn.style.zIndex = '1000';
-        floatingCopyBtn.style.opacity = '0';
-        floatingCopyBtn.style.pointerEvents = 'none';
-        floatingCopyBtn.style.transition = 'opacity 0.15s ease';
-        document.body.appendChild(floatingCopyBtn);
+        floatingCopyBtn.innerHTML = copyIconSvg;
+        floatingCopyBtn.setAttribute('aria-label', 'Copy code');
+        Object.assign(floatingCopyBtn.style, {
+          position: 'absolute',
+          zIndex: '1000',
+          opacity: '0',
+          pointerEvents: 'none',
+          transition: 'opacity 0.15s ease',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: '28px',
+          height: '28px',
+          borderRadius: '4px',
+          cursor: 'pointer',
+        });
+        const wrapper = container?.parentElement;
+        const mountTarget = wrapper ?? document.body;
+        if (wrapper && getComputedStyle(wrapper).position === 'static') {
+          wrapper.style.position = 'relative';
+        }
+        mountTarget.appendChild(floatingCopyBtn);
+
+        floatingCopyBtn.addEventListener('click', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (!currentPre) return;
+          const code = currentPre.querySelector('code');
+          if (!code) return;
+          navigator.clipboard.writeText(code.textContent || '').catch((err) => {
+            getLogger().warn('Failed to copy code block:', err);
+          });
+          if (floatingCopyBtn) {
+            floatingCopyBtn.innerHTML = checkIconSvg;
+            setTimeout(() => {
+              if (floatingCopyBtn) floatingCopyBtn.innerHTML = copyIconSvg;
+            }, 1500);
+          }
+        });
       }
       return floatingCopyBtn;
     };
@@ -254,27 +291,14 @@ export function useMilkdown({
       const btn = getCopyButton();
       currentPre = pre;
 
-      const rect = pre.getBoundingClientRect();
-      btn.style.top = `${rect.top + 8}px`;
-      btn.style.left = `${rect.right - 72}px`;
+      const wrapperRect = container?.parentElement?.getBoundingClientRect();
+      const preRect = pre.getBoundingClientRect();
+      if (wrapperRect) {
+        btn.style.top = `${preRect.top - wrapperRect.top + 8}px`;
+        btn.style.right = `${wrapperRect.right - preRect.right + 8}px`;
+      }
       btn.style.opacity = '1';
       btn.style.pointerEvents = 'auto';
-
-      const newBtn = btn.cloneNode(true) as HTMLButtonElement;
-      btn.parentNode?.replaceChild(newBtn, btn);
-      floatingCopyBtn = newBtn;
-
-      floatingCopyBtn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        void navigator.clipboard.writeText(code.textContent || '');
-        if (floatingCopyBtn) {
-          floatingCopyBtn.textContent = 'Copied!';
-          setTimeout(() => {
-            if (floatingCopyBtn) floatingCopyBtn.textContent = 'Copy';
-          }, 1500);
-        }
-      });
     };
 
     const hideCopyButton = (): void => {
