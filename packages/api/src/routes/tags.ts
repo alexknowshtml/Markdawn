@@ -26,12 +26,16 @@ tagsRoute.get('/', async (c) => {
   await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    `select t.id, t.name, count(pt.page_id) as page_count
-     from tags t
-     left join page_tags pt on pt.tag_id = t.id
-     where t.workspace_id = $1
-     group by t.id, t.name
-     order by page_count desc, t.name asc`,
+    `select c.target_slug as id,
+            trim(leading '#' from c.target_slug) as name,
+            count(distinct c.source_id) as page_count
+     from connections c
+     join pages p on p.id = c.source_id
+     where c.workspace_id = $1
+       and c.connection_type = 'tag'
+       and p.is_deleted = false
+     group by c.target_slug
+     order by page_count desc, name asc`,
     [workspaceId],
   );
 
@@ -55,10 +59,13 @@ tagsRoute.get('/pages', async (c) => {
   const result = await pool.query(
     `select p.id, p.title, p.icon, p.parent_id as "parentId"
      from pages p
-     join page_tags pt on pt.page_id = p.id
-     where pt.tag_id = $1 and p.workspace_id = $2 and p.is_deleted = false
+     join connections c on c.source_id = p.id
+     where c.target_slug = $1
+       and c.workspace_id = $2
+       and c.connection_type = 'tag'
+       and p.is_deleted = false
      order by p.updated_at desc`,
-    [tagId, workspaceId],
+    [tagId.startsWith('#') ? tagId : `#${tagId}`, workspaceId],
   );
 
   return c.json(result.rows);
