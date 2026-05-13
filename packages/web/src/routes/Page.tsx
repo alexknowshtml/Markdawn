@@ -57,6 +57,14 @@ export default function Page() {
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
+
+  // Clear state on page navigation.
+  useEffect(() => {
+    setProvider(null);
+    setCollabStatus(WebSocketStatus.Connecting);
+    setEditorElement(null);
+    void pageId;
+  }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
 
   const { data: page } = useQuery({
