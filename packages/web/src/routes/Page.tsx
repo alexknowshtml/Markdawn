@@ -68,22 +68,31 @@ export default function Page() {
     enabled: !!pageId,
   });
 
-  // Find the .milkdown-editor DOM element and pass it to TableOfContents.
-  // Re-runs on page navigation (MilkdownEditor is keyed by pageId, so the
-  // old editor unmounts and a new one mounts). Safe to use [page] deps now
-  // that TableOfContents no longer mutates heading DOM ids (which caused a
-  // Find the editor DOM element for TableOfContents. Runs once on mount;
-  // TOC re-queries the DOM internally via MutationObserver so stale refs
-  // after page navigation are harmless.
+  // Find the .milkdown-editor DOM element for TableOfContents.
+  // Re-runs on page change (data load or navigation) to handle the
+  // editor mounting asynchronously after page fetch completes.
+  // Polls up to 4 times (0ms, 200ms, 600ms, 1400ms) to catch the
+  // editor regardless of page load timing.
   useEffect(() => {
-    const el = document.querySelector('.milkdown-editor') as HTMLElement | null;
-    if (el) setEditorElement(el);
-    const id = setTimeout(() => {
-      const el2 = document.querySelector('.milkdown-editor') as HTMLElement | null;
-      if (el2) setEditorElement(el2);
-    }, 500);
+    if (!page) return;
+    let attempts = 0;
+    const maxAttempts = 4;
+    let id: ReturnType<typeof setTimeout>;
+
+    const poll = () => {
+      const el = document.querySelector('.milkdown-editor') as HTMLElement | null;
+      if (el) {
+        setEditorElement(el);
+        return;
+      }
+      attempts++;
+      if (attempts < maxAttempts) {
+        id = setTimeout(poll, attempts * 200);
+      }
+    };
+    poll();
     return () => clearTimeout(id);
-  }, []);
+  }, [page]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
