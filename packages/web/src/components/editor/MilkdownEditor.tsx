@@ -216,16 +216,6 @@ export function MilkdownEditor({
     });
   }, [pageId, doc]);
 
-  // Destroy the Y.Doc and Hocuspocus provider on unmount. Without this,
-  // navigating between pages leaks WebSocket connections and Yjs document
-  // memory. useMemo ensures the references are stable, so this cleanup only
-  // fires on actual unmount (not on React Strict Mode double-renders).
-  useEffect(() => () => {
-    provider.forceSync();
-    provider.destroy();
-    doc.destroy();
-  }, [provider, doc]);
-
   const { setContainer, editor } = useMilkdown({
     ...(initialValue !== undefined && { initialValue }),
     ...(onChange !== undefined && { onChange }),

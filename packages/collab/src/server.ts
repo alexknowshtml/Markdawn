@@ -697,21 +697,14 @@ export function createCollabServer(config: CollabServerConfig) {
         await conn.disconnect();
       }
 
-      const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
-      if (activeDoc) {
-        const beforeTitle = activeDoc.getText('title').toString();
-        if (beforeTitle !== newTitle) {
-          activeDoc.transact(() => {
-            const titleText = activeDoc.getText('title');
-            titleText.delete(0, titleText.length);
-            titleText.insert(0, newTitle);
-          });
-          logger.debug(
-            `[listen] pushed rename to active session for page ${pageId}: "${beforeTitle}" -> "${newTitle}"`,
-          );
-        }
-      }
-
+      // The meta room pageIndex update above is sufficient to keep the
+      // sidebar in sync. We intentionally do NOT modify the active Y.Doc
+      // for this page here. If the rename was initiated from the page editor,
+      // the client already wrote to the Y.Doc via commitTitle -> WebSocket
+      // sync. Modifying it again from pg_notify races with that sync and
+      // causes CRDT merge duplication (e.g., "x" becomes "xx").
+      // If the page is not open, onLoadDocument handles title reconciliation
+      // when it is next opened.
       logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
     }
 
