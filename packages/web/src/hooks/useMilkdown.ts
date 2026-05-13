@@ -7,7 +7,7 @@ import {
 } from '@milkdown/core';
 import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { commonmark } from '@milkdown/preset-commonmark';
+import { commonmark, syncHeadingIdPlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
 import Papa from 'papaparse';
@@ -611,16 +611,22 @@ export function useMilkdown({
         return;
       }
 
-      if (shouldUseCollab && doc && provider) {
-        runtimeEditor.action((ctx) => {
-          const collabService = ctx.get(collabServiceCtx);
-          collabService.bindDoc(doc);
-          const awareness = provider.awareness;
-          if (awareness) {
-            collabService.setAwareness(awareness);
-          }
-          collabService.connect();
-        });
+      if (shouldUseCollab && doc) {
+        runtimeEditor.remove(syncHeadingIdPlugin);
+        setTimeout(() => {
+          if (disposed || !runtimeEditor) return;
+          runtimeEditor.action((ctx) => {
+            const collabService = ctx.get(collabServiceCtx);
+            collabService.bindDoc(doc);
+            if (provider) {
+              const awareness = provider.awareness;
+              if (awareness) {
+                collabService.setAwareness(awareness);
+              }
+              collabService.connect();
+            }
+          });
+        }, 0);
       }
 
       editorRef.current = runtimeEditor;
