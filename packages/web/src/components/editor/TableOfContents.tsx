@@ -40,7 +40,6 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/^-|-$/g, '');
-          el.id = id;
         }
 
         const node: HeadingNode = { id, text, level, children: [] };
@@ -123,7 +122,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
 
   const scrollToHeading = (headingId: string) => {
     if (!editorElement) return;
-    const element = editorElement.querySelector(`#${headingId}`);
+    const element = editorElement.querySelector(`#${CSS.escape(headingId)}`);
     if (element) {
       element.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
@@ -223,7 +222,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
           isHovered ? 'opacity-0 translate-x-2 pointer-events-none' : 'opacity-100 translate-x-0',
         )}
       >
-        <div className="flex flex-col gap-0.5 max-h-[60vh] overflow-y-auto scrollbar-hide">
+        <div className="flex flex-col gap-0.5 max-h-[60vh] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {renderTickMarks()}
         </div>
       </div>
