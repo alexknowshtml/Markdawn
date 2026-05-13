@@ -612,6 +612,13 @@ export function useMilkdown({
       }
 
       if (shouldUseCollab && doc) {
+        // syncHeadingIdPlugin dispatches setNodeMarkup transactions on every
+        // doc update to assign heading IDs. y-prosemirror's ySyncPlugin then
+        // syncs those mutations to the Y.Doc, which triggers observeDeep,
+        // which re-renders ProseMirror, which fires syncHeadingIdPlugin again.
+        // Milkdown's own vanilla-collab example removes this plugin in collab
+        // mode. We also defer connect via setTimeout(0) so Milkdown processes
+        // the plugin removal before ySyncPlugin is injected.
         runtimeEditor.remove(syncHeadingIdPlugin);
         setTimeout(() => {
           if (disposed || !runtimeEditor) return;

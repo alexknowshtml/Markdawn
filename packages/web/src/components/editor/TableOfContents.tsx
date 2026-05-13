@@ -36,6 +36,10 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
         let id = el.id;
 
         if (!id) {
+          // The heading schema's toDOM already generates DOM ids at render
+          // time (id: node.attrs.id || getId(node)), so we don't need to
+          // mutate the DOM here. Setting el.id would trigger this component's
+          // own MutationObserver, causing a re-render cascade.
           id = text
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')

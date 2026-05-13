@@ -68,6 +68,11 @@ export default function Page() {
     enabled: !!pageId,
   });
 
+  // Find the .milkdown-editor DOM element and pass it to TableOfContents.
+  // Re-runs on page navigation (MilkdownEditor is keyed by pageId, so the
+  // old editor unmounts and a new one mounts). Safe to use [page] deps now
+  // that TableOfContents no longer mutates heading DOM ids (which caused a
+  // MutationObserver cascade with useState-triggered re-renders).
   useEffect(() => {
     const el = document.querySelector('.milkdown-editor') as HTMLElement | null;
     if (el) setEditorElement(el);
@@ -76,7 +81,7 @@ export default function Page() {
       if (el2) setEditorElement(el2);
     }, 500);
     return () => clearTimeout(id);
-  }, []);
+  }, [page]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
