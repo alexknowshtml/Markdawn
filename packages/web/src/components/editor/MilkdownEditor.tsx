@@ -197,7 +197,7 @@ export function MilkdownEditor({
   const cachedTokenRef = useRef<{ token: string; userId: string; expiresAt: number } | null>(null);
 
   const provider = useMemo(() => {
-    const instance = new HocuspocusProvider({
+    return new HocuspocusProvider({
       url: COLLAB_URL,
       name: pageId,
       document: doc,
@@ -214,9 +214,7 @@ export function MilkdownEditor({
         return token;
       },
     });
-
-    return instance;
-  }, [doc, pageId]);
+  }, [pageId, doc]);
 
   const { setContainer, editor } = useMilkdown({
     ...(initialValue !== undefined && { initialValue }),
@@ -642,40 +640,6 @@ export function MilkdownEditor({
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
-
-  const isMountedRef = useRef(true);
-  const latestProviderRef = useRef(provider);
-  const latestDocRef = useRef(doc);
-  latestProviderRef.current = provider;
-  latestDocRef.current = doc;
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const capturedProvider = provider;
-    const capturedDoc = doc;
-
-    return () => {
-      if (latestProviderRef.current !== capturedProvider || latestDocRef.current !== capturedDoc) {
-        capturedProvider.forceSync();
-        capturedProvider.destroy();
-        capturedDoc.destroy();
-        return;
-      }
-      setTimeout(() => {
-        if (!isMountedRef.current) {
-          capturedProvider.forceSync();
-          capturedProvider.destroy();
-          capturedDoc.destroy();
-        }
-      }, 0);
-    };
-  }, [provider, doc]);
 
   useEffect(() => {
     if (!editor) return;
