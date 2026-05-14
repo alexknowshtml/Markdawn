@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { focusEditor, createNewPage, renamePageViaTitleInput } from '../fixtures';
+import { expect, test } from '@playwright/test';
+import { createNewPage, renamePageViaTitleInput } from '../fixtures';
 
 test.describe('Page renaming', () => {
   test('rename via page title input', async ({ page }) => {

@@ -1,12 +1,15 @@
-import { test, expect } from '@playwright/test';
-import { focusEditor, getEditorText } from '../fixtures';
+import { expect, test } from '@playwright/test';
+import { focusEditor } from '../fixtures';
 
 test.describe('Page creation', () => {
   test('create page via workspace home "New Page" button', async ({ page }) => {
     await page.goto('/');
     await page.waitForURL(/\/app\//);
 
-    await page.getByRole('button', { name: /new page/i }).first().click();
+    await page
+      .getByRole('button', { name: /new page/i })
+      .first()
+      .click();
     await page.waitForURL(/\/app\/.+\/untitled-/);
 
     // A new page should have an empty editor
@@ -22,8 +25,11 @@ test.describe('Page creation', () => {
     // Count existing sidebar pages
     const beforeCount = await page.locator('text=Untitled').count();
     await page.getByRole('button', { name: /create note/i }).click();
-    await page.waitForTimeout(1000);
     // A new "Untitled" page should appear
+    await page
+      .locator('text=Untitled')
+      .nth(beforeCount)
+      .waitFor({ state: 'visible', timeout: 5000 });
     const afterCount = await page.locator('text=Untitled').count();
     expect(afterCount).toBeGreaterThan(beforeCount);
   });
@@ -32,7 +38,10 @@ test.describe('Page creation', () => {
     await page.goto('/');
     await page.waitForURL(/\/app\//);
 
-    await page.getByRole('button', { name: /new page/i }).first().click();
+    await page
+      .getByRole('button', { name: /new page/i })
+      .first()
+      .click();
     await page.waitForURL(/\/app\/.+\/untitled-/);
 
     await expect(page.locator('input[data-testid="page-title"]')).toHaveValue('Untitled');

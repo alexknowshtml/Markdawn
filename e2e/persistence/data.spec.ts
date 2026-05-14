@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { focusEditor, createNewPage, renamePageViaTitleInput, getEditorText } from '../fixtures';
+import { expect, test } from '@playwright/test';
+import { createNewPage, focusEditor, renamePageViaTitleInput } from '../fixtures';
 
 test.describe('Data persistence', () => {
   test('content persists after page reload', async ({ page }) => {
@@ -42,11 +42,14 @@ test.describe('Data persistence', () => {
     await page.waitForURL(/\/app\//);
     await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 10_000 });
 
-    // After deleting and reloading, the editor should be empty
-    await expect(page.locator('.ProseMirror p')).toBeVisible();
+    // After deleting and reloading, the deleted text should not appear
+    await expect(page.locator('.ProseMirror')).not.toContainText('Temporary content');
   });
 
-  test('content survives after closing and reopening the browser tab', async ({ page, context }) => {
+  test('content survives after closing and reopening the browser tab', async ({
+    page,
+    context,
+  }) => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('Tab close test');
