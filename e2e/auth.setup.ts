@@ -1,12 +1,13 @@
-import { test as setup, expect } from '@playwright/test';
-import path from 'path';
+import path from 'node:path';
+import { expect, test as setup } from '@playwright/test';
+import { API_URL } from './fixtures';
 
 const authFile = path.join(__dirname, 'playwright/.auth/user.json');
 
 setup('authenticate', async ({ page, request }) => {
   // Create a test user and session via the API's dev-only test setup endpoint.
   // Disabled in production (NODE_ENV === 'production').
-  const res = await request.post('http://localhost:3001/api/test/setup', {
+  const res = await request.post(`${API_URL}/api/test/setup`, {
     data: { name: 'Playwright Test User' },
   });
   expect(res.ok()).toBeTruthy();

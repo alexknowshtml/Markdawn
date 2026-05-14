@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Breadcrumbs', () => {
@@ -11,14 +11,10 @@ test.describe('Breadcrumbs', () => {
 });
 
 test.describe('Table of Contents', () => {
-  test('TOC is visible when page has headings', async ({ page }) => {
+  test('headings are rendered in the editor', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('## Section A');
-    await page.waitForTimeout(500);
-    const toc = page.locator('[class*="TableOfContents"], [class*="toc"]').first();
-    if (await toc.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await expect(toc).toBeVisible();
-    }
+    await expect(page.locator('.ProseMirror h2')).toBeVisible({ timeout: 5000 });
   });
 });

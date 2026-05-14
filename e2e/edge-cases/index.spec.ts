@@ -1,5 +1,5 @@
-import { test, expect } from '@playwright/test';
-import { focusEditor, createNewPage } from '../fixtures';
+import { expect, test } from '@playwright/test';
+import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Edge cases', () => {
   test('rapid typing does not cause hang', async ({ page }) => {
@@ -8,9 +8,7 @@ test.describe('Edge cases', () => {
     // Type a long sentence quickly
     const text = 'The quick brown fox jumps over the lazy dog. '.repeat(10);
     await page.keyboard.type(text, { delay: 10 });
-    await page.waitForTimeout(500);
-    // If the page didn't hang, this should pass
-    await expect(page.locator('.ProseMirror')).toContainText('quick brown fox');
+    await expect(page.locator('.ProseMirror p').first()).toContainText('quick brown fox');
   });
 
   test('switching between heading levels works', async ({ page }) => {
@@ -33,7 +31,6 @@ test.describe('Edge cases', () => {
     await focusEditor(page);
     await page.keyboard.type('```');
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(500);
-    await expect(page.locator('.ProseMirror')).toBeVisible();
+    await expect(page.locator('.ProseMirror pre')).toBeVisible({ timeout: 5000 });
   });
 });

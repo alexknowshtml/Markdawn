@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Floating toolbar buttons', () => {
@@ -18,7 +18,9 @@ test.describe('Floating toolbar buttons', () => {
     // Italic
     await page.keyboard.type('italic text');
     await page.keyboard.press('Control+a');
-    await page.locator('.floating-toolbar button[title="Italic (Ctrl+I)"]').click({ timeout: 5000 });
+    await page
+      .locator('.floating-toolbar button[title="Italic (Ctrl+I)"]')
+      .click({ timeout: 5000 });
     await expect(page.locator('.ProseMirror em')).toBeVisible();
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
@@ -73,11 +75,7 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.type('Bullet');
     await page.keyboard.press('Control+a');
     await page.locator('.floating-toolbar button[title="Bullet List"]').click({ timeout: 5000 });
-    await page.waitForTimeout(300);
-    // Should either wrap in ul or convert to li
-    const hasBullet = await page.locator('.ProseMirror ul').isVisible().catch(() => false);
-    const hasListItem = await page.locator('.ProseMirror li').isVisible().catch(() => false);
-    expect(hasBullet || hasListItem).toBeTruthy();
+    await expect(page.locator('.ProseMirror ul')).toBeVisible({ timeout: 5000 });
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
 
@@ -85,10 +83,13 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.type('First');
     await page.keyboard.press('Control+a');
     await page.locator('.floating-toolbar button[title="Ordered List"]').click({ timeout: 5000 });
-    await page.waitForTimeout(300);
-    const hasOrdered = await page.locator('.ProseMirror ol').isVisible().catch(() => false);
-    const hasLiAfter = await page.locator('.ProseMirror li').count();
-    expect(hasOrdered || hasLiAfter > 0).toBeTruthy();
+    // The list may render as ol or as li elements directly
+    const hasOrdered = await page
+      .locator('.ProseMirror ol')
+      .isVisible()
+      .catch(() => false);
+    const liCount = await page.locator('.ProseMirror li').count();
+    expect(hasOrdered || liCount > 0).toBeTruthy();
   });
 
   test('task list via toolbar', async ({ page }) => {
@@ -97,10 +98,7 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.type('Task');
     await page.keyboard.press('Control+a');
     await page.locator('.floating-toolbar button[title="Task List"]').click({ timeout: 5000 });
-    await page.waitForTimeout(300);
-    // Task list items have data-item-type="task"
-    const hasTask = await page.locator('li[data-item-type="task"]').isVisible().catch(() => false);
-    expect(hasTask).toBeTruthy();
+    await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
   });
 
   test('insert table via toolbar', async ({ page }) => {

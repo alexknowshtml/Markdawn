@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Table operations', () => {
@@ -12,14 +12,12 @@ test.describe('Table operations', () => {
 
     // Click inside the table to show table manipulation buttons
     await page.locator('.ProseMirror td, .ProseMirror th').first().click();
-    await page.waitForTimeout(300);
 
     // Add a row below
     const addRowBtn = page.locator('.floating-toolbar button[title="Add Row Below"]');
-    await expect(addRowBtn).toBeVisible({ timeout: 3000 });
+    await addRowBtn.waitFor({ state: 'visible', timeout: 3000 });
     const rowCountBefore = await page.locator('.ProseMirror tr').count();
     await addRowBtn.click();
-    await page.waitForTimeout(300);
     const rowCountAfter = await page.locator('.ProseMirror tr').count();
     expect(rowCountAfter).toBeGreaterThan(rowCountBefore);
   });
@@ -33,12 +31,10 @@ test.describe('Table operations', () => {
     await expect(page.locator('.ProseMirror table')).toBeVisible();
 
     await page.locator('.ProseMirror td, .ProseMirror th').first().click();
-    await page.waitForTimeout(300);
 
     const deleteBtn = page.locator('.floating-toolbar button[title="Delete Table"]');
-    await expect(deleteBtn).toBeVisible({ timeout: 3000 });
+    await deleteBtn.waitFor({ state: 'visible', timeout: 3000 });
     await deleteBtn.click();
-    await page.waitForTimeout(300);
     await expect(page.locator('.ProseMirror table')).not.toBeVisible();
   });
 });
