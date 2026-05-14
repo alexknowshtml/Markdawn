@@ -10,8 +10,7 @@ test.describe('Wikilinks', () => {
     await page.keyboard.type('[[');
 
     // The suggestions popup renders inside editor-wrapper when open
-    // It has distinctive styling: rounded-xl, border, shadow-2xl
-    const popup = page.locator('.editor-wrapper > div.rounded-xl.border.shadow-2xl').first();
+    const popup = page.getByTestId('wikilink-suggestions');
     await popup.waitFor({ state: 'visible', timeout: 5000 });
     await expect(popup).toBeVisible();
   });

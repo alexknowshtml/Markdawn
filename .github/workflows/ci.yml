@@ -141,6 +141,20 @@ jobs:
           sudo apt-get install -y -qq podman
           podman version
 
+      - name: Cache Podman container layers
+        id: cache-podman
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/containers
+          key: podman-${{ runner.os }}-postgres17-e2e-${{ hashFiles('packages/api/src/db/schema.ts') }}
+          restore-keys: |
+            podman-${{ runner.os }}-postgres17-e2e-
+            podman-${{ runner.os }}-
+
+      - name: Pre-pull Postgres image (if cache miss)
+        if: steps.cache-podman.outputs.cache-hit != 'true'
+        run: podman pull postgres:17-alpine
+
       - name: Start PostgreSQL
         run: |
           podman run -d --name markdawn-postgres-e2e \

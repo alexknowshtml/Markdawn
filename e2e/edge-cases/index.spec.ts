@@ -11,7 +11,7 @@ test.describe('Edge cases', () => {
     await expect(page.locator('.ProseMirror p').first()).toContainText('quick brown fox');
   });
 
-  test('switching between heading levels works', async ({ page }) => {
+  test('creating h2 after h1 works', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
     // Create an h1

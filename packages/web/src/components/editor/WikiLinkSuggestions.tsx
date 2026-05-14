@@ -161,6 +161,7 @@ export function WikiLinkSuggestions({
   return (
     <div
       ref={containerRef}
+      data-testid="wikilink-suggestions"
       className={`w-80 max-w-[calc(100vw-2rem)] rounded-xl border shadow-2xl overflow-hidden animate-in fade-in duration-100 ${
         placement === 'bottom'
           ? 'zoom-in-95 slide-in-from-top-2'

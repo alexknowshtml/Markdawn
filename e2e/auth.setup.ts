@@ -14,11 +14,13 @@ setup('authenticate', async ({ page, request }) => {
 
   const { cookie } = (await res.json()) as { cookie: string };
 
+  const domain = new URL(API_URL).hostname;
+
   await page.context().addCookies([
     {
       name: 'better-auth.session_token',
       value: cookie,
-      domain: 'localhost',
+      domain,
       path: '/',
       httpOnly: true,
       secure: false,

@@ -16,11 +16,8 @@ test.describe('Command palette', () => {
     await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 10000 });
   });
 
-  test('quick action "Go to Trash" navigates to workspace', async ({ page }) => {
+  test('quick action "Go to Trash" navigates to trash', async ({ page }) => {
     await createNewPage(page);
-
-    const currentUrl = page.url();
-    const workspacePath = currentUrl.match(/\/app\/([^/?#]+)/)?.[1] ?? '';
 
     await page.keyboard.press('Control+K');
     await expect(page.getByPlaceholder('Search pages...')).toBeVisible({ timeout: 5000 });
@@ -29,10 +26,6 @@ test.describe('Command palette', () => {
     await expect(goToTrash).toBeVisible({ timeout: 5000 });
     await goToTrash.click();
 
-    await expect(page).toHaveURL(new RegExp(`/app/${escapeRegex(workspacePath)}`));
+    await expect(page).toHaveURL(/\/app\/.+\/trash/);
   });
 });
-
-function escapeRegex(str: string): string {
-  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}

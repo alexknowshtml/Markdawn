@@ -42,21 +42,23 @@ test.describe('Markdown block shortcuts', () => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('- item');
-    // The editor should contain the list item text
-    await expect(page.locator('.ProseMirror')).toContainText('item', { timeout: 5_000 });
+    await expect(page.locator('.ProseMirror ul')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.ProseMirror ul')).toContainText('item');
   });
 
   test('ordered list via 1. ', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('1. first');
-    await expect(page.locator('.ProseMirror')).toContainText('first', { timeout: 5_000 });
+    await expect(page.locator('.ProseMirror ol')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.ProseMirror ol')).toContainText('first');
   });
 
   test('blockquote via > ', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('> quoted text');
-    await expect(page.locator('.ProseMirror')).toContainText('quoted text', { timeout: 5_000 });
+    await expect(page.locator('.ProseMirror blockquote')).toBeVisible({ timeout: 5_000 });
+    await expect(page.locator('.ProseMirror blockquote')).toContainText('quoted text');
   });
 });

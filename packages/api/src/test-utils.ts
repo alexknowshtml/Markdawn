@@ -73,7 +73,7 @@ export async function createTestSession(userId: string) {
      VALUES ($1, $2, NOW() + INTERVAL '1 day', NOW(), NOW(), $3)`,
     [sessionId, token, userId],
   );
-  return { Cookie: `better-auth.session_token=${signedToken}` };
+  return { Cookie: `better-auth.session_token=${signedToken}`, token: signedToken };
 }
 
 type CreateWorkspaceOptions = {

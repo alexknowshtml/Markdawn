@@ -125,14 +125,14 @@ publicRoute.post('/test/setup', async (c) => {
   const { pool } = await import('../db/connection');
   const body = (await c.req.json().catch(() => ({}))) as { name?: string };
   const user = await createTestUser({ name: body.name ?? 'E2E Test User' });
-  const { Cookie } = await createTestSession(user.id);
+  const { token } = await createTestSession(user.id);
   // Override the workspace slug to a predictable value for tests
   const knownSlug = 'e2e-test-workspace';
   await pool.query('UPDATE workspaces SET slug = $1 WHERE owner_id = $2 AND is_personal = true', [
     knownSlug,
     user.id,
   ]);
-  return c.json({ cookie: Cookie.split('=').slice(1).join('=') });
+  return c.json({ cookie: token });
 });
 
 export { publicRoute, publicShareRoute };
