@@ -93,9 +93,7 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
   useEffect(() => {
     if (!isOpen) return;
 
-    const buttons = containerRef.current?.querySelectorAll<HTMLElement>(
-      ':scope button',
-    );
+    const buttons = containerRef.current?.querySelectorAll<HTMLElement>(':scope button');
     const selectedElement = buttons?.[selectedIndex];
     if (selectedElement) {
       selectedElement.scrollIntoView({ block: 'nearest' });
