@@ -7,7 +7,8 @@
     "typescript": "^5.7.0"
   },
   "scripts": {
-    "test": "playwright test",
+    "test": "tsc --noEmit",
+    "test:e2e": "playwright test",
     "test:ui": "playwright test --ui",
     "test:headed": "playwright test --headed",
     "codegen": "playwright codegen",
