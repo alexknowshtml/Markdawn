@@ -223,6 +223,7 @@ jobs:
         working-directory: e2e
         env:
           BASE_URL: http://localhost:5173
+          TEST_SETUP_TOKEN: e2e-test-setup-secret
 
       - name: Upload Playwright report
         uses: actions/upload-artifact@v4
