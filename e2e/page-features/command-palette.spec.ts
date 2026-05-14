@@ -26,6 +26,6 @@ test.describe('Command palette', () => {
     await expect(goToTrash).toBeVisible({ timeout: 5000 });
     await goToTrash.click();
 
-    await expect(page).toHaveURL(/\/app\/.+\/trash/);
+    await expect(page).toHaveURL(/tab=trash/);
   });
 });

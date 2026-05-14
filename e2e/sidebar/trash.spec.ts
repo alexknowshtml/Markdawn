@@ -28,7 +28,7 @@ test.describe('Trash', () => {
     await page.locator('button:has(svg.lucide-trash-2)').first().click();
     await expect(page.getByRole('heading', { name: /Trash/i })).toBeVisible({ timeout: 5000 });
 
-    const restoreBtn = page.getByTitle('Restore page');
+    const restoreBtn = page.getByTitle('Restore page').first();
     await expect(restoreBtn).toBeVisible({ timeout: 5000 });
     await restoreBtn.click({ force: true });
 
