@@ -161,6 +161,12 @@ interface UseMilkdownProps {
     query: string,
     position: { x: number; y: number; top?: number; bottom?: number } | null,
   ) => void;
+  onSlashMenuSuggest?: (
+    isOpen: boolean,
+    query: string,
+    position: { x: number; y: number; top?: number; bottom?: number } | null,
+    range: { from: number; to: number } | null,
+  ) => void;
 }
 
 function isTaskChecked(checked: unknown): boolean {
@@ -213,6 +219,7 @@ export function useMilkdown({
   provider,
   onWikiLinkClick,
   onWikiLinkSuggest,
+  onSlashMenuSuggest,
 }: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -221,6 +228,8 @@ export function useMilkdown({
   onWikiLinkClickRef.current = onWikiLinkClick;
   const onWikiLinkSuggestRef = useRef(onWikiLinkSuggest);
   onWikiLinkSuggestRef.current = onWikiLinkSuggest;
+  const onSlashMenuSuggestRef = useRef(onSlashMenuSuggest);
+  onSlashMenuSuggestRef.current = onSlashMenuSuggest;
   const hasCollab = Boolean(doc && provider);
   const fallbackInitialValue = hasCollab ? undefined : initialValue;
 
@@ -324,13 +333,14 @@ export function useMilkdown({
 
           ctx.get(listenerCtx).updated((_ctx) => {
             const suggest = onWikiLinkSuggestRef.current;
-            if (!suggest) return;
+            const suggestSlash = onSlashMenuSuggestRef.current;
 
             const view = _ctx.get(editorViewCtx);
             const { selection } = view.state;
 
             if (!selection.empty) {
-              suggest(false, '', null);
+              suggest?.(false, '', null);
+              suggestSlash?.(false, '', null, null);
               return;
             }
 
@@ -341,14 +351,46 @@ export function useMilkdown({
             if (match) {
               const query = match[1] || '';
               const coords = view.coordsAtPos($from.pos);
-              suggest(true, query, {
+              suggest?.(true, query, {
                 x: coords.left,
                 y: coords.bottom + 5,
                 top: coords.top,
                 bottom: coords.bottom,
               });
+              suggestSlash?.(false, '', null, null);
             } else {
-              suggest(false, '', null);
+              suggest?.(false, '', null);
+
+              if (!suggestSlash) {
+                return;
+              }
+
+              const slashIndex = textBefore.lastIndexOf('/');
+              if (slashIndex < 0) {
+                suggestSlash(false, '', null, null);
+                return;
+              }
+
+              const prefixChar = slashIndex === 0 ? '' : (textBefore[slashIndex - 1] ?? '');
+              if (prefixChar && !/\s/.test(prefixChar)) {
+                suggestSlash(false, '', null, null);
+                return;
+              }
+
+              const query = textBefore.slice(slashIndex + 1);
+              const coords = view.coordsAtPos($from.pos);
+              const slashFrom = $from.start() + slashIndex;
+              suggestSlash(
+                true,
+                query,
+                {
+                  x: coords.left,
+                  y: coords.bottom + 5,
+                  top: coords.top,
+                  bottom: coords.bottom,
+                },
+                { from: slashFrom, to: $from.pos },
+              );
             }
           });
 
