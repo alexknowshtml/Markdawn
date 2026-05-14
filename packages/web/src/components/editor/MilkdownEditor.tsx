@@ -1,3 +1,22 @@
+import {
+  IconBlockquote,
+  IconBold,
+  IconCode,
+  IconH1,
+  IconH2,
+  IconH3,
+  IconH4,
+  IconH5,
+  IconH6,
+  IconItalic,
+  IconLink,
+  IconList,
+  IconListCheck,
+  IconListNumbers,
+  IconPhoto,
+  IconStrikethrough,
+  IconTable,
+} from '@tabler/icons-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
@@ -12,9 +31,10 @@ import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import type { Editor } from '@milkdown/core';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
-import { setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
+import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
 import type { EditorState } from 'prosemirror-state';
+import { TextSelection } from 'prosemirror-state';
 import {
   addColumnAfter,
   addColumnBefore,
@@ -27,6 +47,7 @@ import {
 } from 'prosemirror-tables';
 import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
+import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
 
 interface MilkdownEditorProps {
@@ -71,12 +92,36 @@ export function MilkdownEditor({
     closeSuggestions,
   } = useWikiLinkSuggestions(workspaceId, editorRef);
 
+  const [slashMenuState, setSlashMenuState] = useState({
+    isOpen: false,
+    query: '',
+    position: null as { x: number; y: number; top?: number; bottom?: number } | null,
+    range: null as { from: number; to: number } | null,
+  });
+
+  const handleSlashMenuSuggest = useCallback(
+    (
+      isOpen: boolean,
+      query: string,
+      position: { x: number; y: number; top?: number; bottom?: number } | null,
+      range: { from: number; to: number } | null,
+    ) => {
+      setSlashMenuState({ isOpen, query, position, range });
+    },
+    [],
+  );
+
+  const closeSlashMenu = useCallback(() => {
+    setSlashMenuState((prev) => ({ ...prev, isOpen: false }));
+  }, []);
+
   const [activeStates, setActiveStates] = useState({
     isBoldActive: false,
     isItalicActive: false,
     isStrikeActive: false,
     isCodeActive: false,
     isLinkActive: false,
+    isBlockquoteActive: false,
     isH1Active: false,
     isH2Active: false,
     isH3Active: false,
@@ -174,6 +219,7 @@ export function MilkdownEditor({
           isStrikeActive: hasMark(state, marks.strike_through),
           isCodeActive: hasMark(state, marks.inlineCode) || hasBlockType(state, nodes.code_block),
           isLinkActive: hasMark(state, marks.link),
+          isBlockquoteActive: hasParentBlockType(state, nodes.blockquote),
           isH1Active: hasBlockType(state, nodes.heading, { level: 1 }),
           isH2Active: hasBlockType(state, nodes.heading, { level: 2 }),
           isH3Active: hasBlockType(state, nodes.heading, { level: 3 }),
@@ -223,6 +269,7 @@ export function MilkdownEditor({
     provider,
     onWikiLinkClick,
     onWikiLinkSuggest: handleWikiLinkSuggest,
+    onSlashMenuSuggest: handleSlashMenuSuggest,
   });
 
   useAwareness(provider);
@@ -391,6 +438,349 @@ export function MilkdownEditor({
     });
   };
 
+  // Slash-specific handlers that don't call keepVisible()
+  const handleSlashParagraph = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const paraType = state.schema.nodes.paragraph;
+      if (!paraType) return;
+      const command = setBlockType(paraType as never);
+      command(state, dispatch);
+    });
+  };
+
+  const handleSlashHeading = (level: number) => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const headingType = state.schema.nodes.heading;
+      if (!headingType) return;
+      const command = setBlockType(headingType as never, { level });
+      command(state, dispatch);
+    });
+  };
+
+  const handleSlashQuote = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const blockquoteType = state.schema.nodes.blockquote;
+      if (!blockquoteType) return;
+      const command = wrapIn(blockquoteType as never);
+      command(state, dispatch);
+    });
+  };
+
+  const handleSlashBulletList = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const bulletListType = state.schema.nodes.bullet_list;
+      if (!bulletListType) return;
+      const command = wrapIn(bulletListType as never);
+      command(state, dispatch);
+    });
+  };
+
+  const handleSlashOrderedList = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const orderedListType = state.schema.nodes.ordered_list;
+      if (!orderedListType) return;
+      const command = wrapIn(orderedListType as never);
+      command(state, dispatch);
+    });
+  };
+
+  const handleSlashTaskList = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const bulletListType = state.schema.nodes.bullet_list;
+      const listItemType = state.schema.nodes.list_item;
+      if (!bulletListType || !listItemType) return;
+
+      const command = wrapIn(bulletListType as never);
+      command(state, dispatch);
+
+      const newState = view.state;
+      const tr = newState.tr;
+      const { from, to } = newState.selection;
+      newState.doc.nodesBetween(from, to, (node, pos) => {
+        if (node.type === listItemType && node.attrs.checked == null) {
+          tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
+        }
+      });
+      if (tr.docChanged) {
+        dispatch(tr);
+      }
+    });
+  };
+
+  const handleSlashInsertTable = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const commands = ctx.get(commandsCtx);
+      commands.call(insertTableCommand.key, { row: 3, col: 3 });
+    });
+  };
+
+  const handleSlashDivider = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const hrType = state.schema.nodes.hr;
+      if (!hrType) return;
+      const { $from } = state.selection;
+      const node = hrType.create();
+      const tr = state.tr.insert($from.pos, node);
+      dispatch(tr);
+    });
+  };
+
+  const handleSlashTag = () => {
+    if (!editor) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const { $from } = state.selection;
+      const codeType = state.schema.marks.code;
+      if (!codeType) return;
+
+      const tr = state.tr.insertText('#tag', $from.pos);
+      dispatch(tr);
+    });
+  };
+
+  const removeSlashTrigger = () => {
+    const range = slashMenuState.range;
+    if (!editor || !range) return;
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const { from, to } = range;
+      const tr = state.tr.delete(from, to);
+      const cursorPos = from;
+      tr.setSelection(TextSelection.near(tr.doc.resolve(cursorPos)));
+      dispatch(tr);
+    });
+  };
+
+  const executeSlashAction = (action: () => void) => {
+    removeSlashTrigger();
+    closeSlashMenu();
+    setTimeout(() => {
+      action();
+      if (editor) {
+        editor.action((ctx) => {
+          const view = ctx.get(editorViewCtx);
+          if (view) {
+            view.focus();
+          }
+        });
+      }
+    }, 0);
+  };
+
+  const slashCommands = [
+    {
+      id: 'paragraph',
+      label: 'Paragraph',
+      hint: 'P',
+      shortcut: 'Ctrl+Alt+0',
+      keywords: ['paragraph', 'text', 'p'],
+      icon: <span className="text-xs">¶</span>,
+      onSelect: () => executeSlashAction(handleSlashParagraph),
+    },
+    {
+      id: 'h1',
+      label: 'Heading 1',
+      hint: 'H1',
+      shortcut: 'Ctrl+Alt+1',
+      keywords: ['heading', 'h1', 'title'],
+      icon: <IconH1 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(1)),
+    },
+    {
+      id: 'h2',
+      label: 'Heading 2',
+      hint: 'H2',
+      shortcut: 'Ctrl+Alt+2',
+      keywords: ['heading', 'h2'],
+      icon: <IconH2 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(2)),
+    },
+    {
+      id: 'h3',
+      label: 'Heading 3',
+      hint: 'H3',
+      shortcut: 'Ctrl+Alt+3',
+      keywords: ['heading', 'h3'],
+      icon: <IconH3 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(3)),
+    },
+    {
+      id: 'h4',
+      label: 'Heading 4',
+      hint: 'H4',
+      shortcut: 'Ctrl+Alt+4',
+      keywords: ['heading', 'h4'],
+      icon: <IconH4 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(4)),
+    },
+    {
+      id: 'h5',
+      label: 'Heading 5',
+      hint: 'H5',
+      shortcut: 'Ctrl+Alt+5',
+      keywords: ['heading', 'h5'],
+      icon: <IconH5 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(5)),
+    },
+    {
+      id: 'h6',
+      label: 'Heading 6',
+      hint: 'H6',
+      shortcut: 'Ctrl+Alt+6',
+      keywords: ['heading', 'h6'],
+      icon: <IconH6 size={16} />,
+      onSelect: () => executeSlashAction(() => handleSlashHeading(6)),
+    },
+    {
+      id: 'bold',
+      label: 'Bold',
+      hint: 'Bold',
+      shortcut: 'Ctrl+B',
+      keywords: ['bold', 'strong'],
+      icon: <IconBold size={16} />,
+      onSelect: () => executeSlashAction(handleBold),
+    },
+    {
+      id: 'italic',
+      label: 'Italic',
+      hint: 'Italic',
+      shortcut: 'Ctrl+I',
+      keywords: ['italic', 'emphasis'],
+      icon: <IconItalic size={16} />,
+      onSelect: () => executeSlashAction(handleItalic),
+    },
+    {
+      id: 'strikethrough',
+      label: 'Strikethrough',
+      hint: 'Strike',
+      shortcut: 'Ctrl+Shift+X',
+      keywords: ['strikethrough', 'strike'],
+      icon: <IconStrikethrough size={16} />,
+      onSelect: () => executeSlashAction(handleStrike),
+    },
+    {
+      id: 'code',
+      label: 'Code',
+      hint: 'Code',
+      shortcut: 'Ctrl+`',
+      keywords: ['code', 'inline'],
+      icon: <IconCode size={16} />,
+      onSelect: () => executeSlashAction(handleCode),
+    },
+    {
+      id: 'blockquote',
+      label: 'Blockquote',
+      hint: 'Quote',
+      shortcut: 'Ctrl+Shift+>',
+      keywords: ['quote', 'blockquote', 'citation'],
+      icon: <IconBlockquote size={16} />,
+      onSelect: () => executeSlashAction(handleSlashQuote),
+    },
+    {
+      id: 'link',
+      label: 'Link',
+      hint: 'Link',
+      shortcut: 'Ctrl+K',
+      keywords: ['link', 'url'],
+      icon: <IconLink size={16} />,
+      onSelect: () => executeSlashAction(handleLink),
+    },
+    {
+      id: 'bullet-list',
+      label: 'Bullet List',
+      hint: 'Bullet',
+      shortcut: 'Ctrl+Shift+8',
+      keywords: ['bullet', 'list', 'unordered'],
+      icon: <IconList size={16} />,
+      onSelect: () => executeSlashAction(handleSlashBulletList),
+    },
+    {
+      id: 'ordered-list',
+      label: 'Ordered List',
+      hint: 'Ordered',
+      shortcut: 'Ctrl+Shift+7',
+      keywords: ['ordered', 'list', 'number', 'numbered'],
+      icon: <IconListNumbers size={16} />,
+      onSelect: () => executeSlashAction(handleSlashOrderedList),
+    },
+    {
+      id: 'task-list',
+      label: 'Task List',
+      hint: 'Check',
+      shortcut: 'Ctrl+Shift+[',
+      keywords: ['task', 'check', 'list', 'todo', 'checkbox'],
+      icon: <IconListCheck size={16} />,
+      onSelect: () => executeSlashAction(handleSlashTaskList),
+    },
+    {
+      id: 'table',
+      label: 'Table',
+      hint: 'Table',
+      keywords: ['table', 'grid'],
+      icon: <IconTable size={16} />,
+      onSelect: () => executeSlashAction(handleSlashInsertTable),
+    },
+    {
+      id: 'image',
+      label: 'Image',
+      hint: 'Img',
+      shortcut: 'Ctrl+Shift+I',
+      keywords: ['image', 'photo', 'upload'],
+      icon: <IconPhoto size={16} />,
+      onSelect: () => executeSlashAction(handleImageUploadFromSlash),
+    },
+    {
+      id: 'divider',
+      label: 'Divider',
+      hint: 'Line',
+      keywords: ['divider', 'hr', 'line', 'separator', 'horizontal rule'],
+      icon: <span className="text-lg">—</span>,
+      onSelect: () => executeSlashAction(handleSlashDivider),
+    },
+    {
+      id: 'tag',
+      label: 'Tag',
+      hint: 'Tag',
+      shortcut: 'Ctrl+Shift+#',
+      keywords: ['tag', 'label', 'property', '#'],
+      icon: <span className="text-sm">#</span>,
+      onSelect: () => executeSlashAction(handleSlashTag),
+    },
+  ];
+
   const handleBold = () => {
     runMarkCommand('strong');
     setTimeout(updateActiveStates, 0);
@@ -426,6 +816,37 @@ export function MilkdownEditor({
       setTimeout(updateActiveStates, 0);
     }
   };
+
+  const handleBlockquote = () => {
+    if (!editor) return;
+    keepVisible();
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+      const { state, dispatch } = view;
+      const blockquoteType = state.schema.nodes.blockquote;
+      if (!blockquoteType) return;
+
+      const { $from } = state.selection;
+      let inBlockquote = false;
+
+      state.doc.nodesBetween($from.pos, $from.pos, (node) => {
+        if (node.type === blockquoteType) {
+          inBlockquote = true;
+        }
+      });
+
+      if (inBlockquote) {
+        const command = lift;
+        command(state, dispatch);
+      } else {
+        const command = wrapIn(blockquoteType as never);
+        command(state, dispatch);
+      }
+    });
+    setTimeout(updateActiveStates, 0);
+  };
+
   const handleImageUpload = async (file: File) => {
     if (!workspaceId) {
       alert('No workspace selected');
@@ -467,6 +888,19 @@ export function MilkdownEditor({
     } catch (e) {
       alert(`Upload failed: ${(e as Error).message}`);
     }
+  };
+
+  const handleImageUploadFromSlash = () => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = (e) => {
+      const file = (e.target as HTMLInputElement).files?.[0];
+      if (file) {
+        handleImageUpload(file);
+      }
+    };
+    input.click();
   };
   const handleH1 = () => {
     runBlockCommand('heading', { level: 1 });
@@ -727,6 +1161,13 @@ export function MilkdownEditor({
         onClose={closeSuggestions}
         onAddPage={handleAddPage}
       />
+      <SlashMenu
+        isOpen={slashMenuState.isOpen}
+        query={slashMenuState.query}
+        position={slashMenuState.position}
+        commands={slashCommands}
+        onClose={closeSlashMenu}
+      />
       <FloatingToolbar
         visible={visible}
         position={position}
@@ -735,6 +1176,7 @@ export function MilkdownEditor({
         onStrike={handleStrike}
         onCode={handleCode}
         onLink={handleLink}
+        onBlockquote={handleBlockquote}
         onImageUpload={handleImageUpload}
         onH1={handleH1}
         onH2={handleH2}
