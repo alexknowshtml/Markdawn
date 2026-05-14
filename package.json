@@ -11,6 +11,8 @@
     "db:start": "bash scripts/db-start.sh",
     "db:stop": "bash scripts/db-stop.sh",
     "db:reset": "bash scripts/db-reset.sh",
+    "lint": "biome check",
+    "format": "biome check --write",
     "dev:full": "pnpm db:start && pnpm dev"
   },
   "pnpm": {
