@@ -13,6 +13,10 @@ type PublicPageRow = {
 
 const publicRoute = new Hono();
 
+publicRoute.get('/health', (c) => {
+  return c.json({ status: 'ok' });
+});
+
 publicRoute.get('/public/:token', async (c) => {
   const token = c.req.param('token');
 

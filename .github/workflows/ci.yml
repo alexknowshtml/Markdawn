@@ -179,6 +179,9 @@ jobs:
         env:
           DATABASE_URL: postgresql://markdawn:password@localhost:5432/markdawn
 
+      - name: Build shared dependencies
+        run: pnpm --filter @markdawn/shared run build
+
       - name: Start dev servers
         run: |
           pnpm dev > /tmp/dev-servers.log 2>&1 &
@@ -187,7 +190,7 @@ jobs:
           for i in $(seq 1 60); do
             api_ready=0
             web_ready=0
-            if curl -sf -o /dev/null http://localhost:3001/api/test/setup 2>/dev/null; then
+            if curl -sf -o /dev/null http://localhost:3001/api/health 2>/dev/null; then
               api_ready=1
             fi
             if curl -sf -o /dev/null http://localhost:5173 2>/dev/null; then
