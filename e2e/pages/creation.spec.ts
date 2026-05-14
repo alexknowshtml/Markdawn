@@ -1,0 +1,40 @@
+import { test, expect } from '@playwright/test';
+import { focusEditor, getEditorText } from '../fixtures';
+
+test.describe('Page creation', () => {
+  test('create page via workspace home "New Page" button', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForURL(/\/app\//);
+
+    await page.getByRole('button', { name: /new page/i }).first().click();
+    await page.waitForURL(/\/app\/.+\/untitled-/);
+
+    // A new page should have an empty editor
+    await expect(page.locator('.ProseMirror')).toBeVisible();
+    // The editor should contain a paragraph with a trailing break (empty state)
+    await expect(page.locator('.ProseMirror p')).toBeVisible();
+  });
+
+  test('create page via sidebar "Create note" button', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForURL(/\/app\//);
+
+    // Count existing sidebar pages
+    const beforeCount = await page.locator('text=Untitled').count();
+    await page.getByRole('button', { name: /create note/i }).click();
+    await page.waitForTimeout(1000);
+    // A new "Untitled" page should appear
+    const afterCount = await page.locator('text=Untitled').count();
+    expect(afterCount).toBeGreaterThan(beforeCount);
+  });
+
+  test('new page has "Untitled" as default title', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForURL(/\/app\//);
+
+    await page.getByRole('button', { name: /new page/i }).first().click();
+    await page.waitForURL(/\/app\/.+\/untitled-/);
+
+    await expect(page.locator('input[data-testid="page-title"]')).toHaveValue('Untitled');
+  });
+});

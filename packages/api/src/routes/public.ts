@@ -117,4 +117,22 @@ publicShareRoute.delete(':pageId/share', async (c) => {
   return c.json({ isPublic: false });
 });
 
+publicRoute.post('/test/setup', async (c) => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new HTTPException(404, { message: 'Not found' });
+  }
+  const { createTestUser, createTestSession } = await import('../test-utils');
+  const { pool } = await import('../db/connection');
+  const body = (await c.req.json().catch(() => ({}))) as { name?: string };
+  const user = await createTestUser({ name: body.name ?? 'E2E Test User' });
+  const { Cookie } = await createTestSession(user.id);
+  // Override the workspace slug to a predictable value for tests
+  const knownSlug = 'e2e-test-workspace';
+  await pool.query('UPDATE workspaces SET slug = $1 WHERE owner_id = $2 AND is_personal = true', [
+    knownSlug,
+    user.id,
+  ]);
+  return c.json({ cookie: Cookie.split('=').slice(1).join('=') });
+});
+
 export { publicRoute, publicShareRoute };
