@@ -212,6 +212,7 @@ jobs:
           FRONTEND_URL: http://localhost:5173
           PORT: 3001
           NODE_ENV: development
+          TEST_SETUP_TOKEN: e2e-test-setup-secret
 
       - name: Install Playwright browsers
         run: pnpm exec playwright install chromium firefox

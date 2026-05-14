@@ -7,8 +7,15 @@ const authFile = path.join(__dirname, 'playwright/.auth/user.json');
 setup('authenticate', async ({ page, request }) => {
   // Create a test user and session via the API's dev-only test setup endpoint.
   // Disabled in production (NODE_ENV === 'production').
+  const headers: Record<string, string> = {};
+  const testToken = process.env.TEST_SETUP_TOKEN;
+  if (testToken) {
+    headers['x-test-setup-token'] = testToken;
+  }
+
   const res = await request.post(`${API_URL}/api/test/setup`, {
     data: { name: 'Playwright Test User' },
+    headers,
   });
   expect(res.ok()).toBeTruthy();
 

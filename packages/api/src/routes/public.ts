@@ -125,6 +125,10 @@ publicRoute.post('/test/setup', async (c) => {
   if (process.env.NODE_ENV === 'production') {
     throw new HTTPException(404, { message: 'Not found' });
   }
+  const testToken = process.env.TEST_SETUP_TOKEN;
+  if (testToken && c.req.header('x-test-setup-token') !== testToken) {
+    throw new HTTPException(403, { message: 'Forbidden' });
+  }
   const { createTestUser, createTestSession } = await import('../test-utils');
   const { pool } = await import('../db/connection');
   const body = (await c.req.json().catch(() => ({}))) as { name?: string };
