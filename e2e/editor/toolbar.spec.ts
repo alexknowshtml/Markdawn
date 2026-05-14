@@ -36,7 +36,7 @@ test.describe('Floating toolbar buttons', () => {
     // Inline code
     await page.keyboard.type('code');
     await page.keyboard.press('Control+a');
-    await page.locator('.floating-toolbar button[title="Inline Code"]').click({ timeout: 5000 });
+    await page.locator('.floating-toolbar button[title="Code"]').click({ timeout: 5000 });
     await expect(page.locator('.ProseMirror code')).toBeVisible();
   });
 
