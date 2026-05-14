@@ -561,10 +561,7 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const { $from } = state.selection;
-      const codeType = state.schema.marks.code;
-      if (!codeType) return;
-
-      const tr = state.tr.insertText('#tag', $from.pos);
+      const tr = state.tr.insertText('#tag ', $from.pos);
       dispatch(tr);
     });
   };
@@ -827,14 +824,7 @@ export function MilkdownEditor({
       const blockquoteType = state.schema.nodes.blockquote;
       if (!blockquoteType) return;
 
-      const { $from } = state.selection;
-      let inBlockquote = false;
-
-      state.doc.nodesBetween($from.pos, $from.pos, (node) => {
-        if (node.type === blockquoteType) {
-          inBlockquote = true;
-        }
-      });
+      const inBlockquote = hasParentBlockType(state, blockquoteType);
 
       if (inBlockquote) {
         const command = lift;

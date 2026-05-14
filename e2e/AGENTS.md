@@ -89,7 +89,7 @@ podman exec -i markdawn-postgres-dev psql -U markdawn -d markdawn <<'SQL'
 BEGIN;
 DELETE FROM sessions WHERE user_id IN (SELECT owner_id FROM workspaces WHERE slug = 'e2e-test-workspace');
 DELETE FROM workspace_members WHERE workspace_id IN (SELECT id FROM workspaces WHERE slug = 'e2e-test-workspace');
-DELETE FROM workspaces WHERE slug = 'e2e-test-workspace');
+DELETE FROM workspaces WHERE slug = 'e2e-test-workspace';
 DELETE FROM users WHERE id NOT IN (SELECT owner_id FROM workspaces);
 COMMIT;
 SQL

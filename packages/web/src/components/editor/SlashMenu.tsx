@@ -51,6 +51,10 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
     if (isOpen) setSelectedIndex(0);
   }, [isOpen]);
 
+  useEffect(() => {
+    setSelectedIndex((prev) => Math.min(prev, Math.max(0, results.length - 1)));
+  }, [results]);
+
   useLayoutEffect(() => {
     if (!isOpen || !position || !containerRef.current) {
       if (!isOpen) {
@@ -89,9 +93,10 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
   useEffect(() => {
     if (!isOpen) return;
 
-    const selectedElement = containerRef.current?.querySelector(
-      `button:nth-child(${selectedIndex + 2})`,
-    ) as HTMLElement | undefined;
+    const buttons = containerRef.current?.querySelectorAll<HTMLElement>(
+      ':scope button',
+    );
+    const selectedElement = buttons?.[selectedIndex];
     if (selectedElement) {
       selectedElement.scrollIntoView({ block: 'nearest' });
     }
