@@ -697,8 +697,14 @@ export function createCollabServer(config: CollabServerConfig) {
         await conn.disconnect();
       }
 
+      // Push the rename to the active Y.Doc so open editors see sidebar/home
+      // renames from other clients. Before pushing, delay briefly to let any
+      // in-flight WebSocket sync from the editing client arrive first — if
+      // it already wrote the new title, we skip to avoid CRDT merging two
+      // identical writes into a duplicate (e.g., "x" becomes "xx").
       const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
       if (activeDoc) {
+        await new Promise((r) => setTimeout(r, 50));
         const beforeTitle = activeDoc.getText('title').toString();
         if (beforeTitle !== newTitle) {
           activeDoc.transact(() => {

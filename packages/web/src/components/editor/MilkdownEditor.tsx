@@ -197,7 +197,7 @@ export function MilkdownEditor({
   const cachedTokenRef = useRef<{ token: string; userId: string; expiresAt: number } | null>(null);
 
   const provider = useMemo(() => {
-    const instance = new HocuspocusProvider({
+    return new HocuspocusProvider({
       url: COLLAB_URL,
       name: pageId,
       document: doc,
@@ -214,9 +214,7 @@ export function MilkdownEditor({
         return token;
       },
     });
-
-    return instance;
-  }, [doc, pageId]);
+  }, [pageId, doc]);
 
   const { setContainer, editor } = useMilkdown({
     ...(initialValue !== undefined && { initialValue }),
@@ -228,6 +226,49 @@ export function MilkdownEditor({
   });
 
   useAwareness(provider);
+
+  // Cleanup: destroy provider and Y.Doc on unmount. The ref-capture
+  // pattern distinguishes Strict Mode double-fire from real unmount:
+  // when latest refs differ from captured, we know the instances were
+  // replaced (Strict Mode re-render) and we destroy the old ones
+  // immediately. When refs match, we wait for isMountedRef to flip
+  // false (real unmount) via setTimeout.
+  // The status listener effect below is declared AFTER this one, so
+  // React cleans it up FIRST (bottom-to-top), removing the listener
+  // before provider.destroy() fires its disconnected event.
+  const isMountedRef = useRef(true);
+  const latestProviderRef = useRef(provider);
+  const latestDocRef = useRef(doc);
+  latestProviderRef.current = provider;
+  latestDocRef.current = doc;
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const capturedProvider = provider;
+    const capturedDoc = doc;
+
+    return () => {
+      if (latestProviderRef.current !== capturedProvider || latestDocRef.current !== capturedDoc) {
+        capturedProvider.forceSync();
+        capturedProvider.destroy();
+        capturedDoc.destroy();
+        return;
+      }
+      setTimeout(() => {
+        if (!isMountedRef.current) {
+          capturedProvider.forceSync();
+          capturedProvider.destroy();
+          capturedDoc.destroy();
+        }
+      }, 0);
+    };
+  }, [provider, doc]);
 
   const { visible, position, keepVisible } = useFloatingToolbar();
 
@@ -642,40 +683,6 @@ export function MilkdownEditor({
   useEffect(() => {
     editorRef.current = editor;
   }, [editor]);
-
-  const isMountedRef = useRef(true);
-  const latestProviderRef = useRef(provider);
-  const latestDocRef = useRef(doc);
-  latestProviderRef.current = provider;
-  latestDocRef.current = doc;
-
-  useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const capturedProvider = provider;
-    const capturedDoc = doc;
-
-    return () => {
-      if (latestProviderRef.current !== capturedProvider || latestDocRef.current !== capturedDoc) {
-        capturedProvider.forceSync();
-        capturedProvider.destroy();
-        capturedDoc.destroy();
-        return;
-      }
-      setTimeout(() => {
-        if (!isMountedRef.current) {
-          capturedProvider.forceSync();
-          capturedProvider.destroy();
-          capturedDoc.destroy();
-        }
-      }, 0);
-    };
-  }, [provider, doc]);
 
   useEffect(() => {
     if (!editor) return;

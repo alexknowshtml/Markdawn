@@ -2,7 +2,7 @@ import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
-import React, { useState, useMemo, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
@@ -28,9 +28,7 @@ async function fetchPage(pageId: string): Promise<PageType> {
 }
 
 function decodePageContent(ydoc: unknown): string {
-  if (!ydoc || !Array.isArray(ydoc) || ydoc.length === 0) {
-    return '';
-  }
+  if (!ydoc || !Array.isArray(ydoc) || ydoc.length === 0) return '';
   const hasNullByte = ydoc.includes(0);
   if (!hasNullByte) {
     return new TextDecoder().decode(new Uint8Array(ydoc as number[]));
@@ -59,25 +57,15 @@ export default function Page() {
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
-  const editorElementRef = useRef<HTMLElement | null>(null);
 
-  const handleStatusChange = (newStatus: WebSocketStatus) => {
-    setCollabStatus(newStatus);
-  };
-
+  // Clear state on page navigation.
   useEffect(() => {
-    const findEditorElement = () => {
-      const editorElement = document.querySelector('.milkdown-editor');
-      if (editorElement) {
-        editorElementRef.current = editorElement as HTMLElement;
-      }
-    };
-
-    findEditorElement();
-    const timeoutId = setTimeout(findEditorElement, 500);
-
-    return () => clearTimeout(timeoutId);
-  }, []);
+    setProvider(null);
+    setCollabStatus(WebSocketStatus.Connecting);
+    setEditorElement(null);
+    void pageId;
+  }, [pageId]);
+  const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
 
   const { data: page } = useQuery({
     queryKey: ['pages', 'detail', pageId],
@@ -87,6 +75,36 @@ export default function Page() {
     },
     enabled: !!pageId,
   });
+
+  // Find the .milkdown-editor DOM element for TableOfContents.
+  // Re-runs on page change (data load or navigation) to handle the
+  // editor mounting asynchronously after page fetch completes.
+  // Polls up to 4 times (0ms, 200ms, 600ms, 1400ms) to catch the
+  // editor regardless of page load timing.
+  useEffect(() => {
+    if (!page) return;
+    let attempts = 0;
+    const maxAttempts = 4;
+    let id: ReturnType<typeof setTimeout>;
+
+    const poll = () => {
+      const el = document.querySelector('.milkdown-editor') as HTMLElement | null;
+      if (el) {
+        setEditorElement(el);
+        return;
+      }
+      attempts++;
+      if (attempts < maxAttempts) {
+        id = setTimeout(poll, attempts * 200);
+      }
+    };
+    poll();
+    return () => clearTimeout(id);
+  }, [page]);
+
+  const handleStatusChange = (newStatus: WebSocketStatus) => {
+    setCollabStatus(newStatus);
+  };
 
   const updateDocumentMeta = useCallback(() => {
     if (!page) return;
@@ -224,17 +242,19 @@ export default function Page() {
         </div>
       </div>
       <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
-      <MilkdownEditor
-        key={pageId}
-        pageId={pageId}
-        workspaceId={workspaceId ?? ''}
-        initialValue={decodePageContent(page?.ydoc)}
-        onProviderReady={setProvider}
-        onStatusChange={handleStatusChange}
-        onWikiLinkClick={handleWikiLinkClick}
-      />
+      {page ? (
+        <MilkdownEditor
+          key={pageId}
+          pageId={pageId}
+          workspaceId={workspaceId ?? ''}
+          initialValue={decodePageContent(page.ydoc)}
+          onProviderReady={setProvider}
+          onStatusChange={handleStatusChange}
+          onWikiLinkClick={handleWikiLinkClick}
+        />
+      ) : null}
       <BacklinksPanel pageId={pageId} workspaceSlug={workspaceSlug} />
-      <TableOfContents editorElement={editorElementRef.current} />
+      <TableOfContents editorElement={editorElement} />
     </div>
   );
 }

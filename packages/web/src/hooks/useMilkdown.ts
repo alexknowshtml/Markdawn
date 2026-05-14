@@ -7,7 +7,7 @@ import {
 } from '@milkdown/core';
 import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
-import { commonmark } from '@milkdown/preset-commonmark';
+import { commonmark, syncHeadingIdPlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
 import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
 import Papa from 'papaparse';
@@ -611,16 +611,29 @@ export function useMilkdown({
         return;
       }
 
-      if (shouldUseCollab && doc && provider) {
-        runtimeEditor.action((ctx) => {
-          const collabService = ctx.get(collabServiceCtx);
-          collabService.bindDoc(doc);
-          const awareness = provider.awareness;
-          if (awareness) {
-            collabService.setAwareness(awareness);
-          }
-          collabService.connect();
-        });
+      if (shouldUseCollab && doc) {
+        // syncHeadingIdPlugin dispatches setNodeMarkup transactions on every
+        // doc update to assign heading IDs. y-prosemirror's ySyncPlugin then
+        // syncs those mutations to the Y.Doc, which triggers observeDeep,
+        // which re-renders ProseMirror, which fires syncHeadingIdPlugin again.
+        // Milkdown's own vanilla-collab example removes this plugin in collab
+        // mode. We also defer connect via setTimeout(0) so Milkdown processes
+        // the plugin removal before ySyncPlugin is injected.
+        runtimeEditor.remove(syncHeadingIdPlugin);
+        setTimeout(() => {
+          if (disposed || !runtimeEditor) return;
+          runtimeEditor.action((ctx) => {
+            const collabService = ctx.get(collabServiceCtx);
+            collabService.bindDoc(doc);
+            if (provider) {
+              const awareness = provider.awareness;
+              if (awareness) {
+                collabService.setAwareness(awareness);
+              }
+              collabService.connect();
+            }
+          });
+        }, 0);
       }
 
       editorRef.current = runtimeEditor;
