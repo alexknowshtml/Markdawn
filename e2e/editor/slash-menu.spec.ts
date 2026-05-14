@@ -2,33 +2,259 @@ import { expect, test } from '@playwright/test';
 import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Slash menu', () => {
-  test('can search and insert heading blocks', async ({ page }) => {
-    await createNewPage(page);
-    await focusEditor(page);
+  test.describe('Trigger and visibility', () => {
+    test('opens when / is typed at line start', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      const menu = page.locator('[data-testid="slash-menu"]');
+      await expect(menu).toBeVisible({ timeout: 5000 });
+    });
 
-    await page.keyboard.type('/h2');
-    await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('Heading from slash');
+    test('does not open when / is typed mid-word', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('abc/');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('/');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+    });
 
-    await expect(page.locator('.ProseMirror h2')).toBeVisible({ timeout: 5000 });
-    await expect(page.locator('.ProseMirror h2')).toHaveText('Heading from slash');
+    test('shows all commands with empty query (just /)', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      const menu = page.locator('[data-testid="slash-menu"]');
+      await expect(menu).toBeVisible({ timeout: 5000 });
+      const buttons = page.locator('[data-testid="slash-menu"] button');
+      await expect(buttons.first()).toBeVisible();
+      const count = await buttons.count();
+      expect(count).toBeGreaterThan(10);
+    });
   });
 
-  test('can insert checklist items from slash command', async ({ page }) => {
-    await createNewPage(page);
-    await focusEditor(page);
+  test.describe('Search and filtering', () => {
+    test('filters commands by fuzzy search', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
 
-    await page.keyboard.type('/check');
-    await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
-    await page.keyboard.press('Enter');
-    await page.keyboard.type('Task from slash');
-
-    await expect(page.locator('.ProseMirror li[data-item-type="task"]')).toBeVisible({
-      timeout: 5000,
+      await page.keyboard.type('table');
+      await expect(page.locator('[data-testid="slash-menu"]')).toContainText('Table');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toContainText(
+        'No matching commands',
+      );
     });
-    await expect(page.locator('.ProseMirror li[data-item-type="task"]')).toContainText(
-      'Task from slash',
-    );
+
+    test('shows no-match message for gibberish query', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/zzzzz');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await expect(page.locator('[data-testid="slash-menu"]')).toContainText(
+        'No matching commands',
+      );
+    });
+  });
+
+  test.describe('Dismissal', () => {
+    test('closes on Escape key', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Escape');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('closes on click outside the menu', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.locator('input[data-testid="page-title"]').click({ timeout: 5000 });
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+  });
+
+  test.describe('Keyboard navigation', () => {
+    test('ArrowDown cycles selection and Enter executes the selected command', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Keyboard Heading');
+      await expect(page.locator('.ProseMirror h1')).toContainText('Keyboard Heading', {
+        timeout: 5000,
+      });
+    });
+  });
+
+  test.describe('Trigger cleanup', () => {
+    test('removes the /query text after a command is selected', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/h2');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Clean Text');
+      await expect(page.locator('.ProseMirror h2')).toContainText('Clean Text', { timeout: 5000 });
+      await expect(page.locator('.ProseMirror')).not.toContainText('/h2');
+    });
+  });
+
+  test.describe('Block commands', () => {
+    test('inserts heading 1 via /h1', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/h1');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Main Title');
+      await expect(page.locator('.ProseMirror h1')).toContainText('Main Title', { timeout: 5000 });
+    });
+
+    test('inserts blockquote via /blockquote', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/blockquote');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Cited text');
+      await expect(page.locator('.ProseMirror blockquote')).toContainText('Cited text', {
+        timeout: 5000,
+      });
+    });
+
+    test('inserts bullet list via /bullet', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/bullet');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('List item');
+      await expect(page.locator('.ProseMirror ul')).toContainText('List item', { timeout: 5000 });
+    });
+
+    test('inserts ordered list via /ordered', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/ordered');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('First item');
+      await expect(page.locator('.ProseMirror ol')).toContainText('First item', { timeout: 5000 });
+    });
+
+    test('inserts task list via /check', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/check');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Task item');
+      await expect(page.locator('.ProseMirror li[data-item-type="task"]')).toContainText(
+        'Task item',
+        { timeout: 5000 },
+      );
+    });
+
+    test('inserts table via /table', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/table');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.ProseMirror table')).toBeVisible({ timeout: 5000 });
+    });
+
+    test('inserts horizontal divider via /divider', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/divider');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.ProseMirror hr')).toBeVisible({ timeout: 5000 });
+    });
+  });
+
+  test.describe('Inline mark commands', () => {
+    test('bold command applies bold to subsequent typing', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/bold');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+      await page.keyboard.type('bold text');
+      await expect(page.locator('.ProseMirror strong')).toContainText('bold text', {
+        timeout: 5000,
+      });
+    });
+
+    test('italic command applies italic to subsequent typing', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/italic');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+      await page.keyboard.type('italic text');
+      await expect(page.locator('.ProseMirror em')).toContainText('italic text', {
+        timeout: 5000,
+      });
+    });
+  });
+
+  test.describe('Sequential use', () => {
+    test('can execute multiple slash commands one after another', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+
+      await page.keyboard.type('/h1');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('First Section');
+      await expect(page.locator('.ProseMirror h1')).toContainText('First Section', {
+        timeout: 5000,
+      });
+
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('/h2');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Second Section');
+      await expect(page.locator('.ProseMirror h2')).toContainText('Second Section', {
+        timeout: 5000,
+      });
+
+      await expect(page.locator('.ProseMirror h1')).toHaveCount(1);
+      await expect(page.locator('.ProseMirror h2')).toHaveCount(1);
+    });
+  });
+
+  test.describe('Regression', () => {
+    test('wiki link [[ still triggers suggestions alongside slash menu', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+
+      await page.keyboard.type('[[');
+      const popup = page.getByTestId('wikilink-suggestions');
+      await expect(popup).toBeVisible({ timeout: 5000 });
+
+      await page.keyboard.press('Escape');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('/h2');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Heading from slash');
+      await expect(page.locator('.ProseMirror h2')).toContainText('Heading from slash', {
+        timeout: 5000,
+      });
+    });
   });
 });
