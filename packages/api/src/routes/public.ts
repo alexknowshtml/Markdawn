@@ -13,6 +13,10 @@ type PublicPageRow = {
 
 const publicRoute = new Hono();
 
+publicRoute.get('/health', (c) => {
+  return c.json({ status: 'ok' });
+});
+
 publicRoute.get('/public/:token', async (c) => {
   const token = c.req.param('token');
 
@@ -115,6 +119,28 @@ publicShareRoute.delete(':pageId/share', async (c) => {
   ]);
 
   return c.json({ isPublic: false });
+});
+
+publicRoute.post('/test/setup', async (c) => {
+  if (process.env.NODE_ENV === 'production') {
+    throw new HTTPException(404, { message: 'Not found' });
+  }
+  const testToken = process.env.TEST_SETUP_TOKEN;
+  if (testToken && c.req.header('x-test-setup-token') !== testToken) {
+    throw new HTTPException(403, { message: 'Forbidden' });
+  }
+  const { createTestUser, createTestSession } = await import('../test-utils');
+  const { pool } = await import('../db/connection');
+  const body = (await c.req.json().catch(() => ({}))) as { name?: string };
+  const user = await createTestUser({ name: body.name ?? 'E2E Test User' });
+  const { token } = await createTestSession(user.id);
+  // Override the workspace slug to a predictable value for tests
+  const knownSlug = 'e2e-test-workspace';
+  await pool.query('UPDATE workspaces SET slug = $1 WHERE owner_id = $2 AND is_personal = true', [
+    knownSlug,
+    user.id,
+  ]);
+  return c.json({ cookie: token });
 });
 
 export { publicRoute, publicShareRoute };
