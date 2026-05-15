@@ -1,4 +1,5 @@
 import {
+  IconBlockquote,
   IconBold,
   IconCode,
   IconColumnInsertLeft,
@@ -32,6 +33,7 @@ export interface FloatingToolbarProps {
   onStrike: () => void;
   onCode: () => void;
   onLink: () => void;
+  onBlockquote: () => void;
   onImageUpload: (file: File) => void;
   onInsertTable: () => void;
   onAddRowBefore: () => void;
@@ -57,6 +59,7 @@ export interface FloatingToolbarProps {
   isStrikeActive?: boolean;
   isCodeActive?: boolean;
   isLinkActive?: boolean;
+  isBlockquoteActive?: boolean;
   isH1Active?: boolean;
   isH2Active?: boolean;
   isH3Active?: boolean;
@@ -75,6 +78,7 @@ export function FloatingToolbar({
   onStrike,
   onCode,
   onLink,
+  onBlockquote,
   onImageUpload,
   onInsertTable,
   onAddRowBefore,
@@ -100,6 +104,7 @@ export function FloatingToolbar({
   isStrikeActive,
   isCodeActive,
   isLinkActive,
+  isBlockquoteActive,
   isH1Active,
   isH2Active,
   isH3Active,
@@ -166,11 +171,10 @@ export function FloatingToolbar({
         type="button"
         onClick={onCode}
         className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isCodeActive ? 'bg-zinc-600 text-white' : ''}`}
-        title="Inline Code"
+        title="Code"
       >
         <IconCode size={16} />
       </button>
-      <div className="w-px h-5 bg-zinc-600 mx-1" />
       <button
         type="button"
         onClick={onLink}
@@ -178,6 +182,14 @@ export function FloatingToolbar({
         title="Add Link"
       >
         <IconLink size={16} />
+      </button>
+      <button
+        type="button"
+        onClick={onBlockquote}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isBlockquoteActive ? 'bg-zinc-600 text-white' : ''}`}
+        title="Blockquote"
+      >
+        <IconBlockquote size={16} />
       </button>
       <div className="w-px h-5 bg-zinc-600 mx-1" />
       <button
