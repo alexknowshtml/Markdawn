@@ -71,7 +71,6 @@ describe('useTheme', () => {
     });
 
     expect(document.documentElement.classList.contains('dark')).toBe(true);
-    expect(document.documentElement.getAttribute('data-mantine-color-scheme')).toBe('dark');
   });
 
   it('removes "dark" class from documentElement when theme is light', () => {
@@ -83,7 +82,6 @@ describe('useTheme', () => {
     });
 
     expect(document.documentElement.classList.contains('dark')).toBe(false);
-    expect(document.documentElement.getAttribute('data-mantine-color-scheme')).toBe('light');
   });
 
   it('cycles through light -> dark -> system -> light', () => {
