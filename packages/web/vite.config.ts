@@ -22,9 +22,7 @@ export default defineConfig(({ mode }) => {
               if (id.includes('yjs') || id.includes('@hocuspocus')) {
                 return 'collab';
               }
-              if (id.includes('@mantine')) {
-                return 'mantine';
-              }
+
               if (id.includes('react') || id.includes('react-dom')) {
                 return 'react';
               }
