@@ -134,7 +134,7 @@ export function FloatingToolbar({
 
   return (
     <div
-      className="floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl"
+      className="floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl"
       style={{
         position: 'fixed',
         top: position.top,
@@ -146,7 +146,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onBold}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isBoldActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isBoldActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Bold (Ctrl+B)"
       >
         <IconBold size={16} />
@@ -154,7 +154,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onItalic}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isItalicActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isItalicActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Italic (Ctrl+I)"
       >
         <IconItalic size={16} />
@@ -162,7 +162,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onStrike}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isStrikeActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isStrikeActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Strikethrough"
       >
         <IconStrikethrough size={16} />
@@ -170,7 +170,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onCode}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isCodeActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isCodeActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Code"
       >
         <IconCode size={16} />
@@ -178,7 +178,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onLink}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isLinkActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isLinkActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Add Link"
       >
         <IconLink size={16} />
@@ -186,16 +186,16 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onBlockquote}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isBlockquoteActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isBlockquoteActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Blockquote"
       >
         <IconBlockquote size={16} />
       </button>
-      <div className="w-px h-5 bg-zinc-600 mx-1" />
+      <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-600 mx-1" />
       <button
         type="button"
         onClick={onH1}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH1Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH1Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 1"
       >
         <IconH1 size={16} />
@@ -203,7 +203,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onH2}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH2Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH2Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 2"
       >
         <IconH2 size={16} />
@@ -211,7 +211,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onH3}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH3Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH3Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 3"
       >
         <IconH3 size={16} />
@@ -219,7 +219,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onH4}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH4Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH4Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 4"
       >
         <IconH4 size={16} />
@@ -227,7 +227,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onH5}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH5Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH5Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 5"
       >
         <IconH5 size={16} />
@@ -235,16 +235,16 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onH6}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer font-bold ${isH6Active ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer font-bold ${isH6Active ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Heading 6"
       >
         <IconH6 size={16} />
       </button>
-      <div className="w-px h-5 bg-zinc-600 mx-1" />
+      <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-600 mx-1" />
       <button
         type="button"
         onClick={onBulletList}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isBulletListActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isBulletListActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Bullet List"
       >
         <IconList size={16} />
@@ -252,7 +252,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onOrderedList}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isOrderedListActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isOrderedListActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Ordered List"
       >
         <IconListNumbers size={16} />
@@ -260,7 +260,7 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onTaskList}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isTaskListActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isTaskListActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Task List"
       >
         <IconListCheck size={16} />
@@ -268,18 +268,18 @@ export function FloatingToolbar({
       <button
         type="button"
         onClick={onInsertTable}
-        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer ${isInTableActive ? 'bg-zinc-600 text-white' : ''}`}
+        className={`floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer ${isInTableActive ? 'bg-zinc-100 dark:bg-zinc-600 text-zinc-900 dark:text-white' : ''}`}
         title="Insert Table"
       >
         <IconTable size={16} />
       </button>
       {isInTableActive && (
         <>
-          <div className="w-px h-5 bg-zinc-600 mx-1" />
+          <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-600 mx-1" />
           <button
             type="button"
             onClick={onAddRowBefore}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
             title="Add Row Above"
           >
             <IconRowInsertTop size={16} />
@@ -287,7 +287,7 @@ export function FloatingToolbar({
           <button
             type="button"
             onClick={onAddRowAfter}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
             title="Add Row Below"
           >
             <IconRowInsertBottom size={16} />
@@ -295,7 +295,7 @@ export function FloatingToolbar({
           <button
             type="button"
             onClick={onAddColBefore}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
             title="Add Column Left"
           >
             <IconColumnInsertLeft size={16} />
@@ -303,16 +303,16 @@ export function FloatingToolbar({
           <button
             type="button"
             onClick={onAddColAfter}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-700 text-zinc-300 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-700 text-zinc-600 dark:text-zinc-300 transition-colors cursor-pointer"
             title="Add Column Right"
           >
             <IconColumnInsertRight size={16} />
           </button>
-          <div className="w-px h-5 bg-zinc-600 mx-1" />
+          <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-600 mx-1" />
           <button
             type="button"
             onClick={onDeleteRow}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/50 text-red-500 dark:text-red-400 transition-colors cursor-pointer"
             title="Delete Row"
           >
             <IconRowRemove size={16} />
@@ -320,7 +320,7 @@ export function FloatingToolbar({
           <button
             type="button"
             onClick={onDeleteCol}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/50 text-red-500 dark:text-red-400 transition-colors cursor-pointer"
             title="Delete Column"
           >
             <IconColumnRemove size={16} />
@@ -328,7 +328,7 @@ export function FloatingToolbar({
           <button
             type="button"
             onClick={onDeleteTable}
-            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-900/50 text-red-400 transition-colors cursor-pointer"
+            className="floating-toolbar-btn p-1.5 rounded hover:bg-red-100 dark:hover:bg-red-900/50 text-red-500 dark:text-red-400 transition-colors cursor-pointer"
             title="Delete Table"
           >
             <IconTrash size={16} />
