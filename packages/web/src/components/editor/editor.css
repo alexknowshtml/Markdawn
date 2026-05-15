@@ -57,22 +57,31 @@
   margin-bottom: 1rem;
 }
 
+.milkdown-editor-view ul li::marker {
+  font-size: 1.2em;
+}
+
+.milkdown-editor-view ol li::marker {
+  font-size: 1.2em;
+}
+
 .milkdown-editor-view li[data-item-type="task"] {
   list-style: none;
   position: relative;
-  padding-left: 1.75rem;
+  padding-left: 0;
 }
 
 .milkdown-editor-view li[data-item-type="task"]::before {
   content: "";
   position: absolute;
-  left: 0;
+  left: -1.25rem;
   top: 0.38em;
   width: 14px;
   height: 14px;
   border: 1px solid #6b7280;
   border-radius: 4px;
   background: transparent;
+  box-sizing: border-box;
 }
 
 .milkdown-editor-view li[data-item-type="task"][data-checked="true"]::before {
