@@ -33,7 +33,7 @@ import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
 import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
-import type { EditorState } from 'prosemirror-state';
+import type { EditorState, Transaction } from 'prosemirror-state';
 import { TextSelection } from 'prosemirror-state';
 import {
   addColumnAfter,
@@ -49,6 +49,43 @@ import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
 import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
+
+function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
+  const { $from } = state.selection;
+  const schema = state.schema;
+
+  let listDepth = -1;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type === schema.nodes.bullet_list || node.type === schema.nodes.ordered_list) {
+      listDepth = d;
+      break;
+    }
+  }
+  if (listDepth < 0) return false;
+
+  const listStart = $from.before(listDepth);
+  const listEnd = $from.after(listDepth);
+  const listNode = $from.node(listDepth);
+  const listItemType = schema.nodes.list_item;
+
+  const content: unknown[] = [];
+  for (let i = 0; i < listNode.content.childCount; i++) {
+    const child = listNode.content.child(i);
+    if (child.type === listItemType) {
+      for (let j = 0; j < child.content.childCount; j++) {
+        content.push(child.content.child(j));
+      }
+    }
+  }
+
+  if (content.length === 0) return false;
+  if (dispatch) {
+    const tr = state.tr.replaceWith(listStart, listEnd, content as never);
+    dispatch(tr.scrollIntoView());
+  }
+  return true;
+}
 
 interface MilkdownEditorProps {
   pageId: string;
@@ -198,20 +235,18 @@ export function MilkdownEditor({
 
         const listItemNode = nodes.list_item;
         const isInListItem = listItemNode ? hasParentBlockType(state, listItemNode) : false;
-        const listItemChecked =
-          isInListItem && listItemNode
-            ? (() => {
-                const { $from } = state.selection;
-                for (let d = $from.depth; d > 0; d--) {
-                  const node = $from.node(d);
-                  if (node.type === listItemNode) {
-                    const checked = node.attrs.checked;
-                    return checked === true || checked === 'true';
-                  }
-                }
-                return false;
-              })()
-            : false;
+
+        let isTaskListItem = false;
+        if (isInListItem && listItemNode) {
+          const { $from } = state.selection;
+          for (let d = $from.depth; d > 0; d--) {
+            const node = $from.node(d);
+            if (node.type === listItemNode && node.attrs.checked != null) {
+              isTaskListItem = true;
+              break;
+            }
+          }
+        }
 
         setActiveStates({
           isBoldActive: hasMark(state, marks.strong),
@@ -226,9 +261,9 @@ export function MilkdownEditor({
           isH4Active: hasBlockType(state, nodes.heading, { level: 4 }),
           isH5Active: hasBlockType(state, nodes.heading, { level: 5 }),
           isH6Active: hasBlockType(state, nodes.heading, { level: 6 }),
-          isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !listItemChecked,
+          isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !isTaskListItem,
           isOrderedListActive: hasParentBlockType(state, nodes.ordered_list),
-          isTaskListActive: listItemChecked,
+          isTaskListActive: isTaskListItem,
           isInTableActive: isInTable(state),
         });
       });
@@ -924,9 +959,14 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const bulletListType = state.schema.nodes.bullet_list;
-      if (!bulletListType) return;
-      const command = wrapIn(bulletListType as never);
-      command(state, dispatch);
+      const listItemType = state.schema.nodes.list_item;
+      if (!bulletListType || !listItemType || !dispatch) return;
+
+      if (activeStates.isBulletListActive) {
+        unwrapList(state, dispatch);
+      } else {
+        wrapIn(bulletListType as never)(state, dispatch);
+      }
     });
     setTimeout(updateActiveStates, 0);
   };
@@ -938,9 +978,13 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const orderedListType = state.schema.nodes.ordered_list;
-      if (!orderedListType) return;
-      const command = wrapIn(orderedListType as never);
-      command(state, dispatch);
+      if (!orderedListType || !dispatch) return;
+
+      if (activeStates.isOrderedListActive) {
+        unwrapList(state, dispatch);
+      } else {
+        wrapIn(orderedListType as never)(state, dispatch);
+      }
     });
     setTimeout(updateActiveStates, 0);
   };
@@ -955,19 +999,23 @@ export function MilkdownEditor({
       const listItemType = state.schema.nodes.list_item;
       if (!bulletListType || !listItemType || !dispatch) return;
 
-      const command = wrapIn(bulletListType as never);
-      command(state, dispatch);
+      if (activeStates.isTaskListActive) {
+        unwrapList(state, dispatch);
+      } else {
+        const command = wrapIn(bulletListType as never);
+        command(state, dispatch);
 
-      const newState = view.state;
-      const tr = newState.tr;
-      const { from, to } = newState.selection;
-      newState.doc.nodesBetween(from, to, (node, pos) => {
-        if (node.type === listItemType && node.attrs.checked == null) {
-          tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
+        const newState = view.state;
+        const tr = newState.tr;
+        const { from, to } = newState.selection;
+        newState.doc.nodesBetween(from, to, (node, pos) => {
+          if (node.type === listItemType && node.attrs.checked == null) {
+            tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
+          }
+        });
+        if (tr.docChanged) {
+          dispatch(tr);
         }
-      });
-      if (tr.docChanged) {
-        dispatch(tr);
       }
     });
     setTimeout(updateActiveStates, 0);
