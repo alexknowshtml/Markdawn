@@ -50,6 +50,17 @@ import { FloatingToolbar } from './FloatingToolbar';
 import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
 
+function hasTaskListAncestor(state: EditorState): boolean {
+  const listItemType = state.schema.nodes.list_item;
+  if (!listItemType) return false;
+  const { $from } = state.selection;
+  for (let d = $from.depth; d > 0; d--) {
+    const node = $from.node(d);
+    if (node.type === listItemType && node.attrs.checked != null) return true;
+  }
+  return false;
+}
+
 function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
   const { $from } = state.selection;
   const schema = state.schema;
@@ -962,7 +973,7 @@ export function MilkdownEditor({
       const listItemType = state.schema.nodes.list_item;
       if (!bulletListType || !listItemType || !dispatch) return;
 
-      if (activeStates.isBulletListActive) {
+      if (hasParentBlockType(state, bulletListType) && !hasTaskListAncestor(state)) {
         unwrapList(state, dispatch);
       } else {
         wrapIn(bulletListType as never)(state, dispatch);
@@ -978,9 +989,10 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const orderedListType = state.schema.nodes.ordered_list;
-      if (!orderedListType || !dispatch) return;
+      const listItemType = state.schema.nodes.list_item;
+      if (!orderedListType || !listItemType || !dispatch) return;
 
-      if (activeStates.isOrderedListActive) {
+      if (hasParentBlockType(state, orderedListType)) {
         unwrapList(state, dispatch);
       } else {
         wrapIn(orderedListType as never)(state, dispatch);
@@ -999,7 +1011,7 @@ export function MilkdownEditor({
       const listItemType = state.schema.nodes.list_item;
       if (!bulletListType || !listItemType || !dispatch) return;
 
-      if (activeStates.isTaskListActive) {
+      if (hasTaskListAncestor(state)) {
         unwrapList(state, dispatch);
       } else {
         const command = wrapIn(bulletListType as never);
