@@ -67,6 +67,7 @@ function hasTaskListAncestor(state: EditorState): boolean {
         found = true;
         return false;
       }
+      return;
     });
     return found;
   }
