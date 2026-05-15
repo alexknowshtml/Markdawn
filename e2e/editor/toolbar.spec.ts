@@ -101,6 +101,77 @@ test.describe('Floating toolbar buttons', () => {
     await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
   });
 
+  test('toggles off list formatting when toolbar button clicked again', async ({ page }) => {
+    await createNewPage(page);
+    await focusEditor(page);
+
+    await page.keyboard.type('Bullet');
+    await page.keyboard.press('Control+a');
+    await page.locator('.floating-toolbar button[title="Bullet List"]').click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ul')).toBeVisible({ timeout: 5000 });
+    await page.locator('.floating-toolbar button[title="Bullet List"]').click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ul')).toHaveCount(0);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+
+    await page.keyboard.type('Ordered');
+    await page.keyboard.press('Control+a');
+    await page.locator('.floating-toolbar button[title="Ordered List"]').click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ol')).toBeVisible({ timeout: 5000 });
+    await page.locator('.floating-toolbar button[title="Ordered List"]').click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ol')).toHaveCount(0);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+
+    await page.keyboard.type('Task');
+    await page.keyboard.press('Control+a');
+    await page.locator('.floating-toolbar button[title="Task List"]').click({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
+    await page.locator('.floating-toolbar button[title="Task List"]').click({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]')).toHaveCount(0);
+  });
+
+  test('highlights correct toolbar icon for active list type', async ({ page }) => {
+    await createNewPage(page);
+    await focusEditor(page);
+
+    const bulletBtn = page.locator('.floating-toolbar button[title="Bullet List"]');
+    const orderedBtn = page.locator('.floating-toolbar button[title="Ordered List"]');
+    const taskBtn = page.locator('.floating-toolbar button[title="Task List"]');
+
+    await page.keyboard.type('Task item');
+    await page.keyboard.press('Control+a');
+    await taskBtn.click({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
+    await expect(taskBtn).toHaveClass(/bg-zinc-600/);
+    await expect(bulletBtn).not.toHaveClass(/bg-zinc-600/);
+    await expect(orderedBtn).not.toHaveClass(/bg-zinc-600/);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    await taskBtn.click({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]')).toHaveCount(0);
+
+    await page.keyboard.type('Bullet item');
+    await page.keyboard.press('Control+a');
+    await bulletBtn.click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ul')).toBeVisible({ timeout: 5000 });
+    await expect(bulletBtn).toHaveClass(/bg-zinc-600/);
+    await expect(taskBtn).not.toHaveClass(/bg-zinc-600/);
+    await expect(orderedBtn).not.toHaveClass(/bg-zinc-600/);
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    await bulletBtn.click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ul')).toHaveCount(0);
+
+    await page.keyboard.type('Ordered item');
+    await page.keyboard.press('Control+a');
+    await orderedBtn.click({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ol')).toBeVisible({ timeout: 5000 });
+    await expect(orderedBtn).toHaveClass(/bg-zinc-600/);
+    await expect(bulletBtn).not.toHaveClass(/bg-zinc-600/);
+    await expect(taskBtn).not.toHaveClass(/bg-zinc-600/);
+  });
+
   test('insert table via toolbar', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
