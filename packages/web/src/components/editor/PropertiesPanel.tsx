@@ -71,13 +71,7 @@ const getIconForKey = (key: string) => {
   return knownIcons[key.toLowerCase()] ?? null;
 };
 
-const isUrl = (val: string) => {
-  try {
-    return val.startsWith('http://') || val.startsWith('https://');
-  } catch {
-    return false;
-  }
-};
+const isUrl = (val: string) => val.startsWith('http://') || val.startsWith('https://');
 
 // --- Sub-components ---
 
@@ -242,6 +236,15 @@ function PropertyKeySelector({
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const hasInteracted = useRef(false);
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
+    };
+  }, []);
 
   const filtered = useMemo(() => {
     const query = inputValue.toLowerCase();
@@ -329,7 +332,7 @@ function PropertyKeySelector({
         }}
         onKeyDown={handleKeyDown}
         onBlur={() => {
-          setTimeout(() => {
+          blurTimeoutRef.current = setTimeout(() => {
             if (inputRef.current) {
               handleSelect(inputValue.trim() || currentKey);
             }
@@ -680,11 +683,10 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   const renameProperty = (id: string, newKey: string) => {
-    if (!newKey || items.some((it) => it.id !== id && it.key === newKey)) {
-      setItems((prev) => [...prev]); // Trigger re-render to revert invalid input
-      return;
-    }
     setItems((currentItems) => {
+      if (!newKey || currentItems.some((it) => it.id !== id && it.key === newKey)) {
+        return [...currentItems]; // Trigger re-render to revert invalid input
+      }
       const next = currentItems.map((it) => (it.id === id ? { ...it, key: newKey } : it));
       persistChanges(next);
       return next;
