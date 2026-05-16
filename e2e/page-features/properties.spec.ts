@@ -200,7 +200,6 @@ test.describe('Properties panel', () => {
 
     await expect(page.locator('[data-property-key="beta"]')).toBeVisible();
     await expect(page.locator('[data-property-key="alpha"]')).toBeVisible();
-    await expect(page.locator('[data-property-key="beta"]')).toBeVisible();
   });
 
   test('12: persists properties after page reload', async ({ page }) => {
@@ -294,6 +293,10 @@ test.describe('Properties panel', () => {
     await tagInput.fill('crossdoctag');
     await tagInput.press('Enter');
     await page.waitForTimeout(1500);
+
+    // Reload to ensure fresh tag data from the server (staleTime is 30s)
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.waitForSelector('.ProseMirror', { timeout: 15000 });
 
     await createNewPage(page);
     await page.getByTestId('add-property').click();
