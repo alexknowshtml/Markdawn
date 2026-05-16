@@ -34,7 +34,7 @@ import {
   X,
 } from 'lucide-react';
 import type React from 'react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUpdatePage } from '../../hooks/use-pages';
 import { useWorkspaceMetadata } from '../../hooks/useWorkspaceMetadata';
 
@@ -110,130 +110,132 @@ interface TagValueEditorProps {
   onBlur?: () => void;
 }
 
-function TagValueEditor({ tags, onChange, suggestions, onBlur }: TagValueEditorProps) {
-  const [inputValue, setInputValue] = useState('');
-  const [isFocused, setIsFocused] = useState(false);
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
+  ({ tags, onChange, suggestions, onBlur }, ref) => {
+    const [inputValue, setInputValue] = useState('');
+    const [isFocused, setIsFocused] = useState(false);
+    const [selectedIndex, setSelectedIndex] = useState(0);
 
-  const filteredSuggestions = useMemo(() => {
-    if (!inputValue) return [];
-    return suggestions.filter(
-      (s) => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s),
-    );
-  }, [inputValue, suggestions, tags]);
+    const filteredSuggestions = useMemo(() => {
+      if (!inputValue) return [];
+      return suggestions.filter(
+        (s) => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s),
+      );
+    }, [inputValue, suggestions, tags]);
 
-  const addTag = (tag: string) => {
-    const trimmed = tag.trim();
-    if (trimmed && !tags.includes(trimmed)) {
-      onChange([...tags, trimmed]);
-    }
-    setInputValue('');
-  };
-
-  const removeTag = (tagToRemove: string) => {
-    onChange(tags.filter((t) => t !== tagToRemove));
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'ArrowDown') {
-      if (filteredSuggestions.length > 0) {
-        e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % filteredSuggestions.length);
+    const addTag = (tag: string) => {
+      const trimmed = tag.trim();
+      if (trimmed && !tags.includes(trimmed)) {
+        onChange([...tags, trimmed]);
       }
-    } else if (e.key === 'ArrowUp') {
-      if (filteredSuggestions.length > 0) {
-        e.preventDefault();
-        setSelectedIndex(
-          (prev) => (prev - 1 + filteredSuggestions.length) % filteredSuggestions.length,
-        );
-      }
-    } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') {
-      if (filteredSuggestions.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
-        e.preventDefault();
-        const selected = filteredSuggestions[selectedIndex];
-        if (selected) {
-          addTag(selected);
-        }
-      } else {
-        if (e.key === 'Enter' || e.key === ',') {
+      setInputValue('');
+    };
+
+    const removeTag = (tagToRemove: string) => {
+      onChange(tags.filter((t) => t !== tagToRemove));
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'ArrowDown') {
+        if (filteredSuggestions.length > 0) {
           e.preventDefault();
-          addTag(inputValue);
+          setSelectedIndex((prev) => (prev + 1) % filteredSuggestions.length);
+        }
+      } else if (e.key === 'ArrowUp') {
+        if (filteredSuggestions.length > 0) {
+          e.preventDefault();
+          setSelectedIndex(
+            (prev) => (prev - 1 + filteredSuggestions.length) % filteredSuggestions.length,
+          );
+        }
+      } else if (e.key === 'Enter' || e.key === 'Tab' || e.key === ',') {
+        if (filteredSuggestions.length > 0 && (e.key === 'Enter' || e.key === 'Tab')) {
+          e.preventDefault();
+          const selected = filteredSuggestions[selectedIndex];
+          if (selected) {
+            addTag(selected);
+          }
+        } else {
+          if (e.key === 'Enter' || e.key === ',') {
+            e.preventDefault();
+            addTag(inputValue);
+          }
+        }
+      } else if (e.key === 'Backspace' && !inputValue && tags.length > 0) {
+        const lastTag = tags[tags.length - 1];
+        if (lastTag !== undefined) {
+          removeTag(lastTag);
         }
       }
-    } else if (e.key === 'Backspace' && !inputValue && tags.length > 0) {
-      const lastTag = tags[tags.length - 1];
-      if (lastTag !== undefined) {
-        removeTag(lastTag);
-      }
-    }
-  };
+    };
 
-  return (
-    <div className="flex flex-wrap items-center gap-1.5 min-h-[1.75rem] py-0.5">
-      {tags.map((tag) => (
-        <span
-          key={tag}
-          className="flex items-center gap-1 px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-[12px] rounded-full font-medium leading-none group/tag transition-colors"
-        >
-          {tag}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              removeTag(tag);
-            }}
-            className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
+    return (
+      <div className="flex flex-wrap items-center gap-1.5 min-h-[1.75rem] py-0.5">
+        {tags.map((tag) => (
+          <span
+            key={tag}
+            className="flex items-center gap-1 px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-[12px] rounded-full font-medium leading-none group/tag transition-colors"
           >
-            <X size={11} />
-          </button>
-        </span>
-      ))}
-      <div className="relative flex-1 min-w-[80px]">
-        <input
-          ref={inputRef}
-          type="text"
-          value={inputValue}
-          onChange={(e) => {
-            setInputValue(e.target.value);
-            setSelectedIndex(0);
-          }}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => {
-            setIsFocused(false);
-            if (onBlur) onBlur();
-          }}
-          placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
-          className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
-          style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
-        />
-        {isFocused && filteredSuggestions.length > 0 && (
-          <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-            {filteredSuggestions.map((s, i) => (
-              <button
-                key={s}
-                type="button"
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  addTag(s);
-                }}
-                className={clsx(
-                  'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
-                  i === selectedIndex
-                    ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
-                    : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
-                )}
-              >
-                {s}
-              </button>
-            ))}
-          </div>
-        )}
+            {tag}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                removeTag(tag);
+              }}
+              className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
+            >
+              <X size={11} />
+            </button>
+          </span>
+        ))}
+        <div className="relative flex-1 min-w-[80px]">
+          <input
+            ref={ref}
+            type="text"
+            value={inputValue}
+            onChange={(e) => {
+              setInputValue(e.target.value);
+              setSelectedIndex(0);
+            }}
+            onKeyDown={handleKeyDown}
+            onFocus={() => setIsFocused(true)}
+            onBlur={() => {
+              setIsFocused(false);
+              if (onBlur) onBlur();
+            }}
+            placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
+            className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
+            style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
+          />
+          {isFocused && filteredSuggestions.length > 0 && (
+            <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
+              {filteredSuggestions.map((s, i) => (
+                <button
+                  key={s}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    addTag(s);
+                  }}
+                  className={clsx(
+                    'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
+                    i === selectedIndex
+                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                      : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  },
+);
+TagValueEditor.displayName = 'TagValueEditor';
 
 interface PropertyKeySelectorProps {
   currentKey: string;
@@ -396,6 +398,7 @@ function SortablePropertyRow({
   });
 
   const valueInputRef = useRef<HTMLInputElement>(null);
+  const tagEditorRef = useRef<HTMLInputElement>(null);
   const [isEditingKey, setIsEditingKey] = useState(isNew ?? false);
 
   const style = {
@@ -420,6 +423,20 @@ function SortablePropertyRow({
 
   const isTagsProperty = item.key.toLowerCase() === 'tags' || item.key.toLowerCase() === 'tag';
 
+  const handleKeySelect = useCallback(
+    (newKey: string) => {
+      onRename(item.id, newKey);
+      // Auto-focus the value area after selecting a property key
+      const isTag = newKey.toLowerCase() === 'tags' || newKey.toLowerCase() === 'tag';
+      if (isTag) {
+        setTimeout(() => tagEditorRef.current?.focus(), 0);
+      } else {
+        setIsEditingValue(true);
+      }
+    },
+    [item.id, onRename],
+  );
+
   return (
     <div
       ref={setNodeRef}
@@ -441,7 +458,7 @@ function SortablePropertyRow({
 
       <PropertyKeySelector
         currentKey={item.key}
-        onSelect={(newKey) => onRename(item.id, newKey)}
+        onSelect={handleKeySelect}
         suggestions={workspaceMetadata.allKeys}
         isEditing={isEditingKey}
         setIsEditing={setIsEditingKey}
@@ -450,6 +467,7 @@ function SortablePropertyRow({
       <div className="flex-1 min-w-0 flex items-center gap-2">
         {isTagsProperty ? (
           <TagValueEditor
+            ref={tagEditorRef}
             tags={Array.isArray(item.value) ? (item.value as string[]) : []}
             suggestions={workspaceMetadata.allTags}
             onChange={(newTags) => onUpdate(item.id, newTags)}
@@ -458,7 +476,7 @@ function SortablePropertyRow({
           <input
             ref={valueInputRef}
             type="text"
-            className="w-full text-[15px] !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-900 dark:text-zinc-100 p-0 appearance-none"
+            className="w-full text-[15px] !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-900 dark:text-zinc-100 caret-zinc-900 dark:caret-zinc-100 p-0 appearance-none"
             style={{
               border: 'none',
               outline: 'none',
@@ -696,9 +714,9 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
         <button
           type="button"
           onClick={() => setIsCollapsed(!isCollapsed)}
-          className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 transition-colors cursor-pointer group !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
+          className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 cursor-pointer group !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
         >
-          <div className="p-0.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors">
+          <div className="p-0.5 rounded">
             {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </div>
           <span>Properties</span>
