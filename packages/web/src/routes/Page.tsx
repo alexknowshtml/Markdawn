@@ -241,7 +241,11 @@ export default function Page() {
           </div>
         </div>
       </div>
-      <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
+      <PropertiesPanel
+        pageId={pageId}
+        workspaceId={workspaceId ?? ''}
+        properties={page?.properties ?? null}
+      />
       {page ? (
         <MilkdownEditor
           key={pageId}
