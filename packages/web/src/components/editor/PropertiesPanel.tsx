@@ -17,7 +17,6 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { clsx } from 'clsx';
 import {
-  Activity,
   Calendar,
   Check,
   ChevronDown,
@@ -68,30 +67,8 @@ const getIconForKey = (key: string) => {
     duration: Clock,
     tags: TagIcon,
     tag: TagIcon,
-    status: Activity,
   };
   return knownIcons[key.toLowerCase()] ?? null;
-};
-
-const isDate = (val: string) => {
-  if (!val || val.length < 8) return false;
-  const d = new Date(val);
-  return (
-    d instanceof Date && !Number.isNaN(d.getTime()) && (val.includes('-') || val.includes('/'))
-  );
-};
-
-const formatDate = (val: string) => {
-  try {
-    const d = new Date(val);
-    return new Intl.DateTimeFormat('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    }).format(d);
-  } catch {
-    return val;
-  }
 };
 
 const isUrl = (val: string) => {
@@ -100,14 +77,6 @@ const isUrl = (val: string) => {
   } catch {
     return false;
   }
-};
-
-const getStatusColor = (status: string) => {
-  const s = status.toLowerCase();
-  // Obsidian-style monochrome muted status
-  if (s === 'done' || s === 'completed' || s === 'finished' || s === 'closed')
-    return 'bg-zinc-200 text-zinc-700 dark:bg-zinc-700 dark:text-zinc-300 border-zinc-300 dark:border-zinc-600';
-  return 'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400 border-zinc-200 dark:border-zinc-700';
 };
 
 // --- Sub-components ---
@@ -204,6 +173,7 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
           <input
             ref={ref}
             type="text"
+            data-testid="tag-input"
             value={inputValue}
             onChange={(e) => {
               setInputValue(e.target.value);
@@ -217,7 +187,12 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
             }}
             placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
             className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
-            style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
+            style={{
+              border: 'none',
+              outline: 'none',
+              boxShadow: 'none',
+              background: 'transparent',
+            }}
           />
           {isFocused && filteredSuggestions.length > 0 && (
             <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
@@ -266,6 +241,7 @@ function PropertyKeySelector({
   const [inputValue, setInputValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const hasInteracted = useRef(false);
 
   const filtered = useMemo(() => {
     const query = inputValue.toLowerCase();
@@ -273,17 +249,22 @@ function PropertyKeySelector({
     return suggestions.filter((s) => s.toLowerCase().includes(query));
   }, [inputValue, suggestions, currentKey]);
 
-  const showCreateOption = inputValue.trim().length > 0 && inputValue !== currentKey && filtered.length === 0;
+  const showCreateOption =
+    inputValue.trim().length > 0 && inputValue !== currentKey && filtered.length === 0;
   const totalItems = filtered.length + (showCreateOption ? 1 : 0);
 
   useEffect(() => {
     if (isEditing) {
-      setInputValue(currentKey === 'New Property' || currentKey === '' ? '' : currentKey);
+      if (!hasInteracted.current) {
+        setInputValue(currentKey === 'New Property' || currentKey === '' ? '' : currentKey);
+      }
       const idx = suggestions.indexOf(currentKey);
       setSelectedIndex(idx >= 0 ? idx : 0);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 0);
+    } else {
+      hasInteracted.current = false;
     }
   }, [isEditing, currentKey, suggestions]);
 
@@ -339,8 +320,10 @@ function PropertyKeySelector({
       <input
         ref={inputRef}
         type="text"
+        data-testid="key-input"
         value={inputValue}
         onChange={(e) => {
+          hasInteracted.current = true;
           setInputValue(e.target.value);
           setSelectedIndex(0);
         }}
@@ -435,6 +418,7 @@ function SortablePropertyRow({
   const valueInputRef = useRef<HTMLInputElement>(null);
   const tagEditorRef = useRef<HTMLInputElement>(null);
   const [isEditingKey, setIsEditingKey] = useState(isNew ?? false);
+  const valueSavePending = useRef(false);
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -443,15 +427,18 @@ function SortablePropertyRow({
   };
 
   const handleValueSave = (nextValue?: unknown) => {
+    if (valueSavePending.current) return;
     setIsEditingValue(false);
     const finalValue = nextValue !== undefined ? nextValue : tempValue.trim();
     if (finalValue !== (Array.isArray(item.value) ? item.value.join(', ') : item.value)) {
+      valueSavePending.current = true;
       onUpdate(item.id, finalValue);
     }
   };
 
   useEffect(() => {
     if (isEditingValue) {
+      valueSavePending.current = false;
       valueInputRef.current?.focus();
     }
   }, [isEditingValue]);
@@ -476,6 +463,7 @@ function SortablePropertyRow({
     <div
       ref={setNodeRef}
       style={style}
+      data-property-key={item.key}
       className={clsx(
         'group flex items-center gap-2 px-2 py-1.5 rounded-lg transition-all duration-200 border border-transparent',
         isDragging
@@ -511,6 +499,7 @@ function SortablePropertyRow({
           <input
             ref={valueInputRef}
             type="text"
+            data-testid="value-input"
             className="flex-1 text-[15px] !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 px-2 py-0.5 min-h-[1.75rem] rounded truncate appearance-none"
             style={{
               border: 'none',
@@ -543,16 +532,7 @@ function SortablePropertyRow({
               background: 'transparent',
             }}
           >
-            {item.key.toLowerCase() === 'status' ? (
-              <span
-                className={clsx(
-                  'px-2 py-0.5 rounded-md text-[12px] font-bold border uppercase tracking-wider transition-colors',
-                  getStatusColor(String(item.value)),
-                )}
-              >
-                {String(item.value || 'Empty')}
-              </span>
-            ) : isUrl(String(item.value)) ? (
+            {isUrl(String(item.value)) ? (
               <a
                 href={String(item.value)}
                 target="_blank"
@@ -574,6 +554,7 @@ function SortablePropertyRow({
 
       <button
         type="button"
+        data-testid="delete-property"
         onClick={() => onDelete(item.id)}
         className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-400 hover:text-red-500 transition-all cursor-pointer rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 !outline-none !ring-0 !ring-offset-0 !focus:ring-0"
         title="Delete property"
@@ -705,8 +686,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
     }
     setItems((currentItems) => {
       const next = currentItems.map((it) => (it.id === id ? { ...it, key: newKey } : it));
-      // Use a timeout to allow the state to settle before persisting
-      setTimeout(() => persistChanges(next), 0);
+      persistChanges(next);
       return next;
     });
     setNewPropertyId(null);
@@ -724,6 +704,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
       <div className="mb-6 animate-fade-in px-2">
         <button
           type="button"
+          data-testid="add-property"
           onClick={addProperty}
           className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-all cursor-pointer group border border-dashed border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
         >
@@ -739,6 +720,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
       <div className="flex items-center justify-between mb-3 px-2">
         <button
           type="button"
+          data-testid="properties-heading"
           onClick={() => setIsCollapsed(!isCollapsed)}
           className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-zinc-600 dark:text-zinc-300 cursor-pointer group !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
         >
@@ -746,7 +728,10 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
             {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </div>
           <span>Properties</span>
-          <span className="bg-zinc-100 dark:bg-zinc-800/80 px-2 py-0.5 rounded-full text-[11px] normal-case tracking-normal font-black">
+          <span
+            data-testid="property-count"
+            className="bg-zinc-100 dark:bg-zinc-800/80 px-2 py-0.5 rounded-full text-[11px] normal-case tracking-normal font-black"
+          >
             {items.length}
           </span>
         </button>
@@ -776,6 +761,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
 
           <button
             type="button"
+            data-testid="add-property"
             onClick={addProperty}
             className="w-full flex items-center gap-2 px-2 py-2 mt-2 text-[13px] font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 rounded-lg transition-all cursor-pointer group border border-dashed border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
           >
