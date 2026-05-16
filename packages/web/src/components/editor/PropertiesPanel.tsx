@@ -19,6 +19,7 @@ import { clsx } from 'clsx';
 import {
   Activity,
   Calendar,
+  Check,
   ChevronDown,
   ChevronRight,
   Clock,
@@ -29,7 +30,6 @@ import {
   Plus,
   Tag as TagIcon,
   Trash2,
-  Type,
   User,
   X,
 } from 'lucide-react';
@@ -53,15 +53,24 @@ interface PropertyItem {
 // --- Helpers ---
 
 const getIconForKey = (key: string) => {
-  const k = key.toLowerCase();
-  if (k.includes('date') || k.includes('created') || k.includes('updated')) return Calendar;
-  if (k.includes('author') || k.includes('user') || k.includes('owner')) return User;
-  if (k.includes('url') || k.includes('link') || k.includes('website')) return Link;
-  if (k.includes('email')) return Mail;
-  if (k.includes('time') || k.includes('duration')) return Clock;
-  if (k.includes('tag')) return TagIcon;
-  if (k.includes('status')) return Activity;
-  return Type;
+  const knownIcons: Record<string, React.ComponentType<{ size?: number; className?: string }>> = {
+    date: Calendar,
+    created: Calendar,
+    updated: Calendar,
+    author: User,
+    user: User,
+    owner: User,
+    url: Link,
+    link: Link,
+    website: Link,
+    email: Mail,
+    time: Clock,
+    duration: Clock,
+    tags: TagIcon,
+    tag: TagIcon,
+    status: Activity,
+  };
+  return knownIcons[key.toLowerCase()] ?? null;
 };
 
 const isDate = (val: string) => {
@@ -117,7 +126,9 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     const filteredSuggestions = useMemo(() => {
-      if (!inputValue) return [];
+      if (!inputValue) {
+        return suggestions.filter((s) => !tags.includes(s));
+      }
       return suggestions.filter(
         (s) => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s),
       );
@@ -252,24 +263,29 @@ function PropertyKeySelector({
   isEditing,
   setIsEditing,
 }: PropertyKeySelectorProps) {
-  const [inputValue, setInputValue] = useState(currentKey);
+  const [inputValue, setInputValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const availableSuggestions = useMemo(() => {
+  const filtered = useMemo(() => {
     const query = inputValue.toLowerCase();
-    const filtered = suggestions.filter((s) => s.toLowerCase().includes(query) && s !== currentKey);
-    return filtered.length > 0 ? filtered : suggestions.slice(0, 8);
+    if (!query || inputValue === currentKey) return suggestions;
+    return suggestions.filter((s) => s.toLowerCase().includes(query));
   }, [inputValue, suggestions, currentKey]);
+
+  const showCreateOption = inputValue.trim().length > 0 && inputValue !== currentKey && filtered.length === 0;
+  const totalItems = filtered.length + (showCreateOption ? 1 : 0);
 
   useEffect(() => {
     if (isEditing) {
       setInputValue(currentKey === 'New Property' || currentKey === '' ? '' : currentKey);
+      const idx = suggestions.indexOf(currentKey);
+      setSelectedIndex(idx >= 0 ? idx : 0);
       setTimeout(() => {
         inputRef.current?.focus();
       }, 0);
     }
-  }, [isEditing, currentKey]);
+  }, [isEditing, currentKey, suggestions]);
 
   const handleSelect = (key: string) => {
     onSelect(key);
@@ -278,43 +294,41 @@ function PropertyKeySelector({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
-      if (availableSuggestions.length > 0) {
+      if (totalItems > 0) {
         e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % availableSuggestions.length);
+        setSelectedIndex((prev) => (prev + 1) % totalItems);
       }
     } else if (e.key === 'ArrowUp') {
-      if (availableSuggestions.length > 0) {
+      if (totalItems > 0) {
         e.preventDefault();
-        setSelectedIndex(
-          (prev) => (prev - 1 + availableSuggestions.length) % availableSuggestions.length,
-        );
+        setSelectedIndex((prev) => (prev - 1 + totalItems) % totalItems);
       }
     } else if (e.key === 'Enter' || e.key === 'Tab') {
       e.preventDefault();
-      if (availableSuggestions.length > 0) {
-        const selected = availableSuggestions[selectedIndex];
-        if (selected) {
-          handleSelect(selected);
-        }
+      if (showCreateOption && selectedIndex === 0) {
+        handleSelect(inputValue);
+      } else if (filtered.length > 0) {
+        const adjustedIndex = showCreateOption ? selectedIndex - 1 : selectedIndex;
+        const selected = filtered[adjustedIndex];
+        if (selected) handleSelect(selected);
       } else {
         handleSelect(inputValue || currentKey);
       }
     } else if (e.key === 'Escape') {
       setIsEditing(false);
-      setInputValue(currentKey);
     }
   };
 
   if (!isEditing) {
-    const Icon = getIconForKey(currentKey);
+    const IconComponent = getIconForKey(currentKey);
     return (
       <button
         type="button"
         onClick={() => setIsEditing(true)}
-        className="flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate cursor-text px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0"
+        className="flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate cursor-text px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
         style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
       >
-        <Icon size={15} className="text-zinc-400 shrink-0" />
+        {IconComponent && <IconComponent size={15} className="text-zinc-400 shrink-0" />}
         <span className="truncate">{currentKey || 'New Property'}</span>
       </button>
     );
@@ -338,13 +352,33 @@ function PropertyKeySelector({
             }
           }, 150);
         }}
-        className="w-full text-[13px] font-medium !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-900 dark:text-zinc-100 p-0 pl-1.5 appearance-none"
+        className="w-full text-[13px] font-medium !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-500 dark:text-zinc-400 px-1.5 py-0.5 rounded appearance-none"
         style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
         placeholder="Property name..."
       />
       <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-        {availableSuggestions.map((s, i) => {
+        {showCreateOption && (
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              handleSelect(inputValue);
+            }}
+            className={clsx(
+              'w-full text-left px-3 py-2 text-[13px] transition-colors flex items-center gap-2 !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
+              selectedIndex === 0
+                ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
+            )}
+          >
+            <Plus size={13} className="text-zinc-400 shrink-0" />
+            <span>Create &ldquo;{inputValue}&rdquo;</span>
+          </button>
+        )}
+        {filtered.map((s, i) => {
           const Svg = getIconForKey(s);
+          const isCurrent = s === currentKey;
+          const idx = showCreateOption ? i + 1 : i;
           return (
             <button
               key={s}
@@ -355,13 +389,14 @@ function PropertyKeySelector({
               }}
               className={clsx(
                 'w-full text-left px-3 py-2 text-[13px] transition-colors flex items-center gap-2 !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
-                i === selectedIndex
+                idx === selectedIndex
                   ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
                   : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
               )}
             >
-              <Svg size={13} className="text-zinc-400" />
-              {s}
+              {Svg && <Svg size={13} className="text-zinc-400 shrink-0" />}
+              <span className="flex-1 truncate">{s}</span>
+              {isCurrent && <Check size={13} className="text-zinc-400 shrink-0" />}
             </button>
           );
         })}
@@ -476,7 +511,7 @@ function SortablePropertyRow({
           <input
             ref={valueInputRef}
             type="text"
-            className="w-full text-[15px] !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-900 dark:text-zinc-100 caret-zinc-900 dark:caret-zinc-100 p-0 appearance-none"
+            className="flex-1 text-[15px] !bg-transparent !border-0 !border-none !shadow-none !outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 px-2 py-0.5 min-h-[1.75rem] rounded truncate appearance-none"
             style={{
               border: 'none',
               outline: 'none',
@@ -500,7 +535,7 @@ function SortablePropertyRow({
           <button
             type="button"
             onClick={() => setIsEditingValue(true)}
-            className="flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate cursor-text px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0"
+            className="flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate cursor-text px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
             style={{
               border: 'none',
               outline: 'none',
@@ -528,15 +563,6 @@ function SortablePropertyRow({
                 <span className="truncate">{String(item.value)}</span>
                 <ExternalLink size={11} className="shrink-0" />
               </a>
-            ) : isDate(String(item.value)) ? (
-              <div className="flex items-center gap-2">
-                <span className="font-medium text-zinc-800 dark:text-zinc-200">
-                  {formatDate(String(item.value))}
-                </span>
-                <span className="text-[11px] text-zinc-400 font-normal tabular-nums">
-                  ({String(item.value)})
-                </span>
-              </div>
             ) : (
               <span className={clsx(!item.value && 'text-zinc-400 dark:text-zinc-600')}>
                 {String(item.value || 'Empty')}
