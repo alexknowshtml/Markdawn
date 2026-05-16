@@ -27,16 +27,7 @@ export function useWorkspaceMetadata(workspaceId: string) {
     }
 
     // Default keys to suggest even if workspace is empty
-    const defaultKeys = [
-      'tags',
-      'status',
-      'date',
-      'author',
-      'priority',
-      'url',
-      'created',
-      'updated',
-    ];
+    const defaultKeys = ['tags', 'date', 'author', 'url', 'created', 'updated'];
     for (const k of defaultKeys) keys.add(k);
 
     return {
