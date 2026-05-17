@@ -59,11 +59,11 @@ export default function Page() {
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
 
   // Clear state on page navigation.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: pageId is intentionally a trigger dependency
   useEffect(() => {
     setProvider(null);
     setCollabStatus(WebSocketStatus.Connecting);
     setEditorElement(null);
-    void pageId;
   }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
 
@@ -241,7 +241,11 @@ export default function Page() {
           </div>
         </div>
       </div>
-      <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
+      <PropertiesPanel
+        pageId={pageId}
+        workspaceId={workspaceId ?? ''}
+        properties={page?.properties ?? null}
+      />
       {page ? (
         <MilkdownEditor
           key={pageId}

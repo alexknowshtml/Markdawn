@@ -129,11 +129,13 @@ export function useCreatePage() {
       workspaceId,
       parentId,
       title,
-    }: { workspaceId: string; parentId?: string; title?: string }) =>
+    }: { workspaceId: string; parentId?: string; title?: string; silent?: boolean }) =>
       createPage(workspaceId, parentId, title),
-    onSuccess: (_, { workspaceId }) => {
+    onSuccess: (newPage, { workspaceId, silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
-      showSuccessToast('Page created');
+      if (!silent) {
+        showSuccessToast('Page created');
+      }
     },
     onError: (error: Error) => {
       showErrorToast(error.message);
@@ -144,12 +146,16 @@ export function useCreatePage() {
 export function useUpdatePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ pageId, updates }: { pageId: string; updates: Partial<Page> }) =>
-      updatePage(pageId, updates),
-    onSuccess: (_, { pageId }) => {
+    mutationFn: ({
+      pageId,
+      updates,
+    }: { pageId: string; updates: Partial<Page>; silent?: boolean }) => updatePage(pageId, updates),
+    onSuccess: (_, { pageId, silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
-      showSuccessToast('Page updated');
+      if (!silent) {
+        showSuccessToast('Page updated');
+      }
     },
     onError: () => {
       showErrorToast('Failed to update page');

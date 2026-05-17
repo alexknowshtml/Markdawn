@@ -8,6 +8,8 @@ vi.mock('../utils/toast', () => ({
   showInfoToast: vi.fn(),
 }));
 
+import { showSuccessToast } from '../utils/toast';
+
 import {
   useCreatePage,
   useDeletePage,
@@ -206,6 +208,25 @@ describe('useCreatePage', () => {
     );
   });
 
+  it('suppresses success toast when silent option is set', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: 'p-new', title: 'My Page' }),
+    });
+
+    const { result } = renderHook(() => useCreatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ workspaceId: 'ws-1', silent: true });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(showSuccessToast).not.toHaveBeenCalled();
+  });
+
   it('handles creation error', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,
@@ -262,6 +283,25 @@ describe('useUpdatePage', () => {
         body: JSON.stringify({ title: 'Updated Title' }),
       }),
     );
+  });
+
+  it('suppresses success toast when silent option is set', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: 'p1', title: 'Updated' }),
+    });
+
+    const { result } = renderHook(() => useUpdatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ pageId: 'p1', updates: { title: 'Updated' }, silent: true });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(showSuccessToast).not.toHaveBeenCalled();
   });
 });
 

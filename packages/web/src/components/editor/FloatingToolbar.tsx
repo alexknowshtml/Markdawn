@@ -130,11 +130,9 @@ export function FloatingToolbar({
     }
   };
 
-  if (!visible) return null;
-
   return (
     <div
-      className="floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl"
+      className={`floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl ${visible ? '' : 'invisible'}`}
       style={{
         position: 'fixed',
         top: position.top,
