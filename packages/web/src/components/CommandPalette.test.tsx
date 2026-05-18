@@ -60,7 +60,7 @@ describe('CommandPalette', () => {
     });
 
     await act(async () => {
-      window.dispatchEvent(
+      document.dispatchEvent(
         new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
       );
     });
