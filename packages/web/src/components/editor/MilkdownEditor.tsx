@@ -848,43 +848,43 @@ export function MilkdownEditor({
   // them functional as real keyboard bindings.
   useShortcut({
     key: 'mod+alt+0',
-    handler: ed(handleSlashParagraph),
+    handler: ed(() => runBlockCommand('paragraph')),
     scope: 'editor',
     description: 'Paragraph',
   });
   useShortcut({
     key: 'mod+alt+1',
-    handler: ed(() => handleSlashHeading(1)),
+    handler: ed(handleH1),
     scope: 'editor',
     description: 'Heading 1',
   });
   useShortcut({
     key: 'mod+alt+2',
-    handler: ed(() => handleSlashHeading(2)),
+    handler: ed(handleH2),
     scope: 'editor',
     description: 'Heading 2',
   });
   useShortcut({
     key: 'mod+alt+3',
-    handler: ed(() => handleSlashHeading(3)),
+    handler: ed(handleH3),
     scope: 'editor',
     description: 'Heading 3',
   });
   useShortcut({
     key: 'mod+alt+4',
-    handler: ed(() => handleSlashHeading(4)),
+    handler: ed(handleH4),
     scope: 'editor',
     description: 'Heading 4',
   });
   useShortcut({
     key: 'mod+alt+5',
-    handler: ed(() => handleSlashHeading(5)),
+    handler: ed(handleH5),
     scope: 'editor',
     description: 'Heading 5',
   });
   useShortcut({
     key: 'mod+alt+6',
-    handler: ed(() => handleSlashHeading(6)),
+    handler: ed(handleH6),
     scope: 'editor',
     description: 'Heading 6',
   });
@@ -956,7 +956,16 @@ export function MilkdownEditor({
   });
   useShortcut({
     key: 'mod+shift+#',
-    handler: ed(handleSlashTag),
+    handler: ed(() => {
+      if (!editor) return;
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (!view) return;
+        const { $from } = view.state.selection;
+        const tr = view.state.tr.insertText('#tag ', $from.pos);
+        view.dispatch(tr);
+      });
+    }),
     scope: 'editor',
     description: 'Insert tag',
   });
