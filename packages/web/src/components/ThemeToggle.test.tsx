@@ -17,7 +17,7 @@ describe('ThemeToggle', () => {
   it('renders the theme toggle button with tooltip', () => {
     render(<ThemeToggle />);
 
-    expect(screen.getByText('Switch to dark theme')).toBeInTheDocument();
+    expect(screen.getByText('Switch to dark theme (Ctrl+Shift+D)')).toBeInTheDocument();
     expect(screen.getByRole('button')).toBeInTheDocument();
   });
 

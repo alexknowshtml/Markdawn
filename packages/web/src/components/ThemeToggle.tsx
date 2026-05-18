@@ -2,8 +2,16 @@ import { Monitor, Moon, Sun } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { Tooltip } from './Tooltip';
 
+function getModLabel(): string {
+  if (typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)) {
+    return '⌘+Shift+D';
+  }
+  return 'Ctrl+Shift+D';
+}
+
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const modLabel = getModLabel();
 
   const toggleTheme = () => {
     if (theme === 'light') setTheme('dark');
@@ -12,9 +20,9 @@ export function ThemeToggle() {
   };
 
   const labels: Record<string, string> = {
-    light: 'Switch to dark theme',
-    dark: 'Switch to system theme',
-    system: 'Switch to light theme',
+    light: `Switch to dark theme (${modLabel})`,
+    dark: `Switch to system theme (${modLabel})`,
+    system: `Switch to light theme (${modLabel})`,
   };
 
   return (
