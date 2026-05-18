@@ -378,6 +378,12 @@ export function useMilkdown({
               }
 
               const query = textBefore.slice(slashIndex + 1);
+
+              if (query && /\s/.test(query)) {
+                suggestSlash(false, '', null, null);
+                return;
+              }
+
               const coords = view.coordsAtPos($from.pos);
               const slashFrom = $from.start() + slashIndex;
               suggestSlash(

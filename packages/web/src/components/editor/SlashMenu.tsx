@@ -25,11 +25,8 @@ const MENU_OVERFLOW_THRESHOLD = 320;
 
 export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashMenuProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
   const [selectedIndex, setSelectedIndex] = useState(0);
-  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({
-    opacity: 0,
-    pointerEvents: 'none',
-  });
   const [placement, setPlacement] = useState<'top' | 'bottom'>('bottom');
   const trimmedQuery = query.trim();
 
@@ -56,16 +53,16 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
   }, [results]);
 
   useLayoutEffect(() => {
-    if (!isOpen || !position || !containerRef.current) {
-      if (!isOpen) {
-        setMenuStyle({ opacity: 0, pointerEvents: 'none' });
-      }
+    const el = containerRef.current;
+    if (!el) return;
+    if (!isOpen || !position) {
+      el.style.opacity = '0';
+      el.style.pointerEvents = 'none';
       return;
     }
 
     const viewportHeight = window.innerHeight;
     const viewportWidth = window.innerWidth;
-    const x = position.x;
     const bottomCoord = position.bottom ?? position.y;
     const topCoord = position.top ?? position.y - 20;
     const nextPlacement =
@@ -73,30 +70,38 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
 
     setPlacement(nextPlacement);
 
-    const style: React.CSSProperties = {
-      position: 'fixed',
-      left: Math.max(20, Math.min(x, viewportWidth - MENU_WIDTH - 20)),
-      opacity: 1,
-      pointerEvents: 'auto',
-      zIndex: 100,
-    };
+    el.style.position = 'fixed';
+    el.style.left = `${Math.max(20, Math.min(position.x, viewportWidth - MENU_WIDTH - 20))}px`;
+    el.style.opacity = '1';
+    el.style.pointerEvents = 'auto';
+    el.style.zIndex = '100';
 
     if (nextPlacement === 'top') {
-      style.bottom = viewportHeight - topCoord + 8;
+      el.style.top = 'auto';
+      el.style.bottom = `${viewportHeight - topCoord + 8}px`;
     } else {
-      style.top = bottomCoord + 4;
+      el.style.top = `${bottomCoord + 4}px`;
+      el.style.bottom = 'auto';
     }
-
-    setMenuStyle(style);
   }, [isOpen, position]);
 
   useEffect(() => {
     if (!isOpen) return;
 
-    const buttons = containerRef.current?.querySelectorAll<HTMLElement>(':scope button');
-    const selectedElement = buttons?.[selectedIndex];
-    if (selectedElement) {
-      selectedElement.scrollIntoView({ block: 'nearest' });
+    const list = listRef.current;
+    if (!list) return;
+
+    const buttons = list.querySelectorAll<HTMLElement>(':scope > button');
+    const selectedButton = buttons[selectedIndex];
+    if (!selectedButton) return;
+
+    const listRect = list.getBoundingClientRect();
+    const buttonRect = selectedButton.getBoundingClientRect();
+
+    if (buttonRect.bottom > listRect.bottom) {
+      list.scrollTop += buttonRect.bottom - listRect.bottom;
+    } else if (buttonRect.top < listRect.top) {
+      list.scrollTop -= listRect.top - buttonRect.top;
     }
   }, [selectedIndex, isOpen]);
 
@@ -163,13 +168,15 @@ export function SlashMenu({ isOpen, query, position, commands, onClose }: SlashM
           ? 'zoom-in-95 slide-in-from-top-2'
           : 'zoom-in-95 slide-in-from-bottom-2'
       } bg-white dark:bg-zinc-900 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100`}
-      style={menuStyle}
     >
       <div className="px-3 py-2 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-500 border-b border-zinc-100 dark:border-zinc-800/50">
         Insert block
       </div>
 
-      <div className="max-h-[300px] overflow-y-auto p-1.5 space-y-0.5 scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-800">
+      <div
+        ref={listRef}
+        className="max-h-[300px] overflow-y-auto p-1.5 space-y-0.5 scrollbar-thin scrollbar-thumb-zinc-200 dark:scrollbar-thumb-zinc-800"
+      >
         {results.length === 0 ? (
           <div className="px-3 py-4 text-center text-sm text-zinc-500">No matching commands</div>
         ) : (

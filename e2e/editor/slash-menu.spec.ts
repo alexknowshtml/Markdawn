@@ -257,4 +257,60 @@ test.describe('Slash menu', () => {
       });
     });
   });
+
+  test.describe('Whitespace edge cases', () => {
+    test('does not open when / is followed by a space', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/ ');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('closes slash menu when space is typed after a query', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/h1');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.type(' ');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('does not open when / appears mid-paragraph with surrounding spaces', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('rolling distribution has no / or after some interval');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('does not open for slash in a URL-like string', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('Check out https://example.com/page for details');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('closes menu when typing continues with space after slash command', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/h1');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.type(' more');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+    });
+
+    test('can still trigger slash menu after dismissing from whitespace', async ({ page }) => {
+      await createNewPage(page);
+      await focusEditor(page);
+      await page.keyboard.type('/ ');
+      await expect(page.locator('[data-testid="slash-menu"]')).not.toBeVisible({ timeout: 2000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('/h2');
+      await expect(page.locator('[data-testid="slash-menu"]')).toBeVisible({ timeout: 5000 });
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Still works');
+      await expect(page.locator('.ProseMirror h2')).toContainText('Still works', {
+        timeout: 5000,
+      });
+    });
+  });
 });
