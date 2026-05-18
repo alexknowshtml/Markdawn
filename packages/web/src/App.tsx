@@ -5,6 +5,7 @@ import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
 import { ClipboardProvider } from './contexts/ClipboardContext';
+import { KeyboardShortcutProvider } from './contexts/KeyboardShortcutContext';
 import { SelectionProvider } from './contexts/SelectionContext';
 import Dashboard from './routes/Dashboard';
 import Home from './routes/Home';
@@ -28,7 +29,9 @@ function App() {
                 <ProtectedRoute>
                   <ClipboardProvider>
                     <SelectionProvider>
-                      <AppShell />
+                      <KeyboardShortcutProvider>
+                        <AppShell />
+                      </KeyboardShortcutProvider>
                     </SelectionProvider>
                   </ClipboardProvider>
                 </ProtectedRoute>
