@@ -925,28 +925,45 @@ export function MilkdownEditor({
     priority: 'high',
     description: 'Insert link',
   });
-  // Shift+number shortcuts produce the shifted symbol in event.key,
-  // so the binding key must match the actual character, not the digit:
-  //   Ctrl+Shift+7  → key='&'
-  //   Ctrl+Shift+8  → key='*'
-  //   Ctrl+Shift+[  → key='{'
+  // Ctrl+Shift+number: different browsers behave differently — most suppress
+  // Shift's character mapping when Ctrl is held (event.key stays '8'), but
+  // Zen and some others produce the shifted character ('*'). Register both
+  // forms so it works everywhere.
   useShortcut({
-    key: 'mod+shift+*',
+    key: 'mod+shift+8',
     handler: ed(handleBulletList),
     scope: 'editor',
     description: 'Bullet list',
   });
   useShortcut({
-    key: 'mod+shift+&',
+    key: 'mod+shift+*',
+    handler: ed(handleBulletList),
+    scope: 'editor',
+    description: '',
+  });
+  useShortcut({
+    key: 'mod+shift+7',
     handler: ed(handleOrderedList),
     scope: 'editor',
     description: 'Ordered list',
   });
   useShortcut({
-    key: 'mod+shift+{',
+    key: 'mod+shift+&',
+    handler: ed(handleOrderedList),
+    scope: 'editor',
+    description: '',
+  });
+  useShortcut({
+    key: 'mod+shift+[',
     handler: ed(handleTaskList),
     scope: 'editor',
     description: 'Task list',
+  });
+  useShortcut({
+    key: 'mod+shift+{',
+    handler: ed(handleTaskList),
+    scope: 'editor',
+    description: '',
   });
   useShortcut({
     key: 'mod+shift+i',

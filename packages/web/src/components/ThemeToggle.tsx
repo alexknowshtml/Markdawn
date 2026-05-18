@@ -29,6 +29,7 @@ export function ThemeToggle() {
     <Tooltip label={labels[theme] || 'Change theme'} position="right">
       <button
         type="button"
+        aria-label="Toggle theme"
         onClick={toggleTheme}
         className="relative p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-300 overflow-hidden w-9 h-9 flex items-center justify-center cursor-pointer"
       >
