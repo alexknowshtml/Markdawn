@@ -54,7 +54,6 @@ describe('export-helpers / extractImages', () => {
     const md = `![a](data:image/png;base64,${b64})\n\n![b](data:image/png;base64,${b64})`;
     const result = await extractImages(md, tmpDir);
     expect(result.assets.size).toBe(1);
-    const assetNames = [...result.assets.keys()];
     const occurrences = result.markdown.match(/image-[a-f0-9]{12}\.png/g);
     expect(occurrences?.length).toBe(2);
     expect(new Set(occurrences).size).toBe(1);

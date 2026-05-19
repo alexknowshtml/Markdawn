@@ -6,8 +6,8 @@ import { pool } from '../db/connection';
 
 /**
  * Matches markdown image syntax: ![alt](src) with optional title.
- * Capture groups: 1=alt, 2=src (without title), 3=title (optional).
- * Handles title in double quotes, single quotes, or parentheses.
+ * Capture groups: 1=alt, 2=src (angle-bracket form), 3=src (bare form),
+ * 4=title (double-quoted), 5=title (single-quoted), 6=title (parenthesized).
  */
 const IMAGE_REGEX =
   /!\[([^\]]*)\]\((?:<([^>]*)>|([^)\s]+))(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?\)/g;
@@ -64,10 +64,17 @@ function resolveMimeType(header: string): string | null {
   return match[1] ?? null;
 }
 
+const MIME_TO_EXT: Record<string, string> = {
+  'vnd.microsoft.icon': 'ico',
+  'x-icon': 'ico',
+};
+
 function resolveExtension(mimeType: string): string {
   const parts = mimeType.split('/');
   const subtype = parts[1] ?? 'bin';
-  // image/svg+xml → svg, image/vnd.microsoft.icon → ico
+  // Known MIME→extension mappings for non-standard subtypes
+  if (MIME_TO_EXT[subtype]) return MIME_TO_EXT[subtype];
+  // image/svg+xml → svg (everything after + is the vendor extension)
   const base = subtype.split('+')[0] ?? subtype;
   return base;
 }
@@ -255,19 +262,20 @@ export function serializeFrontmatter(
 
   const lines: string[] = ['---'];
   for (const [key, value] of Object.entries(data)) {
+    const keyStr = yamlScalar(key);
     if (Array.isArray(value)) {
       if (value.length > 0) {
-        lines.push(`${key}:`);
+        lines.push(`${keyStr}:`);
         for (const item of value) {
           lines.push(`  - ${yamlScalar(item)}`);
         }
       } else {
-        lines.push(`${key}: []`);
+        lines.push(`${keyStr}: []`);
       }
     } else if (typeof value === 'object' && value !== null) {
-      lines.push(`${key}: ${JSON.stringify(value)}`);
+      lines.push(`${keyStr}: ${JSON.stringify(value)}`);
     } else {
-      lines.push(`${key}: ${yamlScalar(value)}`);
+      lines.push(`${keyStr}: ${yamlScalar(value)}`);
     }
   }
   lines.push('---');
