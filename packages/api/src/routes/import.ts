@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
+import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
   createYjsDocWithTitle,
@@ -212,8 +212,7 @@ importRoute.post('/markdown', async (c) => {
   const { title: frontmatterTitle, body, properties } = parseFrontmatter(content);
   const title = frontmatterTitle || file.name.replace(/\.md$/, '');
 
-  const uploadDir = path.resolve('uploads');
-  await mkdir(uploadDir, { recursive: true });
+  await mkdir(uploadsDir, { recursive: true });
 
   const { result: processedContent } = processMarkdownImages(body, []);
   const contentForEditor = stripLeadingH1(processedContent, title);
