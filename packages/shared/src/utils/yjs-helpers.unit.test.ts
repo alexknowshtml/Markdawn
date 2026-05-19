@@ -45,14 +45,6 @@ function formattedText(value: string, formats: Record<string, unknown>): Y.XmlTe
   return t;
 }
 
-function multiFormattedText(
-  segments: { text: string; formats?: Record<string, unknown> }[],
-): Y.XmlText[] {
-  return segments.map((s) =>
-    s.formats ? formattedText(s.text, s.formats) : new Y.XmlText(s.text),
-  );
-}
-
 // Marks use the y-prosemirror format (object values) since that's what the
 // editor produces. The API import uses booleans but the serializer handles both.
 const BOLD = { strong: {} };
@@ -356,6 +348,16 @@ describe('yDocToMarkdown', () => {
       ]),
     ]);
     expect(yDocToMarkdown(update)).toBe('> [!INFO Note]\n> Something to note\n\n');
+  });
+
+  it('converts a multi-paragraph callout with empty lines between paragraphs', () => {
+    const update = encodeFragment([
+      blockWithAttrs('callout', { type: 'tip' }, [
+        block('paragraph', [text('First para')]),
+        block('paragraph', [text('Second para')]),
+      ]),
+    ]);
+    expect(yDocToMarkdown(update)).toBe('> [!TIP]\n> First para\n>\n> Second para\n\n');
   });
 
   it('converts mixed content: heading + paragraph + list', () => {

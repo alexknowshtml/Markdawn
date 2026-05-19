@@ -212,7 +212,7 @@ function renderCallout(element: Y.XmlElement, depth: number): string {
 
   const prefixInner = inner
     .split('\n')
-    .map((l) => `> ${l}`)
+    .map((l) => (l ? `> ${l}` : '>'))
     .join('\n');
 
   return `> [!${calloutType}${titleSuffix}]\n${prefixInner}\n\n`;
