@@ -2,9 +2,10 @@ import clsx from 'clsx';
 import { Menu } from 'lucide-react';
 import React, { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import { useShortcut } from '../contexts/KeyboardShortcutContext';
 import { useWorkspaces } from '../hooks/use-workspaces';
-import { useKeyboardShortcuts } from '../hooks/useKeyboardShortcuts';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
+import { useTheme } from '../hooks/useTheme';
 import { useWorkspaceMeta } from '../hooks/useWorkspaceMeta';
 import { CommandPalette } from './CommandPalette';
 import { ProfilePill } from './ProfilePill';
@@ -16,12 +17,53 @@ export function AppShell() {
   const [isHovered, setIsHovered] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
+  const { setTheme, isDark } = useTheme();
   const location = useLocation();
   const { data: workspaces } = useWorkspaces();
   const workspaceSlug = location.pathname.split('/')[2] ?? '';
   const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
 
-  useKeyboardShortcuts({ toggleSidebar: toggleCollapsed });
+  useShortcut({
+    key: 'mod+/',
+    handler: toggleCollapsed,
+    whenInputFocused: 'allow',
+    description: 'Toggle sidebar',
+  });
+  const createNote = () => {
+    if (workspaceSlug) {
+      window.dispatchEvent(new CustomEvent('markdawn:create-note', { detail: { workspaceSlug } }));
+    }
+  };
+  const createFolder = () => {
+    if (workspaceSlug) {
+      window.dispatchEvent(
+        new CustomEvent('markdawn:create-folder', { detail: { workspaceSlug } }),
+      );
+    }
+  };
+  // These are intercepted by most browsers (new tab, incognito) in the
+  // bubble phase. The provider's capture-phase handler calls preventDefault
+  // before the browser sees them, overriding the browser default.
+  // Alt+N / Alt+Shift+N create a new page/folder and navigate to it.
+  // The custom events are handled by PageTree which calls navigate().
+  useShortcut({
+    key: 'alt+n',
+    handler: createNote,
+    whenInputFocused: 'allow',
+    description: 'Create new note',
+  });
+  useShortcut({
+    key: 'alt+shift+n',
+    handler: createFolder,
+    whenInputFocused: 'allow',
+    description: 'Create new folder',
+  });
+  useShortcut({
+    key: 'mod+shift+d',
+    handler: () => setTheme(isDark ? 'light' : 'dark'),
+    whenInputFocused: 'allow',
+    description: 'Toggle dark mode',
+  });
 
   useWorkspaceMeta(workspace?.id);
 

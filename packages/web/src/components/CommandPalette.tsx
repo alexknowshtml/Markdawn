@@ -1,6 +1,7 @@
 import { FileText, Plus, Trash2 } from 'lucide-react';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useShortcut, useShortcutScope } from '../contexts/KeyboardShortcutContext';
 import { useCreatePage } from '../hooks/use-pages';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -29,7 +30,8 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
 
-  const openSearch = useCallback(() => setIsOpen(true), []);
+  const { pushScope, popScope } = useShortcutScope();
+
   const closeDialog = useCallback(() => {
     setIsOpen(false);
     setQuery('');
@@ -37,42 +39,35 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
     setIsLoading(false);
   }, []);
 
-  // Listen for custom open-search event
+  // Custom event for external triggers (e.g., from a button)
   useEffect(() => {
-    const handleOpenSearch = () => openSearch();
+    const handleOpenSearch = () => setIsOpen(true);
     window.addEventListener('open-search', handleOpenSearch);
     return () => window.removeEventListener('open-search', handleOpenSearch);
-  }, [openSearch]);
+  }, []);
 
+  // Toggle palette with Ctrl+K / Cmd+K — high priority to resolve conflicts
+  useShortcut({
+    key: 'mod+k',
+    handler: () => setIsOpen((prev) => !prev),
+    description: 'Open command palette',
+  });
+
+  // Scope management: when palette is open, suspend parent shortcuts
   useEffect(() => {
-    if (isOpen) {
-      inputRef.current?.focus();
-    }
-  }, [isOpen]);
+    if (!isOpen) return;
+    pushScope(['modal', 'universal']);
+    inputRef.current?.focus();
+    return () => popScope();
+  }, [isOpen, pushScope, popScope]);
 
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      const isShortcut = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k';
-      if (isShortcut) {
-        event.preventDefault();
-        setIsOpen(true);
-        return;
-      }
-
-      if (!isOpen) {
-        return;
-      }
-
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        closeDialog();
-        return;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, closeDialog]);
+  // Escape closes the palette (only fires when 'modal' scope is active)
+  useShortcut({
+    key: 'escape',
+    handler: closeDialog,
+    scope: 'modal',
+    description: 'Close command palette',
+  });
 
   useEffect(() => {
     if (!isOpen) {
@@ -138,6 +133,9 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
             ref={inputRef}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') closeDialog();
+            }}
             placeholder="Search pages..."
             className="w-full rounded-xl bg-transparent px-4 py-3 text-lg text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none focus:ring-2 focus:ring-zinc-500/20 dark:focus:ring-zinc-400/20 transition-shadow"
           />

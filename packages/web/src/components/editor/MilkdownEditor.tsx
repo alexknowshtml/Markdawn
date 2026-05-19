@@ -1,4 +1,24 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  IconBlockquote,
+  IconBold,
+  IconCode,
+  IconH1,
+  IconH2,
+  IconH3,
+  IconH4,
+  IconH5,
+  IconH6,
+  IconItalic,
+  IconLink,
+  IconList,
+  IconListCheck,
+  IconListNumbers,
+  IconPhoto,
+  IconStrikethrough,
+  IconTable,
+} from '@tabler/icons-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useShortcut } from '../../contexts/KeyboardShortcutContext';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
@@ -795,6 +815,177 @@ export function MilkdownEditor({
   const handleDeleteRow = () => handleTableAction('deleteRow');
   const handleDeleteCol = () => handleTableAction('deleteCol');
   const handleDeleteTable = () => handleTableAction('deleteTable');
+
+  // ─── Keyboard shortcut registrations for slash menu commands ───
+
+  // Utility: returns true only when the Milkdown/ProseMirror editor has DOM focus.
+  // Editor-scoped shortcuts use this to avoid capturing shortcuts meant
+  // for the command palette, page title, or other inputs.
+  function editorHasFocus(): boolean {
+    if (!editor) return false;
+    let focused = false;
+    try {
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (view) focused = view.hasFocus();
+      });
+    } catch {
+      /* Editor may have been destroyed */
+    }
+    return focused;
+  }
+
+  // Helper: wraps an editor action so it only fires when the editor is focused,
+  // and returns false to allow the next binding to handle the event otherwise.
+  const ed = (action: () => void) => (): boolean => {
+    if (!editorHasFocus()) return false;
+    action();
+    return true;
+  };
+
+  // Mapping from normalized shortcut → handler for every slash-command shortcut.
+  // The slash menu displays these same shortcuts — these registrations make
+  // them functional as real keyboard bindings.
+  useShortcut({
+    key: 'mod+alt+0',
+    handler: ed(() => runBlockCommand('paragraph')),
+    scope: 'editor',
+    description: 'Paragraph',
+  });
+  useShortcut({
+    key: 'mod+alt+1',
+    handler: ed(handleH1),
+    scope: 'editor',
+    description: 'Heading 1',
+  });
+  useShortcut({
+    key: 'mod+alt+2',
+    handler: ed(handleH2),
+    scope: 'editor',
+    description: 'Heading 2',
+  });
+  useShortcut({
+    key: 'mod+alt+3',
+    handler: ed(handleH3),
+    scope: 'editor',
+    description: 'Heading 3',
+  });
+  useShortcut({
+    key: 'mod+alt+4',
+    handler: ed(handleH4),
+    scope: 'editor',
+    description: 'Heading 4',
+  });
+  useShortcut({
+    key: 'mod+alt+5',
+    handler: ed(handleH5),
+    scope: 'editor',
+    description: 'Heading 5',
+  });
+  useShortcut({
+    key: 'mod+alt+6',
+    handler: ed(handleH6),
+    scope: 'editor',
+    description: 'Heading 6',
+  });
+  useShortcut({ key: 'mod+b', handler: ed(handleBold), scope: 'editor', description: 'Bold' });
+  useShortcut({ key: 'mod+i', handler: ed(handleItalic), scope: 'editor', description: 'Italic' });
+  useShortcut({
+    key: 'mod+shift+x',
+    handler: ed(handleStrike),
+    scope: 'editor',
+    description: 'Strikethrough',
+  });
+  useShortcut({ key: 'mod+`', handler: ed(handleCode), scope: 'editor', description: 'Code' });
+  useShortcut({
+    key: 'mod+shift+>',
+    handler: ed(handleBlockquote),
+    scope: 'editor',
+    description: 'Blockquote',
+  });
+  // Ctrl+K: only opens the link dialog when text is selected in the editor.
+  // When the editor is unfocused or no text is selected, returns false so
+  // the command palette's mod+k can fire.
+  useShortcut({
+    key: 'mod+k',
+    handler: (): boolean => {
+      if (!editor) return false;
+      let canLink = false;
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (!view || !view.hasFocus()) return;
+        const { from, to } = view.state.selection;
+        canLink = from !== to;
+      });
+      if (!canLink) return false;
+      handleLink();
+      return true;
+    },
+    scope: 'editor',
+    priority: 'high',
+    description: 'Insert link',
+  });
+  // Ctrl+Shift+number: different browsers behave differently — most suppress
+  // Shift's character mapping when Ctrl is held (event.key stays '8'), but
+  // Zen and some others produce the shifted character ('*'). Register both
+  // forms so it works everywhere.
+  useShortcut({
+    key: 'mod+shift+8',
+    handler: ed(handleBulletList),
+    scope: 'editor',
+    description: 'Bullet list',
+  });
+  useShortcut({
+    key: 'mod+shift+*',
+    handler: ed(handleBulletList),
+    scope: 'editor',
+    description: '',
+  });
+  useShortcut({
+    key: 'mod+shift+7',
+    handler: ed(handleOrderedList),
+    scope: 'editor',
+    description: 'Ordered list',
+  });
+  useShortcut({
+    key: 'mod+shift+&',
+    handler: ed(handleOrderedList),
+    scope: 'editor',
+    description: '',
+  });
+  useShortcut({
+    key: 'mod+shift+[',
+    handler: ed(handleTaskList),
+    scope: 'editor',
+    description: 'Task list',
+  });
+  useShortcut({
+    key: 'mod+shift+{',
+    handler: ed(handleTaskList),
+    scope: 'editor',
+    description: '',
+  });
+  useShortcut({
+    key: 'mod+shift+i',
+    handler: ed(handleImageUploadFromSlash),
+    scope: 'editor',
+    description: 'Insert image',
+  });
+  useShortcut({
+    key: 'mod+shift+#',
+    handler: ed(() => {
+      if (!editor) return;
+      editor.action((ctx) => {
+        const view = ctx.get(editorViewCtx);
+        if (!view) return;
+        const { $from } = view.state.selection;
+        const tr = view.state.tr.insertText('#tag ', $from.pos);
+        view.dispatch(tr);
+      });
+    }),
+    scope: 'editor',
+    description: 'Insert tag',
+  });
 
   useEffect(() => {
     onProviderReady?.(provider);

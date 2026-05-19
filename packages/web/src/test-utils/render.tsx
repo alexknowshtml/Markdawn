@@ -3,6 +3,7 @@ import { type RenderOptions, type RenderResult, render as rtlRender } from '@tes
 import type React from 'react';
 import type { ReactElement } from 'react';
 import { MemoryRouter } from 'react-router-dom';
+import { KeyboardShortcutProvider } from '../contexts/KeyboardShortcutContext';
 
 export function createTestQueryClient(): QueryClient {
   return new QueryClient({
@@ -32,7 +33,9 @@ export function render(
   function Wrapper({ children }: { children: React.ReactNode }) {
     return (
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={[route]}>{children}</MemoryRouter>
+        <MemoryRouter initialEntries={[route]}>
+          <KeyboardShortcutProvider>{children}</KeyboardShortcutProvider>
+        </MemoryRouter>
       </QueryClientProvider>
     );
   }

@@ -1,201 +1,375 @@
 import { renderHook } from '@testing-library/react';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mockUseParams = vi.fn();
-const mockUseTheme = vi.fn();
+import {
+  KeyboardShortcutProvider,
+  useShortcut,
+  useShortcutScope,
+} from '../contexts/KeyboardShortcutContext';
+import { keyboardRegistry, shouldIgnoreKeyboardEvent } from './useKeyboardShortcuts';
 
-vi.mock('react-router-dom', () => ({
-  useParams: () => mockUseParams(),
-}));
+// ---------------------------------------------------------------------------
+// Unit tests: KeyboardRegistry
+// ---------------------------------------------------------------------------
 
-vi.mock('./useTheme', () => ({
-  useTheme: () => mockUseTheme(),
-}));
-
-import { useKeyboardShortcuts } from './useKeyboardShortcuts';
-
-describe('useKeyboardShortcuts', () => {
-  const toggleSidebar = vi.fn();
-  const setTheme = vi.fn();
-
+describe('KeyboardRegistry', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    mockUseParams.mockReturnValue({ workspaceSlug: 'test-workspace' });
-    mockUseTheme.mockReturnValue({ setTheme, isDark: false, theme: 'light' });
+    keyboardRegistry.clearAll();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  function renderShortcuts(options?: { workspaceSlug?: string; isDark?: boolean }) {
-    if (options) {
-      mockUseParams.mockReturnValue({ workspaceSlug: options.workspaceSlug });
-      mockUseTheme.mockReturnValue({
-        setTheme,
-        isDark: options.isDark ?? false,
-        theme: options.isDark ? 'dark' : 'light',
-      });
-    }
-    return renderHook(() => useKeyboardShortcuts({ toggleSidebar }));
-  }
-
-  it('dispatches create-note event on Ctrl+N', () => {
+  it('dispatches to the correct binding by key', () => {
     const handler = vi.fn();
-    window.addEventListener('markdawn:create-note', handler);
+    const unreg = keyboardRegistry.register({
+      id: 'test-1',
+      key: 'mod+/',
+      handler,
+      scope: '*',
+      priority: 'normal',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
 
-    renderShortcuts();
+    const event = new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true });
+    const handled = keyboardRegistry.dispatch(event, false);
 
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }),
-    );
-
+    expect(handled).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    const event = handler.mock.calls[0]?.[0] as CustomEvent;
-    expect(event.detail.workspaceSlug).toBe('test-workspace');
-
-    window.removeEventListener('markdawn:create-note', handler);
+    unreg();
   });
 
-  it('dispatches create-folder event on Ctrl+Shift+N', () => {
+  it('does not dispatch when scopes do not match', () => {
+    keyboardRegistry.setActiveScopes(['modal']);
     const handler = vi.fn();
-    window.addEventListener('markdawn:create-folder', handler);
+    const unreg = keyboardRegistry.register({
+      id: 'test-2',
+      key: 'mod+n',
+      handler,
+      scope: 'global',
+      priority: 'normal',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
 
-    renderShortcuts();
+    const event = new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true });
+    const handled = keyboardRegistry.dispatch(event, false);
 
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, shiftKey: true, bubbles: true }),
-    );
-
-    expect(handler).toHaveBeenCalledTimes(1);
-
-    window.removeEventListener('markdawn:create-folder', handler);
+    expect(handled).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+    unreg();
   });
 
-  it('calls toggleSidebar on Ctrl+/', () => {
-    renderShortcuts();
+  it('blocks binding when input is focused and whenInputFocused is block', () => {
+    const handler = vi.fn();
+    const unreg = keyboardRegistry.register({
+      id: 'test-3',
+      key: 'mod+n',
+      handler,
+      scope: '*',
+      priority: 'normal',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'block',
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true });
+    const handled = keyboardRegistry.dispatch(event, true);
+
+    expect(handled).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+    unreg();
+  });
+
+  it('allows binding when input is focused and whenInputFocused is allow', () => {
+    const handler = vi.fn();
+    const unreg = keyboardRegistry.register({
+      id: 'test-4',
+      key: 'mod+/',
+      handler,
+      scope: '*',
+      priority: 'normal',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
+
+    const event = new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true });
+    const handled = keyboardRegistry.dispatch(event, true);
+
+    expect(handled).toBe(true);
+    expect(handler).toHaveBeenCalledTimes(1);
+    unreg();
+  });
+
+  it('respects priority ordering', () => {
+    const lowHandler = vi.fn();
+    const highHandler = vi.fn();
+
+    keyboardRegistry.register({
+      id: 'test-low',
+      key: 'mod+k',
+      handler: lowHandler,
+      scope: '*',
+      priority: 'low',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
+    keyboardRegistry.register({
+      id: 'test-high',
+      key: 'mod+k',
+      handler: highHandler,
+      scope: '*',
+      priority: 'high',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
+
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true });
+    keyboardRegistry.dispatch(event, false);
+
+    expect(highHandler).toHaveBeenCalledTimes(1);
+    expect(lowHandler).not.toHaveBeenCalled();
+  });
+
+  it('normalizes key patterns correctly', () => {
+    expect(keyboardRegistry.patternToKey('mod+/')).toBe('mod+/');
+    expect(keyboardRegistry.patternToKey('Ctrl+N')).toBe('mod+n');
+    expect(keyboardRegistry.patternToKey('Cmd+Shift+K')).toBe('mod+shift+k');
+    expect(keyboardRegistry.patternToKey('mod+shift+d')).toBe('mod+shift+d');
+    expect(keyboardRegistry.patternToKey('Escape')).toBe('escape');
+  });
+
+  it('cleans up bindings via unregister function', () => {
+    const handler = vi.fn();
+    const unreg = keyboardRegistry.register({
+      id: 'test-cleanup',
+      key: 'mod+/',
+      handler,
+      scope: '*',
+      priority: 'normal',
+      preventDefault: true,
+      description: '',
+      whenInputFocused: 'allow',
+    });
+    unreg();
+
+    const event = new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true });
+    const handled = keyboardRegistry.dispatch(event, false);
+
+    expect(handled).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Unit tests: shouldIgnoreKeyboardEvent
+// ---------------------------------------------------------------------------
+
+describe('shouldIgnoreKeyboardEvent', () => {
+  it('returns true when defaultPrevented', () => {
+    const event = new KeyboardEvent('keydown', { key: 'b', ctrlKey: true, bubbles: true });
+    vi.spyOn(event, 'defaultPrevented', 'get').mockReturnValue(true);
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(true);
+  });
+
+  it('returns false for Escape always', () => {
+    const event = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
+    Object.defineProperty(event, 'target', {
+      value: document.createElement('textarea'),
+    });
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(false);
+  });
+
+  it('returns false for modifier combos in textarea (fixes #64)', () => {
+    const textarea = document.createElement('textarea');
+    const event = new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true });
+    Object.defineProperty(event, 'target', { value: textarea });
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(false);
+  });
+
+  it('returns false for modifier combos in contenteditable', () => {
+    const div = document.createElement('div');
+    div.contentEditable = 'true';
+    const event = new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true });
+    Object.defineProperty(event, 'target', { value: div });
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(false);
+  });
+
+  it('returns true for plain key in textarea (text input)', () => {
+    const textarea = document.createElement('textarea');
+    const event = new KeyboardEvent('keydown', { key: 'a', bubbles: true });
+    Object.defineProperty(event, 'target', { value: textarea });
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(true);
+  });
+
+  it('returns false for non-editable elements', () => {
+    const div = document.createElement('div');
+    const event = new KeyboardEvent('keydown', { key: 'a', bubbles: true });
+    Object.defineProperty(event, 'target', { value: div });
+    expect(shouldIgnoreKeyboardEvent(event)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration tests: useShortcut + KeyboardShortcutProvider
+// ---------------------------------------------------------------------------
+
+import type React from 'react';
+import { createElement } from 'react';
+
+function createWrapper() {
+  return function Wrapper({ children }: { children: React.ReactNode }) {
+    return createElement(KeyboardShortcutProvider, null, children);
+  };
+}
+
+describe('useShortcut', () => {
+  beforeEach(() => {
+    keyboardRegistry.clearAll();
+  });
+
+  it('fires handler on matching keydown', () => {
+    const handler = vi.fn();
+    renderHook(() => useShortcut({ key: 'mod+/', handler, description: 'Toggle sidebar' }), {
+      wrapper: createWrapper(),
+    });
 
     document.dispatchEvent(
       new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }),
     );
 
-    expect(toggleSidebar).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 
-  it('toggles theme on Ctrl+Shift+D', () => {
-    renderShortcuts();
-
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, shiftKey: true, bubbles: true }),
-    );
-
-    expect(setTheme).toHaveBeenCalledWith('dark');
-  });
-
-  it('toggles theme to light when currently dark', () => {
-    mockUseTheme.mockReturnValue({ setTheme, isDark: true, theme: 'dark' });
-
-    renderShortcuts({ isDark: true });
-
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'd', ctrlKey: true, shiftKey: true, bubbles: true }),
-    );
-
-    expect(setTheme).toHaveBeenCalledWith('light');
-  });
-
-  it('does not dispatch create-note when no workspaceSlug', () => {
+  it('supports Meta key (Mac)', () => {
     const handler = vi.fn();
-    window.addEventListener('markdawn:create-note', handler);
-
-    renderShortcuts({});
+    renderHook(() => useShortcut({ key: 'mod+/', handler, description: 'Toggle sidebar' }), {
+      wrapper: createWrapper(),
+    });
 
     document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }),
+      new KeyboardEvent('keydown', { key: '/', metaKey: true, bubbles: true }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not fire for wrong key', () => {
+    const handler = vi.fn();
+    renderHook(() => useShortcut({ key: 'mod+/', handler }), { wrapper: createWrapper() });
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }),
     );
 
     expect(handler).not.toHaveBeenCalled();
-
-    window.removeEventListener('markdawn:create-note', handler);
   });
 
-  it('ignores shortcuts when input element is focused', () => {
-    const input = document.createElement('input');
-    document.body.appendChild(input);
-    input.focus();
+  it('uses latest handler closure', () => {
+    const handler1 = vi.fn();
+    const handler2 = vi.fn();
+    const { rerender } = renderHook(({ handler }) => useShortcut({ key: 'mod+n', handler }), {
+      wrapper: createWrapper(),
+      initialProps: { handler: handler1 },
+    });
 
-    renderShortcuts();
+    rerender({ handler: handler2 });
 
     document.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }),
     );
 
-    expect(toggleSidebar).not.toHaveBeenCalled();
-
-    document.body.removeChild(input);
+    expect(handler1).not.toHaveBeenCalled();
+    expect(handler2).toHaveBeenCalledTimes(1);
   });
 
-  it('ignores shortcuts when textarea is focused', () => {
-    const textarea = document.createElement('textarea');
-    document.body.appendChild(textarea);
-    textarea.focus();
-
-    renderShortcuts();
-
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }),
-    );
-
-    expect(toggleSidebar).not.toHaveBeenCalled();
-
-    document.body.removeChild(textarea);
-  });
-
-  it('ignores shortcuts when contenteditable is focused', () => {
-    const div = document.createElement('div');
-    div.setAttribute('contenteditable', 'true');
-    document.body.appendChild(div);
-    div.focus();
-
-    renderShortcuts();
-
-    document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }),
-    );
-
-    expect(toggleSidebar).not.toHaveBeenCalled();
-
-    document.body.removeChild(div);
-  });
-
-  it('cleans up event listener on unmount', () => {
-    const { unmount } = renderShortcuts();
+  it('cleans up listener on unmount', () => {
+    const handler = vi.fn();
+    const { unmount } = renderHook(() => useShortcut({ key: 'mod+/', handler }), {
+      wrapper: createWrapper(),
+    });
     unmount();
 
     document.dispatchEvent(
       new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }),
     );
 
-    expect(toggleSidebar).not.toHaveBeenCalled();
+    expect(handler).not.toHaveBeenCalled();
+  });
+});
+
+describe('useShortcut + whenInputFocused', () => {
+  beforeEach(() => {
+    keyboardRegistry.clearAll();
   });
 
-  it('supports Meta key (Mac)', () => {
-    const originalPlatform = Object.getOwnPropertyDescriptor(navigator, 'platform');
-    Object.defineProperty(navigator, 'platform', {
-      value: 'MacIntel',
-      configurable: true,
+  it('blocks shortcut when input is focused and whenInputFocused is block (Ctrl+N in input)', () => {
+    const handler = vi.fn();
+    renderHook(() => useShortcut({ key: 'mod+n', handler, whenInputFocused: 'block' }), {
+      wrapper: createWrapper(),
     });
 
-    renderShortcuts();
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    input.focus();
 
     document.dispatchEvent(
-      new KeyboardEvent('keydown', { key: '/', metaKey: true, bubbles: true }),
+      new KeyboardEvent('keydown', { key: 'n', ctrlKey: true, bubbles: true }),
     );
 
-    expect(toggleSidebar).toHaveBeenCalledTimes(1);
+    expect(handler).not.toHaveBeenCalled();
+    document.body.removeChild(input);
+  });
 
-    if (originalPlatform) {
-      Object.defineProperty(navigator, 'platform', originalPlatform);
-    }
+  it('fires shortcut when textarea is focused and whenInputFocused is allow (Ctrl+/ in textarea, fixes #64)', () => {
+    const handler = vi.fn();
+    renderHook(() => useShortcut({ key: 'mod+/', handler, whenInputFocused: 'allow' }), {
+      wrapper: createWrapper(),
+    });
+
+    const textarea = document.createElement('textarea');
+    document.body.appendChild(textarea);
+    textarea.focus();
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    document.body.removeChild(textarea);
+  });
+
+  it('fires shortcut when contenteditable is focused and whenInputFocused is allow', () => {
+    const handler = vi.fn();
+    renderHook(() => useShortcut({ key: 'mod+/', handler, whenInputFocused: 'allow' }), {
+      wrapper: createWrapper(),
+    });
+
+    const div = document.createElement('div');
+    div.contentEditable = 'true';
+    document.body.appendChild(div);
+    div.focus();
+
+    document.dispatchEvent(
+      new KeyboardEvent('keydown', { key: '/', ctrlKey: true, bubbles: true }),
+    );
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    document.body.removeChild(div);
+  });
+});
+
+describe('useShortcutScope', () => {
+  beforeEach(() => {
+    keyboardRegistry.clearAll();
+  });
+
+  it('throws when used outside provider', () => {
+    expect(() => renderHook(() => useShortcutScope())).toThrow(
+      'useShortcutScope must be used within a KeyboardShortcutProvider',
+    );
   });
 });

@@ -2,8 +2,16 @@ import { Monitor, Moon, Sun } from 'lucide-react';
 import { useTheme } from '../hooks/useTheme';
 import { Tooltip } from './Tooltip';
 
+function getModLabel(): string {
+  if (typeof navigator !== 'undefined' && /Mac|iPod|iPhone|iPad/.test(navigator.platform)) {
+    return '⌘+Shift+D';
+  }
+  return 'Ctrl+Shift+D';
+}
+
 export function ThemeToggle() {
   const { theme, setTheme } = useTheme();
+  const modLabel = getModLabel();
 
   const toggleTheme = () => {
     if (theme === 'light') setTheme('dark');
@@ -12,15 +20,16 @@ export function ThemeToggle() {
   };
 
   const labels: Record<string, string> = {
-    light: 'Switch to dark theme',
-    dark: 'Switch to system theme',
-    system: 'Switch to light theme',
+    light: `Switch to dark theme (${modLabel})`,
+    dark: `Switch to system theme (${modLabel})`,
+    system: `Switch to light theme (${modLabel})`,
   };
 
   return (
     <Tooltip label={labels[theme] || 'Change theme'} position="right">
       <button
         type="button"
+        aria-label="Toggle theme"
         onClick={toggleTheme}
         className="relative p-2 rounded-md hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors text-zinc-600 dark:text-zinc-300 overflow-hidden w-9 h-9 flex items-center justify-center cursor-pointer"
       >
