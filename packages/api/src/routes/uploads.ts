@@ -64,7 +64,7 @@ uploadsRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'File must be 10MB or less' });
   }
 
-  const uploadDir = path.resolve('uploads');
+  const uploadDir = path.resolve(__dirname, '..', '..', 'uploads');
   await mkdir(uploadDir, { recursive: true });
 
   const filename = `${randomUUID()}.${extension}`;
@@ -99,7 +99,7 @@ uploadsRoute.get('/:filename', async (c) => {
   // Check workspace membership
   await ensureWorkspaceMember(upload.workspace_id, user.id);
 
-  const filePath = path.resolve('uploads', filename);
+  const filePath = path.resolve(__dirname, '..', '..', 'uploads', filename);
 
   try {
     const fileBuffer = await readFile(filePath);
