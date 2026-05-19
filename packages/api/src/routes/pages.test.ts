@@ -326,7 +326,7 @@ describe('pages API', () => {
       });
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toBe('text/markdown');
-      expect(res.headers.get('Content-Disposition')).toContain('Export.md');
+      expect(res.headers.get('Content-Disposition')).toContain('export.md');
       const body = await res.text();
       expect(typeof body).toBe('string');
     });

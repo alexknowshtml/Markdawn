@@ -1,11 +1,14 @@
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import JSZip from 'jszip';
 import { marked } from 'marked';
 import * as Y from 'yjs';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
+import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 import {
   createEmptyYjsDoc,
   createYjsDocWithTitle,
@@ -499,21 +502,39 @@ pagesRoute.get(':id/export/markdown', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspaceId, user.id);
 
-  const filename = `${page.title || 'Untitled'}.md`;
-  c.header('Content-Type', 'text/markdown');
-  c.header('Content-Disposition', `attachment; filename="${filename}"`);
-  if (!page.ydoc || page.ydoc.length === 0) {
-    return c.body('');
+  const baseFilename = slugifyFilename(page.title || 'Untitled');
+  const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
+  const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
+  const extracted = await extractImages(markdown, uploadsDir);
+
+  if (extracted.assets.size === 0) {
+    c.header('Content-Type', 'text/markdown');
+    c.header('Content-Disposition', `attachment; filename="${baseFilename}.md"`);
+    return c.body(extracted.markdown);
   }
 
-  try {
-    const decoded = new TextDecoder().decode(page.ydoc);
-    c.header('Content-Type', 'text/markdown');
-    return c.body(decoded);
-  } catch {
-    throw new HTTPException(500, { message: 'Failed to decode page content' });
+  const zip = new JSZip();
+  zip.file(`${baseFilename}.md`, extracted.markdown);
+  for (const [assetName, assetBuffer] of extracted.assets) {
+    zip.file(`assets/${assetName}`, assetBuffer);
   }
+
+  const buffer = await zip.generateAsync({ type: 'nodebuffer' });
+  const arrayBuffer = buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
+  c.header('Content-Type', 'application/zip');
+  c.header('Content-Disposition', `attachment; filename="${baseFilename}.zip"`);
+  return c.newResponse(arrayBuffer, 200);
 });
+
+const slugifyFilename = (value: string) =>
+  value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
 
 pagesRoute.post(':id/import/markdown', async (c) => {
   const pageId = c.req.param('id');
