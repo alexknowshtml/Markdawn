@@ -5,6 +5,8 @@ import { config } from 'dotenv';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 
+export const uploadsDir = resolve(currentDir, '..', 'uploads');
+
 const candidateEnvPaths = [
   resolve(process.cwd(), '.env'),
   resolve(currentDir, '../.env'),

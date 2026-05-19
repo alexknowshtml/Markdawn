@@ -1,8 +1,8 @@
-import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
 import { pool } from '../db/connection';
+import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 
@@ -54,7 +54,6 @@ exportRoute.get(':workspaceId/export', async (c) => {
   const zip = new JSZip();
   const usedNames = new Map<string, number>();
   const allAssets = new Map<string, Buffer>();
-  const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
 
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
@@ -70,7 +69,7 @@ exportRoute.get(':workspaceId/export', async (c) => {
     const filename = seenCount > 0 ? `${baseName}-${seenCount + 1}.md` : `${baseName}.md`;
 
     let content = pageToMarkdown(page.ydoc, page.properties, page.icon, title);
-    const extracted = await extractImages(content, uploadsDir);
+    const extracted = await extractImages(content, uploadsDir, workspaceId);
     content = extracted.markdown;
 
     for (const [assetName, assetBuffer] of extracted.assets) {

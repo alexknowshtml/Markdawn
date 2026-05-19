@@ -1,5 +1,4 @@
 import { randomBytes } from 'node:crypto';
-import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
@@ -7,6 +6,7 @@ import { marked } from 'marked';
 import * as Y from 'yjs';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
+import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 import {
@@ -502,10 +502,9 @@ pagesRoute.get(':id/export/markdown', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureWorkspaceMember(page.workspaceId, user.id);
 
-  const baseFilename = slugifyFilename(page.title || 'Untitled');
+  const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
   const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
-  const uploadsDir = path.resolve(__dirname, '..', '..', 'uploads');
-  const extracted = await extractImages(markdown, uploadsDir);
+  const extracted = await extractImages(markdown, uploadsDir, page.workspaceId ?? undefined);
 
   if (extracted.assets.size === 0) {
     c.header('Content-Type', 'text/markdown');
