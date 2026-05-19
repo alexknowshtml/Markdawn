@@ -13,79 +13,391 @@ export interface ConnectionDraft {
   linkContext?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Markdown export
+// ---------------------------------------------------------------------------
+
+interface DeltaSegment {
+  insert: string;
+  attributes?: Record<string, unknown>;
+}
+
+const MARK_ORDER = ['strong', 'emphasis', 'inlineCode', 'strike_through'] as const;
+
+const MARK_DELIMITERS: Record<string, [string, string]> = {
+  strong: ['**', '**'],
+  emphasis: ['*', '*'],
+  inlineCode: ['`', '`'],
+  strike_through: ['~~', '~~'],
+};
+
+/** Exported for testing. */
 export function yDocToMarkdown(update: Uint8Array): string {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, update);
   const fragment = doc.getXmlFragment('prosemirror');
-  return xmlElementToMarkdown(fragment);
+  return renderBlockChildren(fragment, 0);
 }
+
+// ---- Block rendering ----
+
+function renderBlockChildren(element: Y.XmlFragment | Y.XmlElement, depth: number): string {
+  let result = '';
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+
+    if (child instanceof Y.XmlText) {
+      // Block-level XmlText shouldn't happen in a valid prosemirror doc,
+      // but handle it gracefully as inline content.
+      result += renderDelta(child.toDelta() as DeltaSegment[]);
+    } else if (child instanceof Y.XmlElement) {
+      result += renderBlockElement(child, depth);
+    }
+  }
+
+  return result;
+}
+
+function renderBlockElement(element: Y.XmlElement, depth: number): string {
+  switch (element.nodeName) {
+    case 'paragraph':
+      return `${renderInlineContent(element)}\n\n`;
+
+    case 'heading': {
+      const level = Number.parseInt(element.getAttribute('level') || '1', 10);
+      return `${'#'.repeat(Math.min(Math.max(level, 1), 6))} ${renderInlineContent(element)}\n\n`;
+    }
+
+    case 'code_block': {
+      const lang = element.getAttribute('language') || '';
+      const code = element.get(0);
+      const codeText = code instanceof Y.XmlText ? code.toString() : '';
+      return `\`\`\`${lang}\n${codeText}\n\`\`\`\n\n`;
+    }
+
+    case 'blockquote': {
+      const inner = renderBlockChildren(element, depth + 1).replace(/\n\n$/, '');
+      if (!inner.trim()) return '\n';
+      const lines = inner.split('\n');
+      return `${lines.map((l) => (l ? `> ${l}` : '>')).join('\n')}\n\n`;
+    }
+
+    case 'bullet_list':
+      return renderList(element, depth, false);
+
+    case 'ordered_list':
+      return renderList(element, depth, true);
+
+    case 'hr':
+      return '---\n\n';
+
+    case 'table':
+      return renderTable(element);
+
+    case 'callout':
+      return renderCallout(element, depth);
+
+    default:
+      // Treat unknown block nodes as inline content
+      return `${renderInlineContent(element)}\n\n`;
+  }
+}
+
+// ---- List rendering ----
+
+function renderList(element: Y.XmlElement, depth: number, ordered: boolean): string {
+  const items: string[] = [];
+  let counter = Number(element.getAttribute('order') || '1');
+  const indent = '  '.repeat(depth);
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+    if (!(child instanceof Y.XmlElement) || child.nodeName !== 'list_item') continue;
+
+    const prefix = ordered ? `${counter}. ` : '- ';
+    const checked = child.getAttribute('checked');
+    const taskPrefix = checked != null ? (checked === 'true' ? '[x] ' : '[ ] ') : '';
+    const itemContent = renderListItemContent(child, depth + 1);
+
+    items.push(`${indent}${prefix}${taskPrefix}${itemContent.trimStart().trimEnd()}`);
+    counter++;
+  }
+
+  return `${items.join('\n')}\n`;
+}
+
+function renderListItemContent(element: Y.XmlElement, depth: number): string {
+  let result = '';
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+
+    if (child instanceof Y.XmlText) {
+      result += renderDelta(child.toDelta() as DeltaSegment[]);
+    } else if (child instanceof Y.XmlElement) {
+      switch (child.nodeName) {
+        case 'paragraph':
+          result += renderInlineContent(child);
+          break;
+        case 'bullet_list':
+        case 'ordered_list':
+          result += `\n${renderList(child, depth, child.nodeName === 'ordered_list')}`;
+          break;
+        default:
+          result += renderBlockElement(child, depth);
+      }
+    }
+  }
+
+  return result;
+}
+
+// ---- Table rendering ----
+
+function renderTable(element: Y.XmlElement): string {
+  const rows: string[][] = [];
+  const alignments: (string | null)[] = [];
+
+  for (let i = 0; i < element.length; i++) {
+    const row = element.get(i);
+    if (!(row instanceof Y.XmlElement)) continue;
+
+    const cells: string[] = [];
+    for (let j = 0; j < row.length; j++) {
+      const cell = row.get(j);
+      if (!(cell instanceof Y.XmlElement)) continue;
+
+      cells.push(renderInlineContent(cell));
+
+      if (row.nodeName === 'table_header_row' && j >= alignments.length) {
+        alignments.push(cell.getAttribute('alignment') || null);
+      }
+    }
+    rows.push(cells);
+  }
+
+  if (rows.length === 0) return '';
+
+  const numCols = Math.max(...rows.map((r) => r.length), alignments.length);
+  while (alignments.length < numCols) alignments.push(null);
+
+  const alignRow = alignments.map((a) => {
+    if (a === 'center') return ':---:';
+    if (a === 'right') return '---:';
+    if (a === 'left') return ':---';
+    return '---';
+  });
+
+  const lines = rows.map((row) => {
+    while (row.length < numCols) row.push('');
+    return `| ${row.join(' | ')} |`;
+  });
+
+  // Insert alignment row after first (header) row
+  lines.splice(1, 0, `| ${alignRow.join(' | ')} |`);
+
+  return `${lines.join('\n')}\n\n`;
+}
+
+// ---- Callout rendering ----
+
+function renderCallout(element: Y.XmlElement, depth: number): string {
+  const calloutType = (element.getAttribute('type') || 'note').toUpperCase();
+  const title = element.getAttribute('title') || '';
+  const titleSuffix = title ? ` ${title}` : '';
+  const inner = renderBlockChildren(element, depth + 1).replace(/\n\n$/, '');
+
+  if (!inner.trim()) return `> [!${calloutType}${titleSuffix}]\n\n`;
+
+  const prefixInner = inner
+    .split('\n')
+    .map((l) => `> ${l}`)
+    .join('\n');
+
+  return `> [!${calloutType}${titleSuffix}]\n${prefixInner}\n\n`;
+}
+
+// ---- Inline content rendering ----
+
+function renderInlineContent(element: Y.XmlFragment | Y.XmlElement): string {
+  let result = '';
+
+  for (let i = 0; i < element.length; i++) {
+    const child = element.get(i);
+
+    if (child instanceof Y.XmlText) {
+      result += renderDelta(child.toDelta() as DeltaSegment[]);
+    } else if (child instanceof Y.XmlElement) {
+      result += renderInlineElement(child);
+    }
+  }
+
+  return result;
+}
+
+function renderInlineElement(element: Y.XmlElement): string {
+  switch (element.nodeName) {
+    case 'image': {
+      const src = element.getAttribute('src') || '';
+      const alt = element.getAttribute('alt') || '';
+      const title = element.getAttribute('title') || '';
+      const titlePart = title ? ` "${title}"` : '';
+      return `![${alt}](${src}${titlePart})`;
+    }
+
+    case 'hardbreak':
+      return '\n';
+
+    case 'wikiLink': {
+      const path = element.getAttribute('path') || '';
+      const label = element.getAttribute('label') || '';
+      const heading = element.getAttribute('heading') || '';
+      // When imported via API, heading may be embedded in path (# suffix)
+      const resolvedHeading = heading || extractHeadingFromPath(path);
+      const resolvedPath =
+        resolvedHeading && heading === '' && !element.getAttribute('heading')
+          ? path.split('#')[0] || path
+          : path;
+      const target = resolvedHeading ? `${resolvedPath}#${resolvedHeading}` : resolvedPath;
+
+      if (label && label !== target) {
+        return `[[${target}|${label}]]`;
+      }
+      return `[[${target}]]`;
+    }
+
+    case 'tag': {
+      // Editor uses "name", API import uses "value" — check both
+      const name = element.getAttribute('name') || element.getAttribute('value') || '';
+      return name ? `#${name}` : '';
+    }
+
+    case 'math_inline': {
+      const value = element.getAttribute('value') || '';
+      return `$${value}$`;
+    }
+
+    case 'html': {
+      return element.getAttribute('value') || '';
+    }
+
+    case 'footnote_reference': {
+      const label = element.getAttribute('label') || '';
+      return `[^${label}]`;
+    }
+
+    default:
+      return renderInlineContent(element);
+  }
+}
+
+/**
+ * Extracts heading reference from a path string like "Page Name#Heading".
+ * Returns the heading part or empty string if no # separator is present.
+ */
+function extractHeadingFromPath(path: string): string {
+  const hashIndex = path.indexOf('#');
+  if (hashIndex === -1 || hashIndex === path.length - 1) return '';
+  return path.slice(hashIndex + 1);
+}
+
+// ---- Delta / mark processing ----
+
+function renderDelta(delta: DeltaSegment[]): string {
+  if (delta.length === 0) return '';
+
+  const hasLink = delta.some((seg) => seg.attributes && 'link' in seg.attributes);
+
+  if (!hasLink) {
+    return renderDeltaMarks(delta, new Set());
+  }
+
+  // Group consecutive segments by link href for [text](url) structure
+  return renderDeltaWithLinks(delta);
+}
+
+function renderDeltaWithLinks(delta: DeltaSegment[]): string {
+  const groups: { href: string | null; segments: DeltaSegment[] }[] = [];
+  let currentGroup: { href: string | null; segments: DeltaSegment[] } | null = null;
+
+  for (const seg of delta) {
+    const href = getLinkHref(seg);
+    if (!currentGroup || currentGroup.href !== href) {
+      currentGroup = { href, segments: [] };
+      groups.push(currentGroup);
+    }
+    currentGroup.segments.push(seg);
+  }
+
+  return groups
+    .map((group) => {
+      if (group.href) {
+        const inner = renderDeltaMarks(group.segments, new Set(['link']));
+        return `[${inner}](${group.href})`;
+      }
+      return renderDeltaMarks(group.segments, new Set(['link']));
+    })
+    .join('');
+}
+
+function getLinkHref(seg: DeltaSegment): string | null {
+  const linkAttr = seg.attributes?.link;
+  if (linkAttr && typeof linkAttr === 'object') {
+    const href = (linkAttr as Record<string, string>).href;
+    return href || null;
+  }
+  return null;
+}
+
+function renderDeltaMarks(segments: DeltaSegment[], excludeMarks: Set<string>): string {
+  let result = '';
+  const active: string[] = [];
+  const markOrder = MARK_ORDER as readonly string[];
+
+  for (const seg of segments) {
+    const segMarks = Object.keys(seg.attributes || {}).filter(
+      (m) => !excludeMarks.has(m) && MARK_DELIMITERS[m],
+    );
+
+    // Close marks that ended (reverse order for correct nesting)
+    for (let i = active.length - 1; i >= 0; i--) {
+      const mark = active[i] as string;
+      if (!segMarks.includes(mark)) {
+        const delim = MARK_DELIMITERS[mark];
+        if (delim) result += delim[1];
+        active.splice(i, 1);
+      }
+    }
+
+    // Open new marks (in canonical order)
+    const toOpen = segMarks.filter((m) => !active.includes(m));
+    toOpen.sort((a, b) => markOrder.indexOf(a) - markOrder.indexOf(b));
+    for (const mark of toOpen) {
+      result += MARK_DELIMITERS[mark]?.[0];
+      active.push(mark);
+    }
+
+    result += seg.insert;
+  }
+
+  // Close remaining marks (reverse order)
+  for (let i = active.length - 1; i >= 0; i--) {
+    result += MARK_DELIMITERS[active[i] as string]?.[1];
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Connection extraction (unchanged)
+// ---------------------------------------------------------------------------
 
 export function extractConnectionsFromYDoc(update: Uint8Array): ConnectionDraft[] {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, update);
   const fragment = doc.getXmlFragment('prosemirror');
   return extractConnectionsFromXml(fragment);
-}
-
-function xmlElementToMarkdown(element: Y.XmlFragment | Y.XmlElement): string {
-  let markdown = '';
-
-  for (let i = 0; i < element.length; i++) {
-    const item = element.get(i);
-
-    if (item instanceof Y.XmlText) {
-      markdown += item.toString();
-    } else if (item instanceof Y.XmlElement) {
-      const type = item.nodeName;
-
-      switch (type) {
-        case 'paragraph':
-          markdown += `${xmlElementToMarkdown(item)}\n\n`;
-          break;
-        case 'heading': {
-          const level = Number.parseInt(item.getAttribute('level') || '1', 10);
-          markdown += `${'#'.repeat(level)} ${xmlElementToMarkdown(item)}\n\n`;
-          break;
-        }
-        case 'bullet_list':
-          markdown += `${xmlElementToMarkdown(item)}\n`;
-          break;
-        case 'ordered_list':
-          markdown += `${xmlElementToMarkdown(item)}\n`;
-          break;
-        case 'list_item':
-          markdown += `- ${xmlElementToMarkdown(item).trim()}\n`;
-          break;
-        case 'wikiLink': {
-          const path = item.getAttribute('path') || '';
-          const label = item.getAttribute('label') || '';
-          const heading = item.getAttribute('heading') || '';
-          const target = heading ? `${path}#${heading}` : path;
-          if (path === label) {
-            markdown += `[[${target}]]`;
-          } else {
-            markdown += `[[${target}|${label}]]`;
-          }
-          break;
-        }
-        case 'tag': {
-          const name = item.getAttribute('name') || item.getAttribute('value') || '';
-          markdown += name ? `#${name}` : '';
-          break;
-        }
-        case 'inlineCode':
-          markdown += `\`${xmlElementToMarkdown(item)}\``;
-          break;
-        case 'code_block':
-          markdown += `\`\`\`${item.getAttribute('language') || ''}\n${xmlElementToMarkdown(item)}\n\`\`\`\n\n`;
-          break;
-        default:
-          markdown += xmlElementToMarkdown(item);
-      }
-    }
-  }
-
-  return markdown;
 }
 
 function extractConnectionsFromXml(element: Y.XmlFragment | Y.XmlElement): ConnectionDraft[] {
@@ -183,6 +495,10 @@ function xmlElementPlainText(element: Y.XmlFragment | Y.XmlElement): string {
 
   return text;
 }
+
+// ---------------------------------------------------------------------------
+// Misc utilities (unchanged)
+// ---------------------------------------------------------------------------
 
 export function normalizePageSlug(value: string): string {
   return value.trim().toLowerCase();
