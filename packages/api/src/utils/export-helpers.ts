@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
+import { pool } from '../db/connection';
 
 /**
  * Matches markdown image syntax: ![alt](src) with optional title.
@@ -94,11 +95,13 @@ export interface ExtractedImages {
 export async function extractImages(
   markdown: string,
   uploadsDir: string,
+  workspaceId?: string,
 ): Promise<ExtractedImages> {
   const { masked, blocks } = maskCodeBlocks(markdown);
 
   const assets = new Map<string, Buffer>();
   const urlToAssetName = new Map<string, string>();
+  const contentHashToAssetName = new Map<string, string>();
   let result = masked;
 
   const matches: ImageMatch[] = [];
@@ -117,6 +120,29 @@ export async function extractImages(
             ? '()'
             : '';
     matches.push({ full: match[0], alt: match[1] ?? '', src, title, titleDelim });
+  }
+
+  const serverFilenames = new Set<string>();
+  for (const { src } of matches) {
+    if (src.startsWith('/api/uploads/') || src.startsWith('/uploads/')) {
+      const filename = src.startsWith('/api/uploads/')
+        ? src.replace('/api/uploads/', '')
+        : src.replace('/uploads/', '');
+      if (isValidUploadFilename(filename)) {
+        serverFilenames.add(filename);
+      }
+    }
+  }
+
+  const authorizedFiles = new Set<string>();
+  if (workspaceId && serverFilenames.size > 0) {
+    const uploadResult = await pool.query(
+      'select filename from uploads where filename = any($1) and workspace_id = $2',
+      [Array.from(serverFilenames), workspaceId],
+    );
+    for (const row of uploadResult.rows as { filename: string }[]) {
+      authorizedFiles.add(row.filename);
+    }
   }
 
   for (const { full, alt, src, title, titleDelim } of matches) {
@@ -143,9 +169,13 @@ export async function extractImages(
       } catch {
         continue;
       }
-    } else if (src.startsWith('/api/uploads/')) {
-      const filename = src.replace('/api/uploads/', '');
+    } else if (src.startsWith('/api/uploads/') || src.startsWith('/uploads/')) {
+      const filename = src.startsWith('/api/uploads/')
+        ? src.replace('/api/uploads/', '')
+        : src.replace('/uploads/', '');
       if (!isValidUploadFilename(filename)) continue;
+
+      if (workspaceId && !authorizedFiles.has(filename)) continue;
 
       const filePath = path.join(uploadsDir, filename);
       try {
@@ -174,23 +204,24 @@ export async function extractImages(
       continue;
     }
 
-    let finalName = assetName;
-    let counter = 1;
-    for (const [name, existingBuffer] of assets) {
-      if (existingBuffer.equals(buffer)) {
-        finalName = name;
-        break;
+    const contentHash = createHash('sha256').update(buffer).digest('hex');
+    const hashToName = contentHashToAssetName.get(contentHash);
+    let finalName = hashToName ?? assetName;
+
+    if (hashToName) {
+      finalName = hashToName;
+    } else if (assets.has(finalName) && !assets.get(finalName)?.equals(buffer)) {
+      const ext = path.extname(assetName);
+      const base = path.basename(assetName, ext);
+      let counter = 1;
+      while (assets.has(finalName) && !assets.get(finalName)?.equals(buffer)) {
+        finalName = `${base}-${counter}${ext}`;
+        counter++;
       }
     }
 
-    while (assets.has(finalName) && !assets.get(finalName)?.equals(buffer)) {
-      const ext = path.extname(assetName);
-      const base = path.basename(assetName, ext);
-      finalName = `${base}-${counter}${ext}`;
-      counter++;
-    }
-
     assets.set(finalName, buffer);
+    contentHashToAssetName.set(contentHash, finalName);
     urlToAssetName.set(src, finalName);
     result = result.replaceAll(full, `![${alt}](./assets/${finalName}${titlePart})`);
   }
@@ -261,9 +292,17 @@ function yamlScalar(value: unknown): string {
       /[:#]/.test(value) ||
       /^[!&*?'"|>{%\[]/.test(value) ||
       value.includes("'") ||
-      value.includes('"');
+      value.includes('"') ||
+      value.includes('\n') ||
+      value.includes('\r') ||
+      value.includes('\t');
     if (needsQuotes) {
-      const escaped = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const escaped = value
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t');
       return `"${escaped}"`;
     }
     return value;
