@@ -5,6 +5,7 @@ import { pool } from '../db/connection';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
+import { slugifyFilename } from '../utils/filename';
 
 type PageExportRow = {
   id: string;
@@ -28,13 +29,6 @@ const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
     throw new HTTPException(403, { message: 'Forbidden' });
   }
 };
-
-const slugifyFilename = (value: string) =>
-  value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 
 exportRoute.get(':workspaceId/export', async (c) => {
   const workspaceId = c.req.param('workspaceId');

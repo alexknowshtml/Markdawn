@@ -9,6 +9,7 @@ import { pool } from '../db/connection';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
+import { slugifyFilename } from '../utils/filename';
 import {
   createEmptyYjsDoc,
   createYjsDocWithTitle,
@@ -527,13 +528,6 @@ pagesRoute.get(':id/export/markdown', async (c) => {
   c.header('Content-Disposition', `attachment; filename="${baseFilename}.zip"`);
   return c.newResponse(arrayBuffer, 200);
 });
-
-const slugifyFilename = (value: string) =>
-  value
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
 
 pagesRoute.post(':id/import/markdown', async (c) => {
   const pageId = c.req.param('id');
