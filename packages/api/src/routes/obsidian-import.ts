@@ -5,6 +5,7 @@ import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
+import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
   markdownToYjsState,
@@ -248,8 +249,7 @@ obsidianImportRoute.post('/', async (c) => {
   }
 
   const imagePathToUrl = new Map<string, string>();
-  const uploadDir = path.resolve('uploads');
-  await mkdir(uploadDir, { recursive: true });
+  await mkdir(uploadsDir, { recursive: true });
 
   for (const file of imageFiles) {
     try {
@@ -257,7 +257,7 @@ obsidianImportRoute.post('/', async (c) => {
 
       const ext = getExtension(file.path);
       const filename = `${randomUUID()}.${ext}`;
-      const filePath = path.join(uploadDir, filename);
+      const filePath = path.join(uploadsDir, filename);
       const buffer = Buffer.from(file.data, 'base64');
       await writeFile(filePath, buffer);
 

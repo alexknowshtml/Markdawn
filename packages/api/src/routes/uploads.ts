@@ -4,6 +4,7 @@ import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
+import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
@@ -64,11 +65,10 @@ uploadsRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'File must be 10MB or less' });
   }
 
-  const uploadDir = path.resolve('uploads');
-  await mkdir(uploadDir, { recursive: true });
+  await mkdir(uploadsDir, { recursive: true });
 
   const filename = `${randomUUID()}.${extension}`;
-  const filePath = path.join(uploadDir, filename);
+  const filePath = path.join(uploadsDir, filename);
   const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(filePath, buffer);
 
@@ -99,7 +99,7 @@ uploadsRoute.get('/:filename', async (c) => {
   // Check workspace membership
   await ensureWorkspaceMember(upload.workspace_id, user.id);
 
-  const filePath = path.resolve('uploads', filename);
+  const filePath = path.join(uploadsDir, filename);
 
   try {
     const fileBuffer = await readFile(filePath);
