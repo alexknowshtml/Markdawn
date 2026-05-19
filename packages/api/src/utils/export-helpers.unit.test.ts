@@ -2,14 +2,15 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { extractImages } from './export-helpers';
+import { extractImages, serializeFrontmatter } from './export-helpers';
 
 describe('export-helpers / extractImages', () => {
   let tmpDir: string;
 
   beforeAll(async () => {
     const dirPath = path.join(os.tmpdir(), 'extract-images-test');
-    tmpDir = (await mkdir(dirPath, { recursive: true })) as string;
+    await mkdir(dirPath, { recursive: true });
+    tmpDir = dirPath;
     const pngHeader = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     await writeFile(path.join(tmpDir, 'test-image.png'), pngHeader);
     await writeFile(path.join(tmpDir, 'photo.jpg'), Buffer.from([0xff, 0xd8, 0xff]));
@@ -166,5 +167,32 @@ describe('export-helpers / extractImages', () => {
     const result = await extractImages(md, tmpDir);
     expect(result.markdown).toBe('![test](./assets/test-image.png)');
     expect(result.assets.size).toBe(1);
+  });
+});
+
+describe('export-helpers / serializeFrontmatter', () => {
+  it('escapes newlines in string values', () => {
+    const result = serializeFrontmatter({ desc: 'line1\nline2' }, null);
+    expect(result).toContain('desc: "line1\\nline2"');
+  });
+
+  it('escapes tabs in string values', () => {
+    const result = serializeFrontmatter({ code: 'a\tb' }, null);
+    expect(result).toContain('code: "a\\tb"');
+  });
+
+  it('escapes carriage returns in string values', () => {
+    const result = serializeFrontmatter({ text: 'line1\r\nline2' }, null);
+    expect(result).toContain('text: "line1\\r\\nline2"');
+  });
+
+  it('quotes values starting with numbers', () => {
+    const result = serializeFrontmatter({ version: '1.0.0' }, null);
+    expect(result).toContain('version: "1.0.0"');
+  });
+
+  it('quotes boolean-like strings', () => {
+    const result = serializeFrontmatter({ flag: 'true' }, null);
+    expect(result).toContain('flag: "true"');
   });
 });
