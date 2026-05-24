@@ -14,7 +14,7 @@ export interface FloatingToolbarApi {
 
 function computePosition(): { top: number; left: number } {
   const selection = window.getSelection();
-  if (!selection || selection.isCollapsed || !selection.rangeCount) {
+  if (!selection || !selection.rangeCount) {
     return { top: 0, left: 0 };
   }
   const range = selection.getRangeAt(0);
@@ -43,7 +43,7 @@ export function useFloatingToolbar(): FloatingToolbarApi {
 
   const reposition = useCallback(() => {
     const selection = window.getSelection();
-    if (!selection || selection.isCollapsed || !selection.rangeCount) {
+    if (!selection || !selection.rangeCount) {
       return;
     }
     const container = document.querySelector('.milkdown-editor');
