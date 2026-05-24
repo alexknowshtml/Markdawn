@@ -135,15 +135,9 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
     if (unwrapPositions.has(item.pos)) {
       // Flush any accumulated kept items as a list before this unwrapped item
       flushList(listInfo.node.type);
-      if (item.pos === cursorItemPos) {
-        let pos = listInfo.start;
-        for (const n of replacement) {
-          pos += (n as Node).nodeSize;
-        }
-        const contentOffset = Math.max(0, cursorOldPos - item.pos - 1);
-        cursorNewPos = Math.min(pos + contentOffset, pos + item.node.nodeSize - 3);
-      }
-      // Emit the unwrapped item's children as blocks
+      // Emit the unwrapped item's children as blocks first, so cursorNewPos
+      // can use the actual replacement size rather than the old node's size.
+      const replaceStart = replacement.length;
       for (let j = 0; j < item.node.content.childCount; j++) {
         const child = item.node.content.child(j);
         if (child.isBlock) {
@@ -151,6 +145,21 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
         } else {
           replacement.push(paragraphType.create(null, child));
         }
+      }
+      if (item.pos === cursorItemPos) {
+        let pos = listInfo.start;
+        for (const n of replacement) {
+          pos += (n as Node).nodeSize;
+        }
+        const contentOffset = Math.max(0, cursorOldPos - item.pos - 1);
+        // Compute cap from the actual replacement nodes, not the old doc size
+        let replaceSize = 0;
+        for (let i = replaceStart; i < replacement.length; i++) {
+          replaceSize += (replacement[i] as Node).nodeSize;
+        }
+        cursorNewPos = Math.min(pos + contentOffset, pos) - 1;
+        // Bound below — at minimum land on the first replacement node
+        cursorNewPos = Math.max(cursorNewPos, pos - replaceSize);
       }
     } else {
       currentListItems.push(item);
