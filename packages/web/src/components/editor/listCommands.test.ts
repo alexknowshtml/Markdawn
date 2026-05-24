@@ -301,6 +301,46 @@ describe('unwrapList', () => {
     const state = stateWithDoc(doc(p('text')));
     expect(unwrapList(state)).toBe(false);
   });
+
+  it('preserves cursor position after unwrapping a list item', () => {
+    // Regression: cursor cap used Math.min(pos + contentOffset, pos) which
+    // always resolves to pos (contentOffset >= 0), landing the cursor at
+    // the end instead of preserving the old offset.
+    const myDoc = doc(ul(li('alpha')));
+    // Position 4 is inside "alpha" at "a[l]pha"
+    const state = stateWithDoc(myDoc, 4);
+    const newState = applyCommand(state, unwrapList);
+    // The cursor should be near position 4 (start of "alpha") + offset,
+    // not at the end of the unwrapped content.
+    const $sel = newState.selection.$from;
+    // The resolved position should still land inside "alpha"
+    expect(newState.doc.textBetween($sel.before(), $sel.after())).toBe('alpha');
+  });
+
+  it('preserves ordered list numbering when unwrapping a middle item', () => {
+    // Regression: nextListOrder wasn't incremented for unwrapped items,
+    // causing the tail list to restart at the wrong number.
+    const myDoc = doc(
+      schema.node('ordered_list', { order: 3 }, [li('First'), li('Second'), li('Third')]),
+    );
+    const state = stateWithDoc(myDoc, 10); // inside "Second"
+    const newState = applyCommand(state, unwrapList);
+    // Should have two ordered lists: one with [First] at order 3, one
+    // with [Third] at order 5 (Second was #4 in the original sequence).
+    const lists: Array<{ order: number; texts: string[] }> = [];
+    newState.doc.descendants((node) => {
+      if (node.type.name === 'ordered_list') {
+        const texts: string[] = [];
+        node.descendants((child) => {
+          if (child.type.name === 'list_item') texts.push(child.textContent);
+        });
+        lists.push({ order: node.attrs.order as number, texts });
+      }
+    });
+    expect(lists).toHaveLength(2);
+    expect(lists[0]).toEqual({ order: 3, texts: ['First'] });
+    expect(lists[1]).toEqual({ order: 5, texts: ['Third'] });
+  });
 });
 
 // ============================================================

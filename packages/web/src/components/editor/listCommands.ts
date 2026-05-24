@@ -146,20 +146,23 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
           replacement.push(paragraphType.create(null, child));
         }
       }
+      // Each unwrapped item consumed an order number in the original
+      // ordered sequence, so advance nextListOrder to keep tail numbering.
+      if (listInfo.node.type === schema.nodes.ordered_list) {
+        nextListOrder += 1;
+      }
       if (item.pos === cursorItemPos) {
         let pos = listInfo.start;
         for (const n of replacement) {
           pos += (n as Node).nodeSize;
         }
         const contentOffset = Math.max(0, cursorOldPos - item.pos - 1);
-        // Compute cap from the actual replacement nodes, not the old doc size
         let replaceSize = 0;
         for (let i = replaceStart; i < replacement.length; i++) {
           replaceSize += (replacement[i] as Node).nodeSize;
         }
-        cursorNewPos = Math.min(pos + contentOffset, pos) - 1;
-        // Bound below — at minimum land on the first replacement node
-        cursorNewPos = Math.max(cursorNewPos, pos - replaceSize);
+        const itemContentStart = pos - replaceSize;
+        cursorNewPos = Math.min(itemContentStart + contentOffset, pos - 1);
       }
     } else {
       currentListItems.push(item);
