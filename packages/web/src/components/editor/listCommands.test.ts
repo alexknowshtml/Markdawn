@@ -339,7 +339,7 @@ describe('unwrapList', () => {
     });
     expect(lists).toHaveLength(2);
     expect(lists[0]).toEqual({ order: 3, texts: ['First'] });
-    expect(lists[1]).toEqual({ order: 5, texts: ['Third'] });
+    expect(lists[1]).toEqual({ order: 4, texts: ['Third'] });
   });
 });
 

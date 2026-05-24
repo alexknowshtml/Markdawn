@@ -146,11 +146,6 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
           replacement.push(paragraphType.create(null, child));
         }
       }
-      // Each unwrapped item consumed an order number in the original
-      // ordered sequence, so advance nextListOrder to keep tail numbering.
-      if (listInfo.node.type === schema.nodes.ordered_list) {
-        nextListOrder += 1;
-      }
       if (item.pos === cursorItemPos) {
         let pos = listInfo.start;
         for (const n of replacement) {
