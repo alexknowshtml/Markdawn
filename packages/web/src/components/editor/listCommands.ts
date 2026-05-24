@@ -193,7 +193,8 @@ export function wrapBlocksInList(
 ): boolean {
   const schema = state.schema;
   const listItemType = schema.nodes.list_item;
-  if (!listItemType || !listType) return false;
+  const paragraphType = schema.nodes.paragraph;
+  if (!listItemType || !listType || !paragraphType) return false;
 
   const sel = state.selection;
   const { from: blockFrom, to: blockTo } = blockRange(sel.$from);
@@ -246,7 +247,14 @@ export function wrapBlocksInList(
   const listItems: unknown[] = [];
 
   for (const block of deduped) {
-    const itemContent = listItemType.create(listItemAttrs, block.node);
+    // Normalize: list_item content is "paragraph block*", so the first
+    // child must be a paragraph. Convert non-paragraph blocks (headings,
+    // code_blocks, etc.) to paragraphs to keep the schema valid.
+    const wrapContent =
+      block.node.type === paragraphType
+        ? block.node
+        : paragraphType.create(null, block.node.content);
+    const itemContent = listItemType.create(listItemAttrs, wrapContent);
     listItems.push(itemContent);
   }
 
@@ -314,7 +322,11 @@ export function switchListType(
   listItemAttrs?: Record<string, unknown>,
 ): boolean {
   const listInfo = findParentList(state);
-  if (!listInfo || listInfo.node.type === targetType) return false;
+  if (!listInfo) return false;
+  // When listItemAttrs is provided (e.g. toggling checked state on task
+  // lists), allow same-type processing — the wrapper stays the same but
+  // list-item attrs need updating.
+  if (listInfo.node.type === targetType && !listItemAttrs) return false;
 
   if (!dispatch) return true;
 

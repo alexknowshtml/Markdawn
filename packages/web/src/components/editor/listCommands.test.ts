@@ -435,6 +435,35 @@ describe('wrapBlocksInList', () => {
     expect(mergedOrder).toBe(3);
   });
 
+  it('normalises a heading to a paragraph when wrapping in a list item', () => {
+    // Regression: wrapping a heading directly in list_item violates the
+    // schema (list_item content is "paragraph block*"). The block should
+    // be converted to a paragraph while preserving inline content.
+    const myDoc = doc(h(2, 'Important heading'), p('body text'));
+    const state = EditorState.create({
+      schema,
+      doc: myDoc,
+      // Select the entire document
+      selection: TextSelection.create(myDoc, 1, myDoc.content.size),
+    });
+    const bulletList = schema.nodes.bullet_list;
+
+    const newState = applyCommand(state, (st, dispatch) =>
+      wrapBlocksInList(st, bulletList, dispatch),
+    );
+
+    // Should have 2 list items
+    expect(countNodes(newState, 'list_item')).toBe(2);
+    // The heading text should be preserved
+    expect(nodeTexts(newState, 'list_item')).toEqual(['Important heading', 'body text']);
+    // The list should not contain any heading nodes
+    let headingCount = 0;
+    newState.doc.descendants((node) => {
+      if (node.type.name === 'heading') headingCount++;
+    });
+    expect(headingCount).toBe(0);
+  });
+
   it('does not create duplicate list items when extracting blocks from inside a list item with multi-block range', () => {
     // The nodesBetween callback visits each block inside the list_item.
     // Without the fix it pushes every child of the parent list_item for
@@ -497,6 +526,31 @@ describe('switchListType', () => {
     const bulletList = schema.nodes.bullet_list;
 
     expect(switchListType(state, bulletList)).toBe(false);
+  });
+
+  it('updates list-item attrs when target type matches and attrs provided', () => {
+    // Regression: toolbar calls switchListType(bullet, dispatch, taskAttrs)
+    // to convert a regular bullet list to a task list. The early return
+    // on same-type blocked it even though list_item attrs need updating.
+    const myDoc = doc(ul(li('Item')));
+    const state = stateWithDoc(myDoc, 3);
+    const bulletList = schema.nodes.bullet_list;
+    const taskAttrs = { checked: false };
+
+    const newState = applyCommand(state, (st, dispatch) =>
+      switchListType(st, bulletList, dispatch, taskAttrs),
+    );
+
+    // Wrapper should still be a bullet list
+    expect(countNodes(newState, 'bullet_list')).toBe(1);
+    // List items should have checked = false (task list)
+    let hasChecked = false;
+    newState.doc.descendants((node) => {
+      if (node.type.name === 'list_item' && node.attrs.checked === false) {
+        hasChecked = true;
+      }
+    });
+    expect(hasChecked).toBe(true);
   });
 
   it('clears checked attrs when switching task list to ordered list', () => {
