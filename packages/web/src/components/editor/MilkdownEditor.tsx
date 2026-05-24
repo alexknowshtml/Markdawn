@@ -679,7 +679,7 @@ export function MilkdownEditor({
       }
 
       const targetLevel = attrs?.level as number | undefined;
-      if (currentLevel === targetLevel) {
+      if (Number(currentLevel) === Number(targetLevel)) {
         const command = setBlockType(paraType as never);
         command(state, dispatch);
       } else {
