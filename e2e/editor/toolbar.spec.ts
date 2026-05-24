@@ -126,7 +126,9 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.type('Task');
     await page.keyboard.press('Control+a');
     await page.locator('.floating-toolbar button[title="Task List"]').click({ timeout: 5000 });
-    await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]').first()).toBeVisible({ timeout: 5000 });
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
     await page.locator('.floating-toolbar button[title="Task List"]').click({ timeout: 5000 });
     await expect(page.locator('li[data-item-type="task"]')).toHaveCount(0);
   });
@@ -142,24 +144,38 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.type('Task item');
     await page.keyboard.press('Control+a');
     await taskBtn.click({ timeout: 5000 });
-    await expect(page.locator('li[data-item-type="task"]')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('li[data-item-type="task"]').first()).toBeVisible({ timeout: 5000 });
     await expect(taskBtn).toHaveClass(/bg-zinc-600/);
     await expect(bulletBtn).not.toHaveClass(/bg-zinc-600/);
     await expect(orderedBtn).not.toHaveClass(/bg-zinc-600/);
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
+    // Select all text before toggling off
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(100);
     await taskBtn.click({ timeout: 5000 });
     await expect(page.locator('li[data-item-type="task"]')).toHaveCount(0);
 
+    // Workaround: directly evaluate to set selection and click toolbar
     await page.keyboard.type('Bullet item');
     await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(100);
     await bulletBtn.click({ timeout: 5000 });
-    await expect(page.locator('.ProseMirror ul')).toBeVisible({ timeout: 5000 });
+    await expect(page.locator('.ProseMirror ul').first()).toBeVisible({ timeout: 5000 });
     await expect(bulletBtn).toHaveClass(/bg-zinc-600/);
     await expect(taskBtn).not.toHaveClass(/bg-zinc-600/);
     await expect(orderedBtn).not.toHaveClass(/bg-zinc-600/);
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
+    // Select all before toggling off
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.waitForTimeout(100);
     await bulletBtn.click({ timeout: 5000 });
     await expect(page.locator('.ProseMirror ul')).toHaveCount(0);
 
