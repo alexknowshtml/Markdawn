@@ -377,10 +377,7 @@ describe('wrapBlocksInList', () => {
   it('preserves order attribute from adjacent ordered list when merging', () => {
     // Regression: listType.create(undefined, ...) discards attrs like
     // order, causing the merged list to restart at 1.
-    const myDoc = doc(
-      schema.node('ordered_list', { order: 3 }, [li('Existing')]),
-      p('New item'),
-    );
+    const myDoc = doc(schema.node('ordered_list', { order: 3 }, [li('Existing')]), p('New item'));
     const paraStart = myDoc.content.child(0).nodeSize;
     const state = stateWithDoc(myDoc, paraStart + 2); // cursor in "New item"
     const orderedList = schema.nodes.ordered_list;
@@ -403,10 +400,7 @@ describe('wrapBlocksInList', () => {
     // Without the fix it pushes every child of the parent list_item for
     // EACH visit, producing duplicates.
     const multiBlockItem = schema.node('list_item', null, [p('Alpha'), p('Beta')]);
-    const myDoc = doc(
-      schema.node('bullet_list', null, [multiBlockItem]),
-      p('Gamma'),
-    );
+    const myDoc = doc(schema.node('bullet_list', null, [multiBlockItem]), p('Gamma'));
     const state = EditorState.create({
       schema,
       doc: myDoc,
