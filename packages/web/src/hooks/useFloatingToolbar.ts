@@ -5,7 +5,27 @@ export interface ToolbarState {
   position: { top: number; left: number };
 }
 
-export function useFloatingToolbar() {
+export interface FloatingToolbarApi {
+  visible: boolean;
+  position: { top: number; left: number };
+  keepVisible: () => void;
+  reposition: () => void;
+}
+
+function computePosition(): { top: number; left: number } {
+  const selection = window.getSelection();
+  if (!selection || !selection.rangeCount) {
+    return { top: 0, left: 0 };
+  }
+  const range = selection.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  return {
+    top: rect.top - 50,
+    left: rect.left + rect.width / 2 + 20,
+  };
+}
+
+export function useFloatingToolbar(): FloatingToolbarApi {
   const [toolbarState, setToolbarState] = useState<ToolbarState>({
     visible: false,
     position: { top: 0, left: 0 },
@@ -19,6 +39,21 @@ export function useFloatingToolbar() {
     setTimeout(() => {
       keepVisibleRef.current = false;
     }, 300);
+  }, []);
+
+  const reposition = useCallback(() => {
+    const selection = window.getSelection();
+    if (!selection || !selection.rangeCount) {
+      return;
+    }
+    const container = document.querySelector('.milkdown-editor');
+    if (!container || !container.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      return;
+    }
+    setToolbarState({
+      visible: true,
+      position: computePosition(),
+    });
   }, []);
 
   useEffect(() => {
@@ -42,14 +77,9 @@ export function useFloatingToolbar() {
           return;
         }
 
-        const rect = range.getBoundingClientRect();
-
         setToolbarState({
           visible: true,
-          position: {
-            top: rect.top - 50,
-            left: rect.left + rect.width / 2 + 20,
-          },
+          position: computePosition(),
         });
       }, 100);
     };
@@ -62,5 +92,5 @@ export function useFloatingToolbar() {
     };
   }, []);
 
-  return { ...toolbarState, keepVisible };
+  return { ...toolbarState, keepVisible, reposition };
 }

@@ -35,8 +35,7 @@ import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
 import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
 import type { MarkType, NodeType } from 'prosemirror-model';
-import type { EditorState, Transaction } from 'prosemirror-state';
-import { TextSelection } from 'prosemirror-state';
+import type { EditorState } from 'prosemirror-state';
 import {
   addColumnAfter,
   addColumnBefore,
@@ -51,90 +50,7 @@ import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
 import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
-
-function hasTaskListAncestor(state: EditorState): boolean {
-  const listItemType = state.schema.nodes.list_item;
-  if (!listItemType) return false;
-  const { $from } = state.selection;
-  for (let d = $from.depth; d > 0; d--) {
-    const node = $from.node(d);
-    if (node.type === listItemType && node.attrs.checked != null) return true;
-  }
-  // Handle AllSelection / depth-0: search the full selection range
-  if ($from.depth === 0) {
-    const { from, to } = state.selection;
-    let found = false;
-    state.doc.nodesBetween(from, to, (node) => {
-      if (node.type === listItemType && node.attrs.checked != null) {
-        found = true;
-        return false;
-      }
-      return;
-    });
-    return found;
-  }
-  return false;
-}
-
-function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => void): boolean {
-  const { $from } = state.selection;
-  const schema = state.schema;
-
-  let listStart = -1;
-  let listEnd = -1;
-  let listNode: import('prosemirror-model').Node | null = null;
-
-  // First try: traverse ancestors from cursor position
-  for (let d = $from.depth; d > 0; d--) {
-    const node = $from.node(d);
-    if (node.type === schema.nodes.bullet_list || node.type === schema.nodes.ordered_list) {
-      listStart = $from.before(d);
-      listEnd = $from.after(d);
-      listNode = node;
-      break;
-    }
-  }
-
-  // Fallback for AllSelection / depth-0: find the list among direct doc children
-  if (!listNode && $from.depth === 0) {
-    let pos = 0;
-    for (let i = 0; i < state.doc.content.childCount; i++) {
-      const child = state.doc.content.child(i);
-      if (child.type === schema.nodes.bullet_list || child.type === schema.nodes.ordered_list) {
-        listStart = pos;
-        listEnd = pos + child.nodeSize;
-        listNode = child;
-        break;
-      }
-      pos += child.nodeSize;
-    }
-  }
-
-  if (!listNode) return false;
-
-  const listItemType = schema.nodes.list_item;
-  const content: unknown[] = [];
-  for (let i = 0; i < listNode.content.childCount; i++) {
-    const child = listNode.content.child(i);
-    if (child.type === listItemType) {
-      for (let j = 0; j < child.content.childCount; j++) {
-        content.push(child.content.child(j));
-      }
-    }
-  }
-
-  if (content.length === 0) return false;
-  if (dispatch) {
-    const tr = state.tr.replaceWith(listStart, listEnd, content as never);
-    // Collapse selection to cursor at end of unwrapped content,
-    // combined with view.focus() in the caller this ensures
-    // ProseMirror's updateSelection() fires and the cursor lands correctly.
-    const afterSize = tr.doc.content.size;
-    tr.setSelection(TextSelection.near(tr.doc.resolve(Math.max(1, afterSize - 1))));
-    dispatch(tr.scrollIntoView());
-  }
-  return true;
-}
+import { hasTaskListAncestor, switchListType, unwrapList, wrapBlocksInList } from './listCommands';
 
 interface MilkdownEditorProps {
   pageId: string;
@@ -384,7 +300,7 @@ export function MilkdownEditor({
     };
   }, [provider, doc]);
 
-  const { visible, position, keepVisible } = useFloatingToolbar();
+  const { visible, position, keepVisible, reposition } = useFloatingToolbar();
 
   const runMarkCommand = (markName: string, attrs?: Record<string, unknown>) => {
     if (!editor) return;
@@ -419,23 +335,25 @@ export function MilkdownEditor({
       if (!nodeType || !paraType) return;
 
       const { $from } = state.selection;
-      const pos = $from.pos;
 
       let currentLevel: number | null = null;
-      state.doc.nodesBetween(pos, pos + 1, (node) => {
-        if (node.type === nodeType && node.attrs.level) {
+      for (let d = $from.depth; d > 0; d--) {
+        const node = $from.node(d);
+        if (node.type === nodeType && 'level' in node.attrs) {
           currentLevel = node.attrs.level;
+          break;
         }
-      });
+      }
 
       const targetLevel = attrs?.level as number | undefined;
-      if (currentLevel === targetLevel) {
+      if (Number(currentLevel) === Number(targetLevel)) {
         const command = setBlockType(paraType as never);
         command(state, dispatch);
       } else {
         const command = setBlockType(nodeType as never, attrs);
         command(state, dispatch);
       }
+      setTimeout(reposition, 0);
     });
   };
 
@@ -666,17 +584,20 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const bulletListType = state.schema.nodes.bullet_list;
-      const listItemType = state.schema.nodes.list_item;
-      if (!bulletListType || !listItemType || !dispatch) return;
+      const orderedListType = state.schema.nodes.ordered_list;
+      if (!bulletListType || !dispatch) return;
 
-      if (hasParentBlockType(state, bulletListType) && !hasTaskListAncestor(state)) {
+      if (hasTaskListAncestor(state)) {
+        // Convert checklist to regular bullet list (clear checked attr)
+        switchListType(state, bulletListType, dispatch, {});
+      } else if (hasParentBlockType(state, bulletListType)) {
         unwrapList(state, dispatch);
+      } else if (hasParentBlockType(state, orderedListType)) {
+        switchListType(state, bulletListType, dispatch);
       } else {
-        wrapIn(bulletListType as never)(state, dispatch);
+        wrapBlocksInList(state, bulletListType, dispatch);
       }
     });
-    // Refocus after React state from keepVisible() settles so the
-    // toolbar DOM isn't torn down during a concurrent test click.
     setTimeout(() => {
       editor?.action((ctx) => {
         const v = ctx.get(editorViewCtx);
@@ -684,6 +605,7 @@ export function MilkdownEditor({
       });
     }, 0);
     setTimeout(updateActiveStates, 0);
+    setTimeout(reposition, 0);
   };
   const handleOrderedList = () => {
     if (!editor) return;
@@ -693,13 +615,38 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const orderedListType = state.schema.nodes.ordered_list;
-      const listItemType = state.schema.nodes.list_item;
-      if (!orderedListType || !listItemType || !dispatch) return;
+      const bulletListType = state.schema.nodes.bullet_list;
+      if (!orderedListType || !dispatch) return;
 
       if (hasParentBlockType(state, orderedListType)) {
-        unwrapList(state, dispatch);
+        // Check if the selection also contains top-level blocks outside
+        // any list. If so, rebuild all content into one list.
+        const { from, to } = state.selection;
+        const listItemType = state.schema.nodes.list_item;
+        let hasNonList = false;
+        if (from !== to) {
+          state.doc.nodesBetween(from, to, (node, pos) => {
+            if (!node.isBlock || node.type.name === 'doc') return;
+            const $pos = state.doc.resolve(pos);
+            // Only count nodes directly inside the document (depth 1)
+            // as "non-list" — content inside list items shouldn't count.
+            if ($pos.depth <= 1 && node.type !== listItemType && node.type !== orderedListType) {
+              hasNonList = true;
+            }
+          });
+        }
+        if (!hasNonList) {
+          unwrapList(state, dispatch);
+        } else {
+          wrapBlocksInList(state, orderedListType, dispatch);
+        }
+      } else if (hasTaskListAncestor(state)) {
+        // Convert checklist to numbered list
+        switchListType(state, orderedListType, dispatch, {});
+      } else if (hasParentBlockType(state, bulletListType) && !hasTaskListAncestor(state)) {
+        switchListType(state, orderedListType, dispatch);
       } else {
-        wrapIn(orderedListType as never)(state, dispatch);
+        wrapBlocksInList(state, orderedListType, dispatch);
       }
     });
     setTimeout(() => {
@@ -709,6 +656,7 @@ export function MilkdownEditor({
       });
     }, 0);
     setTimeout(updateActiveStates, 0);
+    setTimeout(reposition, 0);
   };
   const handleTaskList = () => {
     if (!editor) return;
@@ -721,23 +669,16 @@ export function MilkdownEditor({
       const listItemType = state.schema.nodes.list_item;
       if (!bulletListType || !listItemType || !dispatch) return;
 
+      const taskAttrs = { checked: false };
       if (hasTaskListAncestor(state)) {
         unwrapList(state, dispatch);
+      } else if (
+        hasParentBlockType(state, bulletListType) ||
+        hasParentBlockType(state, state.schema.nodes.ordered_list)
+      ) {
+        switchListType(state, bulletListType, dispatch, taskAttrs);
       } else {
-        const command = wrapIn(bulletListType as never);
-        command(state, dispatch);
-
-        const newState = view.state;
-        const tr = newState.tr;
-        const { from, to } = newState.selection;
-        newState.doc.nodesBetween(from, to, (node, pos) => {
-          if (node.type === listItemType && node.attrs.checked == null) {
-            tr.setNodeMarkup(pos, undefined, { ...node.attrs, checked: false });
-          }
-        });
-        if (tr.docChanged) {
-          dispatch(tr);
-        }
+        wrapBlocksInList(state, bulletListType, dispatch, taskAttrs);
       }
     });
     setTimeout(() => {
@@ -747,8 +688,8 @@ export function MilkdownEditor({
       });
     }, 0);
     setTimeout(updateActiveStates, 0);
+    setTimeout(reposition, 0);
   };
-
   const handleInsertTable = () => {
     if (!editor) return;
     keepVisible();
