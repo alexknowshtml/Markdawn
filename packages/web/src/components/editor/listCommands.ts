@@ -205,13 +205,10 @@ export function wrapBlocksInList(
         if (parent.type !== listItemType && parent.type !== listType) {
           selectedBlocks.push({ node, pos });
         } else if (parent.type === listItemType) {
-          // Inside an existing list item — pull the content out
-          for (let j = 0; j < parent.content.childCount; j++) {
-            const child = parent.content.child(j);
-            if (child.isBlock) {
-              selectedBlocks.push({ node: child, pos: pos + j });
-            }
-          }
+          // Inside an existing list item — use the node's actual position
+          // from nodesBetween, not an array index, so dedup and cursor
+          // calculations remain correct.
+          selectedBlocks.push({ node, pos });
         }
       }
     }
@@ -247,11 +244,14 @@ export function wrapBlocksInList(
   const allItems: unknown[] = [];
   let effectiveFrom = rangeFrom;
   let effectiveTo = rangeTo;
+  // Preserve attrs (e.g. order) from the adjacent list when merging
+  let adjacentAttrs: Record<string, unknown> | undefined;
 
   if (rangeFrom > 0) {
     const nodeBefore = state.doc.resolve(rangeFrom).nodeBefore;
     if (nodeBefore && nodeBefore.type === listType) {
       effectiveFrom = rangeFrom - nodeBefore.nodeSize;
+      adjacentAttrs = { ...nodeBefore.attrs };
       for (let i = 0; i < nodeBefore.content.childCount; i++) {
         allItems.push(nodeBefore.content.child(i));
       }
@@ -262,13 +262,14 @@ export function wrapBlocksInList(
     const nodeAfter = state.doc.resolve(rangeTo).nodeAfter;
     if (nodeAfter && nodeAfter.type === listType) {
       effectiveTo = rangeTo + nodeAfter.nodeSize;
+      adjacentAttrs ??= { ...nodeAfter.attrs };
       for (let i = 0; i < nodeAfter.content.childCount; i++) {
         allItems.push(nodeAfter.content.child(i));
       }
     }
   }
 
-  const list = listType.create(undefined, allItems as never);
+  const list = listType.create(adjacentAttrs ?? undefined, allItems as never);
 
   tr.replaceWith(effectiveFrom, effectiveTo, list);
 

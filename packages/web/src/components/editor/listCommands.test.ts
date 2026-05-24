@@ -352,6 +352,77 @@ describe('wrapBlocksInList', () => {
     expect(newState).not.toBeNull();
     expect(countNodes(newState, 'list_item')).toBe(1);
   });
+
+  it('extracts blocks from inside existing list items without duplication', () => {
+    // Regression: inner-loop position arithmetic (pos + j, where j is an
+    // array index) produced wrong positions and duplicated sibling blocks.
+    const multiBlockItem = schema.node('list_item', null, [p('Alpha'), p('Beta')]);
+    const myDoc = doc(schema.node('bullet_list', null, [multiBlockItem]), p('Gamma'));
+    const state = EditorState.create({
+      schema,
+      doc: myDoc,
+      selection: TextSelection.create(myDoc, 1, myDoc.content.size),
+    });
+    const bulletList = schema.nodes.bullet_list;
+
+    const newState = applyCommand(state, (st, dispatch) =>
+      wrapBlocksInList(st, bulletList, dispatch),
+    );
+
+    // All three blocks should become individual list items
+    expect(countNodes(newState, 'list_item')).toBe(3);
+    expect(nodeTexts(newState, 'list_item')).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
+
+  it('preserves order attribute from adjacent ordered list when merging', () => {
+    // Regression: listType.create(undefined, ...) discards attrs like
+    // order, causing the merged list to restart at 1.
+    const myDoc = doc(
+      schema.node('ordered_list', { order: 3 }, [li('Existing')]),
+      p('New item'),
+    );
+    const paraStart = myDoc.content.child(0).nodeSize;
+    const state = stateWithDoc(myDoc, paraStart + 2); // cursor in "New item"
+    const orderedList = schema.nodes.ordered_list;
+
+    const newState = applyCommand(state, (st, dispatch) =>
+      wrapBlocksInList(st, orderedList, dispatch),
+    );
+
+    let mergedOrder: number | undefined;
+    newState.doc.descendants((node) => {
+      if (node.type.name === 'ordered_list') {
+        mergedOrder = node.attrs.order as number;
+      }
+    });
+    expect(mergedOrder).toBe(3);
+  });
+
+  it('does not create duplicate list items when extracting blocks from inside a list item with multi-block range', () => {
+    // The nodesBetween callback visits each block inside the list_item.
+    // Without the fix it pushes every child of the parent list_item for
+    // EACH visit, producing duplicates.
+    const multiBlockItem = schema.node('list_item', null, [p('Alpha'), p('Beta')]);
+    const myDoc = doc(
+      schema.node('bullet_list', null, [multiBlockItem]),
+      p('Gamma'),
+    );
+    const state = EditorState.create({
+      schema,
+      doc: myDoc,
+      // Range spanning the entire doc
+      selection: TextSelection.create(myDoc, 1, myDoc.content.size),
+    });
+    const bulletList = schema.nodes.bullet_list;
+
+    const newState = applyCommand(state, (st, dispatch) =>
+      wrapBlocksInList(st, bulletList, dispatch),
+    );
+
+    // Should have exactly 3 list items (Alpha, Beta, Gamma), no duplicates
+    expect(countNodes(newState, 'list_item')).toBe(3);
+    expect(nodeTexts(newState, 'list_item')).toEqual(['Alpha', 'Beta', 'Gamma']);
+  });
 });
 
 // ============================================================
