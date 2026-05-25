@@ -116,10 +116,9 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-close; inner div has role="dialog"
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Command palette"
+      role="presentation"
       className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/60 backdrop-blur-sm px-4 py-20 animate-fade-in"
       onClick={closeDialog}
       onKeyDown={(e) => {

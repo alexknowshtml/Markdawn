@@ -164,10 +164,9 @@ export function SearchDialog() {
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-close; inner div has role="dialog"
     <div
-      role="dialog"
-      aria-modal="true"
-      aria-label="Search"
+      role="presentation"
       className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/50 backdrop-blur-sm px-4 py-20 animate-fade-in"
       onClick={closeDialog}
       onKeyDown={(e) => {

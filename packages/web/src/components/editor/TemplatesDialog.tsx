@@ -67,10 +67,9 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
       </button>
 
       {isOpen && (
+        // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-close; inner div has role="dialog"
         <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Templates"
+          role="presentation"
           className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/40 backdrop-blur-sm px-4 animate-fade-in"
           onClick={() => setIsOpen(false)}
           onKeyDown={(e) => {
