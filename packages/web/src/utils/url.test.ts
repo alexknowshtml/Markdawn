@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ensureAbsoluteUrl } from './url';
+import { ensureAbsoluteUrl, extractUuidFromSlug } from './url';
 
 describe('ensureAbsoluteUrl', () => {
   // Bare domains
@@ -94,5 +94,33 @@ describe('ensureAbsoluteUrl', () => {
 
   it('trims whitespace before checking', () => {
     expect(ensureAbsoluteUrl('  samvaad.live  ')).toBe('https://samvaad.live');
+  });
+});
+
+describe('extractUuidFromSlug', () => {
+  const uuid = '550e8400-e29b-41d4-a716-446655440000';
+
+  it('extracts uuid from slug-title-uuid format', () => {
+    expect(extractUuidFromSlug(`my-page-title-${uuid}`)).toBe(uuid);
+  });
+
+  it('extracts uuid from bare uuid', () => {
+    expect(extractUuidFromSlug(uuid)).toBe(uuid);
+  });
+
+  it('extracts uuid when slug has multiple hyphens', () => {
+    expect(extractUuidFromSlug(`a-page-with-many-hyphens-${uuid}`)).toBe(uuid);
+  });
+
+  it('returns undefined when no uuid present', () => {
+    expect(extractUuidFromSlug('just-a-regular-slug')).toBeUndefined();
+  });
+
+  it('returns undefined for empty string', () => {
+    expect(extractUuidFromSlug('')).toBeUndefined();
+  });
+
+  it('returns undefined for malformed uuid', () => {
+    expect(extractUuidFromSlug('page-550e8400-invalid')).toBeUndefined();
   });
 });
