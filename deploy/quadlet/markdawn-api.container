@@ -12,7 +12,7 @@ Environment=PORT=3001
 EnvironmentFile=/var/www/markdawn/.env
 WorkingDir=/app
 Exec=node /app/packages/api/dist/index.mjs
-Volume=markdawn-data.volume:/app/packages/api/uploads:Z
+Volume=markdawn-data:/app/packages/api/uploads:Z
 
 
 [Service]
