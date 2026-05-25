@@ -50,7 +50,7 @@ import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
 import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
-import { hasTaskListAncestor, switchListType, unwrapList, wrapBlocksInList } from './listCommands';
+import { getClosestListType, switchListType, unwrapList, wrapBlocksInList } from './listCommands';
 
 interface MilkdownEditorProps {
   pageId: string;
@@ -183,7 +183,7 @@ export function MilkdownEditor({
         const marks = schema.marks;
         const nodes = schema.nodes;
 
-        const isTaskListItem = hasTaskListAncestor(state);
+        const closestListDisplayType = getClosestListType(state);
 
         setActiveStates({
           isBoldActive: hasMark(state, marks.strong),
@@ -198,9 +198,9 @@ export function MilkdownEditor({
           isH4Active: hasBlockType(state, nodes.heading, { level: 4 }),
           isH5Active: hasBlockType(state, nodes.heading, { level: 5 }),
           isH6Active: hasBlockType(state, nodes.heading, { level: 6 }),
-          isBulletListActive: hasParentBlockType(state, nodes.bullet_list) && !isTaskListItem,
-          isOrderedListActive: hasParentBlockType(state, nodes.ordered_list),
-          isTaskListActive: isTaskListItem,
+          isBulletListActive: closestListDisplayType === 'bullet',
+          isOrderedListActive: closestListDisplayType === 'ordered',
+          isTaskListActive: closestListDisplayType === 'task',
           isInTableActive: isInTable(state),
         });
       });
@@ -584,15 +584,17 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const bulletListType = state.schema.nodes.bullet_list;
-      const orderedListType = state.schema.nodes.ordered_list;
       if (!bulletListType || !dispatch) return;
 
-      if (hasTaskListAncestor(state)) {
-        // Convert checklist to regular bullet list (clear checked attr)
+      // Base decisions on the closest (innermost) list, not any ancestor.
+      // This ensures ordered lists nested inside bullets convert correctly
+      // instead of accidentally unwrapping the inner list.
+      const closestType = getClosestListType(state);
+      if (closestType === 'task') {
         switchListType(state, bulletListType, dispatch, {});
-      } else if (hasParentBlockType(state, bulletListType)) {
+      } else if (closestType === 'bullet') {
         unwrapList(state, dispatch);
-      } else if (hasParentBlockType(state, orderedListType)) {
+      } else if (closestType === 'ordered') {
         switchListType(state, bulletListType, dispatch);
       } else {
         wrapBlocksInList(state, bulletListType, dispatch);
@@ -615,10 +617,10 @@ export function MilkdownEditor({
       if (!view) return;
       const { state, dispatch } = view;
       const orderedListType = state.schema.nodes.ordered_list;
-      const bulletListType = state.schema.nodes.bullet_list;
       if (!orderedListType || !dispatch) return;
 
-      if (hasParentBlockType(state, orderedListType)) {
+      const closestType = getClosestListType(state);
+      if (closestType === 'ordered') {
         // Check if the selection also contains top-level blocks outside
         // any list. If so, rebuild all content into one list.
         const { from, to } = state.selection;
@@ -628,8 +630,6 @@ export function MilkdownEditor({
           state.doc.nodesBetween(from, to, (node, pos) => {
             if (!node.isBlock || node.type.name === 'doc') return;
             const $pos = state.doc.resolve(pos);
-            // Only count nodes directly inside the document (depth 1)
-            // as "non-list" — content inside list items shouldn't count.
             if ($pos.depth <= 1 && node.type !== listItemType && node.type !== orderedListType) {
               hasNonList = true;
             }
@@ -640,10 +640,9 @@ export function MilkdownEditor({
         } else {
           wrapBlocksInList(state, orderedListType, dispatch);
         }
-      } else if (hasTaskListAncestor(state)) {
-        // Convert checklist to numbered list
+      } else if (closestType === 'task') {
         switchListType(state, orderedListType, dispatch, {});
-      } else if (hasParentBlockType(state, bulletListType) && !hasTaskListAncestor(state)) {
+      } else if (closestType === 'bullet') {
         switchListType(state, orderedListType, dispatch);
       } else {
         wrapBlocksInList(state, orderedListType, dispatch);
@@ -670,12 +669,10 @@ export function MilkdownEditor({
       if (!bulletListType || !listItemType || !dispatch) return;
 
       const taskAttrs = { checked: false };
-      if (hasTaskListAncestor(state)) {
+      const closestType = getClosestListType(state);
+      if (closestType === 'task') {
         unwrapList(state, dispatch);
-      } else if (
-        hasParentBlockType(state, bulletListType) ||
-        hasParentBlockType(state, state.schema.nodes.ordered_list)
-      ) {
+      } else if (closestType === 'bullet' || closestType === 'ordered') {
         switchListType(state, bulletListType, dispatch, taskAttrs);
       } else {
         wrapBlocksInList(state, bulletListType, dispatch, taskAttrs);
