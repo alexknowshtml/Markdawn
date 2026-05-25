@@ -78,7 +78,17 @@ export function KeyboardShortcutProvider({
       keyboardRegistry.dispatch(event, isEditableFocused());
     };
 
-    const knownBrowserShortcuts = new Set<string>(['mod+shift+8']);
+    // Zen browser emits the shifted character (event.key = '*') instead of the
+    // raw digit ('8') when Shift is held. Register both forms for each shortcut
+    // so the capture handler intercepts them regardless of browser behavior.
+    const knownBrowserShortcuts = new Set<string>([
+      'mod+shift+8',
+      'mod+shift+*',
+      'mod+shift+7',
+      'mod+shift+&',
+      'mod+shift+[',
+      'mod+shift+{',
+    ]);
 
     document.addEventListener('keydown', handler);
     window.addEventListener('keydown', captureHandler, { capture: true });
