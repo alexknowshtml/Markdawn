@@ -27,6 +27,7 @@ pnpm --filter @markdawn/collab build
 
 echo -e "${YELLOW}[STEP 4/6] Updating Podman Quadlet units...${NC}"
 podman volume create postgres-data 2>/dev/null || true
+podman volume create markdawn-data 2>/dev/null || true
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/

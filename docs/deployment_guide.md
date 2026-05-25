@@ -113,7 +113,7 @@ sudo systemctl reload caddy
 This script will:
 1. Install Podman and common tools
 2. Enable lingering for user systemd services
-3. Create a persistent Podman volume for PostgreSQL
+3. Create persistent Podman volumes for PostgreSQL and uploads
 4. Copy Quadlet files to `~/.config/containers/systemd/`
 5. Build container images
 6. Start PostgreSQL and wait for it to be healthy
