@@ -16,7 +16,6 @@ import {
   IconList,
   IconListCheck,
   IconListNumbers,
-  IconPhoto,
   IconRowInsertBottom,
   IconRowInsertTop,
   IconRowRemove,
@@ -118,7 +117,7 @@ export function FloatingToolbar({
 }: FloatingToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleImageClick = () => {
+  const _handleImageClick = () => {
     fileInputRef.current?.click();
   };
 
