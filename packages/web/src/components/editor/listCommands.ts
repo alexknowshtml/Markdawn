@@ -50,7 +50,9 @@ export function findParentList(
   return null;
 }
 
-export function collectListItems(
+/** Collect list items at ANY depth within a position range.
+ *  Used for determining which items intersect a user's selection. */
+export function collectListItemsInRange(
   doc: Node,
   from: number,
   to: number,
@@ -62,6 +64,27 @@ export function collectListItems(
       items.push({ node, pos });
     }
   });
+  return items;
+}
+
+/** Collect only the DIRECT children of a list node.
+ *  Used by unwrapList and switchListType to operate on siblings only.
+ *  This prevents nested list items from being treated as siblings of
+ *  their parent's siblings (the root cause of nested-list duplication). */
+export function collectDirectListItems(
+  listNode: Node,
+  listStart: number,
+): Array<{ node: Node; pos: number }> {
+  const listItemType = listNode.type.schema.nodes.list_item;
+  const items: Array<{ node: Node; pos: number }> = [];
+  let childPos = listStart + 1;
+  for (let i = 0; i < listNode.content.childCount; i++) {
+    const child = listNode.content.child(i);
+    if (child.type === listItemType) {
+      items.push({ node: child, pos: childPos });
+    }
+    childPos += child.nodeSize;
+  }
   return items;
 }
 
@@ -89,11 +112,17 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
   const listInfo = findParentList(state);
   if (!listInfo || !paragraphType) return false;
 
-  const allItems = collectListItems(state.doc, listInfo.start, listInfo.end);
+  // Only direct children — nested items stay encapsulated within their
+  // parent's content and are NOT unwrapped individually. This prevents
+  // the duplication bug where nested items were extracted as siblings.
+  const allItems = collectDirectListItems(listInfo.node, listInfo.start);
 
   // Determine which items to unwrap.
   // Collapsed selection: unwrap just the item under cursor.
-  // Non-empty selection: unwrap all items intersecting the range.
+  // Non-empty selection: unwrap all DIRECT items intersecting the range.
+  // We filter allItems (direct children) by overlap with the selection
+  // rather than using collectListItemsInRange (which would include
+  // nested descendants as if they were siblings).
   const { $from, $to } = state.selection;
   let unwrapPositions: Set<number>;
   let cursorItemPos = -1;
@@ -106,7 +135,11 @@ export function unwrapList(state: EditorState, dispatch?: (tr: Transaction) => v
     cursorItemPos = cursorItem.pos;
     unwrapPositions = new Set([cursorItemPos]);
   } else {
-    unwrapPositions = new Set(collectListItems(state.doc, $from.pos, $to.pos).map((i) => i.pos));
+    unwrapPositions = new Set(
+      allItems
+        .filter((item) => item.pos < $to.pos && item.pos + item.node.nodeSize > $from.pos)
+        .map((i) => i.pos),
+    );
     cursorItemPos = Math.max(...unwrapPositions);
   }
   if (unwrapPositions.size === 0) return false;
@@ -203,20 +236,33 @@ export function wrapBlocksInList(
 
   state.doc.nodesBetween(rangeFrom, rangeTo, (node, pos) => {
     if (node.isBlock && node.type !== schema.nodes.doc) {
-      const parent = state.doc.resolve(pos).parent;
+      const $pos = state.doc.resolve(pos);
+      const parent = $pos.parent;
       // Include blocks that are:
       // 1. Top-level blocks not inside any list, OR
-      // 2. Blocks inside existing lists of ANY type (to support merging
-      //    when rebuilding a numbered list after unwrap/reapply).
-      //    Skip `list_item` and `list` wrappers themselves.
+      // 2. Blocks directly inside a list_item that is itself top-level
+      //    (not nested inside another list). Nested-list blocks are
+      //    excluded because they are descendants of the parent list_item
+      //    and extracting them as separate items would break nesting.
       if (!isListItem(node) && node.type !== listType) {
         if (parent.type !== listItemType && parent.type !== listType) {
           selectedBlocks.push({ node, pos });
         } else if (parent.type === listItemType) {
-          // Inside an existing list item — use the node's actual position
-          // from nodesBetween, not an array index, so dedup and cursor
-          // calculations remain correct.
-          selectedBlocks.push({ node, pos });
+          // Only include blocks that are DIRECT children of a top-level
+          // list_item. Blocks inside nested lists (list_item's whose
+          // ancestor chain includes another list_item above depth 1)
+          // are part of the nested structure and must not be extracted.
+          let inNestedList = false;
+          const parentDepth = $pos.depth - 1;
+          for (let d = parentDepth - 1; d > 0; d--) {
+            if ($pos.node(d).type === listItemType) {
+              inNestedList = true;
+              break;
+            }
+          }
+          if (!inNestedList) {
+            selectedBlocks.push({ node, pos });
+          }
         }
       }
     }
@@ -309,6 +355,40 @@ export function wrapBlocksInList(
   return true;
 }
 
+/** Return the type of the closest (innermost) list containing the cursor.
+ *  'task' is returned when the closest list is a bullet_list whose direct
+ *  child list_item (under the cursor) has a checked attribute — indicating
+ *  a checklist/task item. Returns null when not inside any list. */
+export type ClosestListType = 'bullet' | 'ordered' | 'task' | null;
+
+export function getClosestListType(state: EditorState): ClosestListType {
+  const listInfo = findParentList(state);
+  if (!listInfo) return null;
+  if (listInfo.node.type.name === 'ordered_list') return 'ordered';
+  if (listInfo.node.type.name === 'bullet_list') {
+    const listItemType = state.schema.nodes.list_item;
+    if (!listItemType) return 'bullet';
+    const { $from } = state.selection;
+    if ($from.depth === 0) {
+      // AllSelection: scan direct children of the found list for task items.
+      // The normal ancestor-walking loop won't execute when depth is 0,
+      // so we check the list's direct children instead.
+      const items = collectDirectListItems(listInfo.node, listInfo.start);
+      if (items.some((item) => item.node.attrs.checked != null)) return 'task';
+      return 'bullet';
+    }
+    for (let d = $from.depth; d > 0; d--) {
+      const node = $from.node(d);
+      if (node.type === listItemType && node.attrs.checked != null) {
+        if ($from.node(d - 1) === listInfo.node) return 'task';
+        break;
+      }
+    }
+    return 'bullet';
+  }
+  return null;
+}
+
 /** Switch an existing list's wrapper type (e.g. bullet_list -> ordered_list). */
 export function switchListType(
   state: EditorState,
@@ -327,14 +407,23 @@ export function switchListType(
 
   const cursorOldPos = state.selection.$from.pos;
   const tr = state.tr;
-  const items = collectListItems(state.doc, listInfo.start, listInfo.end);
+  // Only direct children — switching the wrapper type should not flatten
+  // nested lists. Each item's content (including any nested sub-lists) is
+  // preserved via item.node.content.
+  const items = collectDirectListItems(listInfo.node, listInfo.start);
   const cursorItem = items.find(
     (item) => item.pos <= cursorOldPos && cursorOldPos < item.pos + item.node.nodeSize,
   );
   const cursorOffsetInItem = cursorItem ? cursorOldPos - cursorItem.pos : -1;
 
   const newItems = items.map((item) => {
-    const attrs = listItemAttrs ?? item.node.attrs;
+    // When the wrapper type changes (e.g. ordered → bullet), reset list-item
+    // attrs to schema defaults. Retaining type-specific attrs (like Milkdown's
+    // `listType: 'ordered'` or `label: '1.'`) inside a different list type
+    // causes rendering inconsistencies — the editor still treats them as the
+    // old type. When listItemAttrs is explicitly provided (task conversion),
+    // use those instead.
+    const attrs = listItemAttrs ?? (listInfo.node.type !== targetType ? {} : item.node.attrs);
     return item.node.type.create(attrs, item.node.content, item.node.marks);
   });
 
