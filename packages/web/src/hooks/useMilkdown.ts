@@ -13,6 +13,7 @@ import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
 import Papa from 'papaparse';
 import { goToNextCell, isInTable } from 'prosemirror-tables';
 import { useEffect, useRef, useState } from 'react';
+import { ensureAbsoluteUrl } from '../utils/url';
 import { linkEditor } from '../editor/components/LinkEditor';
 import { autolink } from '../editor/plugins/autolink';
 import { callout } from '../editor/plugins/callout';
@@ -534,7 +535,7 @@ export function useMilkdown({
 
                 event.preventDefault();
                 linkEditor.close();
-                window.open(href, '_blank', 'noopener,noreferrer');
+                window.open(ensureAbsoluteUrl(href), '_blank', 'noopener,noreferrer');
                 return true;
               },
               mouseover: (view, event) => {
@@ -580,7 +581,9 @@ export function useMilkdown({
                     tr.replaceWith(
                       markFrom,
                       markTo,
-                      view.state.schema.text(text, [linkMarkType.create({ href: url })]),
+                      view.state.schema.text(text, [
+                        linkMarkType.create({ href: ensureAbsoluteUrl(url) }),
+                      ]),
                     );
                     view.dispatch(tr);
                   },
