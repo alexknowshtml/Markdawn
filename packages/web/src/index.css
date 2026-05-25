@@ -146,8 +146,8 @@
   *,
   *::before,
   *::after {
-    animation: none !important;
-    transition-duration: 0ms !important;
-    scroll-behavior: auto !important;
+    animation: none;
+    transition-duration: 0ms;
+    scroll-behavior: auto;
   }
 }

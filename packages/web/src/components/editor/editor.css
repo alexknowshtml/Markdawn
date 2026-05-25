@@ -6,14 +6,14 @@
 .milkdown-editor-view {
   outline: none;
   min-height: 500px;
-  border: none !important;
-  box-shadow: none !important;
+  border: none;
+  box-shadow: none;
 }
 
 .ProseMirror {
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
+  border: none;
+  outline: none;
+  box-shadow: none;
 }
 
 .milkdown-editor-view .ProseMirror {
@@ -135,6 +135,14 @@
   position: relative;
 }
 
+/* Floating code block copy button (attached to body, not inside .milkdown-editor-view) */
+.code-block-copy-btn {
+  background: rgba(255, 255, 255, 0.95);
+  color: #18181b;
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
 .milkdown-editor-view .code-block-copy-btn {
   position: absolute;
   top: 0.5rem;
@@ -158,12 +166,12 @@
 }
 
 .milkdown-editor-view pre.ProseMirror-selectednode {
-  background: inherit !important;
-  outline: none !important;
+  background: inherit;
+  outline: none;
 }
 
 .dark .milkdown-editor-view pre.ProseMirror-selectednode {
-  background-color: #111827 !important;
+  background-color: #111827;
 }
 
 .milkdown-editor-view pre code {
@@ -198,14 +206,6 @@
   background: rgba(255, 255, 255, 0.1);
   color: #e5e7eb;
   border-color: rgba(229, 231, 235, 0.25);
-}
-
-/* Floating code block copy button (attached to body, not inside .milkdown-editor-view) */
-.code-block-copy-btn {
-  background: rgba(255, 255, 255, 0.95);
-  color: #18181b;
-  border: 1px solid rgba(0, 0, 0, 0.15);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .dark .code-block-copy-btn {
@@ -370,7 +370,9 @@
   background: #f4f4f5;
   color: #18181b;
   outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
 }
 
 .link-editor-input:focus {
@@ -390,7 +392,9 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  transition: background-color 0.15s, transform 0.1s;
+  transition:
+    background-color 0.15s,
+    transform 0.1s;
 }
 
 .link-editor-btn-cancel {
@@ -547,60 +551,6 @@
   cursor: pointer;
 }
 
-.milkdown-editor-view span[data-type="math_inline"] .katex {
-  font-size: 1em;
-}
-
-.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"],
-.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] {
-  background: transparent !important;
-  border: none !important;
-}
-
-.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] pre,
-.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] pre,
-.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] textarea,
-.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] textarea {
-  display: none !important;
-}
-
-.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] .katex-display,
-.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] .katex-display {
-  margin: 0.5em 0;
-  text-align: center;
-}
-
-.milkdown-editor-view .code-block[data-language="LaTeX"],
-.milkdown-editor-view .code-block[data-language="latex"] {
-  background: transparent !important;
-  border: none !important;
-}
-
-.milkdown-editor-view .code-block[data-language="LaTeX"] .katex-display,
-.milkdown-editor-view .code-block[data-language="latex"] .katex-display {
-  margin: 0.5em 0;
-}
-
-/* Inline LaTeX edit tooltip */
-.milkdown-latex-inline-edit {
-  background: #27272a;
-  border: 1px solid #3f3f46;
-  border-radius: 8px;
-  padding: 8px 12px;
-  min-width: 200px;
-  color: #e4e4e7;
-}
-
-.milkdown-latex-inline-edit p {
-  margin: 0;
-  outline: none;
-}
-
-.dark .milkdown-latex-inline-edit {
-  background: #18181b;
-  border-color: #27272a;
-}
-
 /* Math Editor Popup - Notion Style */
 .math-editor-popup {
   animation: math-popup-fade-in 0.15s ease-out;
@@ -641,6 +591,60 @@
   transform: translateY(0);
 }
 
+.milkdown-editor-view span[data-type="math_inline"] .katex {
+  font-size: 1em;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"],
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] {
+  background: transparent;
+  border: none;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] pre,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] pre,
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] textarea,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] textarea {
+  display: none;
+}
+
+.milkdown-editor-view [data-node-type="code_block"][data-language="LaTeX"] .katex-display,
+.milkdown-editor-view [data-node-type="code_block"][data-language="latex"] .katex-display {
+  margin: 0.5em 0;
+  text-align: center;
+}
+
+.milkdown-editor-view .code-block[data-language="LaTeX"],
+.milkdown-editor-view .code-block[data-language="latex"] {
+  background: transparent;
+  border: none;
+}
+
+.milkdown-editor-view .code-block[data-language="LaTeX"] .katex-display,
+.milkdown-editor-view .code-block[data-language="latex"] .katex-display {
+  margin: 0.5em 0;
+}
+
+/* Inline LaTeX edit tooltip */
+.milkdown-latex-inline-edit {
+  background: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 8px;
+  padding: 8px 12px;
+  min-width: 200px;
+  color: #e4e4e7;
+}
+
+.milkdown-latex-inline-edit p {
+  margin: 0;
+  outline: none;
+}
+
+.dark .milkdown-latex-inline-edit {
+  background: #18181b;
+  border-color: #27272a;
+}
+
 /* Math node hover effect */
 .milkdown-editor-view span[data-type="math_inline"]:hover {
   background: rgba(59, 130, 246, 0.1);
@@ -653,11 +657,11 @@
 
 /* Block math hover */
 .milkdown-editor-view .latex-block-math:hover {
-  background: rgba(59, 130, 246, 0.05) !important;
+  background: rgba(59, 130, 246, 0.05);
 }
 
 .dark .milkdown-editor-view .latex-block-math:hover {
-  background: rgba(96, 165, 250, 0.1) !important;
+  background: rgba(96, 165, 250, 0.1);
 }
 
 /* MathEditor Component */
@@ -697,7 +701,9 @@
   background: #f4f4f5;
   color: #18181b;
   outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition:
+    border-color 0.2s,
+    box-shadow 0.2s;
   min-width: 300px;
 }
 
@@ -718,7 +724,9 @@
   cursor: pointer;
   font-size: 13px;
   font-weight: 500;
-  transition: background-color 0.15s, transform 0.1s;
+  transition:
+    background-color 0.15s,
+    transform 0.1s;
 }
 
 .math-editor-btn-cancel {
