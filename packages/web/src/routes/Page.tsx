@@ -16,6 +16,7 @@ import { TableOfContents } from '../components/editor/TableOfContents';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
 import { useWorkspaces } from '../hooks/use-workspaces';
+import { extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
 
@@ -34,14 +35,6 @@ function decodePageContent(ydoc: unknown): string {
     return new TextDecoder().decode(new Uint8Array(ydoc as number[]));
   }
   return '';
-}
-
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-function extractUuidFromSlug(slug: string): string | undefined {
-  const uuidMatch = slug.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-  const candidate = uuidMatch?.[1];
-  return candidate && UUID_REGEX.test(candidate) ? candidate : undefined;
 }
 
 function slugifyTitle(title: string): string {
