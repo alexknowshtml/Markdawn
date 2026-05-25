@@ -1,5 +1,5 @@
-import { Server } from '@hocuspocus/server';
 import type { Hocuspocus } from '@hocuspocus/server';
+import { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import {
   type ConnectionDraft,

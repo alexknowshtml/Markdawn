@@ -1,5 +1,5 @@
 import { FileText } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useUpdatePage } from '../../hooks/use-pages';
 import { showErrorToast } from '../../utils/toast';
 import { EmojiPicker } from '../EmojiPicker';

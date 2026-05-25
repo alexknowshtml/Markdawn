@@ -8,15 +8,15 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTrashPages } from '../hooks/use-pages';
 import { useWorkspaces } from '../hooks/use-workspaces';
 import { useAuth } from '../hooks/useAuth';
 import { authClient } from '../lib/auth-client';
+import { TrashView } from './sidebar/TrashView';
 import { ThemeToggle } from './ThemeToggle';
 import { Tooltip } from './Tooltip';
-import { TrashView } from './sidebar/TrashView';
 
 interface ProfilePillProps {
   className?: string;

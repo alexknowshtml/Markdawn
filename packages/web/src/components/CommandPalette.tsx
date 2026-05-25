@@ -1,5 +1,5 @@
 import { FileText, Plus, Trash2 } from 'lucide-react';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useShortcut, useShortcutScope } from '../contexts/KeyboardShortcutContext';
 import { useCreatePage } from '../hooks/use-pages';
@@ -116,7 +116,9 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
   }
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: backdrop click-to-close; inner div has role="dialog"
     <div
+      role="presentation"
       className="fixed inset-0 z-50 flex items-start justify-center bg-zinc-900/60 backdrop-blur-sm px-4 py-20 animate-fade-in"
       onClick={closeDialog}
       onKeyDown={(e) => {
@@ -124,6 +126,9 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Search"
         className="w-full max-w-lg rounded-2xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-2xl animate-slide-up overflow-hidden"
         onClick={(event) => event.stopPropagation()}
         onKeyDown={(event) => event.stopPropagation()}

@@ -1,4 +1,3 @@
-import { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
 import clsx from 'clsx';
 import {
   Check,
@@ -14,7 +13,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 export type ExplorerItemType = 'page' | 'folder';
@@ -110,6 +109,8 @@ export function ExplorerItem({
     return (
       <>
         <div
+          role="button"
+          tabIndex={0}
           className={clsx(
             'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150',
             isSelected
@@ -289,6 +290,8 @@ export function ExplorerItem({
   return (
     <>
       <div
+        role="button"
+        tabIndex={0}
         className={clsx(
           'group relative block p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200',
           showMenu && 'z-10',

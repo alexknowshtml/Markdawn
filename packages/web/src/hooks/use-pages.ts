@@ -129,9 +129,13 @@ export function useCreatePage() {
       workspaceId,
       parentId,
       title,
-    }: { workspaceId: string; parentId?: string; title?: string; silent?: boolean }) =>
-      createPage(workspaceId, parentId, title),
-    onSuccess: (newPage, { workspaceId, silent }) => {
+    }: {
+      workspaceId: string;
+      parentId?: string;
+      title?: string;
+      silent?: boolean;
+    }) => createPage(workspaceId, parentId, title),
+    onSuccess: (_newPage, { workspaceId, silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
       if (!silent) {
         showSuccessToast('Page created');
@@ -149,7 +153,11 @@ export function useUpdatePage() {
     mutationFn: ({
       pageId,
       updates,
-    }: { pageId: string; updates: Partial<Page>; silent?: boolean }) => updatePage(pageId, updates),
+    }: {
+      pageId: string;
+      updates: Partial<Page>;
+      silent?: boolean;
+    }) => updatePage(pageId, updates),
     onSuccess: (_, { pageId, silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
@@ -236,8 +244,11 @@ export function useMovePage() {
       pageId,
       parentId,
       position,
-    }: { pageId: string; parentId: string | null; position: string }) =>
-      movePage(pageId, parentId, position),
+    }: {
+      pageId: string;
+      parentId: string | null;
+      position: string;
+    }) => movePage(pageId, parentId, position),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Page moved');

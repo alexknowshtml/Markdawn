@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import React, { useEffect, useState, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export interface HeadingNode {
   id: string;
@@ -207,8 +207,9 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
   }
 
   return (
-    <div
+    <section
       ref={containerRef}
+      aria-label="Table of contents"
       className={clsx(
         'fixed right-2 top-1/2 -translate-y-1/2 z-30',
         'transition-all duration-300 ease-out',
@@ -250,6 +251,6 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
         </div>
         <div className="space-y-0.5">{headings.map((heading) => renderHeading(heading))}</div>
       </div>
-    </div>
+    </section>
   );
 }

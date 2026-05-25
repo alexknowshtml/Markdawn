@@ -1,5 +1,4 @@
 import { expect, test } from '@playwright/test';
-import { focusEditor } from '../fixtures';
 
 test.describe('Page creation', () => {
   test('create page via workspace home "New Page" button', async ({ page }) => {

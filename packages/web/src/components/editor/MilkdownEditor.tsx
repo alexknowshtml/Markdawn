@@ -1,23 +1,4 @@
-import {
-  IconBlockquote,
-  IconBold,
-  IconCode,
-  IconH1,
-  IconH2,
-  IconH3,
-  IconH4,
-  IconH5,
-  IconH6,
-  IconItalic,
-  IconLink,
-  IconList,
-  IconListCheck,
-  IconListNumbers,
-  IconPhoto,
-  IconStrikethrough,
-  IconTable,
-} from '@tabler/icons-react';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
@@ -27,10 +8,9 @@ import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import './editor.css';
-import { WebSocketStatus } from '@hocuspocus/provider';
-import { HocuspocusProvider } from '@hocuspocus/provider';
-import { commandsCtx, editorViewCtx } from '@milkdown/core';
+import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Editor } from '@milkdown/core';
+import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import type { EditorView } from '@milkdown/kit/prose/view';
 import { insertTableCommand } from '@milkdown/preset-gfm';
 import { lift, setBlockType, toggleMark, wrapIn } from 'prosemirror-commands';
@@ -48,9 +28,9 @@ import {
 } from 'prosemirror-tables';
 import * as Y from 'yjs';
 import { FloatingToolbar } from './FloatingToolbar';
+import { getClosestListType, switchListType, unwrapList, wrapBlocksInList } from './listCommands';
 import { SlashMenu } from './SlashMenu';
 import { WikiLinkSuggestions } from './WikiLinkSuggestions';
-import { getClosestListType, switchListType, unwrapList, wrapBlocksInList } from './listCommands';
 
 interface MilkdownEditorProps {
   pageId: string;
@@ -64,7 +44,7 @@ interface MilkdownEditorProps {
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 
-function execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): void {
+function _execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): void {
   if (!editor) return;
   try {
     editor.action(fn);
@@ -851,7 +831,7 @@ export function MilkdownEditor({
       let canLink = false;
       editor.action((ctx) => {
         const view = ctx.get(editorViewCtx);
-        if (!view || !view.hasFocus()) return;
+        if (!view?.hasFocus()) return;
         const { from, to } = view.state.selection;
         canLink = from !== to;
       });

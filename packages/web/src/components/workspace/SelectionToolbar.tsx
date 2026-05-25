@@ -8,7 +8,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import React from 'react';
 
 interface SelectionToolbarProps {
   selectedCount: number;

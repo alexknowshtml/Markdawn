@@ -8,7 +8,7 @@ const URL_INPUT_REGEX = /(https?:\/\/[^\s]+)\s$/;
 export const autoLinkInputRule = $inputRule((ctx: Ctx) => {
   const linkMarkType = linkSchema.type(ctx);
 
-  return new InputRule(URL_INPUT_REGEX, (state, match, start, end) => {
+  return new InputRule(URL_INPUT_REGEX, (state, match, _start, end) => {
     const url = match[1];
     if (!url) return null;
 

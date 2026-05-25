@@ -143,7 +143,10 @@ export function useUpdateComment(pageId: string | undefined) {
     mutationFn: ({
       commentId,
       updates,
-    }: { commentId: string; updates: { content?: string; resolved?: boolean } }) => {
+    }: {
+      commentId: string;
+      updates: { content?: string; resolved?: boolean };
+    }) => {
       if (!pageId) throw new Error('pageId is required');
       return updateComment(pageId, commentId, updates);
     },

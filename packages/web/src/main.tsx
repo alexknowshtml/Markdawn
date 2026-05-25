@@ -10,17 +10,13 @@ import App from './App';
 import { getLogger, initLogger } from './logger-init';
 import { ToastProvider } from './utils/toast';
 
-initLogger()
-  .then(() => {
-    const logger = getLogger();
-    logger.info('[app] starting markdawn web');
-    logger.debug(`[env] NODE_ENV: ${import.meta.env.MODE}`);
-    logger.debug(`[env] VITE_API_URL: ${import.meta.env.VITE_API_URL ?? 'not set'}`);
-    logger.debug(`[env] VITE_COLLAB_URL: ${import.meta.env.VITE_COLLAB_URL ?? 'not set'}`);
-  })
-  .catch((err) => {
-    console.error('[app] failed to initialize logger:', err);
-  });
+initLogger().then(() => {
+  const logger = getLogger();
+  logger.info('[app] starting markdawn web');
+  logger.debug(`[env] NODE_ENV: ${import.meta.env.MODE}`);
+  logger.debug(`[env] VITE_API_URL: ${import.meta.env.VITE_API_URL ?? 'not set'}`);
+  logger.debug(`[env] VITE_COLLAB_URL: ${import.meta.env.VITE_COLLAB_URL ?? 'not set'}`);
+});
 
 const queryClient = new QueryClient();
 

@@ -74,7 +74,7 @@ favoritesRoute.post('/', async (c) => {
   }
 
   const page = await getPageWorkspace(pageId);
-  if (!page || !page.workspace_id || page.is_deleted) {
+  if (!page?.workspace_id || page.is_deleted) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
@@ -96,7 +96,7 @@ favoritesRoute.post('/', async (c) => {
 favoritesRoute.delete(':pageId', async (c) => {
   const pageId = c.req.param('pageId');
   const page = await getPageWorkspace(pageId);
-  if (!page || !page.workspace_id) {
+  if (!page?.workspace_id) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 

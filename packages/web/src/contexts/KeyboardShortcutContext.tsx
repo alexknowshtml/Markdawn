@@ -7,12 +7,12 @@ import {
   useRef,
   useState,
 } from 'react';
+import type { Priority } from '../hooks/useKeyboardShortcuts';
 import {
   isEditableFocused,
   keyboardRegistry,
   shouldIgnoreKeyboardEvent,
 } from '../hooks/useKeyboardShortcuts';
-import type { Priority } from '../hooks/useKeyboardShortcuts';
 
 type Scope = string;
 
@@ -40,11 +40,7 @@ const ShortcutContext = createContext<ShortcutContextValue | null>(null);
 
 let hookIdCounter = 0;
 
-export function KeyboardShortcutProvider({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export function KeyboardShortcutProvider({ children }: { children: React.ReactNode }) {
   const [scopeStack, setScopeStack] = useState<Scope[][]>([['*']]);
   const activeScopes = scopeStack[scopeStack.length - 1] ?? ['*'];
 

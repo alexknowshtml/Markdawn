@@ -1,3 +1,5 @@
+import { getLogger } from '../logger-init';
+
 export type Priority = 'high' | 'normal' | 'low';
 
 const PRIORITY_RANK: Record<Priority, number> = { high: 0, normal: 1, low: 2 };
@@ -60,9 +62,11 @@ export class KeyboardRegistry {
         if (handled === false) continue; // Handler returned false — try next binding
         if (b.preventDefault) event.preventDefault();
         return true;
-      } catch {
-        // Handler threw — log and continue so other bindings can still fire
-        console.error('[KeyboardRegistry] handler threw for binding:', b.id);
+      } catch (err) {
+        getLogger().error('[KeyboardRegistry] handler threw for binding: {id}', {
+          id: b.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
     }
     return false;

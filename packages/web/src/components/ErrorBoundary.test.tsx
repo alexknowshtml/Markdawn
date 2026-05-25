@@ -16,6 +16,7 @@ describe('ErrorBoundary', () => {
   });
 
   afterEach(() => {
+    // biome-ignore lint/suspicious/noConsole: restore test mock for console.error after error boundary tests
     vi.mocked(console.error).mockRestore();
   });
 

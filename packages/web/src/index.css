@@ -146,8 +146,11 @@
   *,
   *::before,
   *::after {
+    /* biome-ignore lint/complexity/noImportantStyles: required to override class-based animation utilities */
     animation: none !important;
+    /* biome-ignore lint/complexity/noImportantStyles: required to override class-based animation utilities */
     transition-duration: 0ms !important;
+    /* biome-ignore lint/complexity/noImportantStyles: required to override class-based animation utilities */
     scroll-behavior: auto !important;
   }
 }

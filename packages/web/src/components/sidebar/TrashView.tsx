@@ -1,5 +1,5 @@
 import { FileText, RotateCcw, Trash2, X } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   useEmptyTrash,
   usePermanentDeletePage,
@@ -28,7 +28,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
     try {
       await restoreMutation.mutateAsync(pageId);
       showSuccessToast('Page restored');
-    } catch (error) {
+    } catch (_error) {
       showErrorToast('Failed to restore page');
     }
   };
@@ -39,7 +39,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
       await permanentDeleteMutation.mutateAsync(pageToDelete.id);
       showSuccessToast('Page permanently deleted');
       setPageToDelete(null);
-    } catch (error) {
+    } catch (_error) {
       showErrorToast('Failed to permanently delete page');
     }
   };
@@ -48,7 +48,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
     try {
       await emptyTrashMutation.mutateAsync(workspaceId);
       setShowEmptyAllConfirm(false);
-    } catch (error) {
+    } catch (_error) {
       showErrorToast('Failed to empty trash');
     }
   };

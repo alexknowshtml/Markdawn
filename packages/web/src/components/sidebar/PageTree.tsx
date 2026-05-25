@@ -1,6 +1,6 @@
 import type { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
 import { ChevronsDown, ChevronsUp, Download, FilePlus2, FolderPlus, Home } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import {
@@ -61,6 +61,30 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     childPages: number;
   } | null>(null);
 
+  const handleCreateRootPage = useCallback(async () => {
+    try {
+      const newPage = await createPageMutation.mutateAsync({ workspaceId });
+      navigate(`/app/${workspaceSlug}/${newPage.id}`);
+      setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
+    } catch {
+      showErrorToast('Failed to create note');
+    }
+  }, [workspaceId, workspaceSlug, navigate, createPageMutation]);
+
+  const handleCreateRootFolder = useCallback(async () => {
+    try {
+      const folder = await createFolderMutation.mutateAsync({ workspaceId });
+      setExpandedFolderIds((prev) => {
+        const next = new Set(prev);
+        next.add(folder.id);
+        return next;
+      });
+      setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
+    } catch {
+      showErrorToast('Failed to create folder');
+    }
+  }, [workspaceId, createFolderMutation]);
+
   useEffect(() => {
     const onCreateNote = (event: Event) => {
       const detail = (event as CustomEvent<{ workspaceSlug?: string }>).detail;
@@ -83,7 +107,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
       window.removeEventListener('markdawn:create-note', onCreateNote as EventListener);
       window.removeEventListener('markdawn:create-folder', onCreateFolder as EventListener);
     };
-  }, [workspaceSlug]);
+  }, [workspaceSlug, handleCreateRootPage, handleCreateRootFolder]);
 
   const pagesByFolder = useMemo(() => {
     const map = new Map<string | null, PageTreeNode[]>();
@@ -159,30 +183,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
       setExpandedFolderIds(new Set());
     } else {
       setExpandedFolderIds(new Set(allFolderIds));
-    }
-  };
-
-  const handleCreateRootPage = async () => {
-    try {
-      const newPage = await createPageMutation.mutateAsync({ workspaceId });
-      navigate(`/app/${workspaceSlug}/${newPage.id}`);
-      setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
-    } catch {
-      showErrorToast('Failed to create note');
-    }
-  };
-
-  const handleCreateRootFolder = async () => {
-    try {
-      const folder = await createFolderMutation.mutateAsync({ workspaceId });
-      setExpandedFolderIds((prev) => {
-        const next = new Set(prev);
-        next.add(folder.id);
-        return next;
-      });
-      setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
-    } catch {
-      showErrorToast('Failed to create folder');
     }
   };
 

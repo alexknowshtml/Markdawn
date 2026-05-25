@@ -41,5 +41,9 @@ export function Popover({ opened, onChange, children, className }: PopoverProps)
     };
   }, [opened, handleClickOutside, handleEscape]);
 
-  return <div ref={ref}>{children}</div>;
+  return (
+    <div ref={ref} className={className}>
+      {children}
+    </div>
+  );
 }

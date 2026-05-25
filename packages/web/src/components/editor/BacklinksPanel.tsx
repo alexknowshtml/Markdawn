@@ -1,5 +1,4 @@
 import { ArrowLeft, ArrowRight, Link2 } from 'lucide-react';
-import React from 'react';
 import { Link } from 'react-router-dom';
 import { useBacklinks, useOutgoingLinks } from '../../hooks/use-backlinks';
 

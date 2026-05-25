@@ -1,6 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
-import React from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 const API_BASE = '/api';

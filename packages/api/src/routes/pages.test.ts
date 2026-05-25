@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestPage,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 describe('pages API', () => {
   describe('auth guard', () => {
@@ -265,7 +259,7 @@ describe('pages API', () => {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
       expect(res.status).toBe(200);
-      const body = await res.json();
+      const _body = await res.json();
       const treeRes = await app.request(`/api/pages/tree?workspaceId=${user.workspaceId}`, {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });

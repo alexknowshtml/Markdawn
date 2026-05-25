@@ -1,15 +1,15 @@
 import {
+  closestCenter,
   DndContext,
   type DragEndEvent,
   KeyboardSensor,
   PointerSensor,
-  closestCenter,
   useSensor,
   useSensors,
 } from '@dnd-kit/core';
 import {
-  SortableContext,
   arrayMove,
+  SortableContext,
   sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
@@ -598,7 +598,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
           continue;
         }
 
-        if (Object.prototype.hasOwnProperty.call(properties, item.key)) {
+        if (Object.hasOwn(properties, item.key)) {
           newItems.push({
             ...item,
             value: properties[item.key],

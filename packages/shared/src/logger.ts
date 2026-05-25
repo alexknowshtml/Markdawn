@@ -1,4 +1,4 @@
-import { type Logger, configure, getConsoleSink, getLogger } from '@logtape/logtape';
+import { configure, getConsoleSink, getLogger, type Logger } from '@logtape/logtape';
 
 let isConfigured = false;
 
@@ -7,7 +7,7 @@ export async function setupLogger(): Promise<void> {
     return;
   }
 
-  const isProduction = process.env.NODE_ENV === 'production';
+  const _isProduction = process.env.NODE_ENV === 'production';
 
   await configure({
     sinks: {

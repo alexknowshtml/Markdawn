@@ -142,6 +142,8 @@ export function PageTreeRow({
   return (
     <>
       <div
+        role="button"
+        tabIndex={0}
         className={clsx(
           'group flex items-center h-8 pr-2 py-1 my-0.5 rounded-lg cursor-pointer transition-all duration-200 ease-in-out relative',
           isActive

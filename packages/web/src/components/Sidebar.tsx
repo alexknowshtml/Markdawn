@@ -1,6 +1,5 @@
 import clsx from 'clsx';
 import { Briefcase } from 'lucide-react';
-import React from 'react';
 import { useParams } from 'react-router-dom';
 import { useWorkspaces } from '../hooks/use-workspaces';
 import { PageTree } from './sidebar/PageTree';

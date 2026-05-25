@@ -317,7 +317,7 @@ describe('switchListType with nested lists', () => {
     );
 
     // Inner list should now be ordered
-    const orderedLists = new Array<{ order?: number }>();
+    const orderedLists: { order?: number }[] = [];
     newState.doc.descendants((node) => {
       if (node.type.name === 'ordered_list') orderedLists.push({ order: node.attrs.order });
     });
@@ -887,7 +887,7 @@ describe('switchListType', () => {
     function ol(...items: ReturnType<typeof li>[]) {
       return milkdownLikeSchema.node('ordered_list', null, items);
     }
-    function ul(...items: ReturnType<typeof li>[]) {
+    function _ul(...items: ReturnType<typeof li>[]) {
       return milkdownLikeSchema.node('bullet_list', null, items);
     }
 

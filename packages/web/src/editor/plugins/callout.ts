@@ -32,7 +32,7 @@ export const callout = $node('callout', () => ({
 
       const regex = /\[!(\w+)\]\/?(.+)?/;
       const match = firstText.match(regex);
-      if (!match || !match[1]) return;
+      if (!match?.[1]) return;
 
       const calloutType = match[1].toLowerCase();
       const validTypes = ['note', 'tip', 'warning', 'danger', 'info', 'example'];
