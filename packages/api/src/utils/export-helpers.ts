@@ -298,7 +298,7 @@ function yamlScalar(value: unknown): string {
       value === 'off' ||
       /^[0-9]/.test(value) ||
       /[:#]/.test(value) ||
-      /^[!&*?'"|>{%\[]/.test(value) ||
+      /^[!&*?'"|>{%[]/.test(value) ||
       value.includes("'") ||
       value.includes('"') ||
       value.includes('\n') ||

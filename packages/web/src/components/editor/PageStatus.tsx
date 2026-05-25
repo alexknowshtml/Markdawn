@@ -1,6 +1,4 @@
-import type { HocuspocusProvider } from '@hocuspocus/provider';
-import type { WebSocketStatus } from '@hocuspocus/provider';
-import React from 'react';
+import type { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import { CollabStatus } from './CollabStatus';
 
 interface PageStatusProps {

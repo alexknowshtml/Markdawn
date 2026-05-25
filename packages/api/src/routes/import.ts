@@ -133,7 +133,7 @@ const parseFrontmatter = (
   return { title, body, properties };
 };
 
-const containsImageReferences = (content: string): boolean => {
+const _containsImageReferences = (content: string): boolean => {
   return (
     /!\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content) ||
     /\[\[([^\]]+\.(?:jpe?g|png|gif|webp|svg))\]\]/i.test(content) ||
@@ -142,7 +142,7 @@ const containsImageReferences = (content: string): boolean => {
   );
 };
 
-const normalizeVaultPath = (value: string): string => {
+const _normalizeVaultPath = (value: string): string => {
   return value.replace(/\\/g, '/').replace(/^\.\//, '').trim();
 };
 

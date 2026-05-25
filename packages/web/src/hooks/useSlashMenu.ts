@@ -1,5 +1,5 @@
-import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import type { Editor } from '@milkdown/core';
+import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import { insertTableCommand } from '@milkdown/preset-gfm';
 import {
   IconBlockquote,
@@ -22,7 +22,7 @@ import {
 } from '@tabler/icons-react';
 import { setBlockType, wrapIn } from 'prosemirror-commands';
 import { TextSelection } from 'prosemirror-state';
-import { type MutableRefObject, createElement, useCallback, useRef, useState } from 'react';
+import { createElement, type MutableRefObject, useCallback, useRef, useState } from 'react';
 
 interface SlashMenuState {
   isOpen: boolean;

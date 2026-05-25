@@ -104,7 +104,7 @@ const extractEmbedLinks = (content: string): WikilinkMatch[] => {
 const extractInlineTags = (content: string): string[] => {
   const tags = new Set<string>();
   const hexOnly = /^[0-9a-fA-F]+$/;
-  const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-\/]+)/g);
+  const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-/]+)/g);
 
   for (const match of inlineTags) {
     const rawTag = match[1];
@@ -127,7 +127,7 @@ const processMarkdownContent = (content: string, imageMap: Map<string, string>):
 
   result = result.replace(
     /!\[\[([^\]|]+(?:\.jpe?g|\.png|\.gif|\.webp|\.svg))(?:\|([^\]]+))?\]\]/gi,
-    (match, imagePath: string) => {
+    (_match, imagePath: string) => {
       const normalizedPath = imagePath.replace(/\\/g, '/').trim();
       const uploadedUrl = imageMap.get(normalizedPath);
       if (uploadedUrl) {
@@ -137,7 +137,7 @@ const processMarkdownContent = (content: string, imageMap: Map<string, string>):
     },
   );
 
-  result = result.replace(/!\[\[([^\]]+)\]\]/g, (match, filePath: string) => {
+  result = result.replace(/!\[\[([^\]]+)\]\]/g, (_match, filePath: string) => {
     const normalized = filePath.replace(/\\/g, '/').trim();
     return `[${path.basename(normalized)}](${normalized})`;
   });

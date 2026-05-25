@@ -224,7 +224,7 @@ foldersRoute.patch(':id', async (c) => {
     position?: string | number;
   };
 
-  const hasParentId = Object.prototype.hasOwnProperty.call(body, 'parentId');
+  const hasParentId = Object.hasOwn(body, 'parentId');
   if (hasParentId && parentId) {
     if (parentId === folder.id) {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });

@@ -1,8 +1,7 @@
-import React from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
-import { ErrorBoundary } from './components/ErrorBoundary';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
 import { ClipboardProvider } from './contexts/ClipboardContext';
 import { KeyboardShortcutProvider } from './contexts/KeyboardShortcutContext';

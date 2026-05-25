@@ -1,8 +1,6 @@
-import { randomUUID } from 'node:crypto';
 import { betterAuth } from 'better-auth';
 import { drizzleAdapter } from 'better-auth/adapters/drizzle';
-import { pool } from './db';
-import { db } from './db';
+import { db, pool } from './db';
 import { accounts, sessions, users, verifications } from './db/schema';
 import { ensurePersonalWorkspace } from './utils/auth-helpers';
 

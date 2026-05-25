@@ -2,11 +2,11 @@ import { HocuspocusProvider, HocuspocusProviderWebsocket } from '@hocuspocus/pro
 import {
   type ConnectionConfiguration,
   Document,
-  type Server,
   type onAuthenticatePayload,
   type onDisconnectPayload,
   type onLoadDocumentPayload,
   type onStoreDocumentPayload,
+  type Server,
 } from '@hocuspocus/server';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';

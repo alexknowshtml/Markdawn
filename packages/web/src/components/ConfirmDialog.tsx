@@ -1,5 +1,3 @@
-import React from 'react';
-
 type ConfirmDialogProps = {
   isOpen: boolean;
   title: string;

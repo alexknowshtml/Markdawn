@@ -2,7 +2,7 @@ import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';

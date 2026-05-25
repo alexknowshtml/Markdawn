@@ -1,4 +1,3 @@
-import { randomBytes } from 'node:crypto';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
@@ -13,8 +12,6 @@ import { slugifyFilename } from '../utils/filename';
 import {
   createEmptyYjsDoc,
   createYjsDocWithTitle,
-  extractTitleFromYjs,
-  markdownToYjsState,
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
 
@@ -33,7 +30,7 @@ const pagesRoute = new Hono();
 
 pagesRoute.use('*', requireAuth);
 
-const markdownToHtml = (markdown: string): string => {
+const _markdownToHtml = (markdown: string): string => {
   return marked.parse(markdown, { async: false }) as string;
 };
 
@@ -314,7 +311,7 @@ pagesRoute.patch(':id', async (c) => {
     properties?: Record<string, unknown> | null;
   };
 
-  const hasParentId = Object.prototype.hasOwnProperty.call(body, 'parentId');
+  const hasParentId = Object.hasOwn(body, 'parentId');
   if (hasParentId && parentId) {
     if (parentId === page.id) {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });
@@ -348,9 +345,9 @@ pagesRoute.patch(':id', async (c) => {
       : typeof position === 'number' && Number.isFinite(position)
         ? String(position)
         : page.position;
-  const hasCoverType = Object.prototype.hasOwnProperty.call(body, 'coverType');
-  const hasCoverValue = Object.prototype.hasOwnProperty.call(body, 'coverValue');
-  const hasProperties = Object.prototype.hasOwnProperty.call(body, 'properties');
+  const hasCoverType = Object.hasOwn(body, 'coverType');
+  const hasCoverValue = Object.hasOwn(body, 'coverValue');
+  const hasProperties = Object.hasOwn(body, 'properties');
   const nextCoverType = hasCoverType
     ? typeof coverType === 'string' && coverType.trim().length > 0
       ? coverType.trim()
@@ -454,7 +451,7 @@ pagesRoute.patch(':id/move', async (c) => {
     position?: string | number;
   };
 
-  const hasParentId = Object.prototype.hasOwnProperty.call(body, 'parentId');
+  const hasParentId = Object.hasOwn(body, 'parentId');
   if (hasParentId && parentId) {
     if (parentId === page.id) {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });

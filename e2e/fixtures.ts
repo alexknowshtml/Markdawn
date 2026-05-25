@@ -1,4 +1,4 @@
-import { type Page, expect } from '@playwright/test';
+import { expect, type Page } from '@playwright/test';
 
 export const API_URL = process.env.API_URL ?? 'http://localhost:3001';
 

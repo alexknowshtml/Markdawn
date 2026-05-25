@@ -1,5 +1,5 @@
 import type { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { getInitial } from '../../utils/avatar';
 import { Tooltip } from '../Tooltip';
 

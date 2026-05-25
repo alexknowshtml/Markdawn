@@ -1,4 +1,3 @@
-import React from 'react';
 import { HeaderActions } from '../components/HeaderActions';
 import { authClient } from '../lib/auth-client';
 

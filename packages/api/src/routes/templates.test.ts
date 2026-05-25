@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   createTestApp,
-  createTestPage,
   createTestSession,
   createTestTemplate,
   createTestUser,
-  createTestVersion,
 } from '../test-utils';
 
 describe('templates API', () => {

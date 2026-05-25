@@ -1,8 +1,3 @@
-import katex from 'katex';
-import remarkMath from 'remark-math';
-import type { Node as UnistNode } from 'unist';
-import { visit } from 'unist-util-visit';
-
 import type { Ctx } from '@milkdown/kit/ctx';
 import { findNodeInSelection, nodeRule } from '@milkdown/kit/prose';
 import { textblockTypeInputRule } from '@milkdown/kit/prose/inputrules';
@@ -12,6 +7,10 @@ import type { NodeViewConstructor } from '@milkdown/kit/prose/view';
 import type { MarkdownNode, ParserState, SerializerState } from '@milkdown/kit/transformer';
 import { $command, $inputRule, $nodeSchema, $remark, $view } from '@milkdown/kit/utils';
 import { codeBlockSchema } from '@milkdown/preset-commonmark';
+import katex from 'katex';
+import remarkMath from 'remark-math';
+import type { Node as UnistNode } from 'unist';
+import { visit } from 'unist-util-visit';
 import { mathEditor } from '../components/MathEditor';
 
 // biome-ignore lint/suspicious/noExplicitAny: remark-math types are not portable

@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
 describe('obsidian import API', () => {
   describe('auth guard', () => {

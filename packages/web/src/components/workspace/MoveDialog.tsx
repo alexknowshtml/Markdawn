@@ -1,7 +1,7 @@
 import type { FolderTreeNode } from '@markdawn/shared';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight, Folder, Home } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 
 interface MoveDialogProps {
   isOpen: boolean;

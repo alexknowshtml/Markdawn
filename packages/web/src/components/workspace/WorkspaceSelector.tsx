@@ -1,5 +1,5 @@
 import { Briefcase, Check, ChevronDown, Plus } from 'lucide-react';
-import React, { useMemo, useState, useRef, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useWorkspaces } from '../../hooks/use-workspaces';
 

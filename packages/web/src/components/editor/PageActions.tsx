@@ -1,6 +1,6 @@
 import type { Page } from '@markdawn/shared';
 import { Share, Star } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import { useWorkspaces } from '../../hooks/use-workspaces';
 import { showErrorToast } from '../../utils/toast';

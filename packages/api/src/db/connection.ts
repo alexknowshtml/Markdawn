@@ -1,5 +1,6 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as pg from 'pg';
+
 const { Pool } = pg;
 
 function getDbHostname(url: string | undefined): string {
@@ -22,9 +23,7 @@ const pool = new Pool({
   ssl: isLocalDb ? false : undefined,
 });
 
-pool.on('error', (err) => {
-  console.error('Unexpected database pool error:', err.message);
-});
+pool.on('error', (_err) => {});
 
 export const db = drizzle(pool);
 export { pool };

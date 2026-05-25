@@ -1,6 +1,6 @@
 import type { Page } from '@markdawn/shared';
 import { Check, Copy, Globe, Lock } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useSharePage, useUnsharePage } from '../../hooks/use-share';
 import { showErrorToast } from '../../utils/toast';
 
