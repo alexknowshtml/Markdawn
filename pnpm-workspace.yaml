@@ -1,3 +1,11 @@
 packages:
   - 'packages/*'
   - 'e2e'
+
+overrides:
+  yjs: 13.6.29
+
+allowBuilds:
+  esbuild: true
+  '@playwright/test': true
+  '@biomejs/biome': false
