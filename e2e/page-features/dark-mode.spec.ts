@@ -10,6 +10,7 @@ test.describe('Dark mode', () => {
     await page.waitForURL(/\/app\//);
 
     await expect(page.locator('html')).toHaveClass(/dark/, { timeout: 10000 });
+    await expect(page.locator('html')).toHaveCSS('color-scheme', 'dark');
   });
 
   test('light mode removes dark class from html', async ({ page }) => {

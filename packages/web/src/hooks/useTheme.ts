@@ -24,8 +24,10 @@ function applyTheme(theme: Theme) {
   const dark = readIsDark(theme);
   if (dark) {
     root.classList.add('dark');
+    root.style.colorScheme = 'dark';
   } else {
     root.classList.remove('dark');
+    root.style.colorScheme = 'light';
   }
   localStorage.setItem(THEME_KEY, theme);
 }
