@@ -1,0 +1,98 @@
+import { describe, expect, it } from 'vitest';
+import { ensureAbsoluteUrl } from './url';
+
+describe('ensureAbsoluteUrl', () => {
+  // Bare domains
+  it('prepends https:// to a bare domain', () => {
+    expect(ensureAbsoluteUrl('samvaad.live')).toBe('https://samvaad.live');
+  });
+
+  it('prepends https:// to a www domain', () => {
+    expect(ensureAbsoluteUrl('www.samvaad.live')).toBe('https://www.samvaad.live');
+  });
+
+  it('prepends https:// to a domain with a path', () => {
+    expect(ensureAbsoluteUrl('samvaad.live/page')).toBe('https://samvaad.live/page');
+  });
+
+  it('prepends https:// to an IP address', () => {
+    expect(ensureAbsoluteUrl('192.168.1.1')).toBe('https://192.168.1.1');
+  });
+
+  it('prepends https:// to a domain with a port', () => {
+    expect(ensureAbsoluteUrl('example.com:3000')).toBe('https://example.com:3000');
+  });
+
+  // Already has a protocol
+  it('leaves https:// URLs unchanged', () => {
+    expect(ensureAbsoluteUrl('https://samvaad.live')).toBe('https://samvaad.live');
+  });
+
+  it('leaves http:// URLs unchanged', () => {
+    expect(ensureAbsoluteUrl('http://samvaad.live')).toBe('http://samvaad.live');
+  });
+
+  it('leaves mailto: links unchanged', () => {
+    expect(ensureAbsoluteUrl('mailto:test@example.com')).toBe('mailto:test@example.com');
+  });
+
+  it('leaves tel: links unchanged', () => {
+    expect(ensureAbsoluteUrl('tel:+1234567890')).toBe('tel:+1234567890');
+  });
+
+  it('leaves sms: links unchanged', () => {
+    expect(ensureAbsoluteUrl('sms:+1234567890')).toBe('sms:+1234567890');
+  });
+
+  it('leaves fax: links unchanged', () => {
+    expect(ensureAbsoluteUrl('fax:+1234567890')).toBe('fax:+1234567890');
+  });
+
+  it('leaves javascript: pseudo-protocol unchanged', () => {
+    expect(ensureAbsoluteUrl('javascript:alert(1)')).toBe('javascript:alert(1)');
+  });
+
+  it('leaves data: URIs unchanged', () => {
+    expect(ensureAbsoluteUrl('data:text/plain;base64,SGVsbG8=')).toBe(
+      'data:text/plain;base64,SGVsbG8=',
+    );
+  });
+
+  // Relative / internal
+  it('leaves absolute paths unchanged', () => {
+    expect(ensureAbsoluteUrl('/workspace/page')).toBe('/workspace/page');
+  });
+
+  it('leaves anchors unchanged', () => {
+    expect(ensureAbsoluteUrl('#section')).toBe('#section');
+  });
+
+  it('leaves query strings unchanged', () => {
+    expect(ensureAbsoluteUrl('?search=foo')).toBe('?search=foo');
+  });
+
+  it('leaves ./ relative paths unchanged', () => {
+    expect(ensureAbsoluteUrl('./about')).toBe('./about');
+  });
+
+  it('leaves ../ relative paths unchanged', () => {
+    expect(ensureAbsoluteUrl('../docs')).toBe('../docs');
+  });
+
+  it('leaves file-like paths with dot after slash unchanged', () => {
+    expect(ensureAbsoluteUrl('docs/file.md')).toBe('docs/file.md');
+  });
+
+  it('leaves plain text without a dot unchanged', () => {
+    expect(ensureAbsoluteUrl('pagename')).toBe('pagename');
+  });
+
+  // Edge cases
+  it('returns empty string as-is', () => {
+    expect(ensureAbsoluteUrl('')).toBe('');
+  });
+
+  it('trims whitespace before checking', () => {
+    expect(ensureAbsoluteUrl('  samvaad.live  ')).toBe('https://samvaad.live');
+  });
+});

@@ -1,19 +1,33 @@
-/**
- * If a URL string looks like a bare domain or IP-based address (has a dot
- * but no protocol), prepend `https://`. Everything else — relative paths,
- * anchors, protocol-prefixed URLs — passes through unchanged.
- */
 export function ensureAbsoluteUrl(url: string): string {
   if (!url) return url;
 
-  // Already has a protocol scheme (http://, https://, mailto:, etc.)
-  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(url)) return url;
+  const trimmed = url.trim();
 
-  // Already relative or internal
-  if (url.startsWith('/') || url.startsWith('#') || url.startsWith('?')) return url;
+  // Already has :// scheme (http://, https://, ftp://, etc.)
+  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(trimmed)) return trimmed;
 
-  // Has a dot → likely a domain name or IP
-  if (url.includes('.')) return `https://${url}`;
+  // Known schemes without :// (mailto:, tel:, etc.)
+  if (/^(mailto|tel|sms|fax):/i.test(trimmed)) return trimmed;
 
-  return url;
+  // Common protocol-like prefix (javascript:, data:) — leave untouched
+  if (/^(javascript|data|blob):/i.test(trimmed)) return trimmed;
+
+  // Leading slash, hash, question mark, or dot → relative/internal
+  if (
+    trimmed.startsWith('/') ||
+    trimmed.startsWith('#') ||
+    trimmed.startsWith('?') ||
+    trimmed.startsWith('.')
+  )
+    return trimmed;
+
+  // Bare domain — dot must appear before any slash so "docs/file.md"
+  // is left alone while "samvaad.live" and "samvaad.live/page" get https://
+  const slashIndex = trimmed.indexOf('/');
+  const dotBeforeSlash =
+    slashIndex === -1 ? trimmed.includes('.') : trimmed.slice(0, slashIndex).includes('.');
+
+  if (dotBeforeSlash) return `https://${trimmed}`;
+
+  return trimmed;
 }
