@@ -1,3 +1,4 @@
+import { getDbLogger } from '@markdawn/shared';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as pg from 'pg';
 
@@ -23,7 +24,11 @@ const pool = new Pool({
   ssl: isLocalDb ? false : undefined,
 });
 
-pool.on('error', (_err) => {});
+pool.on('error', (err) => {
+  getDbLogger().error('Unexpected database pool error: {message}', {
+    message: err instanceof Error ? err.message : String(err),
+  });
+});
 
 export const db = drizzle(pool);
 export { pool };
