@@ -204,26 +204,26 @@ export function WikiLinkSuggestions({
             {results.length > 0 && onAddPage && (
               <div className="h-px bg-zinc-100 dark:bg-zinc-800/50 my-1 mx-1" />
             )}
-
-            {onAddPage && (
-              <button
-                type="button"
-                onClick={() => onAddPage(trimmedQuery)}
-                className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-all ${
-                  selectedIndex === results.length
-                    ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-50 shadow-sm'
-                    : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-300'
-                }`}
-              >
-                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/50">
-                  <Plus className="h-4 w-4 text-zinc-500 dark:text-zinc-500" />
-                </span>
-                <span className="min-w-0 flex-1 truncate">
-                  {trimmedQuery ? `New "${trimmedQuery}" page` : 'Add new page'}
-                </span>
-              </button>
-            )}
           </>
+        )}
+
+        {onAddPage && (
+          <button
+            type="button"
+            onClick={() => onAddPage(trimmedQuery)}
+            className={`flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-sm transition-all ${
+              selectedIndex === results.length
+                ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-50 shadow-sm'
+                : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/50 hover:text-zinc-900 dark:hover:text-zinc-300'
+            }`}
+          >
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700/50">
+              <Plus className="h-4 w-4 text-zinc-500 dark:text-zinc-500" />
+            </span>
+            <span className="min-w-0 flex-1 truncate">
+              {trimmedQuery ? `New "${trimmedQuery}" page` : 'Add new page'}
+            </span>
+          </button>
         )}
       </div>
     </div>
