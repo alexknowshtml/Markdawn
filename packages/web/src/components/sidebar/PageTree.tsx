@@ -17,6 +17,7 @@ import {
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
+import { extractUuidFromSlug } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { PageTreeRow } from './PageTreeRow';
 
@@ -33,7 +34,7 @@ type EditingTarget =
 export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const navigate = useNavigate();
   const params = useParams();
-  const activePageId = params.pageId;
+  const activePageId = params.slugAndId ? extractUuidFromSlug(params.slugAndId) : undefined;
 
   const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree(workspaceId);
   const {

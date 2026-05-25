@@ -1,3 +1,11 @@
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function extractUuidFromSlug(slug: string): string | undefined {
+  const uuidMatch = slug.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  const candidate = uuidMatch?.[1];
+  return candidate && UUID_REGEX.test(candidate) ? candidate : undefined;
+}
+
 export function ensureAbsoluteUrl(url: string): string {
   if (!url) return url;
 
