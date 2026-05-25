@@ -8,11 +8,13 @@
           if (isDark) {
             document.documentElement.classList.add('dark');
             document.documentElement.style.backgroundColor = '#09090b';
+            document.documentElement.style.colorScheme = 'dark';
             if (document.body) {
               document.body.style.backgroundColor = '#09090b';
             }
           } else {
             document.documentElement.style.backgroundColor = '#ffffff';
+            document.documentElement.style.colorScheme = 'light';
             if (document.body) {
               document.body.style.backgroundColor = '#ffffff';
             }

@@ -11,6 +11,7 @@
 }
 
 :root {
+  color-scheme: light;
   --color-surface: #fafafa;
   --color-surface-alt: #f4f4f5;
   --color-surface-elevated: #e4e4e7;
@@ -20,12 +21,38 @@
 }
 
 .dark {
+  color-scheme: dark;
   --color-surface: #09090b;
   --color-surface-alt: #18181b;
   --color-surface-elevated: #27272a;
   --color-border: #3f3f46;
   --color-text: #fafafa;
   --color-text-muted: #a1a1aa;
+}
+
+/* Chrome, Safari, Edge: thin pill-shaped scrollbar */
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-zinc-300);
+  border-radius: 3px;
+  transition: background 150ms ease;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-zinc-400);
+}
+.dark *::-webkit-scrollbar-thumb,
+.dark::-webkit-scrollbar-thumb {
+  background: var(--color-zinc-600);
+}
+.dark *::-webkit-scrollbar-thumb:hover,
+.dark::-webkit-scrollbar-thumb:hover {
+  background: var(--color-zinc-500);
 }
 
 @layer base {
