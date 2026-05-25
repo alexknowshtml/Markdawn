@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { ConfirmDialog } from '../ConfirmDialog';
 
@@ -70,18 +71,49 @@ export function ExplorerItem({
   const navigate = useNavigate();
   const [showMenu, setShowMenu] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const menuRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+      if (
+        menuRef.current &&
+        !menuRef.current.contains(event.target as Node) &&
+        buttonRef.current &&
+        !buttonRef.current.contains(event.target as Node)
+      ) {
         setShowMenu(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  useEffect(() => {
+    if (!showMenu || !buttonRef.current) {
+      setMenuStyle({});
+      return;
+    }
+
+    const rect = buttonRef.current.getBoundingClientRect();
+    const estimatedHeight = 220;
+    const spaceBelow = window.innerHeight - rect.bottom - 16;
+    const spaceAbove = rect.top - 16;
+    const openUpward = spaceBelow < estimatedHeight && spaceAbove >= estimatedHeight;
+    const top = openUpward
+      ? `${Math.max(8, rect.top - estimatedHeight)}px`
+      : `${rect.bottom + 4}px`;
+
+    setMenuStyle({
+      position: 'fixed',
+      right: `${window.innerWidth - rect.right}px`,
+      top,
+      zIndex: 9999,
+      transformOrigin: openUpward ? 'bottom right' : 'top right',
+    });
+  }, [showMenu]);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -172,8 +204,9 @@ export function ExplorerItem({
             {new Date(updatedDate).toLocaleDateString()}
           </span>
 
-          <div className="relative shrink-0" ref={menuRef}>
+          <div className="relative shrink-0">
             <button
+              ref={buttonRef}
               type="button"
               className="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
               onClick={(e) => {
@@ -184,91 +217,97 @@ export function ExplorerItem({
               <MoreHorizontal size={16} />
             </button>
 
-            {showMenu && (
-              <div className="absolute right-0 top-8 w-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border border-black/5 dark:border-white/5 shadow-xl rounded-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
-                {item.type === 'page' && (
+            {showMenu &&
+              createPortal(
+                <div
+                  ref={menuRef}
+                  style={menuStyle}
+                  className="w-40 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-xl rounded-xl p-1.5 flex flex-col animate-scale-in"
+                >
+                  {item.type === 'page' && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowMenu(false);
+                        navigate(`/app/${workspaceSlug}/${item.id}`);
+                      }}
+                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                    >
+                      <FileText size={14} /> Open
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowMenu(false);
-                      navigate(`/app/${workspaceSlug}/${item.id}`);
+                      onRename();
                     }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
-                    <FileText size={14} /> Open
+                    <Edit2 size={14} /> Rename
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onRename();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Edit2 size={14} /> Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onCopy();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Copy size={14} /> Copy
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onCut();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Scissors size={14} /> Cut
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onMove();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <FolderInput size={14} /> Move
-                </button>
-                {onExport && (
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowMenu(false);
-                      onExport();
+                      onCopy();
                     }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
-                    <Download size={14} /> Export
+                    <Copy size={14} /> Copy
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    setShowDeleteDialog(true);
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onCut();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <Scissors size={14} /> Cut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onMove();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <FolderInput size={14} /> Move
+                  </button>
+                  {onExport && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowMenu(false);
+                        onExport();
+                      }}
+                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                    >
+                      <Download size={14} /> Export
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      setShowDeleteDialog(true);
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>,
+                document.body,
+              )}
           </div>
         </div>
 
@@ -370,8 +409,9 @@ export function ExplorerItem({
             </p>
           </div>
 
-          <div className="relative shrink-0" ref={menuRef}>
+          <div className="relative shrink-0">
             <button
+              ref={buttonRef}
               type="button"
               className="item-action p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors cursor-pointer"
               onClick={(e) => {
@@ -382,91 +422,97 @@ export function ExplorerItem({
               <MoreHorizontal size={16} />
             </button>
 
-            {showMenu && (
-              <div className="absolute right-0 top-7 w-40 bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl border border-black/5 dark:border-white/5 shadow-xl rounded-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
-                {item.type === 'page' && (
+            {showMenu &&
+              createPortal(
+                <div
+                  ref={menuRef}
+                  style={menuStyle}
+                  className="w-40 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-xl rounded-xl p-1.5 flex flex-col animate-scale-in"
+                >
+                  {item.type === 'page' && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowMenu(false);
+                        navigate(`/app/${workspaceSlug}/${item.id}`);
+                      }}
+                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                    >
+                      <FileText size={14} /> Open
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowMenu(false);
-                      navigate(`/app/${workspaceSlug}/${item.id}`);
+                      onRename();
                     }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
-                    <FileText size={14} /> Open
+                    <Edit2 size={14} /> Rename
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onRename();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Edit2 size={14} /> Rename
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onCopy();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Copy size={14} /> Copy
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onCut();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Scissors size={14} /> Cut
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onMove();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <FolderInput size={14} /> Move
-                </button>
-                {onExport && (
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowMenu(false);
-                      onExport();
+                      onCopy();
                     }}
                     className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                   >
-                    <Download size={14} /> Export
+                    <Copy size={14} /> Copy
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    setShowDeleteDialog(true);
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </div>
-            )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onCut();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <Scissors size={14} /> Cut
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      onMove();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <FolderInput size={14} /> Move
+                  </button>
+                  {onExport && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setShowMenu(false);
+                        onExport();
+                      }}
+                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                    >
+                      <Download size={14} /> Export
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowMenu(false);
+                      setShowDeleteDialog(true);
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <Trash2 size={14} /> Delete
+                  </button>
+                </div>,
+                document.body,
+              )}
           </div>
         </div>
       </div>
