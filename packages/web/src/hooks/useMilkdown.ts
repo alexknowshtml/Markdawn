@@ -1,6 +1,6 @@
 import {
-  Editor,
   defaultValueCtx,
+  Editor,
   editorViewCtx,
   editorViewOptionsCtx,
   rootCtx,
@@ -87,7 +87,7 @@ function isLikelyMarkdown(value: string): boolean {
     /^```/m,
     /\*\*[^*]+\*\*/,
     /`[^`]+`/,
-    /\[[^\]]+\]\([^\)]+\)/,
+    /\[[^\]]+\]\([^)]+\)/,
     /\|.+\|/,
     /~~[^~]+~~/,
     /^- \[( |x)\]\s/m,
@@ -173,7 +173,7 @@ function isTaskChecked(checked: unknown): boolean {
   return checked === true || checked === 'true';
 }
 
-function isTaskListItem(checked: unknown): boolean {
+function _isTaskListItem(checked: unknown): boolean {
   return checked !== null && checked !== undefined && checked !== '';
 }
 
@@ -508,7 +508,7 @@ export function useMilkdown({
 
                 return false;
               },
-              click: (view, event) => {
+              click: (_view, event) => {
                 const target = event.target;
                 if (!(target instanceof HTMLElement)) return false;
 

@@ -18,9 +18,7 @@ initLogger()
     logger.debug(`[env] VITE_API_URL: ${import.meta.env.VITE_API_URL ?? 'not set'}`);
     logger.debug(`[env] VITE_COLLAB_URL: ${import.meta.env.VITE_COLLAB_URL ?? 'not set'}`);
   })
-  .catch((err) => {
-    console.error('[app] failed to initialize logger:', err);
-  });
+  .catch((_err) => {});
 
 const queryClient = new QueryClient();
 

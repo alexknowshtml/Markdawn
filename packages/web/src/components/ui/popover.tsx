@@ -8,7 +8,7 @@ interface PopoverProps {
   className?: string;
 }
 
-export function Popover({ opened, onChange, children, className }: PopoverProps) {
+export function Popover({ opened, onChange, children, className: _className }: PopoverProps) {
   const ref = useRef<HTMLDivElement>(null);
 
   const handleClickOutside = useCallback(

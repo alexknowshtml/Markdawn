@@ -176,7 +176,7 @@ export function WorkspaceSettings() {
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
       showSuccessToast('Workspace exported');
-    } catch (err) {
+    } catch (_err) {
       showErrorToast('Failed to export workspace');
     } finally {
       setIsExporting(false);

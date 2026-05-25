@@ -34,7 +34,13 @@ async function moveFolder(folderId: string, parentId: string | null): Promise<vo
 export function useBulkDeletePages() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({ pageIds, workspaceId }: { pageIds: string[]; workspaceId: string }) => {
+    mutationFn: async ({
+      pageIds,
+      workspaceId: _workspaceId,
+    }: {
+      pageIds: string[];
+      workspaceId: string;
+    }) => {
       await Promise.all(pageIds.map((id) => deletePage(id)));
     },
     onSuccess: (_, { workspaceId }) => {
@@ -53,8 +59,11 @@ export function useBulkDeleteFolders() {
   return useMutation({
     mutationFn: async ({
       folderIds,
-      workspaceId,
-    }: { folderIds: string[]; workspaceId: string }) => {
+      workspaceId: _workspaceId,
+    }: {
+      folderIds: string[];
+      workspaceId: string;
+    }) => {
       await Promise.all(folderIds.map((id) => deleteFolder(id)));
     },
     onSuccess: (_, { workspaceId }) => {
@@ -74,8 +83,12 @@ export function useBulkMovePages() {
     mutationFn: async ({
       pageIds,
       parentId,
-      workspaceId,
-    }: { pageIds: string[]; parentId: string | null; workspaceId: string }) => {
+      workspaceId: _workspaceId,
+    }: {
+      pageIds: string[];
+      parentId: string | null;
+      workspaceId: string;
+    }) => {
       await Promise.all(pageIds.map((id) => movePage(id, parentId)));
     },
     onSuccess: (_, { workspaceId }) => {
@@ -94,8 +107,12 @@ export function useBulkMoveFolders() {
     mutationFn: async ({
       folderIds,
       parentId,
-      workspaceId,
-    }: { folderIds: string[]; parentId: string | null; workspaceId: string }) => {
+      workspaceId: _workspaceId,
+    }: {
+      folderIds: string[];
+      parentId: string | null;
+      workspaceId: string;
+    }) => {
       await Promise.all(folderIds.map((id) => moveFolder(id, parentId)));
     },
     onSuccess: (_, { workspaceId }) => {

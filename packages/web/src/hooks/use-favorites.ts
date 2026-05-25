@@ -58,7 +58,11 @@ export function useToggleFavorite() {
     mutationFn: async ({
       pageId,
       isFavorite,
-    }: { pageId: string; isFavorite: boolean; workspaceId: string }) => {
+    }: {
+      pageId: string;
+      isFavorite: boolean;
+      workspaceId: string;
+    }) => {
       if (isFavorite) {
         await removeFavorite(pageId);
       } else {

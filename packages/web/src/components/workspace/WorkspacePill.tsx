@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { Briefcase, ChevronDown, Plus, Users } from 'lucide-react';
-import React, { useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useWorkspaces } from '../../hooks/use-workspaces';
 
@@ -14,7 +14,7 @@ interface WorkspacePillProps {
 export function WorkspacePill({
   className,
   collapsed = false,
-  onToggleCollapsed,
+  onToggleCollapsed: _onToggleCollapsed,
   onCreateWorkspace,
 }: WorkspacePillProps) {
   const navigate = useNavigate();

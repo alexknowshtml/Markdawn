@@ -36,9 +36,12 @@ export function useCopyPage() {
     mutationFn: ({
       pageId,
       parentId,
-      workspaceId,
-    }: { pageId: string; parentId?: string | null; workspaceId: string }) =>
-      copyPage(pageId, parentId),
+      workspaceId: _workspaceId,
+    }: {
+      pageId: string;
+      parentId?: string | null;
+      workspaceId: string;
+    }) => copyPage(pageId, parentId),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
       showSuccessToast('Page copied');
@@ -55,9 +58,12 @@ export function useCopyFolder() {
     mutationFn: ({
       folderId,
       parentId,
-      workspaceId,
-    }: { folderId: string; parentId?: string | null; workspaceId: string }) =>
-      copyFolder(folderId, parentId),
+      workspaceId: _workspaceId,
+    }: {
+      folderId: string;
+      parentId?: string | null;
+      workspaceId: string;
+    }) => copyFolder(folderId, parentId),
     onSuccess: (_, { workspaceId }) => {
       queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
       queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });

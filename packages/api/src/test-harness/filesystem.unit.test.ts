@@ -69,7 +69,7 @@ describe('test-harness / filesystem isolation', () => {
   });
 
   it('idempotent cleanup does not throw', () => {
-    const { path, cleanup } = createTestTempDir();
+    const { path: _path, cleanup } = createTestTempDir();
     cleanup();
     expect(() => cleanup()).not.toThrow();
   });

@@ -60,10 +60,7 @@ export class KeyboardRegistry {
         if (handled === false) continue; // Handler returned false — try next binding
         if (b.preventDefault) event.preventDefault();
         return true;
-      } catch {
-        // Handler threw — log and continue so other bindings can still fire
-        console.error('[KeyboardRegistry] handler threw for binding:', b.id);
-      }
+      } catch {}
     }
     return false;
   }

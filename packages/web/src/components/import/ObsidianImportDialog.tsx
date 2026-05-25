@@ -1,6 +1,6 @@
 import { directoryOpen } from 'browser-fs-access';
 import { AlertCircle, CheckCircle, FileText, FolderOpen, Image, Loader2, X } from 'lucide-react';
-import React, { useState, useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 interface VaultFile {
   path: string;
@@ -135,7 +135,7 @@ export function ObsidianImportDialog({
           extractFrontmatterTags(content, tags);
 
           const HEX_ONLY = /^[0-9a-fA-F]+$/;
-          const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-\/]+)/g);
+          const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-/]+)/g);
           for (const match of inlineTags) {
             const rawTag = match[1];
             if (!rawTag) continue;
@@ -192,7 +192,7 @@ export function ObsidianImportDialog({
     setStep('uploading');
     setProgress(0);
 
-    const totalFiles = files.length;
+    const _totalFiles = files.length;
 
     try {
       const res = await fetch(
