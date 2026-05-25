@@ -9,6 +9,7 @@ import * as Y from 'yjs';
 // that fires when pushing to detached XmlElements during doc construction.
 // The ref count ensures concurrent callers don't restore warn prematurely.
 let warnSuppressionCount = 0;
+// biome-ignore lint/suspicious/noConsole: save original to intercept Yjs library warnings during doc construction
 const originalWarn = console.warn;
 
 function suppressYjsWarn(): void {

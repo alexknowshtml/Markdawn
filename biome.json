@@ -38,12 +38,7 @@
       },
       "suspicious": {
         "noExplicitAny": "error",
-        "noConsole": {
-          "level": "warn",
-          "options": {
-            "allow": ["warn", "error"]
-          }
-        }
+        "noConsole": "error"
       },
       "style": {
         "useConst": "error",
