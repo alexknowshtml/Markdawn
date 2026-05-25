@@ -75,7 +75,7 @@ export function Breadcrumbs({
   }
 
   return (
-    <div className="flex items-center gap-1 text-sm font-medium text-zinc-500 dark:text-zinc-400 overflow-x-auto whitespace-nowrap scrollbar-hide">
+    <div className="flex items-center gap-1 text-sm font-medium text-zinc-500 dark:text-zinc-400 overflow-x-auto whitespace-nowrap scrollbar-none">
       <Link
         to={`/app/${workspaceSlug}`}
         className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors px-1.5 py-0.5 -ml-1.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
