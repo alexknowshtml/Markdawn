@@ -15,17 +15,6 @@
     "format": "biome check --write",
     "dev:full": "pnpm db:start && pnpm dev"
   },
-  "pnpm": {
-    "overrides": {
-      "yjs": "13.6.29"
-    },
-    "onlyBuiltDependencies": [
-      "@playwright/test"
-    ],
-    "ignoredBuiltDependencies": [
-      "@biomejs/biome"
-    ]
-  },
   "devDependencies": {
     "@biomejs/biome": "^2.4.15",
     "tsx": "^4.21.0",
@@ -35,5 +24,6 @@
   "dependencies": {
     "@milkdown/plugin-history": "^7.20.0",
     "@milkdown/plugin-tooltip": "^7.20.0"
-  }
+  },
+  "packageManager": "pnpm@11.3.0+sha512.2c403d6594527287672b1f7056343a1f7c3634036a67ffabfcc2b3d7595d843768f8787148d1b57cf7956c90606bbd192857c363af19e96d2d0ec9ec5741d215"
 }
