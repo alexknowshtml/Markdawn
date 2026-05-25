@@ -1,4 +1,5 @@
 import type { EditorView } from '@milkdown/kit/prose/view';
+import { ensureAbsoluteUrl } from '../../utils/url';
 
 export interface LinkEditorOptions {
   initialUrl: string;
@@ -51,7 +52,7 @@ export class LinkEditor {
     tooltip.style.zIndex = '1000';
 
     const urlText = document.createElement('a');
-    urlText.href = options.initialUrl;
+    urlText.href = ensureAbsoluteUrl(options.initialUrl);
     urlText.target = '_blank';
     urlText.rel = 'noopener noreferrer';
     urlText.textContent = options.initialUrl;

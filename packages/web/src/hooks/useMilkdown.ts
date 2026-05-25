@@ -31,6 +31,7 @@ import { tag } from '../editor/plugins/tag';
 import { wikiLinkView } from '../editor/plugins/wikiLinkView';
 import { wikiLink } from '../editor/plugins/wikilink';
 import { repairDocument } from '../editor/utils/documentRepair';
+import { ensureAbsoluteUrl } from '../utils/url';
 import 'katex/dist/katex.min.css';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { getContrastColor } from '@markdawn/shared';
@@ -534,7 +535,7 @@ export function useMilkdown({
 
                 event.preventDefault();
                 linkEditor.close();
-                window.open(href, '_blank', 'noopener,noreferrer');
+                window.open(ensureAbsoluteUrl(href), '_blank', 'noopener,noreferrer');
                 return true;
               },
               mouseover: (view, event) => {
@@ -580,7 +581,9 @@ export function useMilkdown({
                     tr.replaceWith(
                       markFrom,
                       markTo,
-                      view.state.schema.text(text, [linkMarkType.create({ href: url })]),
+                      view.state.schema.text(text, [
+                        linkMarkType.create({ href: ensureAbsoluteUrl(url) }),
+                      ]),
                     );
                     view.dispatch(tr);
                   },

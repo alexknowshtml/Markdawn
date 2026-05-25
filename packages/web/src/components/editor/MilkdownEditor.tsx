@@ -7,6 +7,7 @@ import { useSlashMenu } from '../../hooks/useSlashMenu';
 import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
+import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
 import type { Editor } from '@milkdown/core';
@@ -431,7 +432,7 @@ export function MilkdownEditor({
         const linkMark = state.schema.marks.link;
         if (!linkMark) return;
 
-        const mark = linkMark.create({ href: url });
+        const mark = linkMark.create({ href: ensureAbsoluteUrl(url) });
         const tr = state.tr.addMark(state.selection.from, state.selection.to, mark);
         dispatch(tr);
       });
