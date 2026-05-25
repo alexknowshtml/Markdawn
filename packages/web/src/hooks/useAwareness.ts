@@ -7,7 +7,7 @@ export function useAwareness(provider: HocuspocusProvider | null) {
   const { data: session } = useAuth();
 
   useEffect(() => {
-    if (!provider || !provider.awareness || !session?.user) return;
+    if (!provider?.awareness || !session?.user) return;
 
     const userColor = getStableColor(session.user.id);
     provider.awareness.setLocalStateField('user', {

@@ -14,7 +14,7 @@ export interface FloatingToolbarApi {
 
 function computePosition(): { top: number; left: number } {
   const selection = window.getSelection();
-  if (!selection || !selection.rangeCount) {
+  if (!selection?.rangeCount) {
     return { top: 0, left: 0 };
   }
   const range = selection.getRangeAt(0);
@@ -43,11 +43,11 @@ export function useFloatingToolbar(): FloatingToolbarApi {
 
   const reposition = useCallback(() => {
     const selection = window.getSelection();
-    if (!selection || !selection.rangeCount) {
+    if (!selection?.rangeCount) {
       return;
     }
     const container = document.querySelector('.milkdown-editor');
-    if (!container || !container.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+    if (!container?.contains(selection.getRangeAt(0).commonAncestorContainer)) {
       return;
     }
     setToolbarState({
@@ -72,7 +72,7 @@ export function useFloatingToolbar(): FloatingToolbarApi {
         const range = selection.getRangeAt(0);
         const container = document.querySelector('.milkdown-editor');
 
-        if (!container || !container.contains(range.commonAncestorContainer)) {
+        if (!container?.contains(range.commonAncestorContainer)) {
           setToolbarState((prev) => ({ ...prev, visible: false }));
           return;
         }
