@@ -1,6 +1,6 @@
 import clsx from 'clsx';
 import { Menu } from 'lucide-react';
-import React, { useState, useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useShortcut } from '../contexts/KeyboardShortcutContext';
 import { useWorkspaces } from '../hooks/use-workspaces';
@@ -16,7 +16,7 @@ export function AppShell() {
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
   const [isHovered, setIsHovered] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [showCreateWorkspace, setShowCreateWorkspace] = useState(false);
+  const [_showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const { setTheme, isDark } = useTheme();
   const location = useLocation();
   const { data: workspaces } = useWorkspaces();
@@ -83,7 +83,8 @@ export function AppShell() {
       />
 
       {/* Visual Sidebar - handles the slide/fade animation and hover overlay */}
-      <div
+      <section
+        aria-label="Sidebar"
         className={clsx(
           'hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-screen transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] z-40 w-[252px] fixed left-0',
           collapsed
@@ -111,23 +112,33 @@ export function AppShell() {
           onToggleCollapsed={toggleCollapsed}
           className="flex-shrink-0"
         />
-      </div>
+      </section>
 
       {collapsed && !isHovered && (
-        <div
-          className="hidden md:block fixed left-0 top-0 bottom-0 w-16 z-50 cursor-pointer"
+        <button
+          type="button"
+          className="hidden md:block fixed left-0 top-0 bottom-0 w-16 z-50 bg-transparent border-none p-0 cursor-pointer"
           onMouseEnter={() => setIsHovered(true)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setIsHovered(true);
+            }
+          }}
+          aria-label="Show sidebar"
         />
       )}
 
       {isMobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex">
-          <div
-            className="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm animate-fade-in"
+          <button
+            type="button"
+            className="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm animate-fade-in border-none p-0 cursor-pointer"
             onClick={() => setIsMobileMenuOpen(false)}
             onKeyDown={(e) => {
               if (e.key === 'Escape') setIsMobileMenuOpen(false);
             }}
+            aria-label="Close menu"
           />
           <div className="relative flex w-auto max-w-[80%] flex-col p-3 gap-3 animate-slide-right h-[100vh]">
             <WorkspacePill
