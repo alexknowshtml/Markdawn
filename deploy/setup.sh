@@ -70,6 +70,7 @@ echo -e "${YELLOW}[STEP 7/8] Setting up Podman Quadlet services...${NC}"
 mkdir -p ~/.config/containers/systemd
 
 podman volume create postgres-data 2>/dev/null || true
+podman volume create markdawn-data 2>/dev/null || true
 
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/systemd/
