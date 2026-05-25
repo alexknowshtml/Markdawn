@@ -2,18 +2,22 @@
 <html lang="en">
   <head>
     <script>
-      (function() {
+      (() => {
         try {
-          var isDark = localStorage.getItem('markdawn-theme') === 'dark' || ((!localStorage.getItem('markdawn-theme') || localStorage.getItem('markdawn-theme') === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+          const isDark = localStorage.getItem('markdawn-theme') === 'dark' || ((!localStorage.getItem('markdawn-theme') || localStorage.getItem('markdawn-theme') === 'system') && window.matchMedia('(prefers-color-scheme: dark)').matches);
           if (isDark) {
             document.documentElement.classList.add('dark');
             document.documentElement.style.backgroundColor = '#09090b';
-            document.body && (document.body.style.backgroundColor = '#09090b');
+            if (document.body) {
+              document.body.style.backgroundColor = '#09090b';
+            }
           } else {
             document.documentElement.style.backgroundColor = '#ffffff';
-            document.body && (document.body.style.backgroundColor = '#ffffff');
+            if (document.body) {
+              document.body.style.backgroundColor = '#ffffff';
+            }
           }
-        } catch (e) {}
+        } catch (_e) {}
       })();
     </script>
     <meta charset="UTF-8" />
