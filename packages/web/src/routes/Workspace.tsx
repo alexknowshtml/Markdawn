@@ -23,6 +23,7 @@ import {
   useBulkMovePages,
 } from '../hooks/use-bulk-actions';
 import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
+import { useFavorites, useToggleFavorite } from '../hooks/use-favorites';
 import {
   useCreateFolder,
   useDeleteFolder,
@@ -48,6 +49,13 @@ export default function Workspace() {
     isLoading: isFoldersLoading,
     error: foldersError,
   } = useFolderTree(workspace?.id ?? '');
+  const { data: favorites } = useFavorites(workspace?.id);
+  const toggleFavoriteMutation = useToggleFavorite();
+
+  const favoritePageIds = useMemo(
+    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+    [favorites],
+  );
 
   const createPageMutation = useCreatePage();
   const createFolderMutation = useCreateFolder();
@@ -159,6 +167,11 @@ export default function Workspace() {
     return [...folderItems, ...pageItems];
   }, [currentFolders, currentPages]);
 
+  const favoriteItems = useMemo(
+    () => allItems.filter((item) => item.type === 'page' && favoritePageIds.has(item.id)),
+    [allItems, favoritePageIds],
+  );
+
   const handleCreatePage = async () => {
     if (!workspace?.id) return;
     try {
@@ -268,6 +281,20 @@ export default function Workspace() {
       showSuccessToast('Exported to markdown');
     } catch {
       showErrorToast('Failed to export');
+    }
+  };
+
+  const handleToggleFavorite = async (pageId: string) => {
+    if (!workspace?.id) return;
+    const isCurrentlyFavorite = favoritePageIds.has(pageId);
+    try {
+      await toggleFavoriteMutation.mutateAsync({
+        pageId,
+        isFavorite: isCurrentlyFavorite,
+        workspaceId: workspace.id,
+      });
+    } catch {
+      showErrorToast(isCurrentlyFavorite ? 'Failed to remove favorite' : 'Failed to add favorite');
     }
   };
 
@@ -529,76 +556,190 @@ export default function Workspace() {
           </p>
         </div>
       ) : viewMode === 'card' ? (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 animate-fade-in">
-          {allItems.map((item, index) => (
-            <ExplorerItem
-              key={`${item.type}-${item.id}`}
-              item={item}
-              viewMode="card"
-              isSelected={selection.isSelected(item.id)}
-              workspaceSlug={workspaceSlug ?? ''}
-              onSelect={(e) => {
-                e.stopPropagation();
-                selection.toggle({ id: item.id, type: item.type });
-              }}
-              onNavigate={(e) => handleItemClick(item, index, e)}
-              onDelete={() => void handleDeleteItem(item)}
-              onRename={() => handleRenameItem(item)}
-              onCopy={() => handleCopyItem(item)}
-              onCut={() => handleCutItem(item)}
-              onMove={() => handleMoveItem(item)}
-              {...(item.type === 'page'
-                ? { onExport: () => void handleExport(item.id, item.title) }
-                : {})}
-              isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
-              editValue={editingTarget?.value ?? ''}
-              onEditChange={(value) =>
-                setEditingTarget((prev) => (prev ? { ...prev, value } : null))
-              }
-              onEditSave={() => void handleSaveRename()}
-              onEditKeyDown={handleEditKeyDown}
-            />
-          ))}
+        <div className="space-y-8 animate-fade-in">
+          {favoriteItems.length > 0 && (
+            <div>
+              <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
+                Favorites
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {favoriteItems.map((item, index) => (
+                  <ExplorerItem
+                    key={`${item.type}-${item.id}`}
+                    item={item}
+                    viewMode="card"
+                    isSelected={selection.isSelected(item.id)}
+                    workspaceSlug={workspaceSlug ?? ''}
+                    isFavorite={favoritePageIds.has(item.id)}
+                    onToggleFavorite={() => {
+                      void handleToggleFavorite(item.id);
+                    }}
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      selection.toggle({ id: item.id, type: item.type });
+                    }}
+                    onNavigate={(e) => handleItemClick(item, index, e)}
+                    onDelete={() => void handleDeleteItem(item)}
+                    onRename={() => handleRenameItem(item)}
+                    onCopy={() => handleCopyItem(item)}
+                    onCut={() => handleCutItem(item)}
+                    onMove={() => handleMoveItem(item)}
+                    {...(item.type === 'page'
+                      ? { onExport: () => void handleExport(item.id, item.title) }
+                      : {})}
+                    isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                    editValue={editingTarget?.value ?? ''}
+                    onEditChange={(value) =>
+                      setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+                    }
+                    onEditSave={() => void handleSaveRename()}
+                    onEditKeyDown={handleEditKeyDown}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
+          <div>
+            <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
+              All Pages
+            </h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {allItems.map((item, index) => (
+                <ExplorerItem
+                  key={`${item.type}-${item.id}`}
+                  item={item}
+                  viewMode="card"
+                  isSelected={selection.isSelected(item.id)}
+                  workspaceSlug={workspaceSlug ?? ''}
+                  onSelect={(e) => {
+                    e.stopPropagation();
+                    selection.toggle({ id: item.id, type: item.type });
+                  }}
+                  onNavigate={(e) => handleItemClick(item, index, e)}
+                  onDelete={() => void handleDeleteItem(item)}
+                  onRename={() => handleRenameItem(item)}
+                  onCopy={() => handleCopyItem(item)}
+                  onCut={() => handleCutItem(item)}
+                  onMove={() => handleMoveItem(item)}
+                  {...(item.type === 'page'
+                    ? {
+                        onExport: () => void handleExport(item.id, item.title),
+                        isFavorite: favoritePageIds.has(item.id),
+                        onToggleFavorite: () => {
+                          void handleToggleFavorite(item.id);
+                        },
+                      }
+                    : {})}
+                  isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                  editValue={editingTarget?.value ?? ''}
+                  onEditChange={(value) =>
+                    setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+                  }
+                  onEditSave={() => void handleSaveRename()}
+                  onEditKeyDown={handleEditKeyDown}
+                />
+              ))}
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden animate-fade-in">
-          <div className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
-            <span className="w-5" />
-            <span className="w-8" />
-            <span>Name</span>
-            <span className="hidden md:block w-32 text-right">Last edited</span>
-            <span className="w-8" />
-          </div>
-          <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-            {allItems.map((item, index) => (
-              <ExplorerItem
-                key={`${item.type}-${item.id}`}
-                item={item}
-                viewMode="list"
-                isSelected={selection.isSelected(item.id)}
-                workspaceSlug={workspaceSlug ?? ''}
-                onSelect={(e) => {
-                  e.stopPropagation();
-                  selection.toggle({ id: item.id, type: item.type });
-                }}
-                onNavigate={(e) => handleItemClick(item, index, e)}
-                onDelete={() => void handleDeleteItem(item)}
-                onRename={() => handleRenameItem(item)}
-                onCopy={() => handleCopyItem(item)}
-                onCut={() => handleCutItem(item)}
-                onMove={() => handleMoveItem(item)}
-                {...(item.type === 'page'
-                  ? { onExport: () => void handleExport(item.id, item.title) }
-                  : {})}
-                isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
-                editValue={editingTarget?.value ?? ''}
-                onEditChange={(value) =>
-                  setEditingTarget((prev) => (prev ? { ...prev, value } : null))
-                }
-                onEditSave={() => void handleSaveRename()}
-                onEditKeyDown={handleEditKeyDown}
-              />
-            ))}
+        <div className="space-y-8">
+          {favoriteItems.length > 0 && (
+            <div>
+              <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
+                Favorites
+              </h2>
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
+                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                  {favoriteItems.map((item, index) => (
+                    <ExplorerItem
+                      key={`${item.type}-${item.id}`}
+                      item={item}
+                      viewMode="list"
+                      isSelected={selection.isSelected(item.id)}
+                      workspaceSlug={workspaceSlug ?? ''}
+                      onSelect={(e) => {
+                        e.stopPropagation();
+                        selection.toggle({ id: item.id, type: item.type });
+                      }}
+                      onNavigate={(e) => handleItemClick(item, index, e)}
+                      onDelete={() => void handleDeleteItem(item)}
+                      onRename={() => handleRenameItem(item)}
+                      onCopy={() => handleCopyItem(item)}
+                      onCut={() => handleCutItem(item)}
+                      onMove={() => handleMoveItem(item)}
+                      {...(item.type === 'page'
+                        ? {
+                            onExport: () => void handleExport(item.id, item.title),
+                            isFavorite: favoritePageIds.has(item.id),
+                            onToggleFavorite: () => {
+                              void handleToggleFavorite(item.id);
+                            },
+                          }
+                        : {})}
+                      isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                      editValue={editingTarget?.value ?? ''}
+                      onEditChange={(value) =>
+                        setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+                      }
+                      onEditSave={() => void handleSaveRename()}
+                      onEditKeyDown={handleEditKeyDown}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+          <div>
+            <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
+              All Pages
+            </h2>
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
+              <div className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
+                <span className="w-5" />
+                <span className="w-8" />
+                <span>Name</span>
+                <span className="hidden md:block w-32 text-right">Last edited</span>
+                <span className="w-8" />
+              </div>
+              <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+                {allItems.map((item, index) => (
+                  <ExplorerItem
+                    key={`${item.type}-${item.id}`}
+                    item={item}
+                    viewMode="list"
+                    isSelected={selection.isSelected(item.id)}
+                    workspaceSlug={workspaceSlug ?? ''}
+                    onSelect={(e) => {
+                      e.stopPropagation();
+                      selection.toggle({ id: item.id, type: item.type });
+                    }}
+                    onNavigate={(e) => handleItemClick(item, index, e)}
+                    onDelete={() => void handleDeleteItem(item)}
+                    onRename={() => handleRenameItem(item)}
+                    onCopy={() => handleCopyItem(item)}
+                    onCut={() => handleCutItem(item)}
+                    onMove={() => handleMoveItem(item)}
+                    {...(item.type === 'page'
+                      ? {
+                          onExport: () => void handleExport(item.id, item.title),
+                          isFavorite: favoritePageIds.has(item.id),
+                          onToggleFavorite: () => {
+                            void handleToggleFavorite(item.id);
+                          },
+                        }
+                      : {})}
+                    isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                    editValue={editingTarget?.value ?? ''}
+                    onEditChange={(value) =>
+                      setEditingTarget((prev) => (prev ? { ...prev, value } : null))
+                    }
+                    onEditSave={() => void handleSaveRename()}
+                    onEditKeyDown={handleEditKeyDown}
+                  />
+                ))}
+              </div>
+            </div>
           </div>
         </div>
       )}
