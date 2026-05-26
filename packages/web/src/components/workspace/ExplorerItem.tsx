@@ -139,6 +139,24 @@ export function ExplorerItem({
     onSelect(e);
   };
 
+  const renderFavoriteToggle = () => {
+    if (item.type !== 'page' || !onToggleFavorite) return null;
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setShowMenu(false);
+          onToggleFavorite();
+        }}
+        className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+      >
+        <Star size={14} className={isFavorite ? 'text-yellow-500' : ''} />
+        {isFavorite ? 'Unfavorite' : 'Favorite'}
+      </button>
+    );
+  };
+
   const updatedDate =
     typeof item.updatedAt === 'string' ? item.updatedAt : item.updatedAt.toISOString();
 
@@ -242,20 +260,7 @@ export function ExplorerItem({
                       <FileText size={14} /> Open
                     </button>
                   )}
-                  {item.type === 'page' && onToggleFavorite && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(false);
-                        onToggleFavorite();
-                      }}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Star size={14} className={isFavorite ? 'text-yellow-500' : ''} />
-                      {isFavorite ? 'Unfavorite' : 'Favorite'}
-                    </button>
-                  )}
+                  {renderFavoriteToggle()}
                   <button
                     type="button"
                     onClick={(e) => {
@@ -461,20 +466,7 @@ export function ExplorerItem({
                       <FileText size={14} /> Open
                     </button>
                   )}
-                  {item.type === 'page' && onToggleFavorite && (
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setShowMenu(false);
-                        onToggleFavorite();
-                      }}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Star size={14} className={isFavorite ? 'text-yellow-500' : ''} />
-                      {isFavorite ? 'Unfavorite' : 'Favorite'}
-                    </button>
-                  )}
+                  {renderFavoriteToggle()}
                   <button
                     type="button"
                     onClick={(e) => {
