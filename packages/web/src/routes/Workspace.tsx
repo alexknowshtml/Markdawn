@@ -172,6 +172,11 @@ export default function Workspace() {
     [allItems, favoritePageIds],
   );
 
+  const allItemIndexMap = useMemo(
+    () => new Map(allItems.map((item, index) => [item.id, index])),
+    [allItems],
+  );
+
   const handleCreatePage = async () => {
     if (!workspace?.id) return;
     try {
@@ -287,15 +292,11 @@ export default function Workspace() {
   const handleToggleFavorite = async (pageId: string) => {
     if (!workspace?.id) return;
     const isCurrentlyFavorite = favoritePageIds.has(pageId);
-    try {
-      await toggleFavoriteMutation.mutateAsync({
-        pageId,
-        isFavorite: isCurrentlyFavorite,
-        workspaceId: workspace.id,
-      });
-    } catch {
-      showErrorToast(isCurrentlyFavorite ? 'Failed to remove favorite' : 'Failed to add favorite');
-    }
+    await toggleFavoriteMutation.mutateAsync({
+      pageId,
+      isFavorite: isCurrentlyFavorite,
+      workspaceId: workspace.id,
+    });
   };
 
   const handleBulkDelete = async () => {
@@ -563,7 +564,7 @@ export default function Workspace() {
                 Favorites
               </h2>
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {favoriteItems.map((item, index) => (
+                {favoriteItems.map((item) => (
                   <ExplorerItem
                     key={`${item.type}-${item.id}`}
                     item={item}
@@ -578,7 +579,7 @@ export default function Workspace() {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
                     }}
-                    onNavigate={(e) => handleItemClick(item, index, e)}
+                    onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
                     onDelete={() => void handleDeleteItem(item)}
                     onRename={() => handleRenameItem(item)}
                     onCopy={() => handleCopyItem(item)}
@@ -651,7 +652,7 @@ export default function Workspace() {
               </h2>
               <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  {favoriteItems.map((item, index) => (
+                  {favoriteItems.map((item) => (
                     <ExplorerItem
                       key={`${item.type}-${item.id}`}
                       item={item}
@@ -662,7 +663,9 @@ export default function Workspace() {
                         e.stopPropagation();
                         selection.toggle({ id: item.id, type: item.type });
                       }}
-                      onNavigate={(e) => handleItemClick(item, index, e)}
+                      onNavigate={(e) =>
+                        handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)
+                      }
                       onDelete={() => void handleDeleteItem(item)}
                       onRename={() => handleRenameItem(item)}
                       onCopy={() => handleCopyItem(item)}
