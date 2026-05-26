@@ -1,5 +1,14 @@
 import type { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
-import { ChevronsDown, ChevronsUp, Download, FilePlus2, FolderPlus, Home } from 'lucide-react';
+import {
+  ChevronDown,
+  ChevronRight,
+  ChevronsDown,
+  ChevronsUp,
+  Download,
+  FilePlus2,
+  FolderPlus,
+  Home,
+} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
@@ -44,6 +53,11 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   } = useFolderTree(workspaceId);
   const { data: favorites } = useFavorites(workspaceId);
 
+  const favoritePageIds = useMemo(
+    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+    [favorites],
+  );
+
   const createPageMutation = useCreatePage();
   const updatePageMutation = useUpdatePage();
   const deletePageMutation = useDeletePage();
@@ -54,6 +68,8 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const importMarkdownMutation = useImportMarkdown();
 
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
+  const [favoritesCollapsed, setFavoritesCollapsed] = useState(false);
+  const [allPagesCollapsed, setAllPagesCollapsed] = useState(false);
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
   const [deleteFolderConfirm, setDeleteFolderConfirm] = useState<{
@@ -182,8 +198,12 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   const toggleExpandAll = () => {
     if (isAllExpanded) {
       setExpandedFolderIds(new Set());
+      setFavoritesCollapsed(true);
+      setAllPagesCollapsed(true);
     } else {
       setExpandedFolderIds(new Set(allFolderIds));
+      setFavoritesCollapsed(false);
+      setAllPagesCollapsed(false);
     }
   };
 
@@ -261,12 +281,12 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     }
   };
 
-  const handleUnfavorite = async (pageId: string) => {
-    try {
-      await toggleFavoriteMutation.mutateAsync({ pageId, isFavorite: true, workspaceId });
-    } catch {
-      showErrorToast('Failed to remove favorite');
-    }
+  const handleToggleFavorite = async (pageId: string, isCurrentlyFavorite: boolean) => {
+    await toggleFavoriteMutation.mutateAsync({
+      pageId,
+      isFavorite: isCurrentlyFavorite,
+      workspaceId,
+    });
   };
 
   const handleExport = async (pageId: string, title: string) => {
@@ -385,8 +405,10 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                   workspaceSlug={workspaceSlug}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
-                  isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
-                  onToggleFavorite={() => handleUnfavorite(page.id)}
+                  isFavorite={favoritePageIds.has(page.id)}
+                  onToggleFavorite={() =>
+                    handleToggleFavorite(page.id, favoritePageIds.has(page.id))
+                  }
                   onDelete={() => handleDeletePage(page.id)}
                   onRename={() => beginRenamePage(page)}
                   onExport={() => handleExport(page.id, page.title)}
@@ -433,139 +455,174 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
+        <div className="flex items-center justify-center gap-1 mb-2">
+          <button
+            type="button"
+            onClick={() => {
+              navigate(`/app/${workspaceSlug}`);
+            }}
+            className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            title="Go to workspace home"
+            data-testid="home-btn"
+          >
+            <Home size={16} />
+          </button>
+          <label
+            className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            title="Import markdown file"
+          >
+            <input type="file" accept=".md" className="hidden" onChange={handleImportMarkdown} />
+            <Download size={16} />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              void handleCreateRootFolder();
+            }}
+            className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            title="Create folder (Ctrl/Cmd+Shift+N)"
+            data-testid="new-folder-btn"
+          >
+            <FolderPlus size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              void handleCreateRootPage();
+            }}
+            className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            title="Create note (Ctrl/Cmd+N)"
+            data-testid="new-page-btn"
+          >
+            <FilePlus2 size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={toggleExpandAll}
+            className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+            title={isAllExpanded ? 'Collapse all folders' : 'Expand all folders'}
+            data-testid="toggle-expand-all-btn"
+          >
+            {isAllExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
+          </button>
+        </div>
+
         {favorites && favorites.length > 0 && (
           <div className="mb-2">
-            <div className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider">
+            <button
+              type="button"
+              onClick={() => setFavoritesCollapsed((prev) => !prev)}
+              aria-expanded={!favoritesCollapsed}
+              className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+            >
+              {favoritesCollapsed ? (
+                <ChevronRight size={14} className="mr-1 shrink-0" />
+              ) : (
+                <ChevronDown size={14} className="mr-1 shrink-0" />
+              )}
               <span>Favorites</span>
-            </div>
-            <div className="space-y-0.5">
-              {favorites.map((fav) => (
-                <PageTreeRow
-                  key={fav.pageId}
-                  id={fav.pageId}
-                  title={fav.title}
-                  icon={fav.icon}
-                  workspaceSlug={workspaceSlug}
-                  isActive={activePageId === fav.pageId}
-                  isFavorite={true}
-                  onToggleFavorite={() => handleUnfavorite(fav.pageId)}
-                  onDelete={() => handleDeletePage(fav.pageId)}
-                  onExport={() => handleExport(fav.pageId, fav.title)}
-                />
-              ))}
-            </div>
+            </button>
+            {!favoritesCollapsed && (
+              <div className="space-y-0.5">
+                {favorites.map((fav) => (
+                  <PageTreeRow
+                    key={fav.pageId}
+                    id={fav.pageId}
+                    title={fav.title}
+                    icon={fav.icon}
+                    workspaceSlug={workspaceSlug}
+                    isActive={activePageId === fav.pageId}
+                    isFavorite={true}
+                    onToggleFavorite={() => handleToggleFavorite(fav.pageId, true)}
+                    onDelete={() => handleDeletePage(fav.pageId)}
+                    onExport={() => handleExport(fav.pageId, fav.title)}
+                  />
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         <div>
-          <div className="flex items-center justify-center gap-1 mb-2">
-            <button
-              type="button"
-              onClick={() => {
-                navigate(`/app/${workspaceSlug}`);
-              }}
-              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-              title="Go to workspace home"
-              data-testid="home-btn"
-            >
-              <Home size={16} />
-            </button>
-            <label
-              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-              title="Import markdown file"
-            >
-              <input type="file" accept=".md" className="hidden" onChange={handleImportMarkdown} />
-              <Download size={16} />
-            </label>
-            <button
-              type="button"
-              onClick={() => {
-                void handleCreateRootFolder();
-              }}
-              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-              title="Create folder (Ctrl/Cmd+Shift+N)"
-              data-testid="new-folder-btn"
-            >
-              <FolderPlus size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                void handleCreateRootPage();
-              }}
-              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-              title="Create note (Ctrl/Cmd+N)"
-              data-testid="new-page-btn"
-            >
-              <FilePlus2 size={16} />
-            </button>
-            <button
-              type="button"
-              onClick={toggleExpandAll}
-              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-              title={isAllExpanded ? 'Collapse all folders' : 'Expand all folders'}
-              data-testid="toggle-expand-all-btn"
-            >
-              {isAllExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
-            </button>
-          </div>
-
-          <div className="space-y-0.5">
-            {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
-            {rootPages.map((page) => {
-              const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === page.id;
-              return (
-                <PageTreeRow
-                  key={page.id}
-                  id={page.id}
-                  title={page.title}
-                  icon={page.icon}
-                  workspaceSlug={workspaceSlug}
-                  isActive={activePageId === page.id}
-                  isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
-                  onToggleFavorite={() => handleUnfavorite(page.id)}
-                  onDelete={() => handleDeletePage(page.id)}
-                  onRename={() => beginRenamePage(page)}
-                  onExport={() => handleExport(page.id, page.title)}
-                  isEditing={isEditingPage}
-                  editTitle={isEditingPage ? editingTarget.value : page.title}
-                  onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-                  onEditSave={() => {
-                    void saveRename();
-                  }}
-                  onEditKeyDown={onRenameKeyDown}
-                />
-              );
-            })}
-            {orphanNestedPages.map((page) => {
-              const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === page.id;
-              return (
-                <PageTreeRow
-                  key={`orphan-${page.id}`}
-                  id={page.id}
-                  title={page.title}
-                  icon={page.icon}
-                  workspaceSlug={workspaceSlug}
-                  isActive={activePageId === page.id}
-                  isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
-                  onToggleFavorite={() => handleUnfavorite(page.id)}
-                  onDelete={() => handleDeletePage(page.id)}
-                  onRename={() => beginRenamePage(page)}
-                  onExport={() => handleExport(page.id, page.title)}
-                  isEditing={isEditingPage}
-                  editTitle={isEditingPage ? editingTarget.value : page.title}
-                  onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-                  onEditSave={() => {
-                    void saveRename();
-                  }}
-                  onEditKeyDown={onRenameKeyDown}
-                />
-              );
-            })}
-            {rootFolders.length === 0 && rootPages.length === 0 && (
-              <div className="px-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">No notes yet</div>
+          <button
+            type="button"
+            onClick={() => setAllPagesCollapsed((prev) => !prev)}
+            aria-expanded={!allPagesCollapsed}
+            className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+          >
+            {allPagesCollapsed ? (
+              <ChevronRight size={14} className="mr-1 shrink-0" />
+            ) : (
+              <ChevronDown size={14} className="mr-1 shrink-0" />
             )}
-          </div>
+            <span>All Pages</span>
+          </button>
+          {!allPagesCollapsed && (
+            <div className="space-y-0.5">
+              {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
+              {rootPages.map((page) => {
+                const isEditingPage =
+                  editingTarget?.kind === 'page' && editingTarget.id === page.id;
+                return (
+                  <PageTreeRow
+                    key={page.id}
+                    id={page.id}
+                    title={page.title}
+                    icon={page.icon}
+                    workspaceSlug={workspaceSlug}
+                    isActive={activePageId === page.id}
+                    isFavorite={favoritePageIds.has(page.id)}
+                    onToggleFavorite={() =>
+                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
+                    }
+                    onDelete={() => handleDeletePage(page.id)}
+                    onRename={() => beginRenamePage(page)}
+                    onExport={() => handleExport(page.id, page.title)}
+                    isEditing={isEditingPage}
+                    editTitle={isEditingPage ? editingTarget.value : page.title}
+                    onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
+                    onEditSave={() => {
+                      void saveRename();
+                    }}
+                    onEditKeyDown={onRenameKeyDown}
+                  />
+                );
+              })}
+              {orphanNestedPages.map((page) => {
+                const isEditingPage =
+                  editingTarget?.kind === 'page' && editingTarget.id === page.id;
+                return (
+                  <PageTreeRow
+                    key={`orphan-${page.id}`}
+                    id={page.id}
+                    title={page.title}
+                    icon={page.icon}
+                    workspaceSlug={workspaceSlug}
+                    isActive={activePageId === page.id}
+                    isFavorite={favoritePageIds.has(page.id)}
+                    onToggleFavorite={() =>
+                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
+                    }
+                    onDelete={() => handleDeletePage(page.id)}
+                    onRename={() => beginRenamePage(page)}
+                    onExport={() => handleExport(page.id, page.title)}
+                    isEditing={isEditingPage}
+                    editTitle={isEditingPage ? editingTarget.value : page.title}
+                    onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
+                    onEditSave={() => {
+                      void saveRename();
+                    }}
+                    onEditKeyDown={onRenameKeyDown}
+                  />
+                );
+              })}
+              {rootFolders.length === 0 && rootPages.length === 0 && (
+                <div className="px-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                  No notes yet
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
