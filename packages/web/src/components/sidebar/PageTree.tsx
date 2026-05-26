@@ -53,6 +53,11 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   } = useFolderTree(workspaceId);
   const { data: favorites } = useFavorites(workspaceId);
 
+  const favoritePageIds = useMemo(
+    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+    [favorites],
+  );
+
   const createPageMutation = useCreatePage();
   const updatePageMutation = useUpdatePage();
   const deletePageMutation = useDeletePage();
@@ -277,15 +282,11 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
   };
 
   const handleToggleFavorite = async (pageId: string, isCurrentlyFavorite: boolean) => {
-    try {
-      await toggleFavoriteMutation.mutateAsync({
-        pageId,
-        isFavorite: isCurrentlyFavorite,
-        workspaceId,
-      });
-    } catch {
-      showErrorToast(isCurrentlyFavorite ? 'Failed to remove favorite' : 'Failed to add favorite');
-    }
+    await toggleFavoriteMutation.mutateAsync({
+      pageId,
+      isFavorite: isCurrentlyFavorite,
+      workspaceId,
+    });
   };
 
   const handleExport = async (pageId: string, title: string) => {
@@ -404,12 +405,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                   workspaceSlug={workspaceSlug}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
-                  isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
+                  isFavorite={favoritePageIds.has(page.id)}
                   onToggleFavorite={() =>
-                    handleToggleFavorite(
-                      page.id,
-                      favorites?.some((fav) => fav.pageId === page.id) ?? false,
-                    )
+                    handleToggleFavorite(page.id, favoritePageIds.has(page.id))
                   }
                   onDelete={() => handleDeletePage(page.id)}
                   onRename={() => beginRenamePage(page)}
@@ -514,6 +512,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
             <button
               type="button"
               onClick={() => setFavoritesCollapsed((prev) => !prev)}
+              aria-expanded={!favoritesCollapsed}
               className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
             >
               {favoritesCollapsed ? (
@@ -548,6 +547,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           <button
             type="button"
             onClick={() => setAllPagesCollapsed((prev) => !prev)}
+            aria-expanded={!allPagesCollapsed}
             className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
           >
             {allPagesCollapsed ? (
@@ -571,12 +571,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     icon={page.icon}
                     workspaceSlug={workspaceSlug}
                     isActive={activePageId === page.id}
-                    isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
+                    isFavorite={favoritePageIds.has(page.id)}
                     onToggleFavorite={() =>
-                      handleToggleFavorite(
-                        page.id,
-                        favorites?.some((fav) => fav.pageId === page.id) ?? false,
-                      )
+                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
                     }
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
@@ -602,12 +599,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     icon={page.icon}
                     workspaceSlug={workspaceSlug}
                     isActive={activePageId === page.id}
-                    isFavorite={favorites?.some((fav) => fav.pageId === page.id) ?? false}
+                    isFavorite={favoritePageIds.has(page.id)}
                     onToggleFavorite={() =>
-                      handleToggleFavorite(
-                        page.id,
-                        favorites?.some((fav) => fav.pageId === page.id) ?? false,
-                      )
+                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
                     }
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
