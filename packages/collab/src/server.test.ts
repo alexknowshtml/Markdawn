@@ -363,7 +363,7 @@ describe('collab server', () => {
 
       await expect(server.hocuspocus.hooks('onAuthenticate', payload)).rejects.toThrow('Forbidden');
       expect(logger.debug).toHaveBeenCalledWith(
-        `[auth] user=${intruder.id} denied access to page=${page.id}`,
+        `[auth] user=${intruder.id} denied access to page=${page.id} (no share)`,
       );
     });
   });
