@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import {
   useCreateFolder,
@@ -25,7 +26,6 @@ import {
   usePageTree,
   useUpdatePage,
 } from '../../hooks/use-pages';
-import { useShareContext } from '../../contexts/ShareContext';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';

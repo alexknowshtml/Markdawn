@@ -1,12 +1,12 @@
 import type { Hocuspocus } from '@hocuspocus/server';
 import { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
+import { getAnonymousName } from '@markdawn/shared';
 import {
   type ConnectionDraft,
   extractConnectionsFromYDoc,
   normalizeTagSlug,
 } from '@markdawn/shared/yjs-helpers';
-import { getAnonymousName } from '@markdawn/shared';
 import { Client, type Pool, type PoolClient } from 'pg';
 import * as Y from 'yjs';
 import { parseCookies } from './utils';
@@ -571,7 +571,9 @@ export function createCollabServer(config: CollabServerConfig) {
         const { permission } = await assertAnonymousPageAccess(documentName);
         const anonymousName = getAnonymousName(anonymousId);
 
-        logger.info(`[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${permission})`);
+        logger.info(
+          `[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${permission})`,
+        );
         return {
           user: {
             id: anonymousId,
@@ -828,7 +830,9 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.info(`[listen] share revoked for page ${pageId}`);
       const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
       if (activeDoc) {
-        logger.debug(`[listen] page ${pageId} has active document, anonymous users will be disconnected on next auth check`);
+        logger.debug(
+          `[listen] page ${pageId} has active document, anonymous users will be disconnected on next auth check`,
+        );
       }
     }
 

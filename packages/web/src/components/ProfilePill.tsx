@@ -1,17 +1,10 @@
+import { getAnonymousInitial, getStableColor } from '@markdawn/shared';
 import clsx from 'clsx';
-import {
-  LogIn,
-  LogOut,
-  PanelLeftClose,
-  PanelLeftOpen,
-  User,
-} from 'lucide-react';
+import { LogIn, LogOut, PanelLeftClose, PanelLeftOpen, User } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { getAnonymousInitial } from '@markdawn/shared';
 import { useShareContext } from '../contexts/ShareContext';
 import { useAuth } from '../hooks/useAuth';
 import { authClient } from '../lib/auth-client';
-import { getStableColor } from '@markdawn/shared';
 import { ThemeToggle } from './ThemeToggle';
 import { Tooltip } from './Tooltip';
 

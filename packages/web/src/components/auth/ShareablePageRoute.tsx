@@ -1,5 +1,4 @@
 import { useQuery } from '@tanstack/react-query';
-import { Loader2 } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { ShareProvider } from '../../contexts/ShareContext';
@@ -12,9 +11,7 @@ async function fetchPagePublic(pageId: string) {
 }
 
 function extractPageId(slugAndId: string): string | null {
-  const match = slugAndId.match(
-    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
-  );
+  const match = slugAndId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
   return match?.[1] ?? null;
 }
 
@@ -62,7 +59,5 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  return (
-    <ShareProvider linkPermission={page.linkPermission ?? null}>{children}</ShareProvider>
-  );
+  return <ShareProvider linkPermission={page.linkPermission ?? null}>{children}</ShareProvider>;
 }

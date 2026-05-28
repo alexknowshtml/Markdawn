@@ -16,7 +16,7 @@ export default function PageEntry() {
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
   )?.[1];
 
-  const { data: page, isLoading } = useQuery({
+  const { isLoading } = useQuery({
     queryKey: ['pages', 'detail', pageId],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');

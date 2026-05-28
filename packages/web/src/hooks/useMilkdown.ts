@@ -730,7 +730,7 @@ export function useMilkdown({
         floatingCopyBtn = null;
       }
     };
-  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider]);
+  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider, readOnly]);
 
   return { setContainer, editor: editorInstance };
 }
