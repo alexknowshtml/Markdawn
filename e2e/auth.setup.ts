@@ -35,10 +35,7 @@ setup('authenticate', async ({ page, request }) => {
     },
   ]);
 
-  await page.goto('/');
-  if (!page.url().includes('/app/')) {
-    await page.goto('/app/e2e-test-workspace/', { waitUntil: 'networkidle' });
-  }
+  await page.goto('/app/', { waitUntil: 'networkidle' });
   expect(page.url()).toMatch(/\/app\//);
   await page.context().storageState({ path: authFile });
 });

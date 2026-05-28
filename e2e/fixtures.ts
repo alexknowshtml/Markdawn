@@ -10,7 +10,7 @@ export async function focusEditor(page: Page): Promise<void> {
 
 export async function createNewPage(page: Page): Promise<string> {
   await page.goto('/', { waitUntil: 'networkidle', timeout: 20000 });
-  await page.waitForURL(/\/app\//, { timeout: 15000 });
+  await page.waitForURL(/\/app(\/|$)/, { timeout: 15000 });
   await page
     .getByRole('button', { name: /new page/i })
     .first()

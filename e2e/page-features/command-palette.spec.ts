@@ -12,7 +12,7 @@ test.describe('Command palette', () => {
     await expect(newPageAction).toBeVisible({ timeout: 5000 });
     await newPageAction.click();
 
-    await page.waitForURL(/\/app\/.+\/untitled-/);
+    await page.waitForURL(/\/app\/untitled-/);
     await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 10000 });
   });
 
