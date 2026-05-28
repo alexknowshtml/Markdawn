@@ -14,7 +14,6 @@ import {
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
-  workspace_id?: string | null;
   parent_id?: string | null;
   created_by?: string | null;
   created_at?: Date | null;
@@ -29,23 +28,11 @@ importRoute.use('*', requireAuth);
 
 const normalizePageRow = (row: RawPageRow): PageRow => ({
   ...row,
-  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
   parentId: row.parentId ?? row.parent_id ?? null,
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
 });
-
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
 
 const getExtension = (filename: string): string => {
   const lastDot = filename.lastIndexOf('.');
@@ -181,15 +168,9 @@ const processMarkdownImages = (
 };
 
 importRoute.post('/markdown', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
   const parentId = c.req.query('parentId') || null;
 
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   let formData: FormData;
   try {
@@ -219,10 +200,7 @@ importRoute.post('/markdown', async (c) => {
   let ydocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
 
   // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  const existingPages = await pool.query(
-    'select id, title from pages where workspace_id = $1 and is_deleted = false',
-    [workspaceId],
-  );
+  const existingPages = await pool.query('select id, title from pages where is_deleted = false');
   const pageLookup = new Map<string, string>();
   for (const row of existingPages.rows as { id: string; title: string }[]) {
     pageLookup.set(row.title.trim().toLowerCase(), row.id);
@@ -233,29 +211,21 @@ importRoute.post('/markdown', async (c) => {
 
   const positionResult = await pool.query(
     parentId
-      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-    parentId ? [workspaceId, parentId] : [workspaceId],
+      ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
+      : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
+    parentId ? [parentId, user.id] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = hasProperties
     ? await pool.query(
-        "insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *",
-        [
-          workspaceId,
-          parentId,
-          title,
-          nextPosition,
-          user.id,
-          ydocBuffer,
-          JSON.stringify(properties),
-        ],
+        "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
+        [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
       )
     : await pool.query(
-        "insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6) returning *",
-        [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
+        "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
+        [parentId, title, nextPosition, user.id, ydocBuffer],
       );
 
   if (insertResult.rowCount === 0) {

@@ -16,13 +16,13 @@ describe('templates API', () => {
   });
 
   describe('GET /api/templates', () => {
-    it('lists templates for a workspace', async () => {
+    it('lists templates for the user', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      await createTestTemplate(user.workspaceId, user.id);
+      await createTestTemplate(user.id);
 
-      const res = await app.request(`/api/templates?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/templates', {
         headers: { Cookie: session.Cookie },
       });
 
@@ -46,7 +46,6 @@ describe('templates API', () => {
           Origin: 'http://localhost:5173',
         },
         body: JSON.stringify({
-          workspaceId: user.workspaceId,
           title: 'My Template',
           contentBlocks: [{ type: 'doc', content: [] }],
         }),
@@ -61,7 +60,7 @@ describe('templates API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const tmpl = await createTestTemplate(user.workspaceId, user.id);
+      const tmpl = await createTestTemplate(user.id);
 
       const res = await app.request(`/api/templates/${tmpl.id}`, {
         method: 'DELETE',

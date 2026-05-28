@@ -6,7 +6,6 @@ import {
   createTestPageLink,
   createTestSession,
   createTestUser,
-  createTestWorkspace,
 } from '../test-utils';
 
 describe('backlinks API', () => {
@@ -31,8 +30,8 @@ describe('backlinks API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page1 = await createTestPage(user.workspaceId, user.id, { title: 'Source' });
-      const page2 = await createTestPage(user.workspaceId, user.id, { title: 'Target' });
+      const page1 = await createTestPage(user.id, { title: 'Source' });
+      const page2 = await createTestPage(user.id, { title: 'Target' });
       await createTestPageLink(page1.id, page2.id);
 
       const res = await app.request(`/api/backlinks?pageId=${page2.id}`, {
@@ -58,27 +57,12 @@ describe('backlinks API', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request(`/api/backlinks?pageId=${page.id}`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
-
     it('does not include backlinks from deleted pages', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page1 = await createTestPage(user.workspaceId, user.id, { title: 'Source' });
-      const page2 = await createTestPage(user.workspaceId, user.id, { title: 'Target' });
+      const page1 = await createTestPage(user.id, { title: 'Source' });
+      const page2 = await createTestPage(user.id, { title: 'Target' });
       await createTestPageLink(page1.id, page2.id);
 
       await app.request(`/api/pages/${page1.id}`, {
@@ -101,8 +85,8 @@ describe('backlinks API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page1 = await createTestPage(user.workspaceId, user.id, { title: 'Source' });
-      const page2 = await createTestPage(user.workspaceId, user.id, { title: 'Target' });
+      const page1 = await createTestPage(user.id, { title: 'Source' });
+      const page2 = await createTestPage(user.id, { title: 'Target' });
       await createTestPageLink(page1.id, page2.id);
 
       const res = await app.request(`/api/backlinks/outgoing?pageId=${page1.id}`, {
@@ -127,21 +111,6 @@ describe('backlinks API', () => {
 
       expect(res.status).toBe(400);
     });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request(`/api/backlinks/outgoing?pageId=${page.id}`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('rename handling', () => {
@@ -149,8 +118,8 @@ describe('backlinks API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const source = await createTestPage(user.workspaceId, user.id, { title: 'Source' });
-      const target = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      const source = await createTestPage(user.id, { title: 'Source' });
+      const target = await createTestPage(user.id, { title: 'Original' });
       await createTestPageLink(source.id, target.id);
 
       const renameRes = await app.request(`/api/pages/${target.id}`, {
@@ -179,7 +148,7 @@ describe('backlinks API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const target = await createTestPage(user.workspaceId, user.id, { title: 'Target' });
+      const target = await createTestPage(user.id, { title: 'Target' });
 
       const patchRes = await app.request(`/api/pages/${target.id}`, {
         method: 'PATCH',
@@ -197,7 +166,7 @@ describe('backlinks API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const target = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      const target = await createTestPage(user.id, { title: 'Original' });
 
       const res1 = await app.request(`/api/pages/${target.id}`, {
         method: 'PATCH',

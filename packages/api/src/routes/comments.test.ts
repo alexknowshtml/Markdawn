@@ -21,7 +21,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       await createTestComment(page.id, user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments`, {
@@ -51,7 +51,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments`, {
         method: 'POST',
@@ -72,7 +72,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments`, {
         method: 'POST',
@@ -93,7 +93,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       const comment = await createTestComment(page.id, user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}/replies`, {
@@ -117,7 +117,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       const comment = await createTestComment(page.id, user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
@@ -141,7 +141,7 @@ describe('comments API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       const comment = await createTestComment(page.id, user.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
@@ -157,7 +157,7 @@ describe('comments API', () => {
       const user1 = await createTestUser();
       const user2 = await createTestUser();
       const session2 = await createTestSession(user2.id);
-      const page = await createTestPage(user1.workspaceId, user1.id);
+      const page = await createTestPage(user1.id);
       const comment = await createTestComment(page.id, user1.id);
 
       const res = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {

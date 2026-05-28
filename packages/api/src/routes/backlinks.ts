@@ -2,21 +2,10 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
+import { ensurePageAccess } from '../utils/share-access';
 
 const backlinksRoute = new Hono();
 backlinksRoute.use('*', requireAuth);
-
-const ensureWorkspaceMemberForPage = async (pageId: string, userId: string) => {
-  const result = await pool.query(
-    `select wm.id from workspace_members wm
-     join pages p on p.workspace_id = wm.workspace_id
-     where p.id = $1 and wm.user_id = $2 limit 1`,
-    [pageId, userId],
-  );
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
 
 backlinksRoute.get('/', async (c) => {
   const pageId = c.req.query('pageId');
@@ -25,7 +14,7 @@ backlinksRoute.get('/', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMemberForPage(pageId, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   const result = await pool.query(
     `select c.id, c.source_id as "sourcePageId", c.link_text as "linkText",
@@ -51,7 +40,7 @@ backlinksRoute.get('/outgoing', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMemberForPage(pageId, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   const result = await pool.query(
     `select c.id, c.target_id as "targetPageId", c.target_label as "targetTitle",

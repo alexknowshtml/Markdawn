@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestPage,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 describe('favorites API', () => {
   describe('auth guard', () => {
@@ -25,11 +19,11 @@ describe('favorites API', () => {
   });
 
   describe('GET /api/favorites', () => {
-    it('lists favorites for a workspace', async () => {
+    it('lists favorites for the user', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       await app.request('/api/favorites', {
         method: 'POST',
@@ -41,50 +35,13 @@ describe('favorites API', () => {
         body: JSON.stringify({ pageId: page.id }),
       });
 
-      const res = await app.request(`/api/favorites?workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/favorites`, {
         headers: { Cookie: session.Cookie },
       });
 
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.favorites.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/favorites', {
-        headers: { Cookie: session.Cookie },
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      await app.request('/api/favorites', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: (await createTestSession(user1.id)).Cookie,
-          Origin: 'http://localhost:5173',
-        },
-        body: JSON.stringify({ pageId: page.id }),
-      });
-
-      const res = await app.request(`/api/favorites?workspaceId=${ws.id}`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 
@@ -93,7 +50,7 @@ describe('favorites API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request('/api/favorites', {
         method: 'POST',
@@ -112,7 +69,7 @@ describe('favorites API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       await app.request('/api/favorites', {
         method: 'POST',
@@ -173,27 +130,6 @@ describe('favorites API', () => {
 
       expect(res.status).toBe(404);
     });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request('/api/favorites', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: session2.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-        body: JSON.stringify({ pageId: page.id }),
-      });
-
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('DELETE /api/favorites/:pageId', () => {
@@ -201,7 +137,7 @@ describe('favorites API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       await app.request('/api/favorites', {
         method: 'POST',
@@ -233,22 +169,6 @@ describe('favorites API', () => {
       });
 
       expect(res.status).toBe(404);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request(`/api/favorites/${page.id}`, {
-        method: 'DELETE',
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 });

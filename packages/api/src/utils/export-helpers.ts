@@ -2,7 +2,6 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
-import { pool } from '../db/connection';
 
 /**
  * Matches markdown image syntax: ![alt](src) with optional title.
@@ -102,7 +101,6 @@ export interface ExtractedImages {
 export async function extractImages(
   markdown: string,
   uploadsDir: string,
-  workspaceId?: string,
 ): Promise<ExtractedImages> {
   const { masked, blocks } = maskCodeBlocks(markdown);
 
@@ -127,29 +125,6 @@ export async function extractImages(
             ? '()'
             : '';
     matches.push({ full: match[0], alt: match[1] ?? '', src, title, titleDelim });
-  }
-
-  const serverFilenames = new Set<string>();
-  for (const { src } of matches) {
-    if (src.startsWith('/api/uploads/') || src.startsWith('/uploads/')) {
-      const filename = src.startsWith('/api/uploads/')
-        ? src.replace('/api/uploads/', '')
-        : src.replace('/uploads/', '');
-      if (isValidUploadFilename(filename)) {
-        serverFilenames.add(filename);
-      }
-    }
-  }
-
-  const authorizedFiles = new Set<string>();
-  if (workspaceId && serverFilenames.size > 0) {
-    const uploadResult = await pool.query(
-      'select filename from uploads where filename = any($1) and workspace_id = $2',
-      [Array.from(serverFilenames), workspaceId],
-    );
-    for (const row of uploadResult.rows as { filename: string }[]) {
-      authorizedFiles.add(row.filename);
-    }
   }
 
   for (const { full, alt, src, title, titleDelim } of matches) {
@@ -181,8 +156,6 @@ export async function extractImages(
         ? src.replace('/api/uploads/', '')
         : src.replace('/uploads/', '');
       if (!isValidUploadFilename(filename)) continue;
-
-      if (workspaceId && !authorizedFiles.has(filename)) continue;
 
       const filePath = path.join(uploadsDir, filename);
       try {

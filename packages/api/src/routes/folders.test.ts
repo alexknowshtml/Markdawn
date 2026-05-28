@@ -5,7 +5,6 @@ import {
   createTestPage,
   createTestSession,
   createTestUser,
-  createTestWorkspace,
 } from '../test-utils';
 
 describe('folders API', () => {
@@ -26,46 +25,19 @@ describe('folders API', () => {
   });
 
   describe('GET /api/folders/tree', () => {
-    it('returns folder tree for workspace', async () => {
+    it('returns folder tree for the user', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      await createTestFolder(user.workspaceId, user.id);
+      await createTestFolder(user.id);
 
-      const res = await app.request(`/api/folders/tree?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/folders/tree', {
         headers: { Cookie: session.Cookie },
       });
 
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/folders/tree', {
-        headers: { Cookie: session.Cookie },
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      await createTestFolder(ws.id, user1.id);
-
-      const res = await app.request(`/api/folders/tree?workspaceId=${ws.id}`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 
@@ -82,7 +54,7 @@ describe('folders API', () => {
           Cookie: session.Cookie,
           Origin: 'http://localhost:5173',
         },
-        body: JSON.stringify({ workspaceId: user.workspaceId, name: 'New Folder' }),
+        body: JSON.stringify({ name: 'New Folder' }),
       });
 
       expect(res.status).toBe(201);
@@ -94,7 +66,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const parent = await createTestFolder(user.workspaceId, user.id);
+      const parent = await createTestFolder(user.id);
 
       const res = await app.request('/api/folders', {
         method: 'POST',
@@ -103,30 +75,12 @@ describe('folders API', () => {
           Cookie: session.Cookie,
           Origin: 'http://localhost:5173',
         },
-        body: JSON.stringify({ workspaceId: user.workspaceId, parentId: parent.id, name: 'Child' }),
+        body: JSON.stringify({ parentId: parent.id, name: 'Child' }),
       });
 
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.parentId).toBe(parent.id);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/folders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: session.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-        body: JSON.stringify({ name: 'No Workspace' }),
-      });
-
-      expect(res.status).toBe(400);
     });
 
     it('returns 404 for non-existent parent folder', async () => {
@@ -142,33 +96,12 @@ describe('folders API', () => {
           Origin: 'http://localhost:5173',
         },
         body: JSON.stringify({
-          workspaceId: user.workspaceId,
           parentId: '00000000-0000-0000-0000-000000000000',
           name: 'Orphan',
         }),
       });
 
       expect(res.status).toBe(404);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-
-      const res = await app.request('/api/folders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: session2.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-        body: JSON.stringify({ workspaceId: ws.id, name: 'Hacker' }),
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 
@@ -177,7 +110,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id, { name: 'Specific' });
+      const folder = await createTestFolder(user.id, { name: 'Specific' });
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         headers: { Cookie: session.Cookie },
@@ -206,7 +139,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id, { name: 'Old' });
+      const folder = await createTestFolder(user.id, { name: 'Old' });
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         method: 'PATCH',
@@ -227,7 +160,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id);
+      const folder = await createTestFolder(user.id);
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         method: 'PATCH',
@@ -246,8 +179,8 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const parent = await createTestFolder(user.workspaceId, user.id, { name: 'Parent' });
-      const child = await createTestFolder(user.workspaceId, user.id, {
+      const parent = await createTestFolder(user.id, { name: 'Parent' });
+      const child = await createTestFolder(user.id, {
         name: 'Child',
         parentId: parent.id,
       });
@@ -269,8 +202,8 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id, { name: 'Target' });
-      const deleted = await createTestFolder(user.workspaceId, user.id, { name: 'Deleted' });
+      const folder = await createTestFolder(user.id, { name: 'Target' });
+      const deleted = await createTestFolder(user.id, { name: 'Deleted' });
 
       await app.request(`/api/folders/${deleted.id}`, {
         method: 'DELETE',
@@ -314,7 +247,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id, { name: 'Original' });
+      const folder = await createTestFolder(user.id, { name: 'Original' });
 
       const res = await app.request(`/api/folders/${folder.id}/copy`, {
         method: 'POST',
@@ -355,7 +288,7 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id);
+      const folder = await createTestFolder(user.id);
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         method: 'DELETE',
@@ -371,8 +304,8 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id);
-      await createTestPage(user.workspaceId, user.id, { parentId: folder.id });
+      const folder = await createTestFolder(user.id);
+      await createTestPage(user.id, { parentId: folder.id });
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         method: 'DELETE',
@@ -388,8 +321,8 @@ describe('folders API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const folder = await createTestFolder(user.workspaceId, user.id);
-      await createTestPage(user.workspaceId, user.id, { parentId: folder.id });
+      const folder = await createTestFolder(user.id);
+      await createTestPage(user.id, { parentId: folder.id });
 
       const res = await app.request(`/api/folders/${folder.id}?force=true`, {
         method: 'DELETE',

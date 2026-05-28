@@ -7,29 +7,12 @@ const templatesRoute = new Hono();
 
 templatesRoute.use('*', requireAuth);
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
 templatesRoute.get('/', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    'select id, workspace_id as "workspaceId", title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where workspace_id = $1 order by created_at desc',
-    [workspaceId],
+    'select id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where created_by = $1 order by created_at desc',
+    [user.id],
   );
 
   return c.json(result.rows);
@@ -37,11 +20,7 @@ templatesRoute.get('/', async (c) => {
 
 templatesRoute.post('/', async (c) => {
   const body = await c.req.json();
-  const { workspaceId, title, icon, description, contentBlocks } = body;
-
-  if (!workspaceId || typeof workspaceId !== 'string') {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
+  const { title, icon, description, contentBlocks } = body;
 
   if (!title || typeof title !== 'string') {
     throw new HTTPException(400, { message: 'title is required' });
@@ -52,20 +31,12 @@ templatesRoute.post('/', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    `insert into templates (workspace_id, title, icon, description, content_blocks, created_by)
-     values ($1, $2, $3, $4, $5, $6)
-     returning id, workspace_id as "workspaceId", title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt"`,
-    [
-      workspaceId,
-      title.trim(),
-      icon ?? null,
-      description ?? null,
-      JSON.stringify(contentBlocks),
-      user.id,
-    ],
+    `insert into templates (title, icon, description, content_blocks, created_by)
+     values ($1, $2, $3, $4, $5)
+     returning id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt"`,
+    [title.trim(), icon ?? null, description ?? null, JSON.stringify(contentBlocks), user.id],
   );
 
   return c.json(result.rows[0], 201);
@@ -75,9 +46,8 @@ templatesRoute.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user') as { id: string };
 
-  // First get the template to check workspace
   const templateResult = await pool.query(
-    'select workspace_id from templates where id = $1 limit 1',
+    'select created_by from templates where id = $1 limit 1',
     [id],
   );
 
@@ -85,8 +55,10 @@ templatesRoute.delete('/:id', async (c) => {
     throw new HTTPException(404, { message: 'Template not found' });
   }
 
-  const workspaceId = templateResult.rows[0].workspace_id;
-  await ensureWorkspaceMember(workspaceId, user.id);
+  const ownerId = templateResult.rows[0].created_by;
+  if (ownerId !== user.id) {
+    throw new HTTPException(403, { message: 'Forbidden' });
+  }
 
   await pool.query('delete from templates where id = $1', [id]);
 

@@ -21,25 +21,6 @@ describe('pages API', () => {
   });
 
   describe('POST /api/pages', () => {
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/pages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: session.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-        body: JSON.stringify({ title: 'Test' }),
-      });
-      expect(res.status).toBe(400);
-      const body = await res.text();
-      expect(body).toContain('workspaceId is required');
-    });
-
     it('creates a page with valid data', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -53,7 +34,6 @@ describe('pages API', () => {
           Origin: 'http://localhost:5173',
         },
         body: JSON.stringify({
-          workspaceId: user.workspaceId,
           title: 'My Test Page',
         }),
       });
@@ -61,7 +41,6 @@ describe('pages API', () => {
       expect(res.headers.get('Content-Type')).toContain('application/json');
       const body = await res.json();
       expect(body.title).toBe('My Test Page');
-      expect(body.workspaceId).toBe(user.workspaceId);
       expect(body.id).toBeTruthy();
       expect(body.createdAt).toBeTruthy();
       expect(body.updatedAt).toBeTruthy();
@@ -80,7 +59,6 @@ describe('pages API', () => {
           Origin: 'http://localhost:5173',
         },
         body: JSON.stringify({
-          workspaceId: user.workspaceId,
           title: 'Orphan Page',
           parentId: '00000000-0000-0000-0000-000000000000',
         }),
@@ -90,15 +68,15 @@ describe('pages API', () => {
   });
 
   describe('GET /api/pages/tree', () => {
-    it('returns pages for the workspace', async () => {
+    it('returns pages for the user', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      await createTestPage(user.workspaceId, user.id, { title: 'Page 1' });
-      await createTestPage(user.workspaceId, user.id, { title: 'Page 2' });
+      await createTestPage(user.id, { title: 'Page 1' });
+      await createTestPage(user.id, { title: 'Page 2' });
 
-      const res = await app.request(`/api/pages/tree?workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/pages/tree`, {
         headers: {
           Cookie: session.Cookie,
           Origin: 'http://localhost:5173',
@@ -111,52 +89,22 @@ describe('pages API', () => {
       expect(body.length).toBe(2);
       expect(body.map((p: { title: string }) => p.title).sort()).toEqual(['Page 1', 'Page 2']);
       expect(body[0]).toHaveProperty('id');
-      expect(body[0]).toHaveProperty('workspaceId');
-    });
-
-    it('forbids access to workspace the user does not belong to', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-      const other = await createTestUser();
-
-      const res = await app.request(`/api/pages/tree?workspaceId=${other.workspaceId}`, {
-        headers: {
-          Cookie: session.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-      });
-      expect(res.status).toBe(403);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/pages/tree', {
-        headers: {
-          Cookie: session.Cookie,
-          Origin: 'http://localhost:5173',
-        },
-      });
-      expect(res.status).toBe(400);
     });
   });
 
   describe('GET /api/pages/trash', () => {
-    it('lists trashed pages for the workspace', async () => {
+    it('lists trashed pages for the user', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'To Delete' });
+      const page = await createTestPage(user.id, { title: 'To Delete' });
 
       await app.request(`/api/pages/${page.id}`, {
         method: 'DELETE',
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
 
-      const res = await app.request(`/api/pages/trash?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/pages/trash', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
       expect(res.status).toBe(200);
@@ -164,43 +112,20 @@ describe('pages API', () => {
       expect(Array.isArray(body)).toBe(true);
       expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
     });
-
-    it('returns 400 without workspaceId', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/pages/trash', {
-        headers: { Cookie: session.Cookie },
-      });
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-      const other = await createTestUser();
-
-      const res = await app.request(`/api/pages/trash?workspaceId=${other.workspaceId}`, {
-        headers: { Cookie: session.Cookie },
-      });
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('DELETE /api/pages/trash/empty-all', () => {
-    it('empties all trashed pages in workspace', async () => {
+    it('empties all trashed pages', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       await app.request(`/api/pages/${page.id}`, {
         method: 'DELETE',
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
 
-      const res = await app.request(`/api/pages/trash/empty-all?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/pages/trash/empty-all', {
         method: 'DELETE',
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
@@ -216,13 +141,13 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       await app.request(`/api/pages/${page.id}`, {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
 
-      const res = await app.request(`/api/pages/recent?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/pages/recent', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
       expect(res.status).toBe(200);
@@ -235,7 +160,7 @@ describe('pages API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/pages/recent?workspaceId=${user.workspaceId}&limit=0`, {
+      const res = await app.request('/api/pages/recent?limit=0', {
         headers: { Cookie: session.Cookie },
       });
       expect(res.status).toBe(400);
@@ -247,7 +172,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       await app.request(`/api/pages/${page.id}`, {
         method: 'DELETE',
@@ -260,7 +185,7 @@ describe('pages API', () => {
       });
       expect(res.status).toBe(200);
       const _body = await res.json();
-      const treeRes = await app.request(`/api/pages/tree?workspaceId=${user.workspaceId}`, {
+      const treeRes = await app.request('/api/pages/tree', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
       const tree = await treeRes.json();
@@ -273,7 +198,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Movable' });
+      const page = await createTestPage(user.id, { title: 'Movable' });
 
       const res = await app.request(`/api/pages/${page.id}/move`, {
         method: 'PATCH',
@@ -293,7 +218,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/move`, {
         method: 'PATCH',
@@ -313,7 +238,8 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Export' });
+
+      const page = await createTestPage(user.id, { title: 'Export' });
 
       const res = await app.request(`/api/pages/${page.id}/export/markdown`, {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
@@ -345,7 +271,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Import' });
+      const page = await createTestPage(user.id, { title: 'Import' });
 
       const res = await app.request(`/api/pages/${page.id}/import/markdown`, {
         method: 'POST',
@@ -365,7 +291,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/import/markdown`, {
         method: 'POST',
@@ -383,7 +309,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/import/markdown`, {
         method: 'POST',
@@ -403,7 +329,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      const page = await createTestPage(user.id, { title: 'Original' });
 
       const res = await app.request(`/api/pages/${page.id}/copy`, {
         method: 'POST',
@@ -442,7 +368,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/permanent`, {
         method: 'DELETE',
@@ -471,7 +397,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, {
+      const page = await createTestPage(user.id, {
         title: 'My Page',
       });
 
@@ -506,7 +432,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, {
+      const page = await createTestPage(user.id, {
         title: 'Original',
       });
 
@@ -528,7 +454,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}`, {
         method: 'PATCH',
@@ -546,7 +472,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}`, {
         method: 'PATCH',
@@ -564,7 +490,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}`, {
         method: 'PATCH',
@@ -586,7 +512,7 @@ describe('pages API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}`, {
         method: 'DELETE',

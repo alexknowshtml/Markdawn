@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
 describe('markdown import API', () => {
   describe('auth guard', () => {
@@ -33,7 +28,7 @@ describe('markdown import API', () => {
       const formData = new FormData();
       formData.append('file', new File(['# Hello World'], 'note.md', { type: 'text/markdown' }));
 
-      const res = await app.request(`/api/import/markdown?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/markdown', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
         body: formData,
@@ -59,7 +54,7 @@ Body text`;
       const formData = new FormData();
       formData.append('file', new File([content], 'note.md', { type: 'text/markdown' }));
 
-      const res = await app.request(`/api/import/markdown?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/markdown', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
         body: formData,
@@ -75,7 +70,7 @@ Body text`;
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/markdown?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/markdown', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
       });
@@ -91,23 +86,6 @@ Body text`;
       const formData = new FormData();
       formData.append('file', new File(['plain text'], 'note.txt', { type: 'text/plain' }));
 
-      const res = await app.request(`/api/import/markdown?workspaceId=${user.workspaceId}`, {
-        method: 'POST',
-        headers: { Cookie: session.Cookie },
-        body: formData,
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const formData = new FormData();
-      formData.append('file', new File(['# Hello'], 'note.md', { type: 'text/markdown' }));
-
       const res = await app.request('/api/import/markdown', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
@@ -115,25 +93,6 @@ Body text`;
       });
 
       expect(res.status).toBe(400);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-
-      const formData = new FormData();
-      formData.append('file', new File(['# Hello'], 'note.md', { type: 'text/markdown' }));
-
-      const res = await app.request(`/api/import/markdown?workspaceId=${ws.id}`, {
-        method: 'POST',
-        headers: { Cookie: session2.Cookie },
-        body: formData,
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 });

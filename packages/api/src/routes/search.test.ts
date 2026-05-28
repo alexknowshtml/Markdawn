@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestPage,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 describe('search API', () => {
   describe('auth guard', () => {
@@ -29,9 +23,9 @@ describe('search API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      await createTestPage(user.workspaceId, user.id, { title: 'Searchable Note' });
+      await createTestPage(user.id, { title: 'Searchable Note' });
 
-      const res = await app.request(`/api/search?q=Searchable&workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/search?q=Searchable`, {
         headers: { Cookie: session.Cookie },
       });
 
@@ -47,7 +41,7 @@ describe('search API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/search?q=&workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/search?q=`, {
         headers: { Cookie: session.Cookie },
       });
 
@@ -60,43 +54,10 @@ describe('search API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      await createTestPage(user.workspaceId, user.id, { title: 'Apple' });
+      await createTestPage(user.id, { title: 'Apple' });
 
-      const res = await app.request(`/api/search?q=Zebra&workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/search?q=Zebra`, {
         headers: { Cookie: session.Cookie },
-      });
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.results).toEqual([]);
-    });
-
-    it('filters by workspaceId', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-      const otherWs = await createTestWorkspace(user.id);
-      await createTestPage(user.workspaceId, user.id, { title: 'My Note' });
-
-      const res = await app.request(`/api/search?q=My&workspaceId=${otherWs.id}`, {
-        headers: { Cookie: session.Cookie },
-      });
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
-      expect(body.results).toEqual([]);
-    });
-
-    it('returns empty results when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      await createTestPage(ws.id, user1.id, { title: 'Secret' });
-
-      const res = await app.request(`/api/search?q=Secret&workspaceId=${ws.id}`, {
-        headers: { Cookie: session2.Cookie },
       });
 
       expect(res.status).toBe(200);
@@ -108,14 +69,14 @@ describe('search API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Deleted Note' });
+      const page = await createTestPage(user.id, { title: 'Deleted Note' });
 
       await app.request(`/api/pages/${page.id}`, {
         method: 'DELETE',
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
       });
 
-      const res = await app.request(`/api/search?q=Deleted&workspaceId=${user.workspaceId}`, {
+      const res = await app.request(`/api/search?q=Deleted`, {
         headers: { Cookie: session.Cookie },
       });
 

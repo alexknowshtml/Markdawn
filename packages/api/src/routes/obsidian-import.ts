@@ -41,16 +41,6 @@ type ImportResult = {
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
 /**
  * Extract wiki links from markdown content.
  */
@@ -148,13 +138,7 @@ const processMarkdownContent = (content: string, imageMap: Map<string, string>):
 // ── Route Handler ───────────────────────────────────────────────────
 
 obsidianImportRoute.post('/', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -228,15 +212,15 @@ obsidianImportRoute.post('/', async (c) => {
 
       const positionResult = await pool.query(
         parentId
-          ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
-          : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
-        parentId ? [workspaceId, parentId] : [workspaceId],
+          ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
+          : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
+        parentId ? [parentId, user.id] : [user.id],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
       const insertResult = await pool.query(
-        'insert into folders (workspace_id, parent_id, name, position, created_by) values ($1, $2, $3, $4, $5) returning id',
-        [workspaceId, parentId, name, nextPosition, user.id],
+        'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
+        [parentId, name, nextPosition, user.id],
       );
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
@@ -262,9 +246,9 @@ obsidianImportRoute.post('/', async (c) => {
       await writeFile(filePath, buffer);
 
       await pool.query(
-        `insert into uploads (filename, original_name, mime_type, size, workspace_id, uploaded_by)
-         values ($1, $2, $3, $4, $5, $6)`,
-        [filename, path.basename(file.path), file.mimeType, buffer.length, workspaceId, user.id],
+        `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
+         values ($1, $2, $3, $4, $5)`,
+        [filename, path.basename(file.path), file.mimeType, buffer.length, user.id],
       );
 
       const url = `/api/uploads/${filename}`;
@@ -305,30 +289,22 @@ obsidianImportRoute.post('/', async (c) => {
 
       const positionResult = await pool.query(
         parentId
-          ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-          : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-        parentId ? [workspaceId, parentId] : [workspaceId],
+          ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
+          : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
+        parentId ? [parentId, user.id] : [user.id],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
       const insertResult = hasPropertiesColumn
         ? await pool.query(
-            `insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc, properties)
-             values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *`,
-            [
-              workspaceId,
-              parentId,
-              title,
-              nextPosition,
-              user.id,
-              ydocBuffer,
-              JSON.stringify(frontmatter),
-            ],
+            `insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
+             values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *`,
+            [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)],
           )
         : await pool.query(
-            `insert into pages (workspace_id, parent_id, title, title_search, position, created_by, ydoc)
-             values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6) returning *`,
-            [workspaceId, parentId, title, nextPosition, user.id, ydocBuffer],
+            `insert into pages (parent_id, title, title_search, position, created_by, ydoc)
+             values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *`,
+            [parentId, title, nextPosition, user.id, ydocBuffer],
           );
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
@@ -344,13 +320,13 @@ obsidianImportRoute.post('/', async (c) => {
         for (const tagSlug of pageTagSlugs) {
           await pool.query(
             `insert into connections (
-               workspace_id, source_type, source_id, target_type, target_slug,
+               source_type, source_id, target_type, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
              )
-             values ($1, 'page', $2, 'tag', $3, $3, 'tag', $3, 1, now())
-             on conflict (workspace_id, source_type, source_id, target_type, target_slug, connection_type)
+             values ('page', $1, 'tag', $2, $2, 'tag', $2, 1, now())
+             on conflict (source_type, source_id, target_type, target_slug, connection_type)
              do update set updated_at = now(), occurrence_count = excluded.occurrence_count`,
-            [workspaceId, pageId, tagSlug],
+            [pageId, tagSlug],
           );
         }
 
@@ -382,11 +358,11 @@ obsidianImportRoute.post('/', async (c) => {
 
           await pool.query(
             `insert into connections (
-               workspace_id, source_type, source_id, target_type, target_id, target_slug,
+               source_type, source_id, target_type, target_id, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
              )
-             values ($1, 'page', $2, 'page', $3, $4, $5, $6, $7, 1, now())
-             on conflict (workspace_id, source_type, source_id, target_type, target_slug, connection_type)
+             values ('page', $1, 'page', $2, $3, $4, $5, $6, 1, now())
+             on conflict (source_type, source_id, target_type, target_slug, connection_type)
              do update set
                target_id = excluded.target_id,
                target_label = excluded.target_label,
@@ -394,7 +370,6 @@ obsidianImportRoute.post('/', async (c) => {
                occurrence_count = connections.occurrence_count + 1,
                updated_at = now()`,
             [
-              workspaceId,
               pageId,
               targetPageId,
               targetTitleLower,

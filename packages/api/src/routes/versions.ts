@@ -2,11 +2,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
-
-type PageRow = {
-  id: string;
-  workspace_id: string | null;
-};
+import { ensurePageAccess } from '../utils/share-access';
 
 type VersionRow = {
   id: string;
@@ -20,38 +16,21 @@ const versionsRoute = new Hono();
 
 versionsRoute.use('*', requireAuth);
 
-const getPageById = async (pageId: string) => {
-  const result = await pool.query('select id, workspace_id from pages where id = $1 limit 1', [
-    pageId,
-  ]);
-  return (result.rows[0] as PageRow | undefined) ?? null;
-};
-
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
+const ensurePageExists = async (pageId: string) => {
+  const result = await pool.query('select id from pages where id = $1 limit 1', [pageId]);
+  return !!result.rows[0];
 };
 
 versionsRoute.get(':pageId/versions', async (c) => {
   const pageId = c.req.param('pageId');
-  const page = await getPageById(pageId);
+  const exists = await ensurePageExists(pageId);
 
-  if (!page) {
+  if (!exists) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   const versionsResult = await pool.query(
     'select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = $1 order by pv.created_at desc',
@@ -71,18 +50,14 @@ versionsRoute.get(':pageId/versions', async (c) => {
 
 versionsRoute.post(':pageId/versions', async (c) => {
   const pageId = c.req.param('pageId');
-  const page = await getPageById(pageId);
+  const exists = await ensurePageExists(pageId);
 
-  if (!page) {
+  if (!exists) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
 
   const body = await c.req.json();
   const title = body?.title;
@@ -114,18 +89,14 @@ versionsRoute.post(':pageId/versions', async (c) => {
 versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
   const pageId = c.req.param('pageId');
   const versionId = c.req.param('versionId');
-  const page = await getPageById(pageId);
+  const exists = await ensurePageExists(pageId);
 
-  if (!page) {
+  if (!exists) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
 
   const versionResult = await pool.query(
     'select title from page_versions where id = $1 and page_id = $2 limit 1',

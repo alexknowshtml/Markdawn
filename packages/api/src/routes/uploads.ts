@@ -19,17 +19,6 @@ const uploadsRoute = new Hono();
 
 uploadsRoute.use('*', requireAuth);
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
 const getUploadByFilename = async (filename: string) => {
   const result = await pool.query('select * from uploads where filename = $1 limit 1', [filename]);
   return result.rows[0] ?? null;
@@ -43,18 +32,10 @@ uploadsRoute.post('/', async (c) => {
   }
 
   const file = (body as Record<string, unknown>).file;
-  const workspaceId = (body as Record<string, unknown>).workspaceId;
 
   if (!(file instanceof File)) {
     throw new HTTPException(400, { message: 'File is required' });
   }
-
-  if (!workspaceId || typeof workspaceId !== 'string') {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
-  // Verify workspace membership
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const extension = ALLOWED_IMAGE_TYPES.get(file.type);
   if (!extension) {
@@ -74,9 +55,9 @@ uploadsRoute.post('/', async (c) => {
 
   // Save upload record to database
   await pool.query(
-    `insert into uploads (filename, original_name, mime_type, size, workspace_id, uploaded_by)
-     values ($1, $2, $3, $4, $5, $6)`,
-    [filename, file.name, file.type, file.size, workspaceId, user.id],
+    `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
+     values ($1, $2, $3, $4, $5)`,
+    [filename, file.name, file.type, file.size, user.id],
   );
 
   return c.json({ url: `/api/uploads/${filename}` });
@@ -96,8 +77,9 @@ uploadsRoute.get('/:filename', async (c) => {
     throw new HTTPException(404, { message: 'Not found' });
   }
 
-  // Check workspace membership
-  await ensureWorkspaceMember(upload.workspace_id, user.id);
+  if (upload.uploaded_by !== user.id) {
+    throw new HTTPException(403, { message: 'Forbidden' });
+  }
 
   const filePath = path.join(uploadsDir, filename);
 

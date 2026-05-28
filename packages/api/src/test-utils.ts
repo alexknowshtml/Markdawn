@@ -25,23 +25,7 @@ export async function createTestUser(overrides?: CreateUserOptions) {
     [id, email, name],
   );
 
-  // Mirror ensurePersonalWorkspace from auth.ts:
-  // Better Auth's databaseHooks.user.create.after normally does this,
-  // but we bypass the hook by inserting directly into users.
-  const workspaceId = randomUUID();
-  const slug = `personal-${randomUUID().slice(0, 6)}`;
-  await pool.query(
-    `INSERT INTO workspaces (id, name, slug, owner_id, is_personal, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, true, NOW(), NOW())`,
-    [workspaceId, `${name}'s Workspace`, slug, id],
-  );
-  await pool.query(
-    `INSERT INTO workspace_members (id, workspace_id, user_id, role, joined_at)
-     VALUES ($1, $2, $3, 'owner', NOW())`,
-    [randomUUID(), workspaceId, id],
-  );
-
-  return { id, email, name, workspaceId };
+  return { id, email, name };
 }
 
 /**
@@ -76,46 +60,20 @@ export async function createTestSession(userId: string) {
   return { Cookie: `better-auth.session_token=${signedToken}`, token: signedToken };
 }
 
-type CreateWorkspaceOptions = {
-  name?: string;
-  slug?: string;
-};
-
-export async function createTestWorkspace(ownerId: string, overrides?: CreateWorkspaceOptions) {
-  const id = randomUUID();
-  const name = overrides?.name ?? 'Test Workspace';
-  const slug = overrides?.slug ?? `ws-${randomUUID().slice(0, 8)}`;
-  await pool.query(
-    `INSERT INTO workspaces (id, name, slug, owner_id, is_personal, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, false, NOW(), NOW())`,
-    [id, name, slug, ownerId],
-  );
-  await pool.query(
-    `INSERT INTO workspace_members (id, workspace_id, user_id, role, joined_at)
-     VALUES ($1, $2, $3, 'owner', NOW())`,
-    [randomUUID(), id, ownerId],
-  );
-  return { id, name, slug };
-}
-
 type CreatePageOptions = {
   title?: string;
   parentId?: string | null;
 };
 
-export async function createTestPage(
-  workspaceId: string,
-  createdBy: string,
-  overrides?: CreatePageOptions,
-) {
+export async function createTestPage(createdBy: string, overrides?: CreatePageOptions) {
   const id = randomUUID();
   const title = overrides?.title ?? 'Test Page';
   await pool.query(
-    `INSERT INTO pages (id, workspace_id, parent_id, title, position, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, '0', $5, NOW(), NOW())`,
-    [id, workspaceId, overrides?.parentId ?? null, title, createdBy],
+    `INSERT INTO pages (id, parent_id, title, position, created_by, created_at, updated_at)
+     VALUES ($1, $2, $3, '0', $4, NOW(), NOW())`,
+    [id, overrides?.parentId ?? null, title, createdBy],
   );
-  return { id, title, workspaceId };
+  return { id, title };
 }
 
 type CreateFolderOptions = {
@@ -124,19 +82,15 @@ type CreateFolderOptions = {
   icon?: string | null;
 };
 
-export async function createTestFolder(
-  workspaceId: string,
-  createdBy: string,
-  overrides?: CreateFolderOptions,
-) {
+export async function createTestFolder(createdBy: string, overrides?: CreateFolderOptions) {
   const id = randomUUID();
   const name = overrides?.name ?? 'Test Folder';
   await pool.query(
-    `INSERT INTO folders (id, workspace_id, parent_id, name, icon, position, created_by, created_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, '0', $6, NOW(), NOW())`,
-    [id, workspaceId, overrides?.parentId ?? null, name, overrides?.icon ?? null, createdBy],
+    `INSERT INTO folders (id, parent_id, name, icon, position, created_by, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, '0', $5, NOW(), NOW())`,
+    [id, overrides?.parentId ?? null, name, overrides?.icon ?? null, createdBy],
   );
-  return { id, name, workspaceId };
+  return { id, name };
 }
 
 type CreateCommentOptions = {
@@ -204,45 +158,33 @@ type CreateTemplateOptions = {
   contentBlocks?: unknown;
 };
 
-export async function createTestTemplate(
-  workspaceId: string,
-  userId: string,
-  overrides?: CreateTemplateOptions,
-) {
+export async function createTestTemplate(userId: string, overrides?: CreateTemplateOptions) {
   const id = randomUUID();
   const title = overrides?.title ?? 'Test Template';
   const contentBlocks = overrides?.contentBlocks ?? { type: 'doc', content: [] };
   await pool.query(
-    `INSERT INTO templates (id, workspace_id, title, content_blocks, created_by)
-     VALUES ($1, $2, $3, $4::jsonb, $5)`,
-    [id, workspaceId, title, JSON.stringify(contentBlocks), userId],
+    `INSERT INTO templates (id, title, content_blocks, created_by)
+     VALUES ($1, $2, $3::jsonb, $4)`,
+    [id, title, JSON.stringify(contentBlocks), userId],
   );
-  return { id, workspaceId, title };
+  return { id, title };
 }
 
 export async function createTestPageLink(sourcePageId: string, targetPageId: string) {
   const id = randomUUID();
-  const sourceResult = await pool.query<{ workspace_id: string }>(
-    'select workspace_id from pages where id = $1 limit 1',
-    [sourcePageId],
-  );
   const targetResult = await pool.query<{ title: string }>(
     'select title from pages where id = $1 limit 1',
     [targetPageId],
   );
-  const workspaceId = sourceResult.rows[0]?.workspace_id;
   const targetTitle = targetResult.rows[0]?.title ?? 'target';
-  if (!workspaceId) {
-    throw new Error(`source page not found: ${sourcePageId}`);
-  }
 
   await pool.query(
     `INSERT INTO connections (
-       id, workspace_id, source_type, source_id, target_type, target_id, target_slug,
+       id, source_type, source_id, target_type, target_id, target_slug,
        target_label, connection_type, link_text, occurrence_count, updated_at
      )
-     VALUES ($1, $2, 'page', $3, 'page', $4, $5, $6, 'wikilink', 'link', 1, NOW())`,
-    [id, workspaceId, sourcePageId, targetPageId, targetTitle.toLowerCase(), targetTitle],
+     VALUES ($1, 'page', $2, 'page', $3, $4, $5, 'wikilink', 'link', 1, NOW())`,
+    [id, sourcePageId, targetPageId, targetTitle.toLowerCase(), targetTitle],
   );
   return { id, sourcePageId, targetPageId };
 }

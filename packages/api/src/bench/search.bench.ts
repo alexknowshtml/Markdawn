@@ -4,12 +4,12 @@ import { createTestApp, createTestPage, createTestSession, createTestUser } from
 describe('search API benchmarks', () => {
   let app: Awaited<ReturnType<typeof createTestApp>>;
   let session: Awaited<ReturnType<typeof createTestSession>>;
-  let workspaceId: string;
+  let userId: string;
 
   bench(
     'search with 50 pages',
     async () => {
-      await app.request(`/api/search?q=Document&workspaceId=${workspaceId}`, {
+      await app.request('/api/search?q=Document', {
         headers: { Cookie: session.Cookie },
       });
     },
@@ -18,10 +18,10 @@ describe('search API benchmarks', () => {
         app = await createTestApp();
         const user = await createTestUser();
         session = await createTestSession(user.id);
-        workspaceId = user.workspaceId;
+        userId = user.id;
 
         for (let i = 0; i < 50; i++) {
-          await createTestPage(workspaceId, user.id, { title: `Document ${i}` });
+          await createTestPage(userId, { title: `Document ${i}` });
         }
       },
       iterations: 10,

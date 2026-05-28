@@ -20,7 +20,7 @@ describe('obsidian import API', () => {
   });
 
   describe('POST /api/import/obsidian', () => {
-    it('returns 400 when workspaceId is missing', async () => {
+    it('returns 400 for empty import request', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
@@ -34,43 +34,12 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(400);
     });
 
-    it('returns 400 for empty import request', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
-        method: 'POST',
-        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ files: [] }),
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-      const otherUser = await createTestUser();
-
-      const res = await app.request(`/api/import/obsidian?workspaceId=${otherUser.workspaceId}`, {
-        method: 'POST',
-        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          files: [{ path: 'note.md', content: '# Hello' }],
-        }),
-      });
-
-      expect(res.status).toBe(403);
-    });
-
     it('imports a simple markdown file (happy path)', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -88,7 +57,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -110,7 +79,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -133,7 +102,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -158,7 +127,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -179,7 +148,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: 'not-json',
@@ -193,7 +162,7 @@ describe('obsidian import API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/import/obsidian?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/import/obsidian', {
         method: 'POST',
         headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
         body: JSON.stringify({}),

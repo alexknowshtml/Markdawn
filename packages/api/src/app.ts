@@ -7,19 +7,18 @@ import { timing } from 'hono/timing';
 import { authRoutes } from './routes';
 import backlinksRoute from './routes/backlinks';
 import commentsRoute from './routes/comments';
-import exportRoute from './routes/export';
 import favoritesRoute from './routes/favorites';
 import foldersRoute from './routes/folders';
 import importRoute from './routes/import';
 import obsidianImportRoute from './routes/obsidian-import';
-import pagesRoute from './routes/pages';
-import { publicRoute, publicShareRoute } from './routes/public';
+import pagesRoute, { pagesPublicRoute } from './routes/pages';
 import searchRoute from './routes/search';
+import sharesRoute from './routes/shares';
 import tagsRoute from './routes/tags';
 import templatesRoute from './routes/templates';
+import testSetupRoute from './routes/test-setup';
 import uploadsRoute from './routes/uploads';
 import versionsRoute from './routes/versions';
-import workspacesRoute from './routes/workspaces';
 
 export async function createApp() {
   const { setupLogger, getApiLogger } = await import('@markdawn/shared');
@@ -64,15 +63,16 @@ export async function createApp() {
     return c.json({ status: 'ok', timestamp: Date.now() });
   });
 
+  app.route('/api/pages', pagesPublicRoute);
   app.route('/api/pages', pagesRoute);
 
   app.route('/api/folders', foldersRoute);
 
-  app.route('/api/workspaces', workspacesRoute);
-
-  app.route('/api/workspaces', exportRoute);
+  // workspaces API removed
 
   app.route('/api/search', searchRoute);
+
+  app.route('/api/shares', sharesRoute);
 
   app.route('/api/favorites', favoritesRoute);
 
@@ -88,10 +88,10 @@ export async function createApp() {
   app.route('/api/tags', tagsRoute);
   app.route('/api/backlinks', backlinksRoute);
 
-  app.route('/api', publicRoute);
+  app.route('/api', testSetupRoute);
 
+  // Legacy /api/public routes removed — public pages are now served at /api/pages/:id
   app.route('/api', authRoutes);
-  app.route('/api/pages', publicShareRoute);
 
   app.notFound((c) => c.json({ error: 'Not Found' }, 404));
 

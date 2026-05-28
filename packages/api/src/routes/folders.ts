@@ -3,10 +3,10 @@ import { HTTPException } from 'hono/http-exception';
 import type { folders } from '../db';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
+import { ensureFolderAccess } from '../utils/share-access';
 
 type FolderRow = typeof folders.$inferSelect;
 type RawFolderRow = FolderRow & {
-  workspace_id?: string | null;
   parent_id?: string | null;
   created_by?: string | null;
   created_at?: Date | null;
@@ -21,7 +21,6 @@ foldersRoute.use('*', requireAuth);
 
 const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
   ...row,
-  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
   parentId: row.parentId ?? row.parent_id ?? null,
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
@@ -30,25 +29,6 @@ const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
 });
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
-function ensureFolderWorkspace(
-  folder: FolderRow,
-): asserts folder is FolderRow & { workspaceId: string } {
-  if (!folder.workspaceId) {
-    throw new HTTPException(400, { message: 'Folder has no workspace' });
-  }
-}
-
 const getFolderById = async (folderId: string) => {
   const result = await pool.query('select * from folders where id = $1 limit 1', [folderId]);
   const row = (result.rows[0] as RawFolderRow | undefined) ?? null;
@@ -56,17 +36,17 @@ const getFolderById = async (folderId: string) => {
 };
 
 const ensureNoFolderCycle = async (
-  workspaceId: string,
   folderId: string,
   targetParentId: string | null,
+  userId: string,
 ) => {
   if (!targetParentId) {
     return;
   }
 
   const result = await pool.query(
-    'select id, parent_id from folders where workspace_id = $1 and is_deleted = false',
-    [workspaceId],
+    'select id, parent_id from folders where is_deleted = false and created_by = $1',
+    [userId],
   );
 
   const parentById = new Map<string, string | null>();
@@ -113,17 +93,24 @@ const buildFolderTree = (rows: FolderRow[]) => {
 };
 
 foldersRoute.get('/tree', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
+  // Return folders the user can access (owned or shared)
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    'select * from folders where workspace_id = $1 and is_deleted = false order by parent_id nulls first, case when parent_id is null then updated_at end desc nulls last, position asc',
-    [workspaceId],
+    `
+      select f.*
+      from folders f
+      where f.is_deleted = false
+        and (
+          f.created_by = $1
+          or exists (
+            select 1 from shares s
+            where s.entity_type = 'folder' and s.entity_id = f.id and s.recipient_user_id = $1
+          )
+        )
+      order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position asc
+    `,
+    [user.id],
   );
 
   return c.json(buildFolderTree((result.rows as RawFolderRow[]).map(normalizeFolderRow)));
@@ -135,42 +122,37 @@ foldersRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { workspaceId, parentId, name, icon } = body as {
-    workspaceId?: string;
+  const { parentId, name, icon } = body as {
     parentId?: string | null;
     name?: string;
     icon?: string | null;
   };
 
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   if (parentId) {
     const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== workspaceId) {
+    if (!parent) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
     if (parent.isDeleted) {
       throw new HTTPException(400, { message: 'Cannot create inside a deleted folder' });
     }
+    // ensure user can manage parent
+    await ensureFolderAccess(parent.id, user.id, 'edit');
   }
 
   const positionResult = await pool.query(
     parentId
-      ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
-    parentId ? [workspaceId, parentId] : [workspaceId],
+      ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
+      : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
+    parentId ? [parentId, user.id] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const insertResult = await pool.query(
-    'insert into folders (workspace_id, parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5, $6) returning *',
+    'insert into folders (parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5) returning *',
     [
-      workspaceId,
       parentId ?? null,
       typeof name === 'string' && name.trim().length > 0 ? name.trim() : 'New Folder',
       typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
@@ -194,9 +176,8 @@ foldersRoute.get(':id', async (c) => {
   if (!folder) {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  await ensureFolderAccess(folder.id, user.id);
 
   return c.json(folder);
 });
@@ -208,9 +189,8 @@ foldersRoute.patch(':id', async (c) => {
   if (!folder) {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  await ensureFolderAccess(folder.id, user.id, 'edit');
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -230,7 +210,7 @@ foldersRoute.patch(':id', async (c) => {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });
     }
     const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== folder.workspaceId) {
+    if (!parent) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
 
@@ -240,7 +220,7 @@ foldersRoute.patch(':id', async (c) => {
   }
 
   const nextParent = hasParentId ? (parentId ?? null) : folder.parentId;
-  await ensureNoFolderCycle(folder.workspaceId, folder.id, nextParent);
+  await ensureNoFolderCycle(folder.id, nextParent, user.id);
 
   const nextName =
     typeof name === 'string' ? (name.trim().length > 0 ? name.trim() : 'New Folder') : folder.name;
@@ -281,9 +261,8 @@ foldersRoute.post(':id/copy', async (c) => {
   if (!folder) {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  await ensureFolderAccess(folder.id, user.id, 'edit');
 
   const body = await c.req.json().catch(() => null);
   const parentId =
@@ -296,7 +275,7 @@ foldersRoute.post(':id/copy', async (c) => {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });
     }
     const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== folder.workspaceId) {
+    if (!parent) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
     if (parent.isDeleted) {
@@ -304,12 +283,12 @@ foldersRoute.post(':id/copy', async (c) => {
     }
   }
 
-  await ensureNoFolderCycle(folder.workspaceId, folder.id, parentId);
+  await ensureNoFolderCycle(folder.id, parentId, user.id);
 
   await pool.query('BEGIN');
 
   try {
-    const newFolder = await copyFolderRecursive(folderId, parentId, folder.workspaceId, user.id);
+    const newFolder = await copyFolderRecursive(folderId, parentId, user.id);
     await pool.query('COMMIT');
     return c.json(newFolder, 201);
   } catch (err) {
@@ -323,7 +302,6 @@ foldersRoute.post(':id/copy', async (c) => {
 async function copyFolderRecursive(
   sourceFolderId: string,
   newParentId: string | null,
-  workspaceId: string,
   userId: string,
 ): Promise<FolderRow> {
   const sourceResult = await pool.query('select * from folders where id = $1', [sourceFolderId]);
@@ -331,17 +309,17 @@ async function copyFolderRecursive(
 
   const positionResult = await pool.query(
     newParentId
-      ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
-    newParentId ? [workspaceId, newParentId] : [workspaceId],
+      ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
+      : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
+    newParentId ? [newParentId, userId] : [userId],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const insertResult = await pool.query(
-    `insert into folders (id, workspace_id, parent_id, name, icon, position, created_by)
-     values (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
+    `insert into folders (id, parent_id, name, icon, position, created_by)
+     values (gen_random_uuid(), $1, $2, $3, $4, $5)
      returning *`,
-    [workspaceId, newParentId ?? null, `Copy of ${source.name}`, source.icon, nextPosition, userId],
+    [newParentId ?? null, `Copy of ${source.name}`, source.icon, nextPosition, userId],
   );
   const newFolder = normalizeFolderRow(insertResult.rows[0] as RawFolderRow);
 
@@ -359,10 +337,9 @@ async function copyFolderRecursive(
       ydoc: Buffer | null;
     };
     await pool.query(
-      `insert into pages (id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
-       values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      `insert into pages (id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
+        values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
       [
-        workspaceId,
         newFolder.id,
         `Copy of ${pr.title}`,
         pr.icon,
@@ -380,12 +357,7 @@ async function copyFolderRecursive(
     [sourceFolderId],
   );
   for (const subfolderRow of subfoldersResult.rows) {
-    await copyFolderRecursive(
-      (subfolderRow as { id: string }).id,
-      newFolder.id,
-      workspaceId,
-      userId,
-    );
+    await copyFolderRecursive((subfolderRow as { id: string }).id, newFolder.id, userId);
   }
 
   return newFolder;
@@ -398,9 +370,8 @@ foldersRoute.delete(':id', async (c) => {
   if (!folder) {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  await ensureFolderAccess(folder.id, user.id, 'edit');
 
   const directChildFolders = await pool.query(
     'select id from folders where parent_id = $1 and is_deleted = false',

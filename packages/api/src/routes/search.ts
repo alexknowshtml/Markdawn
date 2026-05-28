@@ -6,7 +6,6 @@ type SearchRow = {
   id: string;
   title: string;
   icon: string | null;
-  workspace_slug: string;
   breadcrumb: string[] | null;
 };
 
@@ -39,7 +38,6 @@ searchRoute.get('/', async (c) => {
 
   const user = c.get('user') as { id: string };
   const { textQuery, tagSlugs } = parseTagSearch(rawQuery);
-  const workspaceId = c.req.query('workspaceId');
   const createdAfter = c.req.query('createdAfter');
   const createdBefore = c.req.query('createdBefore');
   const parentId = c.req.query('parentId');
@@ -48,12 +46,6 @@ searchRoute.get('/', async (c) => {
   const filters: string[] = [];
   const params: unknown[] = [user.id, textQuery, searchPattern];
   let paramIndex = 4;
-
-  if (workspaceId) {
-    filters.push(`p.workspace_id = $${paramIndex}`);
-    params.push(workspaceId);
-    paramIndex += 1;
-  }
 
   if (createdAfter) {
     filters.push(`p.created_at >= $${paramIndex}`);
@@ -79,8 +71,7 @@ searchRoute.get('/', async (c) => {
     filters.push(`p.id in (
       select c.source_id
       from connections c
-      where c.workspace_id = p.workspace_id
-        and c.connection_type = 'tag'
+      where c.connection_type = 'tag'
         and c.target_slug = any($${paramIndex}::text[])
       group by c.source_id
       having count(distinct c.target_slug) = $${paramIndex + 1}
@@ -98,12 +89,9 @@ searchRoute.get('/', async (c) => {
     `select p.id,
       p.title,
       p.icon,
-      w.slug as workspace_slug,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
       ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
     from pages p
-    join workspaces w on w.id = p.workspace_id
-    join workspace_members wm on wm.workspace_id = p.workspace_id
     left join lateral (
       with recursive ancestors as (
         select id, title, parent_id, 1 as depth from pages where id = p.parent_id
@@ -113,8 +101,25 @@ searchRoute.get('/', async (c) => {
       )
       select array_agg(title order by depth desc) as breadcrumb from ancestors
     ) breadcrumbs on true
-    where wm.user_id = $1
-      and p.is_deleted = false
+    where p.is_deleted = false
+      and (
+        p.created_by = $1
+        or p.id in (select entity_id from shares where entity_type = 'page' and recipient_user_id = $1)
+        or p.parent_id in (
+          with recursive shared_folders as (
+            select f.id
+            from shares s
+            join folders f on f.id = s.entity_id
+            where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
+            union all
+            select child.id
+            from folders child
+            join shared_folders parent on child.parent_id = parent.id
+            where child.is_deleted = false
+          )
+          select id from shared_folders
+        )
+      )
       ${textSearchClause}
       ${whereClause}
     order by rank desc nulls last
@@ -126,7 +131,6 @@ searchRoute.get('/', async (c) => {
     id: row.id,
     title: row.title,
     icon: row.icon,
-    workspaceSlug: row.workspace_slug,
     breadcrumb: row.breadcrumb ?? [],
     path: [row.title],
   }));

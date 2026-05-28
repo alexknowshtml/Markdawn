@@ -84,27 +84,61 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-export const workspaces = pgTable('workspaces', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  name: text('name').notNull(),
-  slug: text('slug').notNull().unique(),
-  ownerId: uuid('owner_id').references(() => users.id),
-  isPersonal: boolean('is_personal').default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
-});
+export const shares = pgTable(
+  'shares',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entityType: text('entity_type').notNull().$type<'folder' | 'page'>(),
+    entityId: uuid('entity_id')
+      .notNull()
+      .references(() => pages.id, { onDelete: 'cascade' }),
+    sharedBy: uuid('shared_by').references(() => users.id, { onDelete: 'set null' }),
+    recipientUserId: uuid('recipient_user_id').references(() => users.id, {
+      onDelete: 'cascade',
+    }),
+    recipientEmail: text('recipient_email'),
+    permission: text('permission').notNull().default('view').$type<'view' | 'edit'>(),
+    token: text('token').unique(),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => ({
+    entityIdx: index('shares_entity_idx').on(table.entityType, table.entityId),
+    recipientIdx: index('shares_recipient_idx').on(table.recipientUserId),
+    tokenIdx: index('shares_token_idx').on(table.token),
+    inviteUnique: unique('shares_invite_unique').on(
+      table.entityType,
+      table.entityId,
+      table.recipientUserId,
+    ),
+  }),
+);
 
-export const workspaceMembers = pgTable('workspace_members', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  role: text('role').notNull().default('member').$type<'owner' | 'admin' | 'member'>(),
-  joinedAt: timestamp('joined_at').defaultNow(),
-});
+export const pageAccessEvents = pgTable(
+  'page_access_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pageId: uuid('page_id')
+      .references(() => pages.id, { onDelete: 'cascade' })
+      .notNull(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    source: text('source').notNull().default('link').$type<'link'>(),
+    token: text('token').notNull(),
+    permission: text('permission').notNull().$type<'view' | 'edit'>(),
+    firstSeenAt: timestamp('first_seen_at').defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').defaultNow(),
+  },
+  (table) => ({
+    pageUserSourceUnique: unique().on(table.pageId, table.userId, table.source, table.token),
+    pageUserIdx: index('page_access_events_page_user_idx').on(table.pageId, table.userId),
+    tokenIdx: index('page_access_events_token_idx').on(table.token),
+  }),
+);
 
 export const folders = pgTable('folders', {
   id: uuid('id').defaultRandom().primaryKey(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   parentId: uuid('parent_id').references((): AnyPgColumn => folders.id, { onDelete: 'cascade' }),
   name: text('name').notNull().default('New Folder'),
   icon: text('icon'),
@@ -125,7 +159,6 @@ export const pages = pgTable(
   'pages',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
     parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
     title: text('title').notNull().default('Untitled'),
     titleSearch: tsvector('title_search'),
@@ -178,7 +211,6 @@ export const userFavorites = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
     pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
-    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
     createdAt: timestamp('created_at').defaultNow(),
   },
   (table) => ({
@@ -212,7 +244,6 @@ export const comments = pgTable('comments', {
 
 export const templates = pgTable('templates', {
   id: uuid('id').defaultRandom().primaryKey(),
-  workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
   title: text('title').notNull(),
   icon: text('icon'),
   description: text('description'),
@@ -238,9 +269,6 @@ export const connections = pgTable(
   'connections',
   {
     id: uuid('id').defaultRandom().primaryKey(),
-    workspaceId: uuid('workspace_id')
-      .references(() => workspaces.id, { onDelete: 'cascade' })
-      .notNull(),
     sourceType: text('source_type').notNull().default('page'),
     sourceId: uuid('source_id')
       .references(() => pages.id, { onDelete: 'cascade' })
@@ -260,7 +288,6 @@ export const connections = pgTable(
   },
   (table) => ({
     connectionUnique: unique().on(
-      table.workspaceId,
       table.sourceType,
       table.sourceId,
       table.targetType,
@@ -268,19 +295,16 @@ export const connections = pgTable(
       table.connectionType,
     ),
     sourceIdx: index('connections_source_idx').on(
-      table.workspaceId,
       table.sourceType,
       table.sourceId,
       table.connectionType,
     ),
     targetIdIdx: index('connections_target_id_idx').on(
-      table.workspaceId,
       table.targetType,
       table.targetId,
       table.connectionType,
     ),
     targetSlugIdx: index('connections_target_slug_idx').on(
-      table.workspaceId,
       table.targetType,
       table.targetSlug,
       table.connectionType,
@@ -311,9 +335,6 @@ export const uploads = pgTable('uploads', {
   originalName: text('original_name').notNull(),
   mimeType: text('mime_type').notNull(),
   size: integer('size').notNull(),
-  workspaceId: uuid('workspace_id')
-    .references(() => workspaces.id, { onDelete: 'cascade' })
-    .notNull(),
   uploadedBy: uuid('uploaded_by')
     .references(() => users.id, { onDelete: 'cascade' })
     .notNull(),

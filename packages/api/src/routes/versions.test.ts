@@ -5,7 +5,6 @@ import {
   createTestSession,
   createTestUser,
   createTestVersion,
-  createTestWorkspace,
 } from '../test-utils';
 
 describe('versions API', () => {
@@ -30,7 +29,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       await createTestVersion(page.id, user.id, { title: 'v1' });
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
@@ -55,21 +54,6 @@ describe('versions API', () => {
 
       expect(res.status).toBe(404);
     });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request(`/api/pages/${page.id}/versions`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('POST /api/pages/:pageId/versions', () => {
@@ -77,7 +61,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
         method: 'POST',
@@ -98,7 +82,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
         method: 'POST',
@@ -137,7 +121,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      const page = await createTestPage(user.id, { title: 'Original' });
       const version = await createTestVersion(page.id, user.id, { title: 'Restored Title' });
 
       const res = await app.request(`/api/pages/${page.id}/versions/${version.id}/restore`, {
@@ -157,7 +141,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(
         `/api/pages/${page.id}/versions/00000000-0000-0000-0000-000000000000/restore`,

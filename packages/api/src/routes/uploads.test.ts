@@ -1,10 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createTestApp,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-} from '../test-utils';
+import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
 describe('uploads API', () => {
   describe('auth guard', () => {
@@ -31,7 +26,6 @@ describe('uploads API', () => {
       const session = await createTestSession(user.id);
 
       const formData = new FormData();
-      formData.append('workspaceId', user.workspaceId);
       formData.append('file', new File(['fake-image-data'], 'test.png', { type: 'image/png' }));
 
       const res = await app.request('/api/uploads', {
@@ -51,7 +45,6 @@ describe('uploads API', () => {
       const session = await createTestSession(user.id);
 
       const formData = new FormData();
-      formData.append('workspaceId', user.workspaceId);
       formData.append('file', new File(['text'], 'test.txt', { type: 'text/plain' }));
 
       const res = await app.request('/api/uploads', {
@@ -68,53 +61,12 @@ describe('uploads API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const formData = new FormData();
-      formData.append('workspaceId', user.workspaceId);
-
       const res = await app.request('/api/uploads', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
-        body: formData,
       });
 
       expect(res.status).toBe(400);
-    });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const formData = new FormData();
-      formData.append('file', new File(['fake'], 'test.png', { type: 'image/png' }));
-
-      const res = await app.request('/api/uploads', {
-        method: 'POST',
-        headers: { Cookie: session.Cookie },
-        body: formData,
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 for non-member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-
-      const formData = new FormData();
-      formData.append('workspaceId', ws.id);
-      formData.append('file', new File(['fake'], 'test.png', { type: 'image/png' }));
-
-      const res = await app.request('/api/uploads', {
-        method: 'POST',
-        headers: { Cookie: session2.Cookie },
-        body: formData,
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 
@@ -143,32 +95,6 @@ describe('uploads API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session1 = await createTestSession(user1.id);
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-
-      const formData = new FormData();
-      formData.append('workspaceId', ws.id);
-      formData.append('file', new File(['fake'], 'test.png', { type: 'image/png' }));
-
-      const uploadRes = await app.request('/api/uploads', {
-        method: 'POST',
-        headers: { Cookie: session1.Cookie },
-        body: formData,
-      });
-      const { url } = await uploadRes.json();
-
-      const res = await app.request(url, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
-
     it('returns uploaded file bytes with correct Content-Type', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -176,7 +102,6 @@ describe('uploads API', () => {
 
       const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       const formData = new FormData();
-      formData.append('workspaceId', user.workspaceId);
       formData.append('file', new File([binaryData], 'real.png', { type: 'image/png' }));
 
       const uploadRes = await app.request('/api/uploads', {

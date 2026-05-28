@@ -2,11 +2,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
-
-type PageRow = {
-  id: string;
-  workspace_id: string | null;
-};
+import { ensurePageAccess } from '../utils/share-access';
 
 type UserRow = {
   id: string;
@@ -73,13 +69,6 @@ const commentsRoute = new Hono();
 
 commentsRoute.use('*', requireAuth);
 
-const getPageById = async (pageId: string) => {
-  const result = await pool.query('select id, workspace_id from pages where id = $1 limit 1', [
-    pageId,
-  ]);
-  return (result.rows[0] as PageRow | undefined) ?? null;
-};
-
 const getUserById = async (userId: string) => {
   const result = await pool.query(
     'select id, name, email, avatar_url from users where id = $1 limit 1',
@@ -88,31 +77,19 @@ const getUserById = async (userId: string) => {
   return (result.rows[0] as UserRow | undefined) ?? null;
 };
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
+const ensurePageExists = async (pageId: string) => {
+  const result = await pool.query('select id from pages where id = $1 limit 1', [pageId]);
+  return !!result.rows[0];
 };
 
 commentsRoute.get(':pageId/comments', async (c) => {
   const pageId = c.req.param('pageId');
-  const page = await getPageById(pageId);
-
-  if (!page) {
+  if (!(await ensurePageExists(pageId))) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   const commentsResult = await pool.query(
     'select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc',
@@ -182,18 +159,12 @@ commentsRoute.get(':pageId/comments', async (c) => {
 // POST /:pageId/comments - Create a new comment
 commentsRoute.post(':pageId/comments', async (c) => {
   const pageId = c.req.param('pageId');
-  const page = await getPageById(pageId);
-
-  if (!page) {
+  if (!(await ensurePageExists(pageId))) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
     throw new HTTPException(404, { message: 'User not found' });
@@ -236,16 +207,12 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
   const pageId = c.req.param('pageId');
   const commentId = c.req.param('commentId');
 
-  const page = await getPageById(pageId);
-  if (!page) {
+  if (!(await ensurePageExists(pageId))) {
     throw new HTTPException(404, { message: 'Page not found' });
-  }
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
     throw new HTTPException(404, { message: 'User not found' });
@@ -291,16 +258,12 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
   const pageId = c.req.param('pageId');
   const commentId = c.req.param('commentId');
 
-  const page = await getPageById(pageId);
-  if (!page) {
+  if (!(await ensurePageExists(pageId))) {
     throw new HTTPException(404, { message: 'Page not found' });
-  }
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   const { content, resolved } = await c.req.json();
 
@@ -372,16 +335,12 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
   const pageId = c.req.param('pageId');
   const commentId = c.req.param('commentId');
 
-  const page = await getPageById(pageId);
-  if (!page) {
+  if (!(await ensurePageExists(pageId))) {
     throw new HTTPException(404, { message: 'Page not found' });
-  }
-  if (!page.workspace_id) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
 
   // Verify comment belongs to user or user is admin
   const commentResult = await pool.query(

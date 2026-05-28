@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
 import { marked } from 'marked';
 import * as Y from 'yjs';
+import { auth } from '../auth';
 import type { pages } from '../db';
 import { pool } from '../db/connection';
 import { uploadsDir } from '../env';
@@ -14,19 +15,22 @@ import {
   createYjsDocWithTitle,
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
+import { ensureCanManageEntity, ensureFolderAccess, ensurePageAccess } from '../utils/share-access';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
-  workspace_id?: string | null;
   parent_id?: string | null;
   created_by?: string | null;
   created_at?: Date | null;
   updated_at?: Date | null;
   is_deleted?: boolean | null;
   deleted_at?: Date | null;
+  is_public?: boolean | null;
+  public_token?: string | null;
 };
 
 const pagesRoute = new Hono();
+const pagesPublicRoute = new Hono();
 
 pagesRoute.use('*', requireAuth);
 
@@ -43,17 +47,6 @@ const isValidMarkdown = (markdown: string): boolean => {
   }
 };
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
 const getPageById = async (pageId: string) => {
   const result = await pool.query('select * from pages where id = $1 limit 1', [pageId]);
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
@@ -62,33 +55,47 @@ const getPageById = async (pageId: string) => {
 
 const normalizePageRow = (row: RawPageRow): PageRow => ({
   ...row,
-  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
   parentId: row.parentId ?? row.parent_id ?? null,
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
   isDeleted: row.isDeleted ?? row.is_deleted ?? false,
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
+  isPublic: row.isPublic ?? row.is_public ?? false,
+  publicToken: row.publicToken ?? row.public_token ?? null,
 });
 
-function ensureWorkspaceForPage(page: PageRow): asserts page is PageRow & { workspaceId: string } {
-  if (!page.workspaceId) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-}
-
 pagesRoute.get('/tree', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
+  // Return pages the user can access (owned or shared)
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    'select * from pages where workspace_id = $1 and is_deleted = false order by parent_id nulls first, case when parent_id is null then updated_at end desc nulls last, position asc',
-    [workspaceId],
+    `
+      with recursive shared_folders as (
+        select f.id
+        from shares s
+        join folders f on f.id = s.entity_id
+        where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
+        union all
+        select child.id
+        from folders child
+        join shared_folders parent on child.parent_id = parent.id
+        where child.is_deleted = false
+      )
+      select p.*
+      from pages p
+      where p.is_deleted = false
+        and (
+          p.created_by = $1
+          or exists (
+            select 1 from shares s
+            where s.entity_type = 'page' and s.entity_id = p.id and s.recipient_user_id = $1
+          )
+          or p.parent_id in (select id from shared_folders)
+        )
+      order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position asc
+    `,
+    [user.id],
   );
 
   const pagesList = (result.rows as RawPageRow[]).map(normalizePageRow);
@@ -107,35 +114,31 @@ pagesRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { workspaceId, parentId, title, icon } = body as {
-    workspaceId?: string;
+  const { parentId, title, icon } = body as {
     parentId?: string | null;
     title?: string;
     icon?: string | null;
   };
 
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   if (parentId) {
     const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, workspaceId],
+      'select id from folders where id = $1 and is_deleted = false limit 1',
+      [parentId],
     );
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
+    // ensure user can manage parent
+    await ensureFolderAccess(parentId, user.id, 'edit');
   }
 
   const positionResult = await pool.query(
     parentId
-      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-    parentId ? [workspaceId, parentId] : [workspaceId],
+      ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
+      : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
+    parentId ? [parentId, user.id] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -145,9 +148,8 @@ pagesRoute.post('/', async (c) => {
   const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
 
   const insertResult = await pool.query(
-    "insert into pages (workspace_id, parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *",
+    "insert into pages (parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
     [
-      workspaceId,
       parentId ?? null,
       pageTitle,
       typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
@@ -166,40 +168,28 @@ pagesRoute.post('/', async (c) => {
 });
 
 pagesRoute.get('/trash', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    'select * from pages where workspace_id = $1 and is_deleted = true order by deleted_at desc nulls last, position asc',
-    [workspaceId],
+    'select * from pages where is_deleted = true and created_by = $1 order by deleted_at desc nulls last, position asc',
+    [user.id],
   );
 
   return c.json((result.rows as RawPageRow[]).map(normalizePageRow));
 });
 
 pagesRoute.delete('/trash/empty-all', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const workspacePages = await pool.query(
-    'select id, parent_id, is_deleted from pages where workspace_id = $1',
-    [workspaceId],
+  const userPages = await pool.query(
+    'select id, parent_id, is_deleted from pages where created_by = $1',
+    [user.id],
   );
 
   const childMap = new Map<string, string[]>();
   const trashedPageIds = new Set<string>();
 
-  for (const item of workspacePages.rows as {
+  for (const item of userPages.rows as {
     id: string;
     parent_id: string | null;
     is_deleted: boolean;
@@ -239,11 +229,6 @@ pagesRoute.delete('/trash/empty-all', async (c) => {
 });
 
 pagesRoute.get('/recent', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const limitParam = c.req.query('limit');
   const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 10;
   if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
@@ -251,11 +236,10 @@ pagesRoute.get('/recent', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
   const result = await pool.query(
-    'select p.id, p.title, p.icon, pv.visited_at as "visitedAt" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.workspace_id = $2 and p.is_deleted = false order by pv.visited_at desc limit $3',
-    [user.id, workspaceId, parsedLimit],
+    'select p.id, p.title, p.icon, pv.visited_at as "visitedAt" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.is_deleted = false order by pv.visited_at desc limit $2',
+    [user.id, parsedLimit],
   );
 
   return c.json(
@@ -263,7 +247,43 @@ pagesRoute.get('/recent', async (c) => {
   );
 });
 
-pagesRoute.get(':id', async (c) => {
+pagesPublicRoute.get(
+  ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',
+  async (c) => {
+    const pageId = c.req.param('id');
+    const page = await getPageById(pageId);
+
+    if (!page) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    if (session?.user) {
+      const user = session.user as { id: string };
+      if (!page.isPublic) {
+        await ensurePageAccess(page.id, user.id);
+      }
+      await pool.query(
+        'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
+        [user.id, pageId],
+      );
+    } else if (!page.isPublic) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    // Determine if a link share exists and expose its permission to anonymous viewers.
+    const linkResult = await pool.query(
+      "select permission from shares where entity_type = 'page' and entity_id = $1 and token is not null limit 1",
+      [pageId],
+    );
+    const linkRow = linkResult.rows[0] as { permission: string } | undefined;
+    const linkPermission = linkRow ? (linkRow.permission as 'view' | 'edit') : null;
+
+    return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null, linkPermission });
+  },
+);
+
+pagesRoute.post(':id/access', async (c) => {
   const pageId = c.req.param('id');
   const page = await getPageById(pageId);
 
@@ -271,17 +291,61 @@ pagesRoute.get(':id', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
+  if (!page.isPublic) {
+    throw new HTTPException(404, { message: 'Page not found' });
+  }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+
+  const shareResult = await pool.query(
+    "SELECT token, permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL LIMIT 1",
+    [pageId],
+  );
+  const shareRow = shareResult.rows[0] as { token: string; permission: string } | undefined;
+  const shareToken = shareRow?.token ?? pageId;
+  const sharePermission = (shareRow?.permission ?? 'view') as 'view' | 'edit';
 
   await pool.query(
-    'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
-    [user.id, pageId],
+    `
+      insert into page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
+      values ($1, $2, 'link', $3, $4, now(), now())
+      on conflict (page_id, user_id, source, token)
+      do update set permission = excluded.permission, last_seen_at = now()
+    `,
+    [page.id, user.id, shareToken, sharePermission],
   );
 
-  return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null });
+  return c.json({ ok: true });
+});
+
+pagesRoute.patch(':id/restore', async (c) => {
+  const pageId = c.req.param('id');
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: 'Page not found' });
+  }
+
+  const user = c.get('user') as { id: string };
+  // Direct ownership check — ensurePageAccess filters by is_deleted=false,
+  // but restore operates on a soft-deleted page
+  const ownerRes = await pool.query('select created_by from pages where id = $1 limit 1', [pageId]);
+  const ownerRow = ownerRes.rows[0] as { created_by?: string } | undefined;
+  if (!ownerRow || ownerRow.created_by !== user.id) {
+    throw new HTTPException(403, { message: 'Forbidden' });
+  }
+
+  const updateResult = await pool.query(
+    "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
+    [pageId],
+  );
+
+  if (updateResult.rowCount === 0) {
+    throw new HTTPException(500, { message: 'Failed to restore page' });
+  }
+
+  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
+  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
 pagesRoute.patch(':id', async (c) => {
@@ -292,9 +356,8 @@ pagesRoute.patch(':id', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensurePageAccess(page.id, user.id, 'edit');
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -317,8 +380,8 @@ pagesRoute.patch(':id', async (c) => {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });
     }
     const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
+      'select id from folders where id = $1 and is_deleted = false limit 1',
+      [parentId],
     );
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
@@ -392,37 +455,8 @@ pagesRoute.patch(':id', async (c) => {
   if (page.title !== nextTitle) {
     await pool.query('select pg_notify($1, $2)', [
       'page_renamed',
-      JSON.stringify({
-        workspaceId: page.workspaceId,
-        pageId,
-        newTitle: nextTitle,
-      }),
+      JSON.stringify({ pageId, newTitle: nextTitle }),
     ]);
-  }
-
-  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
-  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
-});
-
-pagesRoute.patch(':id/restore', async (c) => {
-  const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
-  ensureWorkspaceForPage(page);
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
-
-  const updateResult = await pool.query(
-    "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
-    [pageId],
-  );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to restore page' });
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -437,9 +471,8 @@ pagesRoute.patch(':id/move', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -457,8 +490,8 @@ pagesRoute.patch(':id/move', async (c) => {
       throw new HTTPException(400, { message: 'Cannot set parent to self' });
     }
     const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
+      'select id from folders where id = $1 and is_deleted = false limit 1',
+      [parentId],
     );
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
@@ -496,13 +529,12 @@ pagesRoute.get(':id/export/markdown', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
   const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
   const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
-  const extracted = await extractImages(markdown, uploadsDir, page.workspaceId ?? undefined);
+  const extracted = await extractImages(markdown, uploadsDir);
 
   if (extracted.assets.size === 0) {
     c.header('Content-Type', 'text/markdown');
@@ -534,9 +566,8 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
   const contentType = c.req.header('content-type') ?? '';
   let markdown = '';
@@ -572,10 +603,10 @@ pagesRoute.post(':id/import/markdown', async (c) => {
   let ydocBuffer = Buffer.from(createYjsDocWithTitle(page.title || 'Untitled', markdown));
 
   // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  if (page.workspaceId) {
+  {
     const existingPages = await pool.query(
-      'select id, title from pages where workspace_id = $1 and is_deleted = false',
-      [page.workspaceId],
+      'select id, title from pages where is_deleted = false',
+      [],
     );
     const pageLookup = new Map<string, string>();
     for (const row of existingPages.rows as { id: string; title: string }[]) {
@@ -606,9 +637,8 @@ pagesRoute.delete(':id', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
   const updateResult = await pool.query(
     'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
@@ -620,10 +650,7 @@ pagesRoute.delete(':id', async (c) => {
   }
 
   // Notify the collab server so it removes the page from the meta room.
-  await pool.query('select pg_notify($1, $2)', [
-    'page_deleted',
-    JSON.stringify({ workspaceId: page.workspaceId, pageId }),
-  ]);
+  await pool.query('select pg_notify($1, $2)', ['page_deleted', JSON.stringify({ pageId })]);
 
   return c.json({ deleted: true });
 });
@@ -636,9 +663,8 @@ pagesRoute.post(':id/copy', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   const parentId =
@@ -648,8 +674,8 @@ pagesRoute.post(':id/copy', async (c) => {
 
   if (parentId) {
     const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
+      'select id from folders where id = $1 and is_deleted = false limit 1',
+      [parentId],
     );
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
@@ -658,17 +684,17 @@ pagesRoute.post(':id/copy', async (c) => {
 
   const positionResult = await pool.query(
     parentId
-      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-    parentId ? [page.workspaceId, parentId] : [page.workspaceId],
+      ? 'select max(position) as max_position from pages where parent_id = $1 and is_deleted = false and created_by = $2'
+      : 'select max(position) as max_position from pages where parent_id is null and is_deleted = false and created_by = $1',
+    parentId ? [parentId, user.id] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const insertResult = await pool.query(
-    `insert into pages (id, workspace_id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
-     select gen_random_uuid(), workspace_id, $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
+    `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
+     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
      from pages where id = $5
-     returning id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
+     returning id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
     [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
   );
 
@@ -699,7 +725,7 @@ pagesRoute.post(':id/copy', async (c) => {
   // appear immediately — without this, the copied page's backlinks
   // panel and tag queries would be empty until a user opens it and
   // triggers a collab persist.
-  if (page.workspaceId) {
+  {
     const originalConnections = await pool.query(
       `select id, target_type, target_id, target_slug, target_label, connection_type,
               link_text, link_context, occurrence_count
@@ -720,12 +746,11 @@ pagesRoute.post(':id/copy', async (c) => {
     }[]) {
       const insertResult = await pool.query(
         `insert into connections (
-           workspace_id, source_type, source_id, target_type, target_id, target_slug,
+           source_type, source_id, target_type, target_id, target_slug,
            target_label, connection_type, link_text, link_context, occurrence_count, updated_at
-         ) values ($1, 'page', $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+         ) values ('page', $1, $2, $3, $4, $5, $6, $7, $8, $9, now())
          returning id`,
         [
-          page.workspaceId,
           newPageId,
           conn.target_type,
           conn.target_id,
@@ -760,17 +785,15 @@ pagesRoute.delete(':id/permanent', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensureCanManageEntity('page', page.id, user.id);
 
-  const workspacePages = await pool.query(
-    'select id, parent_id from pages where workspace_id = $1',
-    [page.workspaceId],
-  );
+  const userPages = await pool.query('select id, parent_id from pages where created_by = $1', [
+    user.id,
+  ]);
 
   const childMap = new Map<string, string[]>();
-  for (const item of workspacePages.rows as { id: string; parent_id: string | null }[]) {
+  for (const item of userPages.rows as { id: string; parent_id: string | null }[]) {
     if (!item.parent_id) {
       continue;
     }
@@ -800,4 +823,5 @@ pagesRoute.delete(':id/permanent', async (c) => {
   return c.json({ deleted: true });
 });
 
+export { pagesPublicRoute };
 export default pagesRoute;
