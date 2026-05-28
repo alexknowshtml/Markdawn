@@ -17,10 +17,8 @@ import {
   createTestPage,
   createTestSession,
   createTestUser,
-  createTestWorkspace,
   createTestYjsDoc,
   getTestPool,
-  insertTestWorkspace,
 } from './test-utils';
 
 function sleep(ms: number): Promise<void> {
@@ -286,11 +284,9 @@ describe('collab server', () => {
 
   describe('authorization', () => {
     it('denies access to another users page on load', async () => {
-      const owner = await createTestUser(pool);
       const intruder = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, owner.id);
-      const page = await createTestPage(pool, workspace.id, owner.id);
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
       const intruderSession = await createTestSession(pool, intruder.id);
 
       const authResult = await new Promise<'failed' | 'timeout'>((resolve) => {
@@ -317,11 +313,9 @@ describe('collab server', () => {
     it('denies edits to another users page on store', async () => {
       const owner = await createTestUser(pool);
       const intruder = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, owner.id);
-      const page = await createTestPage(pool, workspace.id, owner.id);
       const ownerSession = await createTestSession(pool, owner.id);
       const intruderSession = await createTestSession(pool, intruder.id);
+      const page = await createTestPage(pool, owner.id);
 
       const ownerDoc = new Y.Doc();
       const ownerProvider = new HocuspocusProvider({
@@ -356,13 +350,11 @@ describe('collab server', () => {
       expect(authResult).toBe('failed');
     });
 
-    it('logs access denial when user lacks workspace membership', async () => {
-      const owner = await createTestUser(pool);
+    it('logs access denial when user does not own the page', async () => {
       const intruder = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, owner.id);
-      const page = await createTestPage(pool, workspace.id, owner.id);
       const intruderSession = await createTestSession(pool, intruder.id);
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
 
       const payload = createAuthenticatePayload(server, {
         documentName: page.id,
@@ -377,6 +369,9 @@ describe('collab server', () => {
   });
 
   describe('onLoadDocument', () => {
+    const ydocBytes = createTestYjsDoc('Hello from DB');
+    const corruptedData = createCorruptedYjsDoc();
+
     it('rejects loading when user context is missing', async () => {
       const payload: onLoadDocumentPayload = {
         context: {},
@@ -413,10 +408,8 @@ describe('collab server', () => {
 
     it('creates a new document when the page has no stored ydoc', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc = new Y.Doc();
       const provider = new HocuspocusProvider({
@@ -433,10 +426,7 @@ describe('collab server', () => {
 
     it('loads existing ydoc from the database', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const ydocBytes = createTestYjsDoc('Hello from DB');
-      const page = await createTestPage(pool, workspace.id, user.id, ydocBytes);
+      const page = await createTestPage(pool, user.id, 'Test Page', ydocBytes);
       const session = await createTestSession(pool, user.id);
 
       const doc = new Y.Doc();
@@ -454,10 +444,7 @@ describe('collab server', () => {
 
     it('serves the same content to two concurrent readers', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const ydocBytes = createTestYjsDoc('Shared document');
-      const page = await createTestPage(pool, workspace.id, user.id, ydocBytes);
+      const page = await createTestPage(pool, user.id, 'Test Page', ydocBytes);
       const session = await createTestSession(pool, user.id);
 
       const doc1 = new Y.Doc();
@@ -478,8 +465,8 @@ describe('collab server', () => {
       });
 
       await waitFor(() => provider1.synced && provider2.synced, 5_000, 'both providers to sync');
-      expect(doc1.getText('content').toString()).toBe('Shared document');
-      expect(doc2.getText('content').toString()).toBe('Shared document');
+      expect(doc1.getText('content').toString()).toBe('Hello from DB');
+      expect(doc2.getText('content').toString()).toBe('Hello from DB');
 
       provider1.destroy();
       provider2.destroy();
@@ -487,13 +474,11 @@ describe('collab server', () => {
 
     it('creates new document when stored ydoc is an empty buffer', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
       const pageId = crypto.randomUUID();
       await pool.query(
-        `INSERT INTO pages (id, workspace_id, parent_id, title, position, created_by, created_at, updated_at, ydoc)
-         VALUES ($1, $2, NULL, 'Empty Buffer Page', '0', $3, NOW(), NOW(), $4)`,
-        [pageId, workspace.id, user.id, Buffer.alloc(0)],
+        `INSERT INTO pages (id, parent_id, title, position, created_by, created_at, updated_at, ydoc)
+         VALUES ($1, NULL, 'Empty Buffer Page', '0', $2, NOW(), NOW(), $3)`,
+        [pageId, user.id, Buffer.alloc(0)],
       );
 
       const payload: onLoadDocumentPayload = {
@@ -532,14 +517,11 @@ describe('collab server', () => {
 
     it('throws when stored ydoc contains corrupted binary data', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const corruptedData = createCorruptedYjsDoc();
       const pageId = crypto.randomUUID();
       await pool.query(
-        `INSERT INTO pages (id, workspace_id, parent_id, title, position, created_by, created_at, updated_at, ydoc)
-         VALUES ($1, $2, NULL, 'Corrupted Page', '0', $3, NOW(), NOW(), $4)`,
-        [pageId, workspace.id, user.id, Buffer.from(corruptedData)],
+        `INSERT INTO pages (id, parent_id, title, position, created_by, created_at, updated_at, ydoc)
+         VALUES ($1, NULL, 'Corrupted Page', '0', $2, NOW(), NOW(), $3)`,
+        [pageId, user.id, Buffer.from(corruptedData)],
       );
 
       const payload: onLoadDocumentPayload = {
@@ -624,10 +606,8 @@ describe('collab server', () => {
 
     it('persists content edits to the database', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc = new Y.Doc();
       const provider = new HocuspocusProvider({
@@ -661,10 +641,8 @@ describe('collab server', () => {
 
     it('loads previously persisted content on reconnection', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc1 = new Y.Doc();
       const provider1 = new HocuspocusProvider({
@@ -704,10 +682,8 @@ describe('collab server', () => {
 
     it('coalesces rapid edits into fewer persistence calls via debounce', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc = new Y.Doc();
       const provider = new HocuspocusProvider({
@@ -737,7 +713,7 @@ describe('collab server', () => {
       await sleep(200);
 
       // 5 edits within debounce window should produce at most 4 persistence writes
-      // (1 from debounced onStoreDocument + 1 from updateWorkspaceMeta's pool.query
+      // (1 from debounced onStoreDocument + 1 from updatePageMeta's pool.query
       //  + possibly 1 from onDisconnect force-save + 1 from meta room sync)
       expect(connectSpy.mock.calls.length).toBeGreaterThan(0);
       expect(connectSpy.mock.calls.length).toBeLessThanOrEqual(4);
@@ -824,10 +800,8 @@ describe('collab server', () => {
 
     it('force-saves document when provider disconnects before debounce', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc = new Y.Doc();
       const provider = new HocuspocusProvider({
@@ -881,10 +855,8 @@ describe('collab server', () => {
   describe('Yjs convergence', () => {
     it('syncs awareness state between connected providers', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const provider1 = new HocuspocusProvider({
         url: `ws://localhost:${port}`,
@@ -925,10 +897,8 @@ describe('collab server', () => {
 
     it('re-syncs document state after a provider reconnects', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const docA = new Y.Doc();
       const docB = new Y.Doc();
@@ -976,10 +946,8 @@ describe('collab server', () => {
 
     it('converges concurrent edits from two providers', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const doc1 = new Y.Doc();
       const doc2 = new Y.Doc();
@@ -1021,10 +989,8 @@ describe('collab server', () => {
 
     it('clears awareness state when a provider disconnects', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const provider1 = new HocuspocusProvider({
         url: `ws://localhost:${port}`,
@@ -1069,10 +1035,8 @@ describe('collab server', () => {
 
     it('restores awareness state after a provider reconnects', async () => {
       const user = await createTestUser(pool);
-      const workspace = createTestWorkspace();
-      await insertTestWorkspace(pool, workspace, user.id);
-      const page = await createTestPage(pool, workspace.id, user.id);
       const session = await createTestSession(pool, user.id);
+      const page = await createTestPage(pool, user.id);
 
       const observerProvider = new HocuspocusProvider({
         url: `ws://localhost:${port}`,

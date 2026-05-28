@@ -10,7 +10,7 @@ import { Client, type Pool, type PoolClient } from 'pg';
 import * as Y from 'yjs';
 import { parseCookies } from './utils';
 
-const META_ROOM_PREFIX = 'workspace-meta:';
+const META_ROOM_PREFIX = 'page-meta:';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function extractTitle(doc: Y.Doc): string {
@@ -28,7 +28,7 @@ type PageLookupRow = {
 };
 
 type PageContextRow = {
-  workspace_id: string;
+  created_by: string;
   properties: unknown;
 };
 
@@ -37,7 +37,7 @@ type IndexedConnection = Omit<ConnectionDraft, 'targetId'> & {
   occurrenceCount: number;
 };
 
-async function updateWorkspaceMeta(
+async function updatePageMeta(
   hocuspocus: Hocuspocus,
   pool: Pool,
   pageId: string,
@@ -45,19 +45,19 @@ async function updateWorkspaceMeta(
 ): Promise<void> {
   try {
     const pageResult = await pool.query(
-      'select workspace_id, title, icon, parent_id, position from pages where id = $1',
+      'select created_by, title, icon, parent_id, position from pages where id = $1',
       [pageId],
     );
     if (pageResult.rows.length === 0) return;
 
     const page = pageResult.rows[0] as {
-      workspace_id: string;
+      created_by: string;
       title: string;
       icon: string | null;
       parent_id: string | null;
       position: string;
     };
-    const metaRoomName = `${META_ROOM_PREFIX}${page.workspace_id}`;
+    const metaRoomName = `${META_ROOM_PREFIX}${page.created_by}`;
 
     const connection = await hocuspocus.openDirectConnection(metaRoomName, {});
     try {
@@ -137,7 +137,7 @@ function isUuid(value: string): boolean {
 
 async function resolvePageTargets(
   client: PoolClient,
-  workspaceId: string,
+  userId: string,
   connections: IndexedConnection[],
   staleTargets?: Map<string, string>,
 ): Promise<void> {
@@ -173,8 +173,8 @@ async function resolvePageTargets(
   if (ids.length > 0) {
     const result = await client.query<PageLookupRow>(
       `select id, title from pages
-       where workspace_id = $1 and id = any($2::uuid[]) and is_deleted = false`,
-      [workspaceId, ids],
+       where id = any($1::uuid[]) and is_deleted = false`,
+      [ids],
     );
     for (const row of result.rows) {
       byId.set(row.id, row);
@@ -184,8 +184,8 @@ async function resolvePageTargets(
   if (slugs.length > 0) {
     const result = await client.query<PageLookupRow>(
       `select id, title from pages
-       where workspace_id = $1 and lower(title) = any($2::text[]) and is_deleted = false`,
-      [workspaceId, slugs],
+       where created_by = $1 and lower(title) = any($2::text[]) and is_deleted = false`,
+      [userId, slugs],
     );
     for (const row of result.rows) {
       bySlug.set(row.title.toLowerCase(), row);
@@ -237,9 +237,9 @@ async function resolvePageTargets(
   if (unresolvedSlugs.length > 0) {
     const crossResult = await client.query<{ target_slug: string; target_id: string }>(
       `select distinct on (target_slug) target_slug, target_id from connections
-       where workspace_id = $1 and target_slug = any($2::text[]) and target_id is not null
+       where target_slug = any($1::text[]) and target_id is not null
        order by target_slug, updated_at desc`,
-      [workspaceId, unresolvedSlugs],
+      [unresolvedSlugs],
     );
     for (const row of crossResult.rows) {
       slugTargetMap.set(row.target_slug, row.target_id);
@@ -266,7 +266,7 @@ async function updateConnections(
   logger: Logger,
 ): Promise<string[]> {
   const pageResult = await client.query<PageContextRow>(
-    'select workspace_id, properties from pages where id = $1',
+    'select created_by, properties from pages where id = $1',
     [pageId],
   );
   const page = pageResult.rows[0];
@@ -295,7 +295,7 @@ async function updateConnections(
   const extracted = extractConnectionsFromYDoc(ydocUpdate);
   const propertyTags = extractPropertyTags(page.properties);
   const indexedConnections = aggregateConnections([...extracted, ...propertyTags]);
-  await resolvePageTargets(client, page.workspace_id, indexedConnections, staleTargets);
+  await resolvePageTargets(client, page.created_by, indexedConnections, staleTargets);
 
   await client.query('delete from connections where source_type = $1 and source_id = $2', [
     'page',
@@ -305,13 +305,12 @@ async function updateConnections(
   for (const connection of indexedConnections) {
     const insertResult = await client.query<{ id: string }>(
       `insert into connections (
-         workspace_id, source_type, source_id, target_type, target_id, target_slug,
+         source_type, source_id, target_type, target_id, target_slug,
          target_label, connection_type, link_text, link_context, occurrence_count, updated_at
        )
-       values ($1, 'page', $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       values ('page', $1, $2, $3, $4, $5, $6, $7, $8, $9, now())
        returning id`,
       [
-        page.workspace_id,
         pageId,
         connection.targetType,
         connection.targetId,
@@ -347,13 +346,13 @@ async function updateConnections(
 
 async function updateBacklinksVersion(
   hocuspocus: Hocuspocus,
-  workspaceId: string,
+  userId: string,
   pageIds: string[],
   logger: Logger,
 ): Promise<void> {
   if (pageIds.length === 0) return;
 
-  const metaRoomName = `${META_ROOM_PREFIX}${workspaceId}`;
+  const metaRoomName = `${META_ROOM_PREFIX}${userId}`;
   try {
     const conn = await hocuspocus.openDirectConnection(metaRoomName, {});
     try {
@@ -368,7 +367,7 @@ async function updateBacklinksVersion(
       await conn.disconnect();
     }
   } catch (err) {
-    logger.warn(`[meta] failed to update backlinksVersion for workspace ${workspaceId}: ${err}`);
+    logger.warn(`[meta] failed to update backlinksVersion for user ${userId}: ${err}`);
   }
 }
 
@@ -382,7 +381,7 @@ async function persistDocument(
   attempt = 1,
 ) {
   const client = await pool.connect();
-  let workspaceId: string | undefined;
+  let createdBy: string | undefined;
   let targetPageIds: string[] = [];
 
   try {
@@ -420,12 +419,12 @@ async function persistDocument(
     }
     targetPageIds = await updateConnections(client, documentName, state, logger);
 
-    // Read workspace_id to know which meta room to notify.
-    const wsResult = await client.query<{ workspace_id: string }>(
-      'select workspace_id from pages where id = $1',
+    // Read created_by to know which meta room to notify.
+    const userResult = await client.query<{ created_by: string }>(
+      'select created_by from pages where id = $1',
       [documentName],
     );
-    workspaceId = wsResult.rows[0]?.workspace_id;
+    createdBy = userResult.rows[0]?.created_by;
 
     await client.query('COMMIT');
   } catch (err) {
@@ -447,12 +446,12 @@ async function persistDocument(
     client.release();
   }
 
-  updateWorkspaceMeta(hocuspocus, pool, documentName, logger);
+  updatePageMeta(hocuspocus, pool, documentName, logger);
 
   // Notify all affected pages that their backlinks may have changed.
   const affectedIds = [...new Set([documentName, ...targetPageIds])];
-  if (workspaceId) {
-    updateBacklinksVersion(hocuspocus, workspaceId, affectedIds, logger);
+  if (createdBy) {
+    updateBacklinksVersion(hocuspocus, createdBy, affectedIds, logger);
   }
 }
 
@@ -469,26 +468,53 @@ export function createCollabServer(config: CollabServerConfig) {
   const { port, pool, logger, debounceMs = 500, maxDebounceMs = 3000 } = config;
 
   async function assertPageAccess(documentName: string, userId: string): Promise<void> {
-    const access = await pool.query(
-      `SELECT 1 FROM pages p
-       JOIN workspace_members wm ON wm.workspace_id = p.workspace_id
-       WHERE p.id = $1 AND wm.user_id = $2
-       LIMIT 1`,
+    const ownerResult = await pool.query(
+      'SELECT created_by FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
+      [documentName],
+    );
+    const owner = ownerResult.rows[0] as { created_by?: string } | undefined;
+    if (!owner) {
+      logger.debug(`[auth] page=${documentName} not found`);
+      throw new Error('Forbidden');
+    }
+    if (owner.created_by === userId) {
+      return;
+    }
+
+    const shareResult = await pool.query(
+      `
+        WITH RECURSIVE folder_ancestors AS (
+          SELECT f.id, f.parent_id
+          FROM pages p
+          JOIN folders f ON f.id = p.parent_id
+          WHERE p.id = $1
+          UNION ALL
+          SELECT parent.id, parent.parent_id
+          FROM folders parent
+          JOIN folder_ancestors child ON child.parent_id = parent.id
+        )
+        SELECT permission
+        FROM shares s
+        WHERE s.recipient_user_id = $2
+          AND (
+            (s.entity_type = 'page' AND s.entity_id = $1)
+            OR (s.entity_type = 'folder' AND s.entity_id IN (SELECT id FROM folder_ancestors))
+          )
+        ORDER BY CASE WHEN permission = 'edit' THEN 0 ELSE 1 END
+        LIMIT 1
+      `,
       [documentName, userId],
     );
-    if (access.rows.length === 0) {
-      logger.debug(`[auth] user=${userId} denied access to page=${documentName}`);
+
+    if (shareResult.rows.length === 0) {
+      logger.debug(`[auth] user=${userId} denied access to page=${documentName} (no share)`);
       throw new Error('Forbidden');
     }
   }
 
-  async function assertWorkspaceAccess(workspaceId: string, userId: string): Promise<void> {
-    const access = await pool.query(
-      'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_id = $2 LIMIT 1',
-      [workspaceId, userId],
-    );
-    if (access.rows.length === 0) {
-      logger.debug(`[auth] user=${userId} denied access to workspace=${workspaceId}`);
+  async function assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void> {
+    if (userId !== roomUserId) {
+      logger.debug(`[auth] user=${userId} denied access to meta room for user=${roomUserId}`);
       throw new Error('Forbidden');
     }
   }
@@ -533,8 +559,8 @@ export function createCollabServer(config: CollabServerConfig) {
 
       if (documentName) {
         if (isMetaRoom(documentName)) {
-          const workspaceId = documentName.slice(META_ROOM_PREFIX.length);
-          await assertWorkspaceAccess(workspaceId, user.id);
+          const roomUserId = documentName.slice(META_ROOM_PREFIX.length);
+          await assertMetaRoomAccess(user.id, roomUserId);
         } else if (UUID_REGEX.test(documentName)) {
           const pageExists = await pool.query('SELECT 1 FROM pages WHERE id = $1 LIMIT 1', [
             documentName,
@@ -550,12 +576,12 @@ export function createCollabServer(config: CollabServerConfig) {
     },
     onLoadDocument: async ({ documentName, document, context }) => {
       if (isMetaRoom(documentName)) {
-        const workspaceId = documentName.slice(META_ROOM_PREFIX.length);
-        logger.debug(`[meta] loading workspace meta: ${workspaceId}`);
+        const userId = documentName.slice(META_ROOM_PREFIX.length);
+        logger.debug(`[meta] loading page meta for user: ${userId}`);
 
         const result = await pool.query(
-          'select id, title, icon, parent_id, position from pages where workspace_id = $1 and is_deleted = false order by position asc',
-          [workspaceId],
+          'select id, title, icon, parent_id, position from pages where created_by = $1 and is_deleted = false order by position asc',
+          [userId],
         );
 
         const pageIndex = document.getMap('pageIndex');
@@ -574,7 +600,7 @@ export function createCollabServer(config: CollabServerConfig) {
           });
         }
 
-        logger.debug(`[meta] loaded ${result.rows.length} pages for workspace ${workspaceId}`);
+        logger.debug(`[meta] loaded ${result.rows.length} pages for user ${userId}`);
         return;
       }
 
@@ -674,12 +700,16 @@ export function createCollabServer(config: CollabServerConfig) {
     let stopped = false;
     const MAX_RECONNECT_DELAY = 30000;
 
-    async function handlePageRenamed(
-      workspaceId: string,
-      pageId: string,
-      newTitle: string,
-    ): Promise<void> {
-      const metaRoomName = `${META_ROOM_PREFIX}${workspaceId}`;
+    async function handlePageRenamed(pageId: string, newTitle: string): Promise<void> {
+      // Look up the page creator to determine which meta room to update.
+      const pageResult = await pool.query('select created_by from pages where id = $1', [pageId]);
+      const createdBy = pageResult.rows[0]?.created_by as string | undefined;
+      if (!createdBy) {
+        logger.debug(`[listen] page ${pageId} not found, skipping rename`);
+        return;
+      }
+
+      const metaRoomName = `${META_ROOM_PREFIX}${createdBy}`;
       const conn = await server.hocuspocus.openDirectConnection(metaRoomName, {});
       try {
         await conn.transact((metaDoc: Y.Doc) => {
@@ -721,8 +751,16 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
     }
 
-    async function handlePageDeleted(workspaceId: string, pageId: string): Promise<void> {
-      const metaRoomName = `${META_ROOM_PREFIX}${workspaceId}`;
+    async function handlePageDeleted(pageId: string): Promise<void> {
+      // Look up the page creator to determine which meta room to update.
+      const pageResult = await pool.query('select created_by from pages where id = $1', [pageId]);
+      const createdBy = pageResult.rows[0]?.created_by as string | undefined;
+      if (!createdBy) {
+        logger.debug(`[listen] page ${pageId} not found, skipping delete`);
+        return;
+      }
+
+      const metaRoomName = `${META_ROOM_PREFIX}${createdBy}`;
       const conn = await server.hocuspocus.openDirectConnection(metaRoomName, {});
       try {
         await conn.transact((metaDoc: Y.Doc) => {
@@ -766,19 +804,18 @@ export function createCollabServer(config: CollabServerConfig) {
         client.on('notification', (msg) => {
           try {
             const payload = JSON.parse(msg.payload ?? '{}') as {
-              workspaceId?: string;
               pageId?: string;
               newTitle?: string;
             };
-            const { workspaceId, pageId, newTitle } = payload;
-            if (!workspaceId || !pageId) return;
+            const { pageId, newTitle } = payload;
+            if (!pageId) return;
 
             if (msg.channel === 'page_deleted') {
-              void handlePageDeleted(workspaceId, pageId).catch((err) =>
+              void handlePageDeleted(pageId).catch((err) =>
                 logger.error(`[listen] handlePageDeleted failed: ${err}`),
               );
             } else if (msg.channel === 'page_renamed' && newTitle) {
-              void handlePageRenamed(workspaceId, pageId, newTitle).catch((err) =>
+              void handlePageRenamed(pageId, newTitle).catch((err) =>
                 logger.error(`[listen] handlePageRenamed failed: ${err}`),
               );
             }
