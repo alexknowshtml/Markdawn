@@ -25,6 +25,7 @@ import {
   usePageTree,
   useUpdatePage,
 } from '../../hooks/use-pages';
+import { useShareContext } from '../../contexts/ShareContext';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
@@ -40,6 +41,7 @@ export function PageTree() {
   const navigate = useNavigate();
   const params = useParams();
   const activePageId = params.slugAndId ? extractUuidFromSlug(params.slugAndId) : undefined;
+  const { isAnonymous } = useShareContext();
 
   const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
@@ -440,6 +442,37 @@ export function PageTree() {
       <div className="flex flex-col h-full">
         <div className="flex items-center justify-center h-24 text-zinc-500 dark:text-zinc-400 text-sm">
           Loading...
+        </div>
+      </div>
+    );
+  }
+
+  if (isAnonymous) {
+    return (
+      <div className="flex flex-col h-full">
+        <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
+          <div className="flex items-center justify-center gap-1 mb-2">
+            <button
+              type="button"
+              onClick={() => navigate('/')}
+              className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+              title="Go to home"
+            >
+              <Home size={16} />
+            </button>
+          </div>
+          <div className="px-3 py-4 text-center">
+            <p className="text-sm text-zinc-500 dark:text-zinc-400 mb-3">
+              Sign in to access your pages
+            </p>
+            <button
+              type="button"
+              onClick={() => navigate('/login')}
+              className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 rounded-lg hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer"
+            >
+              Sign In
+            </button>
+          </div>
         </div>
       </div>
     );
