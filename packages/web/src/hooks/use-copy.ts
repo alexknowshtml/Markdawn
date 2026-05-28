@@ -33,17 +33,10 @@ async function copyFolder(folderId: string, parentId?: string | null): Promise<F
 export function useCopyPage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      pageId,
-      parentId,
-      workspaceId: _workspaceId,
-    }: {
-      pageId: string;
-      parentId?: string | null;
-      workspaceId: string;
-    }) => copyPage(pageId, parentId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    mutationFn: ({ pageId, parentId }: { pageId: string; parentId?: string | null }) =>
+      copyPage(pageId, parentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Page copied');
     },
     onError: (error: Error) => {
@@ -55,18 +48,11 @@ export function useCopyPage() {
 export function useCopyFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      folderId,
-      parentId,
-      workspaceId: _workspaceId,
-    }: {
-      folderId: string;
-      parentId?: string | null;
-      workspaceId: string;
-    }) => copyFolder(folderId, parentId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    mutationFn: ({ folderId, parentId }: { folderId: string; parentId?: string | null }) =>
+      copyFolder(folderId, parentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folder copied');
     },
     onError: (error: Error) => {

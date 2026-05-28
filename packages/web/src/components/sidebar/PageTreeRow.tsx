@@ -7,6 +7,7 @@ import {
   FileText,
   MoreHorizontal,
   Plus,
+  Share2,
   Star,
   Trash2,
 } from 'lucide-react';
@@ -14,13 +15,13 @@ import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { buildPagePath } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface PageTreeRowProps {
   id: string;
   title: string;
   icon?: string | null;
-  workspaceSlug: string;
   isActive?: boolean;
   depth?: number;
   hasChildren?: boolean;
@@ -33,6 +34,7 @@ interface PageTreeRowProps {
   onDelete?: () => void;
   onRename?: () => void;
   onExport?: () => void;
+  onShare?: (anchorRect: DOMRect) => void;
   onNavigate?: () => void;
   isEditing?: boolean;
   editTitle?: string;
@@ -47,7 +49,6 @@ export function PageTreeRow({
   id,
   title,
   icon,
-  workspaceSlug,
   isActive = false,
   depth = 0,
   hasChildren = false,
@@ -60,6 +61,7 @@ export function PageTreeRow({
   onDelete,
   onRename,
   onExport,
+  onShare,
   onNavigate,
   isEditing = false,
   editTitle = '',
@@ -127,7 +129,7 @@ export function PageTreeRow({
     if (onNavigate) {
       onNavigate();
     } else {
-      navigate(`/app/${workspaceSlug}/${id}`);
+      navigate(buildPagePath(title, id));
     }
   };
 
@@ -169,6 +171,12 @@ export function PageTreeRow({
     e.stopPropagation();
     setShowMenu(false);
     if (onRename) onRename();
+  };
+
+  const handleShareClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowMenu(false);
+    onShare?.(e.currentTarget.getBoundingClientRect());
   };
 
   return (
@@ -320,6 +328,15 @@ export function PageTreeRow({
                         className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                       >
                         <Download size={14} /> Export
+                      </button>
+                    )}
+                    {onShare && (
+                      <button
+                        type="button"
+                        onClick={handleShareClick}
+                        className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                      >
+                        <Share2 size={14} /> Share
                       </button>
                     )}
                     {onDelete && (

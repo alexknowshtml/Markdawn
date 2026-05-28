@@ -93,7 +93,7 @@ export function MoveDialog({ isOpen, folders, onClose, onConfirm }: MoveDialogPr
             onClick={() => setSelectedFolderId(null)}
           >
             <Home size={16} />
-            <span className="text-sm font-medium">Workspace root</span>
+            <span className="text-sm font-medium">Root</span>
           </button>
           {folders.map((folder) => renderFolder(folder))}
         </div>

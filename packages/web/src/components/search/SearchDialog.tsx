@@ -1,13 +1,13 @@
 import { FileText, Filter } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { buildPagePath } from '../../utils/url';
 import { EmptyState } from '../EmptyState';
 
 type SearchResult = {
   id: string;
   title: string;
   icon: string | null;
-  workspaceSlug: string;
   path: string[];
   breadcrumb?: string[];
 };
@@ -90,7 +90,7 @@ export function SearchDialog() {
         if (activeIndex >= 0 && results[activeIndex]) {
           event.preventDefault();
           const target = results[activeIndex];
-          navigate(`/app/${target.workspaceSlug}/${target.id}`);
+          navigate(buildPagePath(target.title, target.id));
           closeDialog();
         }
       }
@@ -269,7 +269,7 @@ export function SearchDialog() {
                   <button
                     type="button"
                     onClick={() => {
-                      navigate(`/app/${result.workspaceSlug}/${result.id}`);
+                      navigate(buildPagePath(result.title, result.id));
                       closeDialog();
                     }}
                     onMouseEnter={() => setActiveIndex(index)}
@@ -295,7 +295,7 @@ export function SearchDialog() {
                             : 'text-zinc-400 dark:text-zinc-500'
                         }`}
                       >
-                        {result.workspaceSlug}
+                        {result.path?.join(' > ') || ''}
                       </div>
                       {result.breadcrumb && result.breadcrumb.length > 0 && (
                         <div className="text-[11px] mt-1 text-zinc-400 dark:text-zinc-500 truncate">

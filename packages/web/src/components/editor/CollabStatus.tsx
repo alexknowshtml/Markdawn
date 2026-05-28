@@ -69,10 +69,6 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
         ? 'bg-amber-500'
         : 'bg-rose-500';
 
-  if (!provider) {
-    return null;
-  }
-
   return (
     <div className="flex items-center gap-3">
       {/* Status Indicator */}
@@ -84,8 +80,8 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
         </span>
       </Tooltip>
 
-      {/* User Avatars */}
-      {users.length > 0 && (
+      {/* User Avatars — only when provider is available */}
+      {provider && users.length > 0 && (
         <div className="flex items-center -space-x-2">
           {users.slice(0, 5).map((user) => (
             <Tooltip key={user.id} label={user.name} position="bottom">

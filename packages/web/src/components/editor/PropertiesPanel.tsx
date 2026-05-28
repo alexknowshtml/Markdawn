@@ -35,11 +35,10 @@ import {
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useUpdatePage } from '../../hooks/use-pages';
-import { useWorkspaceMetadata } from '../../hooks/useWorkspaceMetadata';
+import { useTags } from '../../hooks/use-tags';
 
 interface PropertiesPanelProps {
   pageId: string;
-  workspaceId: string;
   properties: Record<string, unknown> | null;
 }
 
@@ -396,7 +395,6 @@ interface SortablePropertyRowProps {
   onUpdate: (id: string, value: unknown) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, newKey: string) => void;
-  workspaceMetadata: { allKeys: string[]; allTags: string[] };
   isNew?: boolean;
 }
 
@@ -405,9 +403,9 @@ function SortablePropertyRow({
   onUpdate,
   onDelete,
   onRename,
-  workspaceMetadata,
   isNew,
-}: SortablePropertyRowProps) {
+  tagSuggestions,
+}: SortablePropertyRowProps & { tagSuggestions: string[] }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
   });
@@ -485,7 +483,7 @@ function SortablePropertyRow({
       <PropertyKeySelector
         currentKey={item.key}
         onSelect={handleKeySelect}
-        suggestions={workspaceMetadata.allKeys}
+        suggestions={['tags', 'date', 'author', 'url', 'created', 'updated']}
         isEditing={isEditingKey}
         setIsEditing={setIsEditingKey}
       />
@@ -495,7 +493,7 @@ function SortablePropertyRow({
           <TagValueEditor
             ref={tagEditorRef}
             tags={Array.isArray(item.value) ? (item.value as string[]) : []}
-            suggestions={workspaceMetadata.allTags}
+            suggestions={tagSuggestions}
             onChange={(newTags) => onUpdate(item.id, newTags)}
           />
         ) : isEditingValue ? (
@@ -570,12 +568,11 @@ function SortablePropertyRow({
 
 // --- Main Component ---
 
-export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesPanelProps) {
+export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [items, setItems] = useState<PropertyItem[]>([]);
   const [newPropertyId, setNewPropertyId] = useState<string | null>(null);
   const updatePage = useUpdatePage();
-  const workspaceMetadata = useWorkspaceMetadata(workspaceId);
 
   // Sync internal items with props while preserving order
   useEffect(() => {
@@ -621,6 +618,9 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
       return newItems;
     });
   }, [properties]);
+
+  const { data: allTags } = useTags();
+  const tagSuggestions = useMemo(() => allTags?.map((t) => t.name) ?? [], [allTags]);
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -755,7 +755,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
                   onUpdate={updateProperty}
                   onDelete={deleteProperty}
                   onRename={renameProperty}
-                  workspaceMetadata={workspaceMetadata}
+                  tagSuggestions={tagSuggestions}
                 />
               ))}
             </SortableContext>

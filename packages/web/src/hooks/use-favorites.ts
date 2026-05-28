@@ -10,8 +10,8 @@ export interface Favorite {
   createdAt: string | null;
 }
 
-async function fetchFavorites(workspaceId: string): Promise<Favorite[]> {
-  const res = await fetch(`${API_BASE}/favorites?workspaceId=${workspaceId}`);
+async function fetchFavorites(): Promise<Favorite[]> {
+  const res = await fetch(`${API_BASE}/favorites`);
   if (!res.ok) {
     throw new Error('Failed to fetch favorites');
   }
@@ -39,14 +39,10 @@ async function removeFavorite(pageId: string): Promise<void> {
   }
 }
 
-export function useFavorites(workspaceId: string | undefined) {
+export function useFavorites() {
   return useQuery({
-    queryKey: ['favorites', workspaceId],
-    queryFn: () => {
-      if (!workspaceId) throw new Error('workspaceId is required');
-      return fetchFavorites(workspaceId);
-    },
-    enabled: !!workspaceId,
+    queryKey: ['favorites'],
+    queryFn: () => fetchFavorites(),
     staleTime: 1000 * 60 * 5,
   });
 }
@@ -55,22 +51,15 @@ export function useToggleFavorite() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({
-      pageId,
-      isFavorite,
-    }: {
-      pageId: string;
-      isFavorite: boolean;
-      workspaceId: string;
-    }) => {
+    mutationFn: async ({ pageId, isFavorite }: { pageId: string; isFavorite: boolean }) => {
       if (isFavorite) {
         await removeFavorite(pageId);
       } else {
         await addFavorite(pageId);
       }
     },
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['favorites', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
     },
     onError: () => {
       showErrorToast('Failed to update favorite');

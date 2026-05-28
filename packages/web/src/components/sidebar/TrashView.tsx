@@ -11,12 +11,11 @@ import { ConfirmDialog } from '../ConfirmDialog';
 import { EmptyState } from '../EmptyState';
 
 interface TrashViewProps {
-  workspaceId: string;
   onClose: () => void;
 }
 
-export function TrashView({ workspaceId, onClose }: TrashViewProps) {
-  const { data: trashPages, isLoading } = useTrashPages(workspaceId);
+export function TrashView({ onClose }: TrashViewProps) {
+  const { data: trashPages, isLoading } = useTrashPages();
   const restoreMutation = useRestorePage();
   const permanentDeleteMutation = usePermanentDeletePage();
   const emptyTrashMutation = useEmptyTrash();
@@ -46,7 +45,7 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
 
   const handleEmptyAll = async () => {
     try {
-      await emptyTrashMutation.mutateAsync(workspaceId);
+      await emptyTrashMutation.mutateAsync();
       setShowEmptyAllConfirm(false);
     } catch (_error) {
       showErrorToast('Failed to empty trash');

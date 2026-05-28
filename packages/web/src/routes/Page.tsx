@@ -2,7 +2,7 @@ import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
@@ -15,8 +15,7 @@ import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
-import { useWorkspaces } from '../hooks/use-workspaces';
-import { extractUuidFromSlug } from '../utils/url';
+import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
 
@@ -37,30 +36,36 @@ function decodePageContent(ydoc: unknown): string {
   return '';
 }
 
-function slugifyTitle(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-}
-
 export default function Page() {
-  const { slugAndId, workspaceSlug } = useParams<{ slugAndId: string; workspaceSlug: string }>();
+  const { slugAndId } = useParams<{ slugAndId: string }>();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
+  const accessRecordedRef = useRef<string | null>(null);
+  const isFirstMount = useRef(true);
 
   // Clear state on page navigation.
+  // Skip the initial mount to avoid overwriting the provider that
+  // MilkdownEditor's onProviderReady just set in the same render batch.
+  // With PageEntry pre-caching page data, MilkdownEditor can mount on
+  // the first render, and React runs effects bottom-up — the child
+  // (onProviderReady) fires before the parent's pageId effect.
+  // Without this guard, setProvider(null) would win the batch and
+  // provider would be stuck at null.
   // biome-ignore lint/correctness/useExhaustiveDependencies: pageId is intentionally a trigger dependency
   useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false;
+      return;
+    }
     setProvider(null);
     setCollabStatus(WebSocketStatus.Connecting);
     setEditorElement(null);
   }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
 
-  const { data: page } = useQuery({
+  const { data: page, error } = useQuery({
     queryKey: ['pages', 'detail', pageId],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');
@@ -95,6 +100,21 @@ export default function Page() {
     return () => clearTimeout(id);
   }, [page]);
 
+  useEffect(() => {
+    if (!page?.isPublic || !pageId) {
+      return;
+    }
+    if (accessRecordedRef.current === pageId) {
+      return;
+    }
+    accessRecordedRef.current = pageId;
+    void fetch(`/api/pages/${pageId}/access`, {
+      method: 'POST',
+    }).catch(() => {
+      void 0;
+    });
+  }, [page?.isPublic, pageId]);
+
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
   };
@@ -117,16 +137,14 @@ export default function Page() {
       existingLink.href = '/vite.svg';
     }
 
-    const slug = slugifyTitle(page.title);
-    const canonicalSlug = `${slug}-${page.id}`;
     let canonicalLink = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
     if (!canonicalLink) {
       canonicalLink = document.createElement('link');
       canonicalLink.rel = 'canonical';
       document.head.appendChild(canonicalLink);
     }
-    canonicalLink.href = `${window.location.origin}/app/${workspaceSlug}/${canonicalSlug}`;
-  }, [page, workspaceSlug]);
+    canonicalLink.href = `${window.location.origin}${buildPagePath(page.title, page.id)}`;
+  }, [page]);
 
   useEffect(() => {
     updateDocumentMeta();
@@ -134,9 +152,7 @@ export default function Page() {
 
   useEffect(() => {
     if (!page || !slugAndId) return;
-
-    const slug = slugifyTitle(page.title);
-    const expectedPath = `${slug}-${page.id}`;
+    const expectedPath = buildPagePath(page.title, page.id).slice('/app/'.length);
 
     if (slugAndId !== expectedPath) {
       const newPath = window.location.pathname.replace(/\/[^/]+$/, `/${expectedPath}`);
@@ -144,11 +160,8 @@ export default function Page() {
     }
   }, [page, slugAndId]);
 
-  const { data: workspaces } = useWorkspaces();
-  const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
-  const workspaceId = workspace?.id;
-  const { data: pageTree } = usePageTree(workspaceId ?? '');
-  const { data: folderTree } = useFolderTree(workspaceId ?? '');
+  const { data: pageTree } = usePageTree();
+  const { data: folderTree } = useFolderTree();
 
   const flatPages = useMemo(() => {
     const result: PageType[] = [];
@@ -183,21 +196,37 @@ export default function Page() {
 
   const handleWikiLinkClick = useCallback(
     (path: string) => {
-      if (!path || !workspaceSlug) return;
+      if (!path) return;
       const targetPage = flatPages.find(
         (p) => p.id === path || p.title.toLowerCase() === path.toLowerCase(),
       );
       if (targetPage) {
-        navigate(`/app/${workspaceSlug}/${targetPage.id}`);
+        navigate(buildPagePath(targetPage.title, targetPage.id));
       }
     },
-    [workspaceSlug, flatPages, navigate],
+    [flatPages, navigate],
   );
 
-  if (!pageId || !workspaceSlug) {
+  if (!pageId) {
     return (
       <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 text-zinc-400 animate-fade-in">
         Page not found.
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 text-zinc-400 animate-fade-in">
+        Page not found.
+      </div>
+    );
+  }
+
+  if (!page) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center text-zinc-400 animate-fade-in">
+        Loading page...
       </div>
     );
   }
@@ -207,16 +236,10 @@ export default function Page() {
       <div className="mb-6">
         <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400 -mt-5">
           <div>
-            <Breadcrumbs
-              pages={flatPages}
-              folders={flatFolders}
-              currentPageId={pageId}
-              workspaceName={workspace?.name ?? workspaceSlug}
-              workspaceSlug={workspaceSlug}
-            />
+            <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
           </div>
           <div className="flex items-center gap-2">
-            <PageActions workspaceSlug={workspaceSlug} pageId={pageId} page={page} />
+            <PageActions pageId={pageId} page={page} />
             <PageStatus provider={provider} collabStatus={collabStatus} />
           </div>
         </div>
@@ -234,23 +257,18 @@ export default function Page() {
           </div>
         </div>
       </div>
-      <PropertiesPanel
-        pageId={pageId}
-        workspaceId={workspaceId ?? ''}
-        properties={page?.properties ?? null}
-      />
+      <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
       {page ? (
         <MilkdownEditor
           key={pageId}
           pageId={pageId}
-          workspaceId={workspaceId ?? ''}
           initialValue={decodePageContent(page.ydoc)}
           onProviderReady={setProvider}
           onStatusChange={handleStatusChange}
           onWikiLinkClick={handleWikiLinkClick}
         />
       ) : null}
-      <BacklinksPanel pageId={pageId} workspaceSlug={workspaceSlug} />
+      <BacklinksPanel pageId={pageId} />
       <TableOfContents editorElement={editorElement} />
     </div>
   );

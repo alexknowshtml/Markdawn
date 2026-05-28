@@ -4,19 +4,19 @@ import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
-async function fetchFolderTree(workspaceId: string): Promise<FolderTreeNode[]> {
-  const res = await fetch(`${API_BASE}/folders/tree?workspaceId=${workspaceId}`);
+async function fetchFolderTree(): Promise<FolderTreeNode[]> {
+  const res = await fetch(`${API_BASE}/folders/tree`);
   if (!res.ok) {
     throw new Error('Failed to fetch folder tree');
   }
   return res.json();
 }
 
-async function createFolder(workspaceId: string, parentId?: string): Promise<Folder> {
+async function createFolder(parentId?: string): Promise<Folder> {
   const res = await fetch(`${API_BASE}/folders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId, parentId, name: 'New Folder' }),
+    body: JSON.stringify({ parentId, name: 'New Folder' }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to create folder' }));
@@ -62,11 +62,10 @@ async function updateFolder(
   return res.json();
 }
 
-export function useFolderTree(workspaceId: string) {
+export function useFolderTree() {
   return useQuery({
-    queryKey: ['folderTree', workspaceId],
-    queryFn: () => fetchFolderTree(workspaceId),
-    enabled: !!workspaceId,
+    queryKey: ['folderTree'],
+    queryFn: () => fetchFolderTree(),
     staleTime: 1000 * 30,
     refetchOnWindowFocus: false,
   });
@@ -75,10 +74,9 @@ export function useFolderTree(workspaceId: string) {
 export function useCreateFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ workspaceId, parentId }: { workspaceId: string; parentId?: string }) =>
-      createFolder(workspaceId, parentId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
+    mutationFn: ({ parentId }: { parentId?: string }) => createFolder(parentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       showSuccessToast('Folder created');
     },
     onError: (error: Error) => {

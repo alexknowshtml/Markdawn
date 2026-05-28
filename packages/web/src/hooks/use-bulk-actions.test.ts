@@ -37,7 +37,7 @@ describe('useBulkDeletePages', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageIds: ['p1', 'p2', 'p3'], workspaceId: 'ws-1' });
+    result.current.mutate({ pageIds: ['p1', 'p2', 'p3'] });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -70,7 +70,7 @@ describe('useBulkDeletePages', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageIds: ['p1', 'p2', 'p3'], workspaceId: 'ws-1' });
+    result.current.mutate({ pageIds: ['p1', 'p2', 'p3'] });
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
@@ -100,7 +100,7 @@ describe('useBulkDeleteFolders', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ folderIds: ['f1', 'f2'], workspaceId: 'ws-1' });
+    result.current.mutate({ folderIds: ['f1', 'f2'] });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -140,7 +140,7 @@ describe('useBulkMovePages', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageIds: ['p1', 'p2'], parentId: 'f1', workspaceId: 'ws-1' });
+    result.current.mutate({ pageIds: ['p1', 'p2'], parentId: 'f1' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -163,7 +163,7 @@ describe('useBulkMovePages', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageIds: ['p1'], parentId: null, workspaceId: 'ws-1' });
+    result.current.mutate({ pageIds: ['p1'], parentId: null });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -196,7 +196,7 @@ describe('useBulkMoveFolders', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ folderIds: ['f1', 'f2'], parentId: 'f-parent', workspaceId: 'ws-1' });
+    result.current.mutate({ folderIds: ['f1', 'f2'], parentId: 'f-parent' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);

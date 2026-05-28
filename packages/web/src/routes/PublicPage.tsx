@@ -1,6 +1,9 @@
+import { editorViewOptionsCtx } from '@milkdown/core';
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
+import { useEffect, useMemo, useRef } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useMilkdown } from '../hooks/useMilkdown';
 
 const API_BASE = '/api';
 
@@ -12,8 +15,8 @@ interface PublicPageData {
   content: number[] | null;
 }
 
-async function fetchPublicPage(token: string): Promise<PublicPageData> {
-  const res = await fetch(`${API_BASE}/public/${token}`);
+async function fetchPublicPage(pageId: string): Promise<PublicPageData> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}`);
   if (!res.ok) {
     if (res.status === 404) {
       throw new Error('Page not found');
@@ -23,22 +26,69 @@ async function fetchPublicPage(token: string): Promise<PublicPageData> {
   return res.json();
 }
 
+function decodePageContent(ydoc: unknown): string {
+  if (!ydoc || !Array.isArray(ydoc) || ydoc.length === 0) return '';
+  const hasNullByte = ydoc.includes(0);
+  if (!hasNullByte) {
+    return new TextDecoder().decode(new Uint8Array(ydoc as number[]));
+  }
+  return '';
+}
+
+function MilkdownViewer({ markdown }: { markdown: string }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const { setContainer, editor } = useMilkdown({ initialValue: markdown });
+
+  useEffect(() => {
+    setContainer(containerRef.current as HTMLDivElement | null);
+  }, [setContainer]);
+
+  useEffect(() => {
+    if (editor) {
+      try {
+        editor.action((ctx) => {
+          ctx.update(editorViewOptionsCtx, (prev) => ({ ...prev, editable: () => false }));
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }, [editor]);
+
+  // Update content when markdown changes by replacing whole container.
+  // useMilkdown uses defaultValueCtx only on init; to update editor content after
+  // creation, call replaceAllMarkdown via the window API exposed by useMilkdown.
+  useEffect(() => {
+    // If editor is available, call global helper to replace content
+    (window as unknown as { replaceAllMarkdown?: (content: string) => void }).replaceAllMarkdown?.(
+      markdown,
+    );
+  }, [markdown]);
+
+  return <div ref={containerRef} className="prose max-w-none px-0 py-0" />;
+}
+
 export default function PublicPage() {
-  const { token } = useParams<{ token: string }>();
+  const { slugAndId } = useParams<{ slugAndId: string }>();
+  const pageId = slugAndId?.match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
+  )?.[1];
 
   const {
     data: page,
     isLoading,
     error,
   } = useQuery({
-    queryKey: ['public-page', token],
+    queryKey: ['public-page', pageId],
     queryFn: () => {
-      if (!token) throw new Error('token is required');
-      return fetchPublicPage(token);
+      if (!pageId) throw new Error('pageId is required');
+      return fetchPublicPage(pageId);
     },
-    enabled: !!token,
+    enabled: !!pageId,
     retry: false,
   });
+
+  const markdown = useMemo(() => decodePageContent(page?.content ?? null), [page?.content]);
 
   if (isLoading) {
     return (
@@ -111,16 +161,8 @@ export default function PublicPage() {
             </h1>
           </div>
 
-          <div className="p-8 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900/50 text-center">
-            <p className="text-zinc-600 dark:text-zinc-400 mb-4">
-              Content preview is not available for public pages yet.
-            </p>
-            <Link
-              to="/"
-              className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-md bg-zinc-900 text-white dark:bg-white dark:text-zinc-900 hover:opacity-90 transition-opacity"
-            >
-              Open in Markdawn
-            </Link>
+          <div className="rounded-xl p-6 bg-transparent">
+            <MilkdownViewer markdown={markdown} />
           </div>
         </div>
       </main>

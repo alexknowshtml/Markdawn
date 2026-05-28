@@ -1,17 +1,13 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { AppProviders } from './components/AppProviders';
 import { AppShell } from './components/AppShell';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
-import { ClipboardProvider } from './contexts/ClipboardContext';
-import { KeyboardShortcutProvider } from './contexts/KeyboardShortcutContext';
-import { SelectionProvider } from './contexts/SelectionContext';
 import Dashboard from './routes/Dashboard';
 import Home from './routes/Home';
 import Login from './routes/Login';
-import Page from './routes/Page';
-import PublicPage from './routes/PublicPage';
-import Workspace from './routes/Workspace';
+import PageEntry from './routes/PageEntry';
+import Settings from './routes/Settings';
 
 function App() {
   return (
@@ -26,23 +22,16 @@ function App() {
               path="/app"
               element={
                 <ProtectedRoute>
-                  <ClipboardProvider>
-                    <SelectionProvider>
-                      <KeyboardShortcutProvider>
-                        <AppShell />
-                      </KeyboardShortcutProvider>
-                    </SelectionProvider>
-                  </ClipboardProvider>
+                  <AppProviders>
+                    <AppShell />
+                  </AppProviders>
                 </ProtectedRoute>
               }
             >
               <Route index element={<Dashboard />} />
-              <Route path=":workspaceSlug" element={<Workspace />} />
-              <Route path=":workspaceSlug/folder/:folderId" element={<Workspace />} />
-              <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
-              <Route path=":workspaceSlug/:slugAndId" element={<Page />} />
+              <Route path="settings" element={<Settings />} />
+              <Route path=":slugAndId" element={<PageEntry />} />
             </Route>
-            <Route path="/public/:token" element={<PublicPage />} />
 
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

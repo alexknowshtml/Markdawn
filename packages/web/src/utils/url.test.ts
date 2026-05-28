@@ -60,7 +60,7 @@ describe('ensureAbsoluteUrl', () => {
 
   // Relative / internal
   it('leaves absolute paths unchanged', () => {
-    expect(ensureAbsoluteUrl('/workspace/page')).toBe('/workspace/page');
+    expect(ensureAbsoluteUrl('/some/page')).toBe('/some/page');
   });
 
   it('leaves anchors unchanged', () => {

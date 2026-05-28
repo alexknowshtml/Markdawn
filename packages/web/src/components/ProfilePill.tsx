@@ -9,9 +9,8 @@ import {
   User,
 } from 'lucide-react';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useTrashPages } from '../hooks/use-pages';
-import { useWorkspaces } from '../hooks/use-workspaces';
 import { useAuth } from '../hooks/useAuth';
 import { authClient } from '../lib/auth-client';
 import { TrashView } from './sidebar/TrashView';
@@ -32,15 +31,11 @@ export function ProfilePill({
   onToggleCollapsed,
 }: ProfilePillProps) {
   const navigate = useNavigate();
-  const params = useParams();
-  const workspaceSlug = params.workspaceSlug;
 
   const { data: session } = useAuth();
-  const { data: workspaces } = useWorkspaces();
   const [showTrashModal, setShowTrashModal] = useState(false);
 
-  const currentWorkspace = workspaces?.find((w) => w.slug === workspaceSlug);
-  const { data: trashPages } = useTrashPages(currentWorkspace?.id || '');
+  const { data: trashPages } = useTrashPages();
 
   const handleSignOut = async () => {
     await authClient.signOut({
@@ -118,42 +113,36 @@ export function ProfilePill({
         >
           <div className="flex items-center justify-between px-1 mb-2">
             <ThemeToggle />
-            {workspaceSlug && (
-              <Tooltip label="Workspace Settings" position="top">
-                <button
-                  type="button"
-                  onClick={() => navigate(`/app/${workspaceSlug}/settings`)}
-                  className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                >
-                  <Settings size={18} />
-                </button>
-              </Tooltip>
-            )}
-            {currentWorkspace && (
-              <>
-                <Tooltip label="Trash" position="top">
-                  <button
-                    type="button"
-                    onClick={() => setShowTrashModal(true)}
-                    className="relative p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                  >
-                    <Trash2 size={18} />
-                    {trashPages && trashPages.length > 0 && (
-                      <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-zinc-900 dark:bg-white shadow-sm" />
-                    )}
-                  </button>
-                </Tooltip>
-                <Tooltip label="Search (Ctrl+K)" position="top">
-                  <button
-                    type="button"
-                    onClick={() => window.dispatchEvent(new Event('open-search'))}
-                    className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
-                  >
-                    <Search size={18} />
-                  </button>
-                </Tooltip>
-              </>
-            )}
+            <Tooltip label="Settings" position="top">
+              <button
+                type="button"
+                onClick={() => navigate('/app/settings')}
+                className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <Settings size={18} />
+              </button>
+            </Tooltip>
+            <Tooltip label="Trash" position="top">
+              <button
+                type="button"
+                onClick={() => setShowTrashModal(true)}
+                className="relative p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <Trash2 size={18} />
+                {trashPages && trashPages.length > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-zinc-900 dark:bg-white shadow-sm" />
+                )}
+              </button>
+            </Tooltip>
+            <Tooltip label="Search (Ctrl+K)" position="top">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event('open-search'))}
+                className="p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+              >
+                <Search size={18} />
+              </button>
+            </Tooltip>
             <Tooltip
               label={`${(isActuallyCollapsed ?? collapsed) ? 'Open' : 'Close'} Sidebar (Ctrl+/)`}
               position="top"
@@ -206,9 +195,7 @@ export function ProfilePill({
         </div>
       </div>
 
-      {showTrashModal && workspaceSlug && currentWorkspace && (
-        <TrashView workspaceId={currentWorkspace.id} onClose={() => setShowTrashModal(false)} />
-      )}
+      {showTrashModal && <TrashView onClose={() => setShowTrashModal(false)} />}
     </>
   );
 }

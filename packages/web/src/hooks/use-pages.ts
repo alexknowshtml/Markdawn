@@ -5,19 +5,19 @@ import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
-async function fetchPageTree(workspaceId: string): Promise<PageTreeNode[]> {
-  const res = await fetch(`${API_BASE}/pages/tree?workspaceId=${workspaceId}`);
+async function fetchPageTree(): Promise<PageTreeNode[]> {
+  const res = await fetch(`${API_BASE}/pages/tree`);
   if (!res.ok) {
     throw new Error('Failed to fetch page tree');
   }
   return res.json();
 }
 
-async function createPage(workspaceId: string, parentId?: string, title?: string): Promise<Page> {
+async function createPage(parentId?: string, title?: string): Promise<Page> {
   const res = await fetch(`${API_BASE}/pages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspaceId, parentId, title: title ?? 'Untitled' }),
+    body: JSON.stringify({ parentId, title: title ?? 'Untitled' }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to create page' }));
@@ -49,8 +49,8 @@ async function deletePage(pageId: string): Promise<{ deleted: boolean }> {
   return res.json();
 }
 
-async function fetchTrashPages(workspaceId: string): Promise<Page[]> {
-  const res = await fetch(`${API_BASE}/pages/trash?workspaceId=${workspaceId}`);
+async function fetchTrashPages(): Promise<Page[]> {
+  const res = await fetch(`${API_BASE}/pages/trash`);
   if (!res.ok) {
     throw new Error('Failed to fetch trash pages');
   }
@@ -76,8 +76,8 @@ async function permanentDeletePage(pageId: string): Promise<void> {
   }
 }
 
-async function emptyTrash(workspaceId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/pages/trash/empty-all?workspaceId=${workspaceId}`, {
+async function emptyTrash(): Promise<void> {
+  const res = await fetch(`${API_BASE}/pages/trash/empty-all`, {
     method: 'DELETE',
   });
   if (!res.ok) {
@@ -97,11 +97,11 @@ async function movePage(pageId: string, parentId: string | null, position: strin
   return res.json();
 }
 
-async function importMarkdown(workspaceId: string, file: File): Promise<Page> {
+async function importMarkdown(file: File): Promise<Page> {
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch(`${API_BASE}/import/markdown?workspaceId=${workspaceId}`, {
+  const res = await fetch(`${API_BASE}/import/markdown`, {
     method: 'POST',
     body: formData,
   });
@@ -112,11 +112,10 @@ async function importMarkdown(workspaceId: string, file: File): Promise<Page> {
   return res.json();
 }
 
-export function usePageTree(workspaceId: string) {
+export function usePageTree() {
   return useQuery({
-    queryKey: ['pageTree', workspaceId],
-    queryFn: () => fetchPageTree(workspaceId),
-    enabled: !!workspaceId,
+    queryKey: ['pageTree'],
+    queryFn: () => fetchPageTree(),
     staleTime: 1000 * 30,
     refetchOnWindowFocus: false,
   });
@@ -125,18 +124,10 @@ export function usePageTree(workspaceId: string) {
 export function useCreatePage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      workspaceId,
-      parentId,
-      title,
-    }: {
-      workspaceId: string;
-      parentId?: string;
-      title?: string;
-      silent?: boolean;
-    }) => createPage(workspaceId, parentId, title),
-    onSuccess: (_newPage, { workspaceId, silent }) => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    mutationFn: ({ parentId, title }: { parentId?: string; title?: string; silent?: boolean }) =>
+      createPage(parentId, title),
+    onSuccess: (_newPage, { silent }) => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       if (!silent) {
         showSuccessToast('Page created');
       }
@@ -186,11 +177,10 @@ export function useDeletePage() {
   });
 }
 
-export function useTrashPages(workspaceId: string) {
+export function useTrashPages() {
   return useQuery({
-    queryKey: ['trashPages', workspaceId],
-    queryFn: () => fetchTrashPages(workspaceId),
-    enabled: !!workspaceId,
+    queryKey: ['trashPages'],
+    queryFn: () => fetchTrashPages(),
   });
 }
 
@@ -226,7 +216,7 @@ export function usePermanentDeletePage() {
 export function useEmptyTrash() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (workspaceId: string) => emptyTrash(workspaceId),
+    mutationFn: () => emptyTrash(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Trash emptied');
@@ -262,8 +252,7 @@ export function useMovePage() {
 export function useImportMarkdown() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ workspaceId, file }: { workspaceId: string; file: File }) =>
-      importMarkdown(workspaceId, file),
+    mutationFn: ({ file }: { file: File }) => importMarkdown(file),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
@@ -276,8 +265,8 @@ export function useImportMarkdown() {
   });
 }
 
-export function usePages(workspaceId: string) {
-  const query = usePageTree(workspaceId);
+export function usePages() {
+  const query = usePageTree();
   const pages = useMemo(() => {
     const result: Page[] = [];
     const walk = (nodes: PageTreeNode[] | undefined) => {

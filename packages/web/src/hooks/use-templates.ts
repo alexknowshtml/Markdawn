@@ -7,7 +7,6 @@ export type TemplateContentBlock = unknown;
 
 export interface Template {
   id: string;
-  workspaceId: string;
   title: string;
   icon: string | null;
   description: string | null;
@@ -17,8 +16,8 @@ export interface Template {
   updatedAt: string;
 }
 
-async function fetchTemplates(workspaceId: string): Promise<Template[]> {
-  const res = await fetch(`${API_BASE}/templates?workspaceId=${workspaceId}`);
+async function fetchTemplates(): Promise<Template[]> {
+  const res = await fetch(`${API_BASE}/templates`);
   if (!res.ok) {
     throw new Error('Failed to fetch templates');
   }
@@ -26,7 +25,6 @@ async function fetchTemplates(workspaceId: string): Promise<Template[]> {
 }
 
 async function createTemplate(data: {
-  workspaceId: string;
   title: string;
   icon?: string | null;
   description?: string | null;
@@ -52,11 +50,10 @@ async function deleteTemplate(templateId: string): Promise<void> {
   }
 }
 
-export function useTemplates(workspaceId: string) {
+export function useTemplates() {
   return useQuery({
-    queryKey: ['templates', workspaceId],
-    queryFn: () => fetchTemplates(workspaceId),
-    enabled: !!workspaceId,
+    queryKey: ['templates'],
+    queryFn: () => fetchTemplates(),
   });
 }
 
@@ -64,8 +61,8 @@ export function useCreateTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: createTemplate,
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['templates', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['templates'] });
       showSuccessToast('Template created');
     },
     onError: () => {
@@ -77,10 +74,9 @@ export function useCreateTemplate() {
 export function useDeleteTemplate() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ templateId }: { templateId: string; workspaceId: string }) =>
-      deleteTemplate(templateId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['templates', workspaceId] });
+    mutationFn: ({ templateId }: { templateId: string }) => deleteTemplate(templateId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['templates'] });
       showSuccessToast('Template deleted');
     },
     onError: () => {

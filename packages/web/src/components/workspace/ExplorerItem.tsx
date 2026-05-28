@@ -16,6 +16,7 @@ import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
+import { buildPagePath } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 export type ExplorerItemType = 'page' | 'folder';
@@ -36,7 +37,6 @@ interface ExplorerItemProps {
   isSelected: boolean;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
-  workspaceSlug: string;
   onSelect: (e: React.MouseEvent) => void;
   onNavigate: (e: React.MouseEvent) => void;
   onDelete: () => void;
@@ -58,7 +58,6 @@ export function ExplorerItem({
   isSelected,
   isFavorite = false,
   onToggleFavorite,
-  workspaceSlug,
   onSelect,
   onNavigate,
   onDelete,
@@ -163,23 +162,15 @@ export function ExplorerItem({
   if (viewMode === 'list') {
     return (
       <>
-        <div
-          role="button"
-          tabIndex={0}
+        <button
+          type="button"
           className={clsx(
-            'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150',
+            'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150 w-full text-left',
             isSelected
               ? 'bg-zinc-100 dark:bg-zinc-800'
               : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50',
           )}
           onClick={handleClick}
-          onKeyDown={(e) => {
-            if (isEditing) return;
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              handleClick(e as unknown as React.MouseEvent);
-            }
-          }}
         >
           <button
             type="button"
@@ -253,7 +244,7 @@ export function ExplorerItem({
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowMenu(false);
-                        navigate(`/app/${workspaceSlug}/${item.id}`);
+                        navigate(buildPagePath(item.title, item.id));
                       }}
                       className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                     >
@@ -333,7 +324,7 @@ export function ExplorerItem({
                 document.body,
               )}
           </div>
-        </div>
+        </button>
 
         <ConfirmDialog
           isOpen={showDeleteDialog}
@@ -352,24 +343,16 @@ export function ExplorerItem({
 
   return (
     <>
-      <div
-        role="button"
-        tabIndex={0}
+      <button
+        type="button"
         className={clsx(
-          'group relative block p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200',
+          'group relative block w-full text-left p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200',
           showMenu && 'z-10',
           isSelected
             ? 'border-zinc-900 dark:border-zinc-100 ring-2 ring-zinc-900 dark:ring-zinc-100'
             : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]',
         )}
         onClick={handleClick}
-        onKeyDown={(e) => {
-          if (isEditing) return;
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault();
-            handleClick(e as unknown as React.MouseEvent);
-          }
-        }}
       >
         <div className="absolute top-3 left-3 z-10">
           <button
@@ -459,7 +442,7 @@ export function ExplorerItem({
                       onClick={(e) => {
                         e.stopPropagation();
                         setShowMenu(false);
-                        navigate(`/app/${workspaceSlug}/${item.id}`);
+                        navigate(buildPagePath(item.title, item.id));
                       }}
                       className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
                     >
@@ -540,7 +523,7 @@ export function ExplorerItem({
               )}
           </div>
         </div>
-      </div>
+      </button>
 
       <ConfirmDialog
         isOpen={showDeleteDialog}

@@ -34,18 +34,12 @@ async function moveFolder(folderId: string, parentId: string | null): Promise<vo
 export function useBulkDeletePages() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      pageIds,
-      workspaceId: _workspaceId,
-    }: {
-      pageIds: string[];
-      workspaceId: string;
-    }) => {
+    mutationFn: async ({ pageIds }: { pageIds: string[] }) => {
       await Promise.all(pageIds.map((id) => deletePage(id)));
     },
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ['trashPages', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Pages moved to trash');
     },
     onError: (error: Error) => {
@@ -57,18 +51,12 @@ export function useBulkDeletePages() {
 export function useBulkDeleteFolders() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      folderIds,
-      workspaceId: _workspaceId,
-    }: {
-      folderIds: string[];
-      workspaceId: string;
-    }) => {
+    mutationFn: async ({ folderIds }: { folderIds: string[] }) => {
       await Promise.all(folderIds.map((id) => deleteFolder(id)));
     },
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folders moved to trash');
     },
     onError: (error: Error) => {
@@ -80,19 +68,11 @@ export function useBulkDeleteFolders() {
 export function useBulkMovePages() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      pageIds,
-      parentId,
-      workspaceId: _workspaceId,
-    }: {
-      pageIds: string[];
-      parentId: string | null;
-      workspaceId: string;
-    }) => {
+    mutationFn: async ({ pageIds, parentId }: { pageIds: string[]; parentId: string | null }) => {
       await Promise.all(pageIds.map((id) => movePage(id, parentId)));
     },
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Pages moved');
     },
     onError: (error: Error) => {
@@ -107,17 +87,15 @@ export function useBulkMoveFolders() {
     mutationFn: async ({
       folderIds,
       parentId,
-      workspaceId: _workspaceId,
     }: {
       folderIds: string[];
       parentId: string | null;
-      workspaceId: string;
     }) => {
       await Promise.all(folderIds.map((id) => moveFolder(id, parentId)));
     },
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folders moved');
     },
     onError: (error: Error) => {

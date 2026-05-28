@@ -17,12 +17,9 @@ interface SuggestionsState {
   isLoading: boolean;
 }
 
-export function useWikiLinkSuggestions(
-  workspaceId: string,
-  editorRef: React.RefObject<Editor | null>,
-) {
+export function useWikiLinkSuggestions(editorRef: React.RefObject<Editor | null>) {
   const createPageMutation = useCreatePage();
-  const { data: allPages = [] } = usePages(workspaceId);
+  const { data: allPages = [] } = usePages();
 
   const [suggestions, setSuggestions] = useState<SuggestionsState>({
     isOpen: false,
@@ -110,7 +107,7 @@ export function useWikiLinkSuggestions(
   const handleAddPage = useCallback(
     async (title: string) => {
       createPageMutation.mutate(
-        { workspaceId, title: title || 'Untitled' },
+        { title: title || 'Untitled' },
         {
           onSuccess: (newPage) => {
             handleWikiLinkSelect({
@@ -122,7 +119,7 @@ export function useWikiLinkSuggestions(
         },
       );
     },
-    [workspaceId, createPageMutation, handleWikiLinkSelect],
+    [createPageMutation, handleWikiLinkSelect],
   );
 
   return {

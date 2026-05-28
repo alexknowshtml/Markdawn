@@ -5,18 +5,16 @@ import * as Y from 'yjs';
 import { authClient } from '../lib/auth-client';
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
-const META_ROOM_PREFIX = 'workspace-meta:';
+const META_ROOM_PREFIX = 'page-meta:';
 
 /**
- * Module-level reference to the current workspace's pageIndex Y.Map.
+ * Module-level reference to the current pageIndex Y.Map.
  *
- * Set by `useWorkspaceMeta` when the meta room connects, read by the
- * wiki link node view to resolve targetId → current title at render time.
+ * Set by `usePageMeta` when the meta room connects, read by the
+ * wiki link node view to resolve targetId -> current title at render time.
  *
  * An effect-local ID (`effectIdRef`) prevents the cleanup from nulling
- * the map during a workspace switch. The ID is bumped inside the effect
- * (not during render), so it's safe under concurrent React — replayed
- * renders can't corrupt it.
+ * the map during a user switch.
  */
 let _pageIndex: Y.Map<unknown> | null = null;
 
@@ -25,37 +23,35 @@ export function getPageIndexMap(): Y.Map<unknown> | null {
 }
 
 /**
- * Connects to the workspace meta room (a shared Yjs document indexed by
- * workspace ID) that contains:
- *   - `pageIndex`: a map of `{ pageId → { title, icon, parentId, position } }`
- *   - `backlinksVersion`: a map of `{ pageId → timestamp }` bumped whenever
+ * Connects to the user meta room (a shared Yjs document indexed by
+ * user ID) that contains:
+ *   - `pageIndex`: a map of `{ pageId -> { title, icon, parentId, position } }`
+ *   - `backlinksVersion`: a map of `{ pageId -> timestamp }` bumped whenever
  *     a page's connections are rebuilt, so clients can refetch backlinks.
  *
- * The meta room is populated server-side by `updateWorkspaceMeta()` and
+ * The meta room is populated server-side by `updatePageMeta()` and
  * `updateBacklinksVersion()` on every page persist.
  */
-export function useWorkspaceMeta(workspaceId: string | undefined) {
+export function usePageMeta() {
   const queryClient = useQueryClient();
+  const { data: session } = authClient.useSession();
+  const userId = session?.user?.id;
 
-  // Effect-local ID bumped inside the effect, not during render.
-  // On cleanup, only null _pageIndex when no new effect has started,
-  // which is safe under concurrent React (replayed renders can't
-  // cause a bump without a committed effect).
   const effectIdRef = useRef(0);
 
   useEffect(() => {
-    if (!workspaceId) return undefined;
+    if (!userId) return undefined;
 
     const effectId = ++effectIdRef.current;
 
     const doc = new Y.Doc();
     const provider = new HocuspocusProvider({
       url: COLLAB_URL,
-      name: `${META_ROOM_PREFIX}${workspaceId}`,
+      name: `${META_ROOM_PREFIX}${userId}`,
       document: doc,
       token: async () => {
-        const session = await authClient.getSession();
-        return session.data?.session?.token ?? '';
+        const s = await authClient.getSession();
+        return s.data?.session?.token ?? '';
       },
     });
 
@@ -88,9 +84,6 @@ export function useWorkspaceMeta(workspaceId: string | undefined) {
     map.observe(pageIndexObserver);
 
     return () => {
-      // Only null _pageIndex when this is the last active effect.
-      // On a workspace switch, the new effect bumps the ref first,
-      // so this cleanup sees a mismatch and skips nulling.
       if (effectId === effectIdRef.current) {
         _pageIndex = null;
       }
@@ -108,5 +101,5 @@ export function useWorkspaceMeta(workspaceId: string | undefined) {
       provider.destroy();
       doc.destroy();
     };
-  }, [workspaceId, queryClient]);
+  }, [userId, queryClient]);
 }

@@ -3,25 +3,19 @@ import { Menu } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useShortcut } from '../contexts/KeyboardShortcutContext';
-import { useWorkspaces } from '../hooks/use-workspaces';
+import { usePageMeta } from '../hooks/usePageMeta';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
 import { useTheme } from '../hooks/useTheme';
-import { useWorkspaceMeta } from '../hooks/useWorkspaceMeta';
 import { CommandPalette } from './CommandPalette';
 import { ProfilePill } from './ProfilePill';
 import { Sidebar } from './Sidebar';
-import { WorkspacePill } from './workspace/WorkspacePill';
 
 export function AppShell() {
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
   const [isHovered, setIsHovered] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [_showCreateWorkspace, setShowCreateWorkspace] = useState(false);
   const { setTheme, isDark } = useTheme();
   const location = useLocation();
-  const { data: workspaces } = useWorkspaces();
-  const workspaceSlug = location.pathname.split('/')[2] ?? '';
-  const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
 
   useShortcut({
     key: 'mod+/',
@@ -30,16 +24,10 @@ export function AppShell() {
     description: 'Toggle sidebar',
   });
   const createNote = () => {
-    if (workspaceSlug) {
-      window.dispatchEvent(new CustomEvent('markdawn:create-note', { detail: { workspaceSlug } }));
-    }
+    window.dispatchEvent(new CustomEvent('markdawn:create-note'));
   };
   const createFolder = () => {
-    if (workspaceSlug) {
-      window.dispatchEvent(
-        new CustomEvent('markdawn:create-folder', { detail: { workspaceSlug } }),
-      );
-    }
+    window.dispatchEvent(new CustomEvent('markdawn:create-folder'));
   };
   // These are intercepted by most browsers (new tab, incognito) in the
   // bubble phase. The provider's capture-phase handler calls preventDefault
@@ -65,7 +53,7 @@ export function AppShell() {
     description: 'Toggle dark mode',
   });
 
-  useWorkspaceMeta(workspace?.id);
+  usePageMeta();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: location.pathname triggers mobile menu close on navigation
   useEffect(() => {
@@ -95,12 +83,6 @@ export function AppShell() {
         )}
         onMouseLeave={() => collapsed && setIsHovered(false)}
       >
-        <WorkspacePill
-          collapsed={collapsed && !isHovered}
-          onToggleCollapsed={toggleCollapsed}
-          onCreateWorkspace={() => setShowCreateWorkspace(true)}
-          className="flex-shrink-0"
-        />
         <Sidebar
           className="flex-1 w-full"
           collapsed={collapsed && !isHovered}
@@ -141,15 +123,6 @@ export function AppShell() {
             aria-label="Close menu"
           />
           <div className="relative flex w-auto max-w-[80%] flex-col p-3 gap-3 animate-slide-right h-[100vh]">
-            <WorkspacePill
-              collapsed={false}
-              onToggleCollapsed={() => setIsMobileMenuOpen(false)}
-              onCreateWorkspace={() => {
-                setIsMobileMenuOpen(false);
-                setShowCreateWorkspace(true);
-              }}
-              className="flex-shrink-0"
-            />
             <Sidebar
               className="flex-1 w-full"
               collapsed={false}
@@ -181,7 +154,7 @@ export function AppShell() {
             <Outlet />
           </div>
         </div>
-        {workspace && <CommandPalette workspaceId={workspace.id} workspaceSlug={workspace.slug} />}
+        <CommandPalette />
       </main>
     </div>
   );

@@ -25,16 +25,10 @@ describe('useFolderTree', () => {
     queryClient.clear();
   });
 
-  it('does not fetch when workspaceId is empty', () => {
-    renderHook(() => useFolderTree(''), { wrapper: createWrapper(queryClient) });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('fetches folder tree successfully', async () => {
     const mockData = [
       {
         id: 'f1',
-        workspaceId: 'ws-1',
         parentId: null,
         name: 'Folder',
         icon: null,
@@ -47,7 +41,7 @@ describe('useFolderTree', () => {
     ];
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(mockData) });
 
-    const { result } = renderHook(() => useFolderTree('ws-1'), {
+    const { result } = renderHook(() => useFolderTree(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -61,7 +55,7 @@ describe('useFolderTree', () => {
   it('handles fetch error', async () => {
     fetchMock.mockResolvedValueOnce({ ok: false });
 
-    const { result } = renderHook(() => useFolderTree('ws-1'), {
+    const { result } = renderHook(() => useFolderTree(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -87,14 +81,14 @@ describe('useCreateFolder', () => {
   });
 
   it('creates a folder successfully', async () => {
-    const folder = { id: 'f-new', name: 'New Folder', workspaceId: 'ws-1' };
+    const folder = { id: 'f-new', name: 'New Folder' };
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(folder) });
 
     const { result } = renderHook(() => useCreateFolder(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1' });
+    result.current.mutate({});
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -104,7 +98,7 @@ describe('useCreateFolder', () => {
       '/api/folders',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ workspaceId: 'ws-1', parentId: undefined, name: 'New Folder' }),
+        body: JSON.stringify({ parentId: undefined, name: 'New Folder' }),
       }),
     );
   });
@@ -116,7 +110,7 @@ describe('useCreateFolder', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1', parentId: 'f-parent' });
+    result.current.mutate({ parentId: 'f-parent' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -130,20 +124,20 @@ describe('useCreateFolder', () => {
   it('handles creation error', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: false,
-      json: () => Promise.resolve({ message: 'Invalid workspace' }),
+      json: () => Promise.resolve({ message: 'Invalid request' }),
     });
 
     const { result } = renderHook(() => useCreateFolder(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1' });
+    result.current.mutate({});
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });
 
-    expect(result.current.error?.message).toBe('Invalid workspace');
+    expect(result.current.error?.message).toBe('Invalid request');
   });
 });
 

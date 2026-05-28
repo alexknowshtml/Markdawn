@@ -39,18 +39,13 @@ describe('usePageTree', () => {
     queryClient.clear();
   });
 
-  it('does not fetch when workspaceId is empty', () => {
-    renderHook(() => usePageTree(''), { wrapper: createWrapper(queryClient) });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('fetches page tree successfully', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve([{ id: 'p1', title: 'Page 1', children: [] }]),
     });
 
-    const { result } = renderHook(() => usePageTree('ws-1'), {
+    const { result } = renderHook(() => usePageTree(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -64,7 +59,7 @@ describe('usePageTree', () => {
   it('handles fetch error', async () => {
     fetchMock.mockResolvedValueOnce({ ok: false });
 
-    const { result } = renderHook(() => usePageTree('ws-1'), {
+    const { result } = renderHook(() => usePageTree(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -109,7 +104,7 @@ describe('usePages', () => {
         ]),
     });
 
-    const { result } = renderHook(() => usePages('ws-1'), {
+    const { result } = renderHook(() => usePages(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -124,7 +119,7 @@ describe('usePages', () => {
   it('returns empty array when no data', () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve([]) });
 
-    const { result } = renderHook(() => usePages('ws-1'), {
+    const { result } = renderHook(() => usePages(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -147,18 +142,13 @@ describe('useTrashPages', () => {
     queryClient.clear();
   });
 
-  it('does not fetch when workspaceId is empty', () => {
-    renderHook(() => useTrashPages(''), { wrapper: createWrapper(queryClient) });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('fetches trash pages successfully', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve([{ id: 'p1', title: 'Deleted', isDeleted: true }]),
     });
 
-    const { result } = renderHook(() => useTrashPages('ws-1'), {
+    const { result } = renderHook(() => useTrashPages(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -186,14 +176,14 @@ describe('useCreatePage', () => {
   });
 
   it('creates a page successfully', async () => {
-    const newPage = { id: 'p-new', title: 'My Page', workspaceId: 'ws-1' };
+    const newPage = { id: 'p-new', title: 'My Page' };
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(newPage) });
 
     const { result } = renderHook(() => useCreatePage(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1', title: 'My Page' });
+    result.current.mutate({ title: 'My Page' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -203,7 +193,7 @@ describe('useCreatePage', () => {
       '/api/pages',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ workspaceId: 'ws-1', parentId: undefined, title: 'My Page' }),
+        body: JSON.stringify({ parentId: undefined, title: 'My Page' }),
       }),
     );
   });
@@ -218,7 +208,7 @@ describe('useCreatePage', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1', silent: true });
+    result.current.mutate({ silent: true });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -237,7 +227,7 @@ describe('useCreatePage', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1' });
+    result.current.mutate({});
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
@@ -428,21 +418,21 @@ describe('useEmptyTrash', () => {
     queryClient.clear();
   });
 
-  it('empties trash for workspace', async () => {
+  it('empties trash', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true });
 
     const { result } = renderHook(() => useEmptyTrash(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate('ws-1');
+    result.current.mutate();
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/pages/trash/empty-all?workspaceId=ws-1',
+      '/api/pages/trash/empty-all',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });
@@ -515,14 +505,14 @@ describe('useImportMarkdown', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ workspaceId: 'ws-1', file });
+    result.current.mutate({ file });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
     });
 
     const call = fetchMock.mock.calls[0] as [string, { method: string; body: FormData }];
-    expect(call[0]).toBe('/api/import/markdown?workspaceId=ws-1');
+    expect(call[0]).toBe('/api/import/markdown');
     expect(call[1]?.method).toBe('POST');
     expect(call[1]?.body instanceof FormData).toBe(true);
   });

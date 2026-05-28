@@ -6,6 +6,18 @@ export function extractUuidFromSlug(slug: string): string | undefined {
   return candidate && UUID_REGEX.test(candidate) ? candidate : undefined;
 }
 
+export function slugifyTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+export function buildPagePath(title: string, pageId: string): string {
+  const slug = slugifyTitle(title) || 'page';
+  return `/app/${slug}-${pageId}`;
+}
+
 export function ensureAbsoluteUrl(url: string): string {
   if (!url) return url;
 

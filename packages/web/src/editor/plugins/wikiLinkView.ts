@@ -1,6 +1,6 @@
 import type { NodeViewConstructor } from '@milkdown/kit/prose/view';
 import { $view } from '@milkdown/utils';
-import { getPageIndexMap } from '../../hooks/useWorkspaceMeta';
+import { getPageIndexMap } from '../../hooks/usePageMeta';
 import { wikiLink } from './wikilink';
 
 const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos) => {

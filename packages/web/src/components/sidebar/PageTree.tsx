@@ -26,32 +26,24 @@ import {
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
-import { extractUuidFromSlug } from '../../utils/url';
+import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { PageTreeRow } from './PageTreeRow';
-
-interface PageTreeProps {
-  workspaceId: string;
-  workspaceSlug: string;
-}
 
 type EditingTarget =
   | { kind: 'page'; id: string; value: string }
   | { kind: 'folder'; id: string; value: string }
   | null;
 
-export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
+export function PageTree() {
   const navigate = useNavigate();
   const params = useParams();
   const activePageId = params.slugAndId ? extractUuidFromSlug(params.slugAndId) : undefined;
 
-  const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree(workspaceId);
-  const {
-    data: folders,
-    isLoading: isFoldersLoading,
-    error: foldersError,
-  } = useFolderTree(workspaceId);
-  const { data: favorites } = useFavorites(workspaceId);
+  const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
+  const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
+  const { data: favorites } = useFavorites();
 
   const favoritePageIds = useMemo(
     () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
@@ -77,20 +69,38 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     childFolders: number;
     childPages: number;
   } | null>(null);
+  const [shareTarget, setShareTarget] = useState<{
+    type: 'page' | 'folder';
+    id: string;
+    title: string;
+  } | null>(null);
+  const [shareAnchorRect, setShareAnchorRect] = useState<DOMRect | null>(null);
+
+  const openShare = (
+    target: {
+      type: 'page' | 'folder';
+      id: string;
+      title: string;
+    },
+    anchorRect: DOMRect,
+  ) => {
+    setShareTarget(target);
+    setShareAnchorRect(anchorRect);
+  };
 
   const handleCreateRootPage = useCallback(async () => {
     try {
-      const newPage = await createPageMutation.mutateAsync({ workspaceId });
-      navigate(`/app/${workspaceSlug}/${newPage.id}`);
+      const newPage = await createPageMutation.mutateAsync({});
+      navigate(buildPagePath(newPage.title, newPage.id));
       setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
     } catch {
       showErrorToast('Failed to create note');
     }
-  }, [workspaceId, workspaceSlug, navigate, createPageMutation]);
+  }, [navigate, createPageMutation]);
 
   const handleCreateRootFolder = useCallback(async () => {
     try {
-      const folder = await createFolderMutation.mutateAsync({ workspaceId });
+      const folder = await createFolderMutation.mutateAsync({});
       setExpandedFolderIds((prev) => {
         const next = new Set(prev);
         next.add(folder.id);
@@ -100,31 +110,25 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     } catch {
       showErrorToast('Failed to create folder');
     }
-  }, [workspaceId, createFolderMutation]);
+  }, [createFolderMutation]);
 
   useEffect(() => {
-    const onCreateNote = (event: Event) => {
-      const detail = (event as CustomEvent<{ workspaceSlug?: string }>).detail;
-      if (detail?.workspaceSlug === workspaceSlug) {
-        void handleCreateRootPage();
-      }
+    const onCreateNote = () => {
+      void handleCreateRootPage();
     };
 
-    const onCreateFolder = (event: Event) => {
-      const detail = (event as CustomEvent<{ workspaceSlug?: string }>).detail;
-      if (detail?.workspaceSlug === workspaceSlug) {
-        void handleCreateRootFolder();
-      }
+    const onCreateFolder = () => {
+      void handleCreateRootFolder();
     };
 
-    window.addEventListener('markdawn:create-note', onCreateNote as EventListener);
-    window.addEventListener('markdawn:create-folder', onCreateFolder as EventListener);
+    window.addEventListener('markdawn:create-note', onCreateNote);
+    window.addEventListener('markdawn:create-folder', onCreateFolder);
 
     return () => {
-      window.removeEventListener('markdawn:create-note', onCreateNote as EventListener);
-      window.removeEventListener('markdawn:create-folder', onCreateFolder as EventListener);
+      window.removeEventListener('markdawn:create-note', onCreateNote);
+      window.removeEventListener('markdawn:create-folder', onCreateFolder);
     };
-  }, [workspaceSlug, handleCreateRootPage, handleCreateRootFolder]);
+  }, [handleCreateRootPage, handleCreateRootFolder]);
 
   const pagesByFolder = useMemo(() => {
     const map = new Map<string | null, PageTreeNode[]>();
@@ -209,8 +213,8 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
 
   const handleCreatePageInFolder = async (folderId: string) => {
     try {
-      const newPage = await createPageMutation.mutateAsync({ workspaceId, parentId: folderId });
-      navigate(`/app/${workspaceSlug}/${newPage.id}`);
+      const newPage = await createPageMutation.mutateAsync({ parentId: folderId });
+      navigate(buildPagePath(newPage.title, newPage.id));
       setExpandedFolderIds((prev) => {
         const next = new Set(prev);
         next.add(folderId);
@@ -227,7 +231,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     try {
       await deletePageMutation.mutateAsync(pageId);
       if (activePageId === pageId) {
-        navigate(`/app/${workspaceSlug}`);
+        navigate('/app');
       }
     } catch {
       showErrorToast('Failed to delete note');
@@ -245,8 +249,8 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     }
 
     try {
-      const newPage = await importMarkdownMutation.mutateAsync({ workspaceId, file });
-      navigate(`/app/${workspaceSlug}/${newPage.id}`);
+      const newPage = await importMarkdownMutation.mutateAsync({ file });
+      navigate(buildPagePath(newPage.title, newPage.id));
     } catch {
       showErrorToast('Failed to import note');
     }
@@ -285,7 +289,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     await toggleFavoriteMutation.mutateAsync({
       pageId,
       isFavorite: isCurrentlyFavorite,
-      workspaceId,
     });
   };
 
@@ -373,7 +376,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           id={folder.id}
           title={folder.name}
           icon={folder.icon}
-          workspaceSlug={workspaceSlug}
           depth={depth}
           hasChildren={childFolders.length > 0 || childPages.length > 0}
           isExpanded={isExpanded}
@@ -381,6 +383,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           onCreateChild={() => handleCreatePageInFolder(folder.id)}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
           onRename={() => beginRenameFolder(folder)}
+          onShare={(anchorRect) =>
+            openShare({ type: 'folder', id: folder.id, title: folder.name }, anchorRect)
+          }
           onNavigate={() => toggleFolderExpanded(folder.id)}
           isEditing={isEditingFolder}
           isFolder={true}
@@ -402,7 +407,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                   id={page.id}
                   title={page.title}
                   icon={page.icon}
-                  workspaceSlug={workspaceSlug}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
                   isFavorite={favoritePageIds.has(page.id)}
@@ -412,6 +416,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                   onDelete={() => handleDeletePage(page.id)}
                   onRename={() => beginRenamePage(page)}
                   onExport={() => handleExport(page.id, page.title)}
+                  onShare={(anchorRect) =>
+                    openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
+                  }
                   isEditing={isEditingPage}
                   editTitle={isEditingPage ? editingTarget.value : page.title}
                   onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -432,7 +439,7 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
     return (
       <div className="flex flex-col h-full">
         <div className="flex items-center justify-center h-24 text-zinc-500 dark:text-zinc-400 text-sm">
-          Loading…
+          Loading...
         </div>
       </div>
     );
@@ -459,10 +466,10 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           <button
             type="button"
             onClick={() => {
-              navigate(`/app/${workspaceSlug}`);
+              navigate('/app');
             }}
             className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-            title="Go to workspace home"
+            title="Go to home"
             data-testid="home-btn"
           >
             <Home size={16} />
@@ -530,12 +537,14 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     id={fav.pageId}
                     title={fav.title}
                     icon={fav.icon}
-                    workspaceSlug={workspaceSlug}
                     isActive={activePageId === fav.pageId}
                     isFavorite={true}
                     onToggleFavorite={() => handleToggleFavorite(fav.pageId, true)}
                     onDelete={() => handleDeletePage(fav.pageId)}
                     onExport={() => handleExport(fav.pageId, fav.title)}
+                    onShare={(anchorRect) =>
+                      openShare({ type: 'page', id: fav.pageId, title: fav.title }, anchorRect)
+                    }
                   />
                 ))}
               </div>
@@ -569,7 +578,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     id={page.id}
                     title={page.title}
                     icon={page.icon}
-                    workspaceSlug={workspaceSlug}
                     isActive={activePageId === page.id}
                     isFavorite={favoritePageIds.has(page.id)}
                     onToggleFavorite={() =>
@@ -578,6 +586,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
                     onExport={() => handleExport(page.id, page.title)}
+                    onShare={(anchorRect) =>
+                      openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
+                    }
                     isEditing={isEditingPage}
                     editTitle={isEditingPage ? editingTarget.value : page.title}
                     onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -597,7 +608,6 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     id={page.id}
                     title={page.title}
                     icon={page.icon}
-                    workspaceSlug={workspaceSlug}
                     isActive={activePageId === page.id}
                     isFavorite={favoritePageIds.has(page.id)}
                     onToggleFavorite={() =>
@@ -606,6 +616,9 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
                     onExport={() => handleExport(page.id, page.title)}
+                    onShare={(anchorRect) =>
+                      openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
+                    }
                     isEditing={isEditingPage}
                     editTitle={isEditingPage ? editingTarget.value : page.title}
                     onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -635,6 +648,16 @@ export function PageTree({ workspaceId, workspaceSlug }: PageTreeProps) {
           cancelText="Cancel"
           onConfirm={handleConfirmDeleteFolder}
           onCancel={() => setDeleteFolderConfirm(null)}
+        />
+      )}
+
+      {shareTarget && (
+        <PublicShareDialog
+          entityType={shareTarget.type}
+          entityId={shareTarget.id}
+          title={shareTarget.title}
+          anchorRect={shareAnchorRect}
+          onClose={() => setShareTarget(null)}
         />
       )}
     </div>

@@ -1,5 +1,5 @@
 import { $node } from '@milkdown/utils';
-import { getPageIndexMap } from '../../hooks/useWorkspaceMeta';
+import { getPageIndexMap } from '../../hooks/usePageMeta';
 
 function resolveTargetId(path: string): string {
   const pageIndex = getPageIndexMap();

@@ -25,11 +25,6 @@ describe('useFavorites', () => {
     queryClient.clear();
   });
 
-  it('does not fetch when workspaceId is undefined', () => {
-    renderHook(() => useFavorites(undefined), { wrapper: createWrapper(queryClient) });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
   it('fetches favorites successfully', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -39,7 +34,7 @@ describe('useFavorites', () => {
         }),
     });
 
-    const { result } = renderHook(() => useFavorites('ws-1'), {
+    const { result } = renderHook(() => useFavorites(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -55,7 +50,7 @@ describe('useFavorites', () => {
   it('handles fetch error', async () => {
     fetchMock.mockResolvedValueOnce({ ok: false });
 
-    const { result } = renderHook(() => useFavorites('ws-1'), {
+    const { result } = renderHook(() => useFavorites(), {
       wrapper: createWrapper(queryClient),
     });
 

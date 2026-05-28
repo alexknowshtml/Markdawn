@@ -17,7 +17,6 @@ interface ImportPreview {
 }
 
 interface ObsidianImportDialogProps {
-  workspaceId: string;
   onClose: () => void;
   onSuccess: () => void;
 }
@@ -73,11 +72,7 @@ function extractFrontmatterTags(content: string, tagSet: Set<string>): void {
   }
 }
 
-export function ObsidianImportDialog({
-  workspaceId,
-  onClose,
-  onSuccess,
-}: ObsidianImportDialogProps) {
+export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialogProps) {
   const [step, setStep] = useState<'select' | 'preview' | 'uploading' | 'done' | 'error'>('select');
   const [files, setFiles] = useState<VaultFile[]>([]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -195,15 +190,12 @@ export function ObsidianImportDialog({
     const _totalFiles = files.length;
 
     try {
-      const res = await fetch(
-        `/api/import/obsidian?workspaceId=${encodeURIComponent(workspaceId)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ files }),
-        },
-      );
+      const res = await fetch('/api/import/obsidian', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ files }),
+      });
 
       setProgress(100);
 
@@ -220,7 +212,7 @@ export function ObsidianImportDialog({
       setError((err as Error).message);
       setStep('error');
     }
-  }, [files, workspaceId, onSuccess]);
+  }, [files, onSuccess]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 backdrop-blur-sm px-4">

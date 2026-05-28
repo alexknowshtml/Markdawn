@@ -35,7 +35,6 @@ import { WikiLinkSuggestions } from './WikiLinkSuggestions';
 
 interface MilkdownEditorProps {
   pageId: string;
-  workspaceId: string;
   initialValue?: string;
   onChange?: (markdown: string) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
@@ -56,7 +55,6 @@ function _execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): v
 
 export function MilkdownEditor({
   pageId,
-  workspaceId,
   initialValue,
   onChange,
   onStatusChange,
@@ -73,7 +71,7 @@ export function MilkdownEditor({
     handleWikiLinkSelect,
     handleAddPage,
     closeSuggestions,
-  } = useWikiLinkSuggestions(workspaceId, editorRef);
+  } = useWikiLinkSuggestions(editorRef);
 
   const [activeStates, setActiveStates] = useState({
     isBoldActive: false,
@@ -464,13 +462,8 @@ export function MilkdownEditor({
   };
 
   const handleImageUpload = async (file: File) => {
-    if (!workspaceId) {
-      alert('No workspace selected');
-      return;
-    }
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('workspaceId', workspaceId);
     try {
       const res = await fetch('/api/uploads', {
         method: 'POST',

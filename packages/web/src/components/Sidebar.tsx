@@ -1,7 +1,4 @@
 import clsx from 'clsx';
-import { Briefcase } from 'lucide-react';
-import { useParams } from 'react-router-dom';
-import { useWorkspaces } from '../hooks/use-workspaces';
 import { PageTree } from './sidebar/PageTree';
 
 interface SidebarProps {
@@ -11,12 +8,6 @@ interface SidebarProps {
 }
 
 export function Sidebar({ className, collapsed = false }: SidebarProps) {
-  const params = useParams();
-  const workspaceSlug = params.workspaceSlug;
-
-  const { data: workspaces } = useWorkspaces();
-  const currentWorkspace = workspaces?.find((w) => w.slug === workspaceSlug);
-
   return (
     <aside
       className={clsx(
@@ -46,16 +37,7 @@ export function Sidebar({ className, collapsed = false }: SidebarProps) {
         )}
       >
         <div className="relative z-0 flex-1 overflow-hidden flex flex-col px-2 pt-3">
-          {currentWorkspace && workspaceSlug ? (
-            <PageTree workspaceId={currentWorkspace.id} workspaceSlug={workspaceSlug} />
-          ) : (
-            <div className="flex flex-col items-center justify-center h-40 px-4 text-center">
-              <Briefcase className="text-zinc-300 dark:text-zinc-600 mb-2" size={32} />
-              <p className="text-sm text-zinc-500 dark:text-zinc-400">
-                Select a workspace to view pages
-              </p>
-            </div>
-          )}
+          <PageTree />
         </div>
       </div>
     </aside>
