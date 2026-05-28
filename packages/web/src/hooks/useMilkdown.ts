@@ -168,6 +168,7 @@ interface UseMilkdownProps {
     position: { x: number; y: number; top?: number; bottom?: number } | null,
     range: { from: number; to: number } | null,
   ) => void;
+  readOnly?: boolean;
 }
 
 function isTaskChecked(checked: unknown): boolean {
@@ -221,6 +222,7 @@ export function useMilkdown({
   onWikiLinkClick,
   onWikiLinkSuggest,
   onSlashMenuSuggest,
+  readOnly = false,
 }: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -411,6 +413,7 @@ export function useMilkdown({
 
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
+            editable: () => !readOnly,
             attributes: {
               class: 'milkdown-editor-view',
               spellcheck: 'false',

@@ -1,9 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
 import { Loader2 } from 'lucide-react';
 import { useParams } from 'react-router-dom';
-import { useAuth } from '../hooks/useAuth';
+import { useShareContext } from '../contexts/ShareContext';
 import Page from './Page';
-import PublicPage from './PublicPage';
 
 async function fetchPage(pageId: string) {
   const res = await fetch(`/api/pages/${pageId}`);
@@ -12,7 +11,6 @@ async function fetchPage(pageId: string) {
 }
 
 export default function PageEntry() {
-  const { data: session, isPending } = useAuth();
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const pageId = slugAndId?.match(
     /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i,
@@ -28,7 +26,9 @@ export default function PageEntry() {
     retry: false,
   });
 
-  if (isPending || isLoading) {
+  const { linkPermission } = useShareContext();
+
+  if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-white dark:bg-zinc-950">
         <Loader2 className="h-8 w-8 animate-spin text-zinc-400" />
@@ -36,12 +36,5 @@ export default function PageEntry() {
     );
   }
 
-  // Allow anonymous editing when the page has a link share with edit permission
-  const allowAnonymousEdit = !session?.user && page?.linkPermission === 'edit';
-
-  if (session?.user || allowAnonymousEdit) {
-    return <Page />;
-  }
-
-  return <PublicPage />;
+  return <Page linkPermission={linkPermission} />;
 }

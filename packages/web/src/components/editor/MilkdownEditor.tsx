@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
@@ -7,6 +8,7 @@ import { useSlashMenu } from '../../hooks/useSlashMenu';
 import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
+import { getOrCreateAnonymousId } from '../../utils/anonymous-cookie';
 import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
@@ -40,6 +42,7 @@ interface MilkdownEditorProps {
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
   onWikiLinkClick?: (path: string) => void;
+  readOnly?: boolean;
 }
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
@@ -60,9 +63,11 @@ export function MilkdownEditor({
   onStatusChange,
   onProviderReady,
   onWikiLinkClick,
+  readOnly = false,
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), []);
   const editorRef = useRef<Editor | null>(null);
+  const { isAnonymous } = useShareContext();
 
   const {
     suggestions,
@@ -204,6 +209,12 @@ export function MilkdownEditor({
         if (cached && Date.now() < cached.expiresAt) {
           return cached.token;
         }
+
+        if (isAnonymous) {
+          const anonymousId = getOrCreateAnonymousId();
+          return `anon:${anonymousId}`;
+        }
+
         const session = await authClient.getSession();
         const token = session.data?.session?.token ?? '';
         const userId = session.data?.user?.id ?? '';
@@ -211,7 +222,7 @@ export function MilkdownEditor({
         return token;
       },
     });
-  }, [pageId, doc]);
+  }, [pageId, doc, isAnonymous]);
 
   const handleSlashMenuSuggestRef = useRef<
     (
@@ -232,6 +243,7 @@ export function MilkdownEditor({
     onSlashMenuSuggest: useCallback((isOpen, query, position, range) => {
       handleSlashMenuSuggestRef.current(isOpen, query, position, range);
     }, []),
+    readOnly,
   });
 
   useAwareness(provider);

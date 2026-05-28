@@ -13,6 +13,7 @@ import { PageStatus } from '../components/editor/PageStatus';
 import { PageTitle } from '../components/editor/PageTitle';
 import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
+import { useShareContext } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
@@ -36,7 +37,11 @@ function decodePageContent(ydoc: unknown): string {
   return '';
 }
 
-export default function Page() {
+interface PageProps {
+  linkPermission?: 'view' | 'edit' | null;
+}
+
+export default function Page({ linkPermission = null }: PageProps) {
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useNavigate();
@@ -162,8 +167,10 @@ export default function Page() {
 
   const { data: pageTree } = usePageTree();
   const { data: folderTree } = useFolderTree();
+  const { isAnonymous } = useShareContext();
 
   const flatPages = useMemo(() => {
+    if (isAnonymous) return [];
     const result: PageType[] = [];
     const visit = (nodes: PageTreeNode[] | undefined) => {
       if (!nodes) return;
@@ -176,9 +183,10 @@ export default function Page() {
     };
     visit(pageTree as PageTreeNode[] | undefined);
     return result;
-  }, [pageTree]);
+  }, [pageTree, isAnonymous]);
 
   const flatFolders = useMemo(() => {
+    if (isAnonymous) return [];
     const result: Folder[] = [];
     const visit = (nodes: FolderTreeNode[] | undefined) => {
       if (!nodes) return;
@@ -192,11 +200,11 @@ export default function Page() {
     };
     visit(folderTree as FolderTreeNode[] | undefined);
     return result;
-  }, [folderTree]);
+  }, [folderTree, isAnonymous]);
 
   const handleWikiLinkClick = useCallback(
     (path: string) => {
-      if (!path) return;
+      if (!path || isAnonymous) return;
       const targetPage = flatPages.find(
         (p) => p.id === path || p.title.toLowerCase() === path.toLowerCase(),
       );
@@ -204,7 +212,7 @@ export default function Page() {
         navigate(buildPagePath(targetPage.title, targetPage.id));
       }
     },
-    [flatPages, navigate],
+    [flatPages, navigate, isAnonymous],
   );
 
   if (!pageId) {
@@ -235,11 +243,13 @@ export default function Page() {
     <div className="max-w-4xl mx-auto px-6 animate-fade-in">
       <div className="mb-6">
         <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400 -mt-5">
-          <div>
-            <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
-          </div>
+          {!isAnonymous && (
+            <div>
+              <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
+            </div>
+          )}
           <div className="flex items-center gap-2">
-            <PageActions pageId={pageId} page={page} />
+            {!isAnonymous && <PageActions pageId={pageId} page={page} />}
             <PageStatus provider={provider} collabStatus={collabStatus} />
           </div>
         </div>
@@ -266,9 +276,10 @@ export default function Page() {
           onProviderReady={setProvider}
           onStatusChange={handleStatusChange}
           onWikiLinkClick={handleWikiLinkClick}
+          readOnly={linkPermission === 'view'}
         />
       ) : null}
-      <BacklinksPanel pageId={pageId} />
+      {!isAnonymous && <BacklinksPanel pageId={pageId} />}
       <TableOfContents editorElement={editorElement} />
     </div>
   );
