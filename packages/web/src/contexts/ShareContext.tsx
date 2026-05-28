@@ -1,5 +1,5 @@
 import { getAnonymousName } from '@markdawn/shared';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getOrCreateAnonymousId } from '../utils/anonymous-cookie';
 
@@ -23,29 +23,25 @@ interface ShareProviderProps {
 export function ShareProvider({ children, linkPermission = null }: ShareProviderProps) {
   const { data: session } = useAuth();
   const isAnonymous = !session?.user;
+  const [anonymousId, setAnonymousId] = useState<string | null>(null);
 
-  const value = useMemo(() => {
+  useEffect(() => {
     if (!isAnonymous) {
-      return {
-        isAnonymous: false,
-        anonymousId: null,
-        anonymousName: null,
-        linkPermission,
-        canEdit: true,
-      };
+      setAnonymousId(null);
+      return;
     }
+    void getOrCreateAnonymousId().then(setAnonymousId);
+  }, [isAnonymous]);
 
-    const anonymousId = getOrCreateAnonymousId();
-    const anonymousName = getAnonymousName(anonymousId);
+  const anonymousName = anonymousId ? getAnonymousName(anonymousId) : null;
 
-    return {
-      isAnonymous: true,
-      anonymousId,
-      anonymousName,
-      linkPermission,
-      canEdit: linkPermission === 'edit',
-    };
-  }, [isAnonymous, linkPermission]);
+  const value: ShareContextType = {
+    isAnonymous,
+    anonymousId,
+    anonymousName,
+    linkPermission,
+    canEdit: isAnonymous ? linkPermission === 'edit' : true,
+  };
 
   return <ShareContext.Provider value={value}>{children}</ShareContext.Provider>;
 }

@@ -1,6 +1,5 @@
 import clsx from 'clsx';
 import {
-  Check,
   Copy,
   Download,
   Edit2,
@@ -172,26 +171,17 @@ export function ExplorerItem({
           )}
           onClick={handleClick}
         >
-          <div
-            role="checkbox"
-            aria-checked={isSelected}
-            tabIndex={0}
+          <input
+            type="checkbox"
+            checked={isSelected}
             className={clsx(
-              'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
+              'item-action w-5 h-5 rounded border transition-colors cursor-pointer accent-zinc-900 dark:accent-zinc-100',
               isSelected
-                ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
+                ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100'
                 : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleCheckboxClick(e);
-              }
-            }}
-          >
-            {isSelected && <Check size={12} strokeWidth={3} />}
-          </div>
+          />
 
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 shrink-0">
             {item.type === 'folder' ? (
@@ -363,26 +353,17 @@ export function ExplorerItem({
         onClick={handleClick}
       >
         <div className="absolute top-3 left-3 z-10">
-          <div
-            role="checkbox"
-            aria-checked={isSelected}
-            tabIndex={0}
+          <input
+            type="checkbox"
+            checked={isSelected}
             className={clsx(
-              'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
+              'item-action w-5 h-5 rounded border transition-colors cursor-pointer accent-zinc-900 dark:accent-zinc-100',
               isSelected
-                ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
+                ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100'
                 : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                handleCheckboxClick(e);
-              }
-            }}
-          >
-            {isSelected && <Check size={12} strokeWidth={3} />}
-          </div>
+          />
         </div>
 
         <div

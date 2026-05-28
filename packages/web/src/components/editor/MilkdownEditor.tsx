@@ -211,7 +211,7 @@ export function MilkdownEditor({
         }
 
         if (isAnonymous) {
-          const anonymousId = getOrCreateAnonymousId();
+          const anonymousId = await getOrCreateAnonymousId();
           return `anon:${anonymousId}`;
         }
 
