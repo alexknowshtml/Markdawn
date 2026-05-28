@@ -56,10 +56,7 @@
   },
   "overrides": [
     {
-      "includes": [
-        "packages/web/src/components/sidebar/PageTreeRow.tsx",
-        "packages/web/src/components/workspace/ExplorerItem.tsx"
-      ],
+      "includes": ["packages/web/src/components/sidebar/PageTreeRow.tsx"],
       "linter": {
         "rules": {
           "a11y": {

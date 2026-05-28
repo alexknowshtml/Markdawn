@@ -9,7 +9,8 @@
 5. **Better Auth baseURL**: must be FRONTEND URL (5173), not API (3001)
 6. **API does not serve static files**: Caddy serves `packages/web/dist` directly
 7. **Deploy**: configs in `deploy/`, scripts: `setup.sh` (one-time) + `deploy.sh` (incremental)
-8. The default branch in this repo is `master`.
+8. **Migration workflow**: `db:generate` → commit migration SQL → `db:migrate`. Never use `db:push` on deployed databases — it won't add FK/unique constraints to existing tables. After a fresh `setup.sh`, the migration journal is clean so `db:migrate` applies all migrations in order.
+9. The default branch in this repo is `master`.
 
 ## Code Style
 

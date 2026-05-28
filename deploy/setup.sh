@@ -108,8 +108,8 @@ for i in {1..30}; do
     sleep 2
 done
 
-echo -e "${YELLOW}[SCHEMA] Running db:push to initialize database...${NC}"
-pnpm --filter @markdawn/api db:push
+echo -e "${YELLOW}[SCHEMA] Running db:migrate to initialize database...${NC}"
+pnpm --filter @markdawn/api db:migrate
 
 systemctl --user start markdawn-api.service markdawn-collab.service
 
