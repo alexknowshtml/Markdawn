@@ -132,10 +132,10 @@ export function ExplorerItem({
     onNavigate(e);
   };
 
-  const handleCheckboxClick = (e: React.MouseEvent) => {
+  const handleCheckboxClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     e.stopPropagation();
     e.preventDefault();
-    onSelect(e);
+    onSelect(e as React.MouseEvent);
   };
 
   const renderFavoriteToggle = () => {
@@ -172,8 +172,10 @@ export function ExplorerItem({
           )}
           onClick={handleClick}
         >
-          <button
-            type="button"
+          <div
+            role="checkbox"
+            aria-checked={isSelected}
+            tabIndex={0}
             className={clsx(
               'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
               isSelected
@@ -181,9 +183,15 @@ export function ExplorerItem({
                 : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleCheckboxClick(e);
+              }
+            }}
           >
             {isSelected && <Check size={12} strokeWidth={3} />}
-          </button>
+          </div>
 
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 shrink-0">
             {item.type === 'folder' ? (
@@ -355,8 +363,10 @@ export function ExplorerItem({
         onClick={handleClick}
       >
         <div className="absolute top-3 left-3 z-10">
-          <button
-            type="button"
+          <div
+            role="checkbox"
+            aria-checked={isSelected}
+            tabIndex={0}
             className={clsx(
               'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
               isSelected
@@ -364,9 +374,15 @@ export function ExplorerItem({
                 : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
             onClick={handleCheckboxClick}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                handleCheckboxClick(e);
+              }
+            }}
           >
             {isSelected && <Check size={12} strokeWidth={3} />}
-          </button>
+          </div>
         </div>
 
         <div
