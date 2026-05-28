@@ -6,6 +6,7 @@ import {
   extractConnectionsFromYDoc,
   normalizeTagSlug,
 } from '@markdawn/shared/yjs-helpers';
+import { getAnonymousName } from '@markdawn/shared';
 import { Client, type Pool, type PoolClient } from 'pg';
 import * as Y from 'yjs';
 import { parseCookies } from './utils';
@@ -519,6 +520,26 @@ export function createCollabServer(config: CollabServerConfig) {
     }
   }
 
+  async function assertAnonymousPageAccess(
+    documentName: string,
+  ): Promise<{ permission: 'view' | 'edit' }> {
+    const pageResult = await pool.query(
+      'SELECT is_public FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
+      [documentName],
+    );
+    if (!pageResult.rows[0]?.is_public) {
+      logger.debug(`[auth] anonymous denied: page ${documentName} is not public`);
+      throw new Error('Forbidden');
+    }
+
+    const shareResult = await pool.query(
+      "SELECT permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL LIMIT 1",
+      [documentName],
+    );
+    const permission = (shareResult.rows[0]?.permission as 'view' | 'edit') ?? 'view';
+    return { permission };
+  }
+
   const server = new Server({
     port,
     debounce: debounceMs,
@@ -538,6 +559,27 @@ export function createCollabServer(config: CollabServerConfig) {
       if (!sessionToken) {
         logger.debug('[auth] no session token provided');
         throw new Error('Unauthorized');
+      }
+
+      if (sessionToken.startsWith('anon:')) {
+        const anonymousId = sessionToken.slice(5);
+        if (!documentName || !UUID_REGEX.test(documentName)) {
+          logger.debug('[auth] anonymous token requires valid document name');
+          throw new Error('Forbidden');
+        }
+
+        const { permission } = await assertAnonymousPageAccess(documentName);
+        const anonymousName = getAnonymousName(anonymousId);
+
+        logger.info(`[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${permission})`);
+        return {
+          user: {
+            id: anonymousId,
+            name: anonymousName,
+            isAnonymous: true,
+          },
+          permission,
+        };
       }
 
       const result = await pool.query(
@@ -604,8 +646,9 @@ export function createCollabServer(config: CollabServerConfig) {
         return;
       }
 
-      const user = (context as { user?: { id: string } } | undefined)?.user;
-      if (!user) {
+      const contextUser = (context as { user?: { id: string; isAnonymous?: boolean } } | undefined)
+        ?.user;
+      if (!contextUser) {
         throw new Error('Unauthorized');
       }
 
@@ -652,9 +695,16 @@ export function createCollabServer(config: CollabServerConfig) {
         return;
       }
 
-      const user = (data.context as { user?: { id: string } } | undefined)?.user;
-      if (!user) {
+      const context = data.context as
+        | { user?: { id: string; isAnonymous?: boolean }; permission?: string }
+        | undefined;
+      if (!context?.user) {
         throw new Error('Unauthorized');
+      }
+
+      if (context.user.isAnonymous && context.permission === 'view') {
+        logger.debug(`[persist] skipping anonymous view-only user save for ${documentName}`);
+        return;
       }
 
       const state = Y.encodeStateAsUpdate(data.document);
@@ -774,6 +824,14 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(`[listen] removed deleted page ${pageId} from meta room`);
     }
 
+    async function handleShareRevoked(pageId: string): Promise<void> {
+      logger.info(`[listen] share revoked for page ${pageId}`);
+      const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
+      if (activeDoc) {
+        logger.debug(`[listen] page ${pageId} has active document, anonymous users will be disconnected on next auth check`);
+      }
+    }
+
     function scheduleReconnect() {
       if (stopped) return;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -800,6 +858,7 @@ export function createCollabServer(config: CollabServerConfig) {
         await client.connect();
         await client.query('LISTEN page_renamed');
         await client.query('LISTEN page_deleted');
+        await client.query('LISTEN share_revoked');
 
         client.on('notification', (msg) => {
           try {
@@ -817,6 +876,10 @@ export function createCollabServer(config: CollabServerConfig) {
             } else if (msg.channel === 'page_renamed' && newTitle) {
               void handlePageRenamed(pageId, newTitle).catch((err) =>
                 logger.error(`[listen] handlePageRenamed failed: ${err}`),
+              );
+            } else if (msg.channel === 'share_revoked') {
+              void handleShareRevoked(pageId).catch((err) =>
+                logger.error(`[listen] handleShareRevoked failed: ${err}`),
               );
             }
           } catch (err) {
@@ -836,7 +899,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
         listenClient = client;
         reconnectAttempts = 0;
-        logger.info('[listen] subscribed to page_renamed and page_deleted');
+        logger.info('[listen] subscribed to page_renamed, page_deleted, and share_revoked');
       } catch (err) {
         logger.error(`[listen] connection failed: ${err}`);
         listenClient = null;
