@@ -50,10 +50,15 @@ export function ShareProvider({ children, linkPermission = null }: ShareProvider
   return <ShareContext.Provider value={value}>{children}</ShareContext.Provider>;
 }
 
-export function useShareContext() {
+const DEFAULT_SHARE_CONTEXT: ShareContextType = {
+  isAnonymous: false,
+  anonymousId: null,
+  anonymousName: null,
+  linkPermission: null,
+  canEdit: true,
+};
+
+export function useShareContext(): ShareContextType {
   const context = useContext(ShareContext);
-  if (context === undefined) {
-    throw new Error('useShareContext must be used within a ShareProvider');
-  }
-  return context;
+  return context ?? DEFAULT_SHARE_CONTEXT;
 }
