@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppProviders } from './components/AppProviders';
 import { AppShell } from './components/AppShell';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import { ShareablePageRoute } from './components/auth/ShareablePageRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Dashboard from './routes/Dashboard';
 import Home from './routes/Home';
@@ -30,7 +31,19 @@ function App() {
             >
               <Route index element={<Dashboard />} />
               <Route path="settings" element={<Settings />} />
-              <Route path=":slugAndId" element={<PageEntry />} />
+            </Route>
+
+            <Route
+              path="/app/:slugAndId"
+              element={
+                <ShareablePageRoute>
+                  <AppProviders>
+                    <AppShell />
+                  </AppProviders>
+                </ShareablePageRoute>
+              }
+            >
+              <Route index element={<PageEntry />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />
