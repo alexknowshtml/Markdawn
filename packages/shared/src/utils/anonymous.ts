@@ -113,3 +113,94 @@ export function getAnonymousInitial(id: string): string {
   const name = getAnonymousAnimal(id);
   return name.charAt(0).toUpperCase();
 }
+
+/**
+ * Deterministic emoji for each animal. Uses the closest widely-supported
+ * Unicode emoji match — approximate for species without a direct emoji.
+ */
+const ANIMAL_EMOJI: Record<string, string> = {
+  alligator: '🐊',
+  ant: '🐜',
+  badger: '🦡',
+  bat: '🦇',
+  bear: '🐻',
+  beaver: '🦫',
+  bee: '🐝',
+  bird: '🐦',
+  bison: '🦬',
+  boar: '🐗',
+  buffalo: '🐃',
+  bull: '🐂',
+  butterfly: '🦋',
+  camel: '🐫',
+  cat: '🐱',
+  cobra: '🐍',
+  cod: '🐟',
+  cougar: '🐆',
+  coyote: '🐺',
+  crane: '🦩',
+  crow: '🐦‍⬛',
+  deer: '🦌',
+  dingo: '🐕',
+  dolphin: '🐬',
+  dove: '🕊️',
+  dragon: '🐉',
+  duck: '🦆',
+  eagle: '🦅',
+  eel: '🐍',
+  elk: '🦌',
+  falcon: '🦅',
+  finch: '🐦',
+  fox: '🦊',
+  frog: '🐸',
+  gazelle: '🦌',
+  gecko: '🦎',
+  goat: '🐐',
+  goose: '🪿',
+  gorilla: '🦍',
+  hamster: '🐹',
+  hare: '🐇',
+  hawk: '🦅',
+  hippo: '🦛',
+  horse: '🐴',
+  hyena: '🐺',
+  iguana: '🦎',
+  impala: '🦌',
+  jackal: '🐺',
+  jaguar: '🐆',
+  kangaroo: '🦘',
+  koala: '🐨',
+  lemur: '🐒',
+  leopard: '🐆',
+  lion: '🦁',
+  llama: '🦙',
+  lobster: '🦞',
+  lynx: '🐱',
+  mantis: '🦗',
+  mole: '🐹',
+  moose: '🦌',
+  mule: '🐴',
+  newt: '🦎',
+  otter: '🦦',
+  owl: '🦉',
+  panda: '🐼',
+  panther: '🐆',
+  parrot: '🦜',
+  pelican: '🦩',
+  penguin: '🐧',
+  pig: '🐷',
+  puma: '🐆',
+  rabbit: '🐇',
+  raccoon: '🦝',
+  ram: '🐏',
+  raven: '🐦‍⬛',
+};
+
+/**
+ * Returns an emoji representing the animal for the given anonymous ID.
+ * Same ID always returns the same emoji.
+ */
+export function getAnimalEmoji(id: string): string {
+  const animal = getAnonymousAnimal(id);
+  return ANIMAL_EMOJI[animal] ?? '🐾';
+}

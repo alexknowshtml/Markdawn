@@ -13,6 +13,7 @@ type AwarenessUser = {
   name: string;
   color: string;
   avatar?: string;
+  emoji?: string;
 };
 
 const STATUS_LABELS: Record<WebSocketStatus, string> = {
@@ -35,22 +36,32 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
 
       const states = awareness.getStates();
       const localClientId = awareness.clientID;
-      const activeUsers: AwarenessUser[] = [];
+      const seen = new Map<string, AwarenessUser>();
 
       for (const [clientId, state] of states.entries()) {
         if (clientId === localClientId) continue;
         if (state.user && typeof state.user === 'object') {
-          const user = state.user as { name?: string; color?: string; avatar?: string };
-          activeUsers.push({
-            id: clientId,
-            name: user.name ?? 'Anonymous',
-            color: user.color ?? '#000000',
-            ...(user.avatar ? { avatar: user.avatar } : {}),
-          });
+          const user = state.user as {
+            name?: string;
+            color?: string;
+            avatar?: string;
+            emoji?: string;
+          };
+
+          const key = user.avatar ?? user.name ?? 'Anonymous';
+          if (!seen.has(key)) {
+            seen.set(key, {
+              id: clientId,
+              name: user.name ?? 'Anonymous',
+              color: user.color ?? '#000000',
+              ...(user.avatar ? { avatar: user.avatar } : {}),
+              ...(user.emoji ? { emoji: user.emoji } : {}),
+            });
+          }
         }
       }
 
-      setUsers(activeUsers);
+      setUsers(Array.from(seen.values()));
     };
 
     provider.awareness?.on('change', updateUsers);
@@ -99,6 +110,8 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
+                ) : user.emoji ? (
+                  <span className="text-base">{user.emoji}</span>
                 ) : (
                   <span className="text-white text-xs font-bold">{getInitial(user.name)}</span>
                 )}

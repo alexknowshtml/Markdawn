@@ -1,5 +1,5 @@
 import type { HocuspocusProvider } from '@hocuspocus/provider';
-import { getStableColor } from '@markdawn/shared';
+import { getAnimalEmoji, getStableColor } from '@markdawn/shared';
 import { useEffect } from 'react';
 import { useShareContext } from '../contexts/ShareContext';
 import { useAuth } from './useAuth';
@@ -17,6 +17,7 @@ export function useAwareness(provider: HocuspocusProvider | null) {
         name: anonymousName || 'Anonymous',
         color: userColor,
         avatar: null,
+        emoji: getAnimalEmoji(anonymousId),
         isAnonymous: true,
       });
     } else if (session?.user) {
