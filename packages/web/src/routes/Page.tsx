@@ -2,6 +2,7 @@ import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
+import { LogIn } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
@@ -13,6 +14,7 @@ import { PageStatus } from '../components/editor/PageStatus';
 import { PageTitle } from '../components/editor/PageTitle';
 import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
+import { ThemeToggle } from '../components/ThemeToggle';
 import { useShareContext } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
@@ -46,25 +48,34 @@ export default function Page({ linkPermission = null }: PageProps) {
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
+  const readOnly = linkPermission === 'view';
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
+  const prevPageIdRef = useRef<string | undefined>(pageId);
 
   // Clear state on page navigation.
-  // Skip the initial mount to avoid overwriting the provider that
-  // MilkdownEditor's onProviderReady just set in the same render batch.
-  // With PageEntry pre-caching page data, MilkdownEditor can mount on
-  // the first render, and React runs effects bottom-up — the child
-  // (onProviderReady) fires before the parent's pageId effect.
-  // Without this guard, setProvider(null) would win the batch and
-  // provider would be stuck at null.
+  // Skip when pageId transitions from undefined → UUID (initialization, not navigation)
+  // and skip on the very first mount.
   // biome-ignore lint/correctness/useExhaustiveDependencies: pageId is intentionally a trigger dependency
   useEffect(() => {
+    const prevPageId = prevPageIdRef.current;
+
     if (isFirstMount.current) {
       isFirstMount.current = false;
+      prevPageIdRef.current = pageId;
       return;
     }
-    setProvider(null);
+
+    if (prevPageId === undefined && pageId !== undefined) {
+      prevPageIdRef.current = pageId;
+      return;
+    }
+
+    prevPageIdRef.current = pageId;
+    // Don't reset provider here — MilkdownEditor manages its own lifecycle.
+    // This effect runs AFTER MilkdownEditor's onProviderReady (child effects
+    // fire first), so setProvider(null) would overwrite the new provider.
     setCollabStatus(WebSocketStatus.Connecting);
     setEditorElement(null);
   }, [pageId]);
@@ -241,22 +252,45 @@ export default function Page({ linkPermission = null }: PageProps) {
 
   return (
     <div className="max-w-4xl mx-auto px-6 animate-fade-in">
-      <div className="mb-6">
-        <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400 -mt-5">
-          {!isAnonymous && (
+      <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl">
+        <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          {isAnonymous ? (
+            <div className="flex items-center gap-2">
+              {linkPermission === 'view' ? (
+                <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
+                  View only
+                </span>
+              ) : (
+                <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 rounded-full">
+                  Can edit
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => navigate('/login')}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+              >
+                <LogIn size={14} />
+                Sign in
+              </button>
+            </div>
+          ) : (
             <div>
               <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
             </div>
           )}
           <div className="flex items-center gap-2">
             {!isAnonymous && <PageActions pageId={pageId} page={page} />}
+            {isAnonymous && <ThemeToggle />}
             <PageStatus provider={provider} collabStatus={collabStatus} />
           </div>
         </div>
+      </div>
 
+      <div className="mb-6">
         <div className="relative flex-1 flex items-center mt-19">
           <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
-            <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
+            <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} readOnly={readOnly} />
           </div>
           <div className="pl-[54px] w-full">
             <PageTitle
@@ -268,7 +302,7 @@ export default function Page({ linkPermission = null }: PageProps) {
         </div>
       </div>
       <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
-      {page ? (
+      {page && pageId ? (
         <MilkdownEditor
           key={pageId}
           pageId={pageId}

@@ -8,7 +8,7 @@ import { useSlashMenu } from '../../hooks/useSlashMenu';
 import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
-import { getOrCreateAnonymousId } from '../../utils/anonymous-cookie';
+import { getAnonymousId } from '../../utils/anonymous-cookie';
 import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
@@ -197,6 +197,8 @@ export function MilkdownEditor({
   // doesn't fire a redundant get-session API call on every retry.
   // Key the cache by user ID to avoid session fixation on shared machines.
   const cachedTokenRef = useRef<{ token: string; userId: string; expiresAt: number } | null>(null);
+  const isAnonymousRef = useRef(isAnonymous);
+  isAnonymousRef.current = isAnonymous;
 
   const provider = useMemo(() => {
     return new HocuspocusProvider({
@@ -210,8 +212,8 @@ export function MilkdownEditor({
           return cached.token;
         }
 
-        if (isAnonymous) {
-          const anonymousId = await getOrCreateAnonymousId();
+        if (isAnonymousRef.current) {
+          const anonymousId = getAnonymousId();
           return `anon:${anonymousId}`;
         }
 
@@ -222,7 +224,7 @@ export function MilkdownEditor({
         return token;
       },
     });
-  }, [pageId, doc, isAnonymous]);
+  }, [pageId, doc]);
 
   const handleSlashMenuSuggestRef = useRef<
     (
@@ -762,7 +764,7 @@ export function MilkdownEditor({
   // Helper: wraps an editor action so it only fires when the editor is focused,
   // and returns false to allow the next binding to handle the event otherwise.
   const ed = (action: () => void) => (): boolean => {
-    if (!editorHasFocus()) return false;
+    if (readOnly || !editorHasFocus()) return false;
     action();
     return true;
   };
@@ -1013,51 +1015,55 @@ export function MilkdownEditor({
 
   return (
     <div className="editor-wrapper min-h-[500px] relative">
-      <WikiLinkSuggestions
-        isOpen={suggestions.isOpen}
-        query={suggestions.query}
-        pages={allPages}
-        position={suggestions.position}
-        onSelect={handleWikiLinkSelect}
-        onClose={closeSuggestions}
-        onAddPage={handleAddPage}
-      />
-      <SlashMenu
-        isOpen={slashMenuState.isOpen}
-        query={slashMenuState.query}
-        position={slashMenuState.position}
-        commands={slashCommands}
-        onClose={closeSlashMenu}
-      />
-      <FloatingToolbar
-        visible={visible}
-        position={position}
-        onBold={handleBold}
-        onItalic={handleItalic}
-        onStrike={handleStrike}
-        onCode={handleCode}
-        onLink={handleLink}
-        onBlockquote={handleBlockquote}
-        onImageUpload={handleImageUpload}
-        onH1={handleH1}
-        onH2={handleH2}
-        onH3={handleH3}
-        onH4={handleH4}
-        onH5={handleH5}
-        onH6={handleH6}
-        onBulletList={handleBulletList}
-        onOrderedList={handleOrderedList}
-        onTaskList={handleTaskList}
-        onInsertTable={handleInsertTable}
-        onAddRowBefore={handleAddRowBefore}
-        onAddRowAfter={handleAddRowAfter}
-        onAddColBefore={handleAddColBefore}
-        onAddColAfter={handleAddColAfter}
-        onDeleteRow={handleDeleteRow}
-        onDeleteCol={handleDeleteCol}
-        onDeleteTable={handleDeleteTable}
-        {...activeStates}
-      />
+      {!readOnly && (
+        <>
+          <WikiLinkSuggestions
+            isOpen={suggestions.isOpen}
+            query={suggestions.query}
+            pages={allPages}
+            position={suggestions.position}
+            onSelect={handleWikiLinkSelect}
+            onClose={closeSuggestions}
+            onAddPage={handleAddPage}
+          />
+          <SlashMenu
+            isOpen={slashMenuState.isOpen}
+            query={slashMenuState.query}
+            position={slashMenuState.position}
+            commands={slashCommands}
+            onClose={closeSlashMenu}
+          />
+          <FloatingToolbar
+            visible={visible}
+            position={position}
+            onBold={handleBold}
+            onItalic={handleItalic}
+            onStrike={handleStrike}
+            onCode={handleCode}
+            onLink={handleLink}
+            onBlockquote={handleBlockquote}
+            onImageUpload={handleImageUpload}
+            onH1={handleH1}
+            onH2={handleH2}
+            onH3={handleH3}
+            onH4={handleH4}
+            onH5={handleH5}
+            onH6={handleH6}
+            onBulletList={handleBulletList}
+            onOrderedList={handleOrderedList}
+            onTaskList={handleTaskList}
+            onInsertTable={handleInsertTable}
+            onAddRowBefore={handleAddRowBefore}
+            onAddRowAfter={handleAddRowAfter}
+            onAddColBefore={handleAddColBefore}
+            onAddColAfter={handleAddColAfter}
+            onDeleteRow={handleDeleteRow}
+            onDeleteCol={handleDeleteCol}
+            onDeleteTable={handleDeleteTable}
+            {...activeStates}
+          />
+        </>
+      )}
       <div ref={setContainer} className="milkdown-editor" />
     </div>
   );

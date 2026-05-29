@@ -36,8 +36,8 @@ interface ExplorerItemProps {
   isSelected: boolean;
   isFavorite?: boolean;
   onToggleFavorite?: () => void;
-  onSelect: (e: React.MouseEvent) => void;
-  onNavigate: (e: React.MouseEvent) => void;
+  onSelect: (e: React.MouseEvent | React.KeyboardEvent | React.ChangeEvent<HTMLInputElement>) => void;
+  onNavigate: (e: React.MouseEvent | React.KeyboardEvent) => void;
   onDelete: () => void;
   onRename: () => void;
   onCopy: () => void;
@@ -125,16 +125,18 @@ export function ExplorerItem({
     }
   }, [isEditing]);
 
-  const handleClick = (e: React.MouseEvent) => {
+  const handleClick = (e: React.MouseEvent | React.KeyboardEvent) => {
     if ((e.target as HTMLElement).closest('.item-action')) return;
     if (isEditing) return;
     onNavigate(e);
   };
 
-  const handleCheckboxClick = (e: React.MouseEvent | React.KeyboardEvent) => {
+  const handleCheckboxClick = (
+    e: React.ChangeEvent<HTMLInputElement> | React.MouseEvent | React.KeyboardEvent,
+  ) => {
     e.stopPropagation();
     e.preventDefault();
-    onSelect(e as React.MouseEvent);
+    onSelect(e);
   };
 
   const renderFavoriteToggle = () => {
@@ -161,8 +163,10 @@ export function ExplorerItem({
   if (viewMode === 'list') {
     return (
       <>
-        <button
-          type="button"
+        {/* biome-ignore-start lint/a11y/useSemanticElements: nested buttons not possible */}
+        <div
+          role="button"
+          tabIndex={0}
           className={clsx(
             'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150 w-full text-left',
             isSelected
@@ -170,6 +174,12 @@ export function ExplorerItem({
               : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50',
           )}
           onClick={handleClick}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick(e);
+            }
+          }}
         >
           <input
             type="checkbox"
@@ -180,7 +190,7 @@ export function ExplorerItem({
                 ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100'
                 : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
-            onClick={handleCheckboxClick}
+            onChange={handleCheckboxClick}
           />
 
           <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 shrink-0">
@@ -322,7 +332,8 @@ export function ExplorerItem({
                 document.body,
               )}
           </div>
-        </button>
+        </div>
+        {/* biome-ignore-end lint/a11y/useSemanticElements: nested buttons not possible */}
 
         <ConfirmDialog
           isOpen={showDeleteDialog}
@@ -341,8 +352,10 @@ export function ExplorerItem({
 
   return (
     <>
-      <button
-        type="button"
+      {/* biome-ignore-start lint/a11y/useSemanticElements: nested buttons not possible */}
+      <div
+        role="button"
+        tabIndex={0}
         className={clsx(
           'group relative block w-full text-left p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200',
           showMenu && 'z-10',
@@ -351,6 +364,12 @@ export function ExplorerItem({
             : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]',
         )}
         onClick={handleClick}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleClick(e);
+          }
+        }}
       >
         <div className="absolute top-3 left-3 z-10">
           <input
@@ -362,7 +381,7 @@ export function ExplorerItem({
                 ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100'
                 : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
             )}
-            onClick={handleCheckboxClick}
+            onChange={handleCheckboxClick}
           />
         </div>
 
@@ -520,7 +539,8 @@ export function ExplorerItem({
               )}
           </div>
         </div>
-      </button>
+      </div>
+      {/* biome-ignore-end lint/a11y/useSemanticElements: nested buttons not possible */}
 
       <ConfirmDialog
         isOpen={showDeleteDialog}

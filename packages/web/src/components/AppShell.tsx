@@ -3,6 +3,7 @@ import { Menu } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { useShortcut } from '../contexts/KeyboardShortcutContext';
+import { useShareContext } from '../contexts/ShareContext';
 import { usePageMeta } from '../hooks/usePageMeta';
 import { useSidebarCollapsed } from '../hooks/useSidebarCollapsed';
 import { useTheme } from '../hooks/useTheme';
@@ -16,6 +17,7 @@ export function AppShell() {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { setTheme, isDark } = useTheme();
   const location = useLocation();
+  const { isAnonymous } = useShareContext();
 
   useShortcut({
     key: 'mod+/',
@@ -29,11 +31,6 @@ export function AppShell() {
   const createFolder = () => {
     window.dispatchEvent(new CustomEvent('markdawn:create-folder'));
   };
-  // These are intercepted by most browsers (new tab, incognito) in the
-  // bubble phase. The provider's capture-phase handler calls preventDefault
-  // before the browser sees them, overriding the browser default.
-  // Alt+N / Alt+Shift+N create a new page/folder and navigate to it.
-  // The custom events are handled by PageTree which calls navigate().
   useShortcut({
     key: 'alt+n',
     handler: createNote,
@@ -62,53 +59,57 @@ export function AppShell() {
 
   return (
     <div className="flex h-screen w-full bg-zinc-50 dark:bg-zinc-950 overflow-hidden text-zinc-900 dark:text-zinc-50 font-sans">
-      {/* Layout Spacer - ensures center content animates smoothly when sidebar is pinned/unpinned */}
-      <div
-        className={clsx(
-          'hidden md:block transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] flex-shrink-0 overflow-hidden',
-          collapsed ? 'w-0' : 'w-[252px]',
-        )}
-      />
+      {!isAnonymous && (
+        <>
+          {/* Layout Spacer - ensures center content animates smoothly when sidebar is pinned/unpinned */}
+          <div
+            className={clsx(
+              'hidden md:block transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] flex-shrink-0 overflow-hidden',
+              collapsed ? 'w-0' : 'w-[252px]',
+            )}
+          />
 
-      {/* Visual Sidebar - handles the slide/fade animation and hover overlay */}
-      <section
-        aria-label="Sidebar"
-        className={clsx(
-          'hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-screen transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] z-40 w-[252px] fixed left-0',
-          collapsed
-            ? isHovered
-              ? 'opacity-100 translate-x-0 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-xl pointer-events-auto'
-              : 'opacity-0 -translate-x-full pointer-events-none'
-            : 'opacity-100 translate-x-0 pointer-events-auto',
-        )}
-        onMouseLeave={() => collapsed && setIsHovered(false)}
-      >
-        <Sidebar
-          className="flex-1 w-full"
-          collapsed={collapsed && !isHovered}
-          onToggleCollapsed={toggleCollapsed}
-        />
-        <ProfilePill
-          collapsed={collapsed && !isHovered}
-          isActuallyCollapsed={collapsed}
-          onToggleCollapsed={toggleCollapsed}
-          className="flex-shrink-0"
-        />
-      </section>
+          {/* Visual Sidebar - handles the slide/fade animation and hover overlay */}
+          <section
+            aria-label="Sidebar"
+            className={clsx(
+              'hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-screen transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] z-40 w-[252px] fixed left-0',
+              collapsed
+                ? isHovered
+                  ? 'opacity-100 translate-x-0 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-xl pointer-events-auto'
+                  : 'opacity-0 -translate-x-full pointer-events-none'
+                : 'opacity-100 translate-x-0 pointer-events-auto',
+            )}
+            onMouseLeave={() => collapsed && setIsHovered(false)}
+          >
+            <Sidebar
+              className="flex-1 w-full"
+              collapsed={collapsed && !isHovered}
+              onToggleCollapsed={toggleCollapsed}
+            />
+            <ProfilePill
+              collapsed={collapsed && !isHovered}
+              isActuallyCollapsed={collapsed}
+              onToggleCollapsed={toggleCollapsed}
+              className="flex-shrink-0"
+            />
+          </section>
 
-      {collapsed && !isHovered && (
-        <button
-          type="button"
-          className="hidden md:block fixed left-0 top-0 bottom-0 w-16 z-50 bg-transparent border-none p-0 cursor-pointer"
-          onMouseEnter={() => setIsHovered(true)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              setIsHovered(true);
-            }
-          }}
-          aria-label="Show sidebar"
-        />
+          {collapsed && !isHovered && (
+            <button
+              type="button"
+              className="hidden md:block fixed left-0 top-0 bottom-0 w-16 z-50 bg-transparent border-none p-0 cursor-pointer"
+              onMouseEnter={() => setIsHovered(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  setIsHovered(true);
+                }
+              }}
+              aria-label="Show sidebar"
+            />
+          )}
+        </>
       )}
 
       {isMobileMenuOpen && (

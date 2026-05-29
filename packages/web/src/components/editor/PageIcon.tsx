@@ -7,9 +7,10 @@ import { EmojiPicker } from '../EmojiPicker';
 interface PageIconProps {
   pageId: string;
   initialIcon: string | null;
+  readOnly?: boolean;
 }
 
-export function PageIcon({ pageId, initialIcon }: PageIconProps) {
+export function PageIcon({ pageId, initialIcon, readOnly = false }: PageIconProps) {
   const [icon, setIcon] = useState<string | null>(initialIcon);
   const updatePageMutation = useUpdatePage();
 
@@ -18,6 +19,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
   }, [initialIcon]);
 
   const handleIconChange = async (newIcon: string | null) => {
+    if (readOnly) return;
     setIcon(newIcon);
     try {
       await updatePageMutation.mutateAsync({
@@ -30,11 +32,19 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
     }
   };
 
+  const content = (
+    <div className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-4xl">
+      {icon ? icon : <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />}
+    </div>
+  );
+
+  if (readOnly) {
+    return content;
+  }
+
   return (
     <EmojiPicker icon={icon} onChange={handleIconChange}>
-      <div className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-4xl">
-        {icon ? icon : <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />}
-      </div>
+      {content}
     </EmojiPicker>
   );
 }
