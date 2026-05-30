@@ -468,7 +468,10 @@ export interface CollabServerConfig {
 export function createCollabServer(config: CollabServerConfig) {
   const { port, pool, logger, debounceMs = 500, maxDebounceMs = 3000 } = config;
 
-  async function assertPageAccess(documentName: string, userId: string): Promise<void> {
+  async function assertPageAccess(
+    documentName: string,
+    userId: string,
+  ): Promise<{ permission: 'view' | 'edit' }> {
     const ownerResult = await pool.query(
       'SELECT created_by FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
       [documentName],
@@ -479,7 +482,7 @@ export function createCollabServer(config: CollabServerConfig) {
       throw new Error('Forbidden');
     }
     if (owner.created_by === userId) {
-      return;
+      return { permission: 'edit' };
     }
 
     const shareResult = await pool.query(
@@ -511,6 +514,15 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(`[auth] user=${userId} denied access to page=${documentName} (no share)`);
       throw new Error('Forbidden');
     }
+
+    const rawPermission = shareResult.rows[0].permission;
+    if (rawPermission !== 'view' && rawPermission !== 'edit') {
+      logger.debug(
+        `[auth] user=${userId} denied access to page=${documentName} (invalid permission)`,
+      );
+      throw new Error('Forbidden');
+    }
+    return { permission: rawPermission };
   }
 
   async function assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void> {
@@ -536,15 +548,19 @@ export function createCollabServer(config: CollabServerConfig) {
       "SELECT permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL LIMIT 1",
       [documentName],
     );
-    const permission = (shareResult.rows[0]?.permission as 'view' | 'edit') ?? 'view';
-    return { permission };
+    const rawPermission = shareResult.rows[0]?.permission;
+    if (rawPermission !== 'view' && rawPermission !== 'edit') {
+      logger.debug(`[auth] anonymous denied: page ${documentName} has invalid permission`);
+      throw new Error('Forbidden');
+    }
+    return { permission: rawPermission };
   }
 
   const server = new Server({
     port,
     debounce: debounceMs,
     maxDebounce: maxDebounceMs,
-    onAuthenticate: async ({ token, requestHeaders, documentName }) => {
+    onAuthenticate: async ({ token, requestHeaders, documentName, connectionConfig }) => {
       const cookies = parseCookies(requestHeaders.cookie);
       const bearerTokenHeader = requestHeaders.authorization;
       const bearerMatch = bearerTokenHeader?.match(/^Bearer\s+(.+)$/i);
@@ -570,6 +586,10 @@ export function createCollabServer(config: CollabServerConfig) {
 
         const { permission } = await assertAnonymousPageAccess(documentName);
         const anonymousName = getAnonymousName(anonymousId);
+
+        if (permission === 'view') {
+          connectionConfig.readOnly = true;
+        }
 
         logger.info(
           `[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${permission})`,
@@ -601,6 +621,8 @@ export function createCollabServer(config: CollabServerConfig) {
         throw new Error('Unauthorized');
       }
 
+      let permission: 'view' | 'edit' = 'edit';
+
       if (documentName) {
         if (isMetaRoom(documentName)) {
           const roomUserId = documentName.slice(META_ROOM_PREFIX.length);
@@ -610,13 +632,18 @@ export function createCollabServer(config: CollabServerConfig) {
             documentName,
           ]);
           if (pageExists.rows.length > 0) {
-            await assertPageAccess(documentName, user.id);
+            const access = await assertPageAccess(documentName, user.id);
+            permission = access.permission;
           }
         }
       }
 
-      logger.info(`[auth] authenticated user=${user.id} (${user.email})`);
-      return { user };
+      if (permission === 'view') {
+        connectionConfig.readOnly = true;
+      }
+
+      logger.info(`[auth] authenticated user=${user.id} (${user.email}) permission=${permission}`);
+      return { user, permission };
     },
     onLoadDocument: async ({ documentName, document, context }) => {
       if (isMetaRoom(documentName)) {
