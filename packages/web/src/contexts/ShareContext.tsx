@@ -1,5 +1,5 @@
 import { getAnonymousName } from '@markdawn/shared';
-import { createContext, type ReactNode, useContext, useMemo } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getAnonymousId } from '../utils/anonymous-cookie';
 
@@ -14,15 +14,23 @@ interface ShareContextType {
 }
 
 const ShareContext = createContext<ShareContextType | undefined>(undefined);
+const SetLinkPermissionContext = createContext<
+  React.Dispatch<React.SetStateAction<LinkPermission>>
+>(() => {});
 
 interface ShareProviderProps {
   children: ReactNode;
   linkPermission?: LinkPermission;
 }
 
-export function ShareProvider({ children, linkPermission = null }: ShareProviderProps) {
+export function ShareProvider({ children, linkPermission: initial = null }: ShareProviderProps) {
   const { data: session } = useAuth();
   const isAnonymous = !session?.user;
+  const [linkPermission, setLinkPermission] = useState(initial);
+
+  useEffect(() => {
+    setLinkPermission(initial);
+  }, [initial]);
 
   const value = useMemo(() => {
     if (!isAnonymous) {
@@ -47,7 +55,11 @@ export function ShareProvider({ children, linkPermission = null }: ShareProvider
     };
   }, [isAnonymous, linkPermission]);
 
-  return <ShareContext.Provider value={value}>{children}</ShareContext.Provider>;
+  return (
+    <SetLinkPermissionContext.Provider value={setLinkPermission}>
+      <ShareContext.Provider value={value}>{children}</ShareContext.Provider>
+    </SetLinkPermissionContext.Provider>
+  );
 }
 
 const DEFAULT_SHARE_CONTEXT: ShareContextType = {
@@ -61,4 +73,8 @@ const DEFAULT_SHARE_CONTEXT: ShareContextType = {
 export function useShareContext(): ShareContextType {
   const context = useContext(ShareContext);
   return context ?? DEFAULT_SHARE_CONTEXT;
+}
+
+export function useSetLinkPermission(): React.Dispatch<React.SetStateAction<LinkPermission>> {
+  return useContext(SetLinkPermissionContext);
 }
