@@ -7,6 +7,7 @@ function getCookie(name: string): string | undefined {
 }
 
 function setCookie(name: string, value: string, maxAge: number): void {
+  // biome-ignore lint/suspicious/noDocumentCookie: Cookie Store API not widely supported
   document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax`;
 }
 
