@@ -190,7 +190,11 @@ export default function HomeView() {
     }
   };
 
-  const handleItemClick = (item: ExplorerItemData, index: number, e: React.MouseEvent) => {
+  const handleItemClick = (
+    item: ExplorerItemData,
+    index: number,
+    e: React.MouseEvent | React.KeyboardEvent,
+  ) => {
     if (e.ctrlKey || e.metaKey) {
       selection.toggle({ id: item.id, type: item.type });
       setLastSelectedIndex(index);
@@ -562,13 +566,6 @@ export default function HomeView() {
                     {...(item.type === 'page'
                       ? { onExport: () => void handleExport(item.id, item.title) }
                       : {})}
-                    isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
-                    editValue={editingTarget?.value ?? ''}
-                    onEditChange={(value) =>
-                      setEditingTarget((prev) => (prev ? { ...prev, value } : null))
-                    }
-                    onEditSave={() => void handleSaveRename()}
-                    onEditKeyDown={handleEditKeyDown}
                   />
                 ))}
               </div>
@@ -652,13 +649,6 @@ export default function HomeView() {
                             onExport: () => void handleExport(item.id, item.title),
                           }
                         : {})}
-                      isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
-                      editValue={editingTarget?.value ?? ''}
-                      onEditChange={(value) =>
-                        setEditingTarget((prev) => (prev ? { ...prev, value } : null))
-                      }
-                      onEditSave={() => void handleSaveRename()}
-                      onEditKeyDown={handleEditKeyDown}
                     />
                   ))}
                 </div>
@@ -684,6 +674,10 @@ export default function HomeView() {
                     item={item}
                     viewMode="list"
                     isSelected={selection.isSelected(item.id)}
+                    isFavorite={favoritePageIds.has(item.id)}
+                    onToggleFavorite={() => {
+                      void handleToggleFavorite(item.id);
+                    }}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
@@ -695,13 +689,7 @@ export default function HomeView() {
                     onCut={() => handleCutItem(item)}
                     onMove={() => handleMoveItem(item)}
                     {...(item.type === 'page'
-                      ? {
-                          onExport: () => void handleExport(item.id, item.title),
-                          isFavorite: favoritePageIds.has(item.id),
-                          onToggleFavorite: () => {
-                            void handleToggleFavorite(item.id);
-                          },
-                        }
+                      ? { onExport: () => void handleExport(item.id, item.title) }
                       : {})}
                     isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
                     editValue={editingTarget?.value ?? ''}
