@@ -575,6 +575,8 @@ export function useMilkdown({
                 const hasLink = view.state.doc.rangeHasMark(markFrom, markTo, linkMarkType);
                 if (!hasLink) return false;
 
+                if (!view.editable) return true;
+
                 linkEditor.open(view, anchor, {
                   initialUrl: href,
                   initialText: anchor.textContent || href,

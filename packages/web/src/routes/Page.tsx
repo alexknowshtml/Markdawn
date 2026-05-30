@@ -15,6 +15,7 @@ import { PageTitle } from '../components/editor/PageTitle';
 import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
 import { ThemeToggle } from '../components/ThemeToggle';
+import { EditorReadOnlyProvider } from '../contexts/EditorReadOnlyContext';
 import { useShareContext } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
@@ -57,7 +58,6 @@ export default function Page({ linkPermission = null }: PageProps) {
   // Clear state on page navigation.
   // Skip when pageId transitions from undefined → UUID (initialization, not navigation)
   // and skip on the very first mount.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: pageId is intentionally a trigger dependency
   useEffect(() => {
     const prevPageId = prevPageIdRef.current;
 
@@ -251,70 +251,71 @@ export default function Page({ linkPermission = null }: PageProps) {
   }
 
   return (
-    <div className="max-w-4xl mx-auto px-6 animate-fade-in">
-      <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl">
-        <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400">
-          {isAnonymous ? (
+    <EditorReadOnlyProvider readOnly={readOnly}>
+      <div className="max-w-4xl mx-auto px-6 animate-fade-in">
+        <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl">
+          <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400">
+            {isAnonymous ? (
+              <div className="flex items-center gap-2">
+                {linkPermission === 'view' ? (
+                  <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
+                    View only
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 rounded-full">
+                    Can edit
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => navigate('/login')}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+                >
+                  <LogIn size={14} />
+                  Sign in
+                </button>
+              </div>
+            ) : (
+              <div>
+                <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
+              </div>
+            )}
             <div className="flex items-center gap-2">
-              {linkPermission === 'view' ? (
-                <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
-                  View only
-                </span>
-              ) : (
-                <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 rounded-full">
-                  Can edit
-                </span>
-              )}
-              <button
-                type="button"
-                onClick={() => navigate('/login')}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
-              >
-                <LogIn size={14} />
-                Sign in
-              </button>
+              {!isAnonymous && <PageActions pageId={pageId} page={page} />}
+              {isAnonymous && <ThemeToggle />}
+              <PageStatus provider={provider} collabStatus={collabStatus} />
             </div>
-          ) : (
-            <div>
-              <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
-            </div>
-          )}
-          <div className="flex items-center gap-2">
-            {!isAnonymous && <PageActions pageId={pageId} page={page} />}
-            {isAnonymous && <ThemeToggle />}
-            <PageStatus provider={provider} collabStatus={collabStatus} />
           </div>
         </div>
-      </div>
 
-      <div className="mb-6">
-        <div className="relative flex-1 flex items-center mt-19">
-          <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
-            <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} readOnly={readOnly} />
-          </div>
-          <div className="pl-[54px] w-full">
-            <PageTitle
-              pageId={pageId}
-              initialTitle={page?.title ?? 'Untitled'}
-              ydoc={provider?.document ?? null}
-            />
+        <div className="mb-6">
+          <div className="relative flex-1 flex items-center mt-19">
+            <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
+              <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
+            </div>
+            <div className="pl-[54px] w-full">
+              <PageTitle
+                pageId={pageId}
+                initialTitle={page?.title ?? 'Untitled'}
+                ydoc={provider?.document ?? null}
+              />
+            </div>
           </div>
         </div>
+        <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
+        {page && pageId ? (
+          <MilkdownEditor
+            key={pageId}
+            pageId={pageId}
+            initialValue={decodePageContent(page.ydoc)}
+            onProviderReady={setProvider}
+            onStatusChange={handleStatusChange}
+            onWikiLinkClick={handleWikiLinkClick}
+          />
+        ) : null}
+        {!isAnonymous && <BacklinksPanel pageId={pageId} />}
+        <TableOfContents editorElement={editorElement} />
       </div>
-      <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
-      {page && pageId ? (
-        <MilkdownEditor
-          key={pageId}
-          pageId={pageId}
-          initialValue={decodePageContent(page.ydoc)}
-          onProviderReady={setProvider}
-          onStatusChange={handleStatusChange}
-          onWikiLinkClick={handleWikiLinkClick}
-          readOnly={linkPermission === 'view'}
-        />
-      ) : null}
-      {!isAnonymous && <BacklinksPanel pageId={pageId} />}
-      <TableOfContents editorElement={editorElement} />
-    </div>
+    </EditorReadOnlyProvider>
   );
 }

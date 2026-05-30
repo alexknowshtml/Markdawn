@@ -1,5 +1,6 @@
 import { FileText } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useUpdatePage } from '../../hooks/use-pages';
 import { showErrorToast } from '../../utils/toast';
 import { EmojiPicker } from '../EmojiPicker';
@@ -7,10 +8,10 @@ import { EmojiPicker } from '../EmojiPicker';
 interface PageIconProps {
   pageId: string;
   initialIcon: string | null;
-  readOnly?: boolean;
 }
 
-export function PageIcon({ pageId, initialIcon, readOnly = false }: PageIconProps) {
+export function PageIcon({ pageId, initialIcon }: PageIconProps) {
+  const readOnly = useIsReadOnly();
   const [icon, setIcon] = useState<string | null>(initialIcon);
   const updatePageMutation = useUpdatePage();
 

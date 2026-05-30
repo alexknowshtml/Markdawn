@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useAwareness } from '../../hooks/useAwareness';
@@ -42,7 +43,6 @@ interface MilkdownEditorProps {
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
   onWikiLinkClick?: (path: string) => void;
-  readOnly?: boolean;
 }
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
@@ -63,11 +63,11 @@ export function MilkdownEditor({
   onStatusChange,
   onProviderReady,
   onWikiLinkClick,
-  readOnly = false,
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), []);
   const editorRef = useRef<Editor | null>(null);
   const { isAnonymous } = useShareContext();
+  const isReadOnly = useIsReadOnly();
 
   const {
     suggestions,
@@ -245,7 +245,7 @@ export function MilkdownEditor({
     onSlashMenuSuggest: useCallback((isOpen, query, position, range) => {
       handleSlashMenuSuggestRef.current(isOpen, query, position, range);
     }, []),
-    readOnly,
+    readOnly: isReadOnly,
   });
 
   useAwareness(provider);
@@ -764,7 +764,7 @@ export function MilkdownEditor({
   // Helper: wraps an editor action so it only fires when the editor is focused,
   // and returns false to allow the next binding to handle the event otherwise.
   const ed = (action: () => void) => (): boolean => {
-    if (readOnly || !editorHasFocus()) return false;
+    if (isReadOnly || !editorHasFocus()) return false;
     action();
     return true;
   };
@@ -1015,7 +1015,7 @@ export function MilkdownEditor({
 
   return (
     <div className="editor-wrapper min-h-[500px] relative">
-      {!readOnly && (
+      {!isReadOnly && (
         <>
           <WikiLinkSuggestions
             isOpen={suggestions.isOpen}

@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useUpdatePage } from '../../hooks/use-pages';
 import { useTags } from '../../hooks/use-tags';
 
@@ -83,6 +84,7 @@ interface TagValueEditorProps {
 
 const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
   ({ tags, onChange, suggestions, onBlur }, ref) => {
+    const readOnly = useIsReadOnly();
     const [inputValue, setInputValue] = useState('');
     const [isFocused, setIsFocused] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
@@ -150,66 +152,70 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
             className="flex items-center gap-1 px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-[12px] rounded-full font-medium leading-none group/tag transition-colors"
           >
             {tag}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeTag(tag);
-              }}
-              className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
-            >
-              <X size={11} />
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeTag(tag);
+                }}
+                className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
+              >
+                <X size={11} />
+              </button>
+            )}
           </span>
         ))}
-        <div className="relative flex-1 min-w-[80px]">
-          <input
-            ref={ref}
-            type="text"
-            data-testid="tag-input"
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              setSelectedIndex(0);
-            }}
-            onKeyDown={handleKeyDown}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => {
-              setIsFocused(false);
-              if (onBlur) onBlur();
-            }}
-            placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
-            className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
-            style={{
-              border: 'none',
-              outline: 'none',
-              boxShadow: 'none',
-              background: 'transparent',
-            }}
-          />
-          {isFocused && filteredSuggestions.length > 0 && (
-            <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-              {filteredSuggestions.map((s, i) => (
-                <button
-                  key={s}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    addTag(s);
-                  }}
-                  className={clsx(
-                    'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
-                    i === selectedIndex
-                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
-                      : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
-                  )}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {!readOnly && (
+          <div className="relative flex-1 min-w-[80px]">
+            <input
+              ref={ref}
+              type="text"
+              data-testid="tag-input"
+              value={inputValue}
+              onChange={(e) => {
+                setInputValue(e.target.value);
+                setSelectedIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+              onFocus={() => setIsFocused(true)}
+              onBlur={() => {
+                setIsFocused(false);
+                if (onBlur) onBlur();
+              }}
+              placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
+              className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
+              style={{
+                border: 'none',
+                outline: 'none',
+                boxShadow: 'none',
+                background: 'transparent',
+              }}
+            />
+            {isFocused && filteredSuggestions.length > 0 && (
+              <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
+                {filteredSuggestions.map((s, i) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      addTag(s);
+                    }}
+                    className={clsx(
+                      'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
+                      i === selectedIndex
+                        ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                        : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
+                    )}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   },
@@ -231,6 +237,7 @@ function PropertyKeySelector({
   isEditing,
   setIsEditing,
 }: PropertyKeySelectorProps) {
+  const readOnly = useIsReadOnly();
   const [inputValue, setInputValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -307,8 +314,11 @@ function PropertyKeySelector({
     return (
       <button
         type="button"
-        onClick={() => setIsEditing(true)}
-        className="flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate cursor-text px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
+        onClick={() => !readOnly && setIsEditing(true)}
+        className={clsx(
+          'flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200',
+          readOnly ? 'cursor-default' : 'cursor-text',
+        )}
         style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
       >
         {IconComponent && <IconComponent size={15} className="text-zinc-400 shrink-0" />}
@@ -406,6 +416,7 @@ function SortablePropertyRow({
   isNew,
   tagSuggestions,
 }: SortablePropertyRowProps & { tagSuggestions: string[] }) {
+  const readOnly = useIsReadOnly();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
   });
@@ -472,13 +483,15 @@ function SortablePropertyRow({
           : 'hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40',
       )}
     >
-      <div
-        {...attributes}
-        {...listeners}
-        className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing p-1 -ml-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-opacity"
-      >
-        <GripVertical size={15} />
-      </div>
+      {!readOnly && (
+        <div
+          {...attributes}
+          {...listeners}
+          className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing p-1 -ml-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-opacity"
+        >
+          <GripVertical size={15} />
+        </div>
+      )}
 
       <PropertyKeySelector
         currentKey={item.key}
@@ -524,8 +537,11 @@ function SortablePropertyRow({
         ) : (
           <button
             type="button"
-            onClick={() => setIsEditingValue(true)}
-            className="flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate cursor-text px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
+            onClick={() => !readOnly && setIsEditingValue(true)}
+            className={clsx(
+              'flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200',
+              readOnly ? 'cursor-default' : 'cursor-text',
+            )}
             style={{
               border: 'none',
               outline: 'none',
@@ -553,15 +569,17 @@ function SortablePropertyRow({
         )}
       </div>
 
-      <button
-        type="button"
-        data-testid="delete-property"
-        onClick={() => onDelete(item.id)}
-        className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-400 hover:text-red-500 transition-all cursor-pointer rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 !outline-none !ring-0 !ring-offset-0 !focus:ring-0"
-        title="Delete property"
-      >
-        <Trash2 size={15} />
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          data-testid="delete-property"
+          onClick={() => onDelete(item.id)}
+          className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-400 hover:text-red-500 transition-all cursor-pointer rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 !outline-none !ring-0 !ring-offset-0 !focus:ring-0"
+          title="Delete property"
+        >
+          <Trash2 size={15} />
+        </button>
+      )}
     </div>
   );
 }
@@ -569,6 +587,7 @@ function SortablePropertyRow({
 // --- Main Component ---
 
 export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
+  const readOnly = useIsReadOnly();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [items, setItems] = useState<PropertyItem[]>([]);
   const [newPropertyId, setNewPropertyId] = useState<string | null>(null);
@@ -702,6 +721,15 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   };
 
   if (items.length === 0 && !isCollapsed) {
+    if (readOnly) {
+      return (
+        <div className="mb-6 animate-fade-in px-2">
+          <span className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-medium text-zinc-400 dark:text-zinc-500">
+            No properties
+          </span>
+        </div>
+      );
+    }
     return (
       <div className="mb-6 animate-fade-in px-2">
         <button
@@ -761,15 +789,17 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
             </SortableContext>
           </DndContext>
 
-          <button
-            type="button"
-            data-testid="add-property"
-            onClick={addProperty}
-            className="w-full flex items-center gap-2 px-2 py-2 mt-2 text-[13px] font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 rounded-lg transition-all cursor-pointer group border border-dashed border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
-          >
-            <Plus size={15} className="group-hover:scale-110 transition-transform" />
-            <span>Add a property</span>
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              data-testid="add-property"
+              onClick={addProperty}
+              className="w-full flex items-center gap-2 px-2 py-2 mt-2 text-[13px] font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 rounded-lg transition-all cursor-pointer group border border-dashed border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
+            >
+              <Plus size={15} className="group-hover:scale-110 transition-transform" />
+              <span>Add a property</span>
+            </button>
+          )}
         </div>
       )}
     </div>

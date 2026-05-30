@@ -1,6 +1,7 @@
 import type React from 'react';
 import { useCallback, useRef } from 'react';
 import type * as Y from 'yjs';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { usePageTitle } from '../../hooks/usePageTitle';
 
 interface PageTitleProps {
@@ -12,14 +13,16 @@ interface PageTitleProps {
 export function PageTitle({ pageId, initialTitle, ydoc }: PageTitleProps) {
   const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc);
   const inputRef = useRef<HTMLInputElement>(null);
+  const readOnly = useIsReadOnly();
 
   const handleBlurOrEnter = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement> | React.FocusEvent<HTMLInputElement>) => {
+      if (readOnly) return;
       if ('key' in e && e.key !== 'Enter') return;
       const liveValue = inputRef.current?.value ?? title;
       commitTitle(liveValue);
     },
-    [commitTitle, title],
+    [commitTitle, title, readOnly],
   );
 
   return (
@@ -27,7 +30,8 @@ export function PageTitle({ pageId, initialTitle, ydoc }: PageTitleProps) {
       ref={inputRef}
       type="text"
       value={title}
-      onChange={(e) => setTitle(e.target.value)}
+      readOnly={readOnly}
+      onChange={(e) => !readOnly && setTitle(e.target.value)}
       onBlur={handleBlurOrEnter}
       onKeyDown={handleBlurOrEnter}
       className="w-full font-bold leading-tight text-zinc-900 dark:text-zinc-50 bg-transparent outline-none placeholder:text-zinc-300 dark:placeholder:text-zinc-700 focus:ring-0 focus:border-transparent transition-colors break-words font-serif"
