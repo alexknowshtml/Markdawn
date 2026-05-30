@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
+import { useNavigate } from 'react-router-dom';
+import { useIsReadOnly, useSetReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
-import { useShareContext } from '../../contexts/ShareContext';
+import { useSetLinkPermission, useShareContext } from '../../contexts/ShareContext';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
@@ -10,6 +11,7 @@ import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import { getAnonymousId } from '../../utils/anonymous-cookie';
+import { showInfoToast } from '../../utils/toast';
 import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
@@ -68,6 +70,9 @@ export function MilkdownEditor({
   const editorRef = useRef<Editor | null>(null);
   const { isAnonymous } = useShareContext();
   const isReadOnly = useIsReadOnly();
+  const setReadOnly = useSetReadOnly();
+  const setLinkPermission = useSetLinkPermission();
+  const navigate = useNavigate();
 
   const {
     suggestions,
@@ -947,11 +952,35 @@ export function MilkdownEditor({
       logger.error`[collab] error: ${args}`;
     };
 
+    const handleStateless = ({ payload }: { payload: string }) => {
+      try {
+        const message = JSON.parse(payload) as { type?: string; permission?: string };
+        if (message.type === 'permission_changed') {
+          logger.info`[collab] permission changed: ${message.permission}`;
+          if (message.permission === 'view') {
+            setReadOnly(true);
+            setLinkPermission('view');
+            showInfoToast('This page is now view-only');
+          } else if (message.permission === 'edit') {
+            setReadOnly(false);
+            setLinkPermission('edit');
+            showInfoToast('You can now edit this page');
+          } else if (message.permission === 'private') {
+            showInfoToast('Access revoked');
+            navigate('/login');
+          }
+        }
+      } catch {
+        // Ignore non-JSON stateless messages
+      }
+    };
+
     provider.on('status', handleStatus);
     provider.on('sync', handleSync);
     provider.on('persisted', handlePersisted);
     provider.on('awareness', handleAwareness);
     provider.on('error', handleError);
+    provider.on('stateless', handleStateless);
 
     const onDocUpdate = (_update: Uint8Array, origin: unknown) => {
       logger.debug`[collab] doc update: origin=${String(origin)}, bytes=${_update.length}`;
@@ -972,6 +1001,7 @@ export function MilkdownEditor({
       provider.off('persisted', handlePersisted);
       provider.off('awareness', handleAwareness);
       provider.off('error', handleError);
+      provider.off('stateless', handleStateless);
       doc.off('update', onDocUpdate);
       logger.debug`[editor] disconnected: ${pageId}`;
     };
