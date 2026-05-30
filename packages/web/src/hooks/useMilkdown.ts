@@ -39,7 +39,7 @@ import type * as Y from 'yjs';
 import { getLogger } from '../logger-init';
 import { getInitial } from '../utils/avatar';
 
-const cursorBuilder = (user: { name: string; color: string; avatar?: string }) => {
+const cursorBuilder = (user: { name: string; color: string; avatar?: string; emoji?: string }) => {
   const cursor = document.createElement('span');
   cursor.classList.add('ProseMirror-yjs-cursor');
   cursor.style.borderColor = user.color;
@@ -60,6 +60,18 @@ const cursorBuilder = (user: { name: string; color: string; avatar?: string }) =
     img.alt = user.name;
     img.referrerPolicy = 'no-referrer';
     pill.appendChild(img);
+  } else if (user.emoji) {
+    const wrapper = document.createElement('span');
+    wrapper.style.width = '20px';
+    wrapper.style.height = '20px';
+    wrapper.style.borderRadius = '50%';
+    wrapper.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+    wrapper.style.display = 'inline-flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.fontSize = '14px';
+    wrapper.innerText = user.emoji;
+    pill.appendChild(wrapper);
   } else {
     const initials = document.createElement('div');
     initials.classList.add('ProseMirror-yjs-cursor-initials');
