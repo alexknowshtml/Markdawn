@@ -363,6 +363,14 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
         [entityId],
       );
     }
+
+    // Notify collab server to disconnect anonymous users
+    if (entityType === 'page') {
+      await pool.query("SELECT pg_notify('share_permission_changed', $1)", [
+        JSON.stringify({ pageId: entityId, permission: 'private' }),
+      ]);
+    }
+
     return c.json({ permission: 'private', token: null, url: null });
   }
 
@@ -391,6 +399,13 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
       'update pages set is_public = true, public_token = $1, updated_at = now() where id = $2',
       [token, entityId],
     );
+  }
+
+  // Notify collab server of permission change (e.g., edit → view downgrade)
+  if (entityType === 'page') {
+    await pool.query("SELECT pg_notify('share_permission_changed', $1)", [
+      JSON.stringify({ pageId: entityId, permission: nextPermission }),
+    ]);
   }
 
   return c.json({
