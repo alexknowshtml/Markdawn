@@ -1,5 +1,5 @@
 import type { Hocuspocus } from '@hocuspocus/server';
-import { Server } from '@hocuspocus/server';
+import { type Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import { getAnonymousName } from '@markdawn/shared';
 import {
@@ -853,13 +853,35 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(`[listen] removed deleted page ${pageId} from meta room`);
     }
 
-    async function handleShareRevoked(pageId: string): Promise<void> {
-      logger.info(`[listen] share revoked for page ${pageId}`);
-      const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
-      if (activeDoc) {
-        logger.debug(
-          `[listen] page ${pageId} has active document, anonymous users will be disconnected on next auth check`,
-        );
+    async function handleSharePermissionChanged(pageId: string, permission: string): Promise<void> {
+      logger.info(`[listen] share permission changed for page ${pageId}: ${permission}`);
+      const activeDoc = server.hocuspocus.documents.get(pageId) as Document | undefined;
+      if (!activeDoc) return;
+
+      const connections = activeDoc.getConnections();
+      for (const connection of connections) {
+        const ctx = connection.context as { user?: { isAnonymous?: boolean } } | undefined;
+        if (!ctx?.user?.isAnonymous) continue;
+
+        if (permission === 'private') {
+          logger.debug(`[listen] revoking anonymous access on page ${pageId}`);
+          connection.sendStateless(
+            JSON.stringify({ type: 'permission_changed', permission: 'private' }),
+          );
+          connection.close({ code: 4401, reason: 'Access revoked' });
+        } else if (permission === 'view') {
+          logger.debug(`[listen] setting anonymous connection to read-only on page ${pageId}`);
+          connection.readOnly = true;
+          connection.sendStateless(
+            JSON.stringify({ type: 'permission_changed', permission: 'view' }),
+          );
+        } else if (permission === 'edit') {
+          logger.debug(`[listen] granting anonymous edit access on page ${pageId}`);
+          connection.readOnly = false;
+          connection.sendStateless(
+            JSON.stringify({ type: 'permission_changed', permission: 'edit' }),
+          );
+        }
       }
     }
 
@@ -889,15 +911,16 @@ export function createCollabServer(config: CollabServerConfig) {
         await client.connect();
         await client.query('LISTEN page_renamed');
         await client.query('LISTEN page_deleted');
-        await client.query('LISTEN share_revoked');
+        await client.query('LISTEN share_permission_changed');
 
         client.on('notification', (msg) => {
           try {
             const payload = JSON.parse(msg.payload ?? '{}') as {
               pageId?: string;
               newTitle?: string;
+              permission?: string;
             };
-            const { pageId, newTitle } = payload;
+            const { pageId, newTitle, permission } = payload;
             if (!pageId) return;
 
             if (msg.channel === 'page_deleted') {
@@ -908,9 +931,9 @@ export function createCollabServer(config: CollabServerConfig) {
               void handlePageRenamed(pageId, newTitle).catch((err) =>
                 logger.error(`[listen] handlePageRenamed failed: ${err}`),
               );
-            } else if (msg.channel === 'share_revoked') {
-              void handleShareRevoked(pageId).catch((err) =>
-                logger.error(`[listen] handleShareRevoked failed: ${err}`),
+            } else if (msg.channel === 'share_permission_changed' && permission) {
+              void handleSharePermissionChanged(pageId, permission).catch((err) =>
+                logger.error(`[listen] handleSharePermissionChanged failed: ${err}`),
               );
             }
           } catch (err) {
@@ -930,7 +953,9 @@ export function createCollabServer(config: CollabServerConfig) {
 
         listenClient = client;
         reconnectAttempts = 0;
-        logger.info('[listen] subscribed to page_renamed, page_deleted, and share_revoked');
+        logger.info(
+          '[listen] subscribed to page_renamed, page_deleted, and share_permission_changed',
+        );
       } catch (err) {
         logger.error(`[listen] connection failed: ${err}`);
         listenClient = null;
