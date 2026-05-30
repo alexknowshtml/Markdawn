@@ -2,6 +2,7 @@ import type { ShareEntityType, SharePermission } from '@markdawn/shared';
 import { Check, Copy, Globe2, Lock, Mail, Trash2, UserRound, X } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   useInviteToEntity,
   useRemoveShare,
@@ -50,7 +51,7 @@ export function PublicShareDialog({
 
   const overlayStyle: React.CSSProperties = anchorRect
     ? {
-        left: `${Math.min(Math.max(16, anchorRect.right - 440), window.innerWidth - 456)}px`,
+        left: `${Math.max(16, anchorRect.right - 440)}px`,
         top: `${Math.min(anchorRect.bottom + 10, window.innerHeight - 520)}px`,
       }
     : {
@@ -93,7 +94,7 @@ export function PublicShareDialog({
     setEmail('');
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 pointer-events-none">
       <button
         type="button"
@@ -289,6 +290,7 @@ export function PublicShareDialog({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
