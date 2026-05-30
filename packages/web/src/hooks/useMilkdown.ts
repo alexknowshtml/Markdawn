@@ -454,6 +454,7 @@ export function useMilkdown({
 
                 const taskItem = target.closest('li[data-item-type="task"]');
                 if (taskItem instanceof HTMLElement) {
+                  if (readOnly) return false;
                   const rect = taskItem.getBoundingClientRect();
                   const clickX = event.clientX - rect.left;
                   const clickY = event.clientY - rect.top;
