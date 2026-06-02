@@ -9,4 +9,5 @@
    - Collab: `node /app/packages/collab/dist/index.js`
 4. **SPA serving**: API container does NOT serve static files. Caddy serves `packages/web/dist` directly.
 5. **PostgreSQL in pod**: port 5432 mapped to `127.0.0.1:5432`. Containers connect via `localhost:5432`.
-6. **db:push after restart**: run `pnpm --filter @markdawn/api db:push` after service restart to sync schema.
+6. **Schema sync**: `setup.sh` runs `db:migrate` followed by a `podman exec` to add any columns that aren't covered by migrations (e.g. `properties` on `pages`). No need to run `db:push` manually.
+7. **Migration cleanup pending**: Issue [#102](https://github.com/atharva-again/Markdawn/issues/102) tracks two schema gaps that need proper migrations after `feat/share-ui` merges. Until then, `setup.sh` has raw SQL workarounds.
