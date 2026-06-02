@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { pool } from '../db/connection';
 import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 describe('pages API', () => {
@@ -524,6 +525,131 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.deleted).toBe(true);
+    });
+  });
+
+  describe('POST /api/pages/:id/leave', () => {
+    it('returns 401 without session', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const page = await createTestPage(user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/leave`, {
+        method: 'POST',
+      });
+      expect(res.status).toBe(401);
+    });
+
+    it('returns 400 when user owns the page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/leave`, {
+        method: 'POST',
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body.message).toContain('Cannot leave your own page');
+    });
+
+    it('returns 404 for non-existent page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const res = await app.request('/api/pages/00000000-0000-0000-0000-000000000000/leave', {
+        method: 'POST',
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+      expect(res.status).toBe(404);
+    });
+
+    it('removes share row for email-invited page', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(recipient.id);
+      const page = await createTestPage(owner.id);
+
+      await pool.query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, recipient.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/leave`, {
+        method: 'POST',
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.ok).toBe(true);
+
+      const shareCheck = await pool.query(
+        `SELECT id FROM shares WHERE entity_id = $1 AND recipient_user_id = $2`,
+        [page.id, recipient.id],
+      );
+      expect(shareCheck.rowCount).toBe(0);
+    });
+
+    it('removes page_access_events row for link-joined page', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(owner.id);
+
+      await pool.query(
+        `INSERT INTO page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
+         VALUES ($1, $2, 'link', 'test-token', 'view', now(), now())`,
+        [page.id, user.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/leave`, {
+        method: 'POST',
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
+
+      const paeCheck = await pool.query(
+        `SELECT id FROM page_access_events WHERE page_id = $1 AND user_id = $2`,
+        [page.id, user.id],
+      );
+      expect(paeCheck.rowCount).toBe(0);
+    });
+
+    it('is idempotent when no share/pae row exists', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const stranger = await createTestUser();
+      const session = await createTestSession(stranger.id);
+      const page = await createTestPage(owner.id);
+
+      const res = await app.request(`/api/pages/${page.id}/leave`, {
+        method: 'POST',
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+      expect(res.status).toBe(200);
+      expect((await res.json()).ok).toBe(true);
     });
   });
 });

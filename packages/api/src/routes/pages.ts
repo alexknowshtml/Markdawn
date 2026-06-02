@@ -16,6 +16,7 @@ import {
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
 import { ensureCanManageEntity, ensureFolderAccess, ensurePageAccess } from '../utils/share-access';
+import { notifyShareRevoke } from '../utils/share-notify';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -90,6 +91,10 @@ pagesRoute.get('/tree', async (c) => {
           or exists (
             select 1 from shares s
             where s.entity_type = 'page' and s.entity_id = p.id and s.recipient_user_id = $1
+          )
+          or exists (
+            select 1 from page_access_events pae
+            where pae.page_id = p.id and pae.user_id = $1
           )
           or p.parent_id in (select id from shared_folders)
         )
@@ -653,6 +658,42 @@ pagesRoute.delete(':id', async (c) => {
   await pool.query('select pg_notify($1, $2)', ['page_deleted', JSON.stringify({ pageId })]);
 
   return c.json({ deleted: true });
+});
+
+pagesRoute.post(':id/leave', async (c) => {
+  const pageId = c.req.param('id');
+  const page = await getPageById(pageId);
+
+  if (!page) {
+    throw new HTTPException(404, { message: 'Page not found' });
+  }
+
+  const user = c.get('user') as { id: string };
+
+  if (page.createdBy === user.id) {
+    throw new HTTPException(400, { message: 'Cannot leave your own page' });
+  }
+
+  const shareResult = await pool.query(
+    "delete from shares where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
+    [pageId, user.id],
+  );
+
+  await pool.query(
+    'delete from page_access_events where page_id = $1 and user_id = $2',
+    [pageId, user.id],
+  );
+
+  const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+  if (shareRow?.recipient_user_id) {
+    await notifyShareRevoke({
+      entityType: 'page',
+      entityId: pageId,
+      targetUserId: shareRow.recipient_user_id,
+    });
+  }
+
+  return c.json({ ok: true });
 });
 
 pagesRoute.post(':id/copy', async (c) => {
