@@ -32,6 +32,7 @@ import {
 } from '../hooks/use-folders';
 import { usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, useDeletePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { useAuth } from '../hooks/useAuth';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 import { buildPagePath } from '../utils/url';
 
@@ -48,6 +49,8 @@ export default function HomeView() {
   } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: favorites } = useFavorites();
+  const { data: session } = useAuth();
+  const currentUserId = session?.user?.id;
 
   const favoritePageIds = useMemo(
     () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
@@ -70,6 +73,13 @@ export default function HomeView() {
 
   const clipboard = useClipboard();
   const selection = useSelection();
+
+  const filterOutSelf = useMemo(
+    () =>
+      <T extends { userId?: string }>(collaborators: T[]): T[] =>
+        currentUserId ? collaborators.filter((c) => c.userId !== currentUserId) : collaborators,
+    [currentUserId],
+  );
 
   const [viewMode, setViewMode] = useState<'card' | 'list'>(() => {
     const saved = localStorage.getItem('markdawn:viewMode');
@@ -573,7 +583,7 @@ export default function HomeView() {
                     {...(item.type === 'page'
                       ? { onExport: () => void handleExport(item.id, item.title) }
                       : {})}
-                    collaborators={item.collaborators ?? []}
+                    collaborators={filterOutSelf(item.collaborators ?? [])}
                   />
                 ))}
               </div>
@@ -616,7 +626,7 @@ export default function HomeView() {
                   }
                   onEditSave={() => void handleSaveRename()}
                   onEditKeyDown={handleEditKeyDown}
-                  collaborators={item.collaborators ?? []}
+                  collaborators={filterOutSelf(item.collaborators ?? [])}
                 />
               ))}
             </div>
@@ -665,7 +675,7 @@ export default function HomeView() {
                             onExport: () => void handleExport(item.id, item.title),
                           }
                         : {})}
-                      collaborators={item.collaborators ?? []}
+                      collaborators={filterOutSelf(item.collaborators ?? [])}
                       showCheckboxes={hasSelection}
                     />
                   ))}
@@ -716,7 +726,7 @@ export default function HomeView() {
                     }
                     onEditSave={() => void handleSaveRename()}
                     onEditKeyDown={handleEditKeyDown}
-                    collaborators={item.collaborators ?? []}
+                    collaborators={filterOutSelf(item.collaborators ?? [])}
                     showCheckboxes={hasSelection}
                   />
                 ))}
