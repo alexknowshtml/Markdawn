@@ -1,13 +1,22 @@
 import { type CapabilitySet, deriveCapabilities } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
+import { ShieldOff } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { ShareProvider } from '../../contexts/ShareContext';
 import { useAuth } from '../../hooks/useAuth';
+import { ApiError } from '../../utils/api';
 
 async function fetchPagePublic(pageId: string) {
   const res = await fetch(`/api/pages/${pageId}`);
-  if (!res.ok) throw new Error('Failed to fetch page');
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message =
+      body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
+        ? body.message
+        : 'Failed to fetch page';
+    throw new ApiError(res.status, message);
+  }
   return res.json();
 }
 
@@ -31,7 +40,14 @@ type SharesResponse = {
 
 async function fetchPageShares(pageId: string): Promise<SharesResponse> {
   const res = await fetch(`/api/shares/entity/page/${pageId}`);
-  if (!res.ok) throw new Error('Failed to fetch share info');
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const message =
+      body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
+        ? body.message
+        : 'Failed to fetch share info';
+    throw new ApiError(res.status, message);
+  }
   return res.json();
 }
 
@@ -50,7 +66,11 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const pageId = slugAndId ? extractPageId(slugAndId) : null;
 
-  const { data: page, isLoading: pageLoading } = useQuery({
+  const {
+    data: page,
+    isLoading: pageLoading,
+    error: pageError,
+  } = useQuery({
     queryKey: ['pages', 'detail', pageId],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');
@@ -64,7 +84,11 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
   // shares API — this reuses the same endpoint the share dialog uses.
   // We block rendering until it resolves so the initial linkPermission is
   // correct, avoiding a flash of editable state (same as the anonymous path).
-  const { data: sharesData, isLoading: sharesLoading } = useQuery({
+  const {
+    data: sharesData,
+    isLoading: sharesLoading,
+    error: sharesError,
+  } = useQuery({
     queryKey: ['shares', 'entity', 'page', pageId],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');
@@ -89,6 +113,27 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
         </div>
       </div>
     );
+  }
+
+  if (session?.user && sharesError instanceof ApiError && sharesError.status === 403) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
+        <div className="flex flex-col items-center gap-4 text-center max-w-md p-8">
+          <ShieldOff size={48} className="text-zinc-300 dark:text-zinc-600" />
+          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            You don&apos;t have access
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            Your access to this page may have been removed. Contact the page owner to request
+            access.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session?.user && pageError instanceof ApiError && pageError.status === 403) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
   if (session?.user) {

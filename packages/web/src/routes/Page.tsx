@@ -2,7 +2,7 @@ import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { LogIn } from 'lucide-react';
+import { LogIn, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
@@ -19,6 +19,7 @@ import { EditorReadOnlyProvider } from '../contexts/EditorReadOnlyContext';
 import { useShareContext } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
+import { ApiError } from '../utils/api';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
@@ -26,7 +27,12 @@ const API_BASE = '/api';
 async function fetchPage(pageId: string): Promise<PageType> {
   const res = await fetch(`${API_BASE}/pages/${pageId}`);
   if (!res.ok) {
-    throw new Error('Failed to fetch page');
+    const body = await res.json().catch(() => null);
+    const message =
+      body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
+        ? body.message
+        : 'Failed to fetch page';
+    throw new ApiError(res.status, message);
   }
   return res.json();
 }
@@ -241,6 +247,22 @@ export default function Page({ linkPermission = null }: PageProps) {
   }
 
   if (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      return (
+        <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 animate-fade-in">
+          <div className="flex flex-col items-center gap-4 text-center py-16">
+            <ShieldOff size={48} className="text-zinc-300 dark:text-zinc-600" />
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              You don&apos;t have access
+            </h2>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              Your access to this page may have been removed. Contact the page owner to request
+              access.
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 text-zinc-400 animate-fade-in">
         Page not found.
