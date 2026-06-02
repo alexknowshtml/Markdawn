@@ -62,6 +62,7 @@ export interface EntityAccessor {
   userId: string;
   name: string | null;
   email: string | null;
+  avatarUrl: string | null;
   permission: SharePermission;
   source: string;
   isOwner: boolean;
