@@ -9,6 +9,7 @@ import Home from './routes/Home';
 import Login from './routes/Login';
 import PageEntry from './routes/PageEntry';
 import Settings from './routes/Settings';
+import Trash from './routes/Trash';
 
 function App() {
   return (
@@ -31,6 +32,7 @@ function App() {
             >
               <Route index element={<Dashboard />} />
               <Route path="settings" element={<Settings />} />
+              <Route path="trash" element={<Trash />} />
             </Route>
 
             <Route

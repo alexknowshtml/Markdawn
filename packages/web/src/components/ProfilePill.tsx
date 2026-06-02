@@ -8,12 +8,10 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTrashPages } from '../hooks/use-pages';
 import { useAuth } from '../hooks/useAuth';
 import { authClient } from '../lib/auth-client';
-import { TrashView } from './sidebar/TrashView';
 import { ThemeToggle } from './ThemeToggle';
 import { Tooltip } from './Tooltip';
 
@@ -33,7 +31,6 @@ export function ProfilePill({
   const navigate = useNavigate();
 
   const { data: session } = useAuth();
-  const [showTrashModal, setShowTrashModal] = useState(false);
 
   const { data: trashPages } = useTrashPages();
 
@@ -125,7 +122,7 @@ export function ProfilePill({
             <Tooltip label="Trash" position="top">
               <button
                 type="button"
-                onClick={() => setShowTrashModal(true)}
+                onClick={() => navigate('/app/trash')}
                 className="relative p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
               >
                 <Trash2 size={18} />
@@ -194,8 +191,6 @@ export function ProfilePill({
           </div>
         </div>
       </div>
-
-      {showTrashModal && <TrashView onClose={() => setShowTrashModal(false)} />}
     </>
   );
 }
