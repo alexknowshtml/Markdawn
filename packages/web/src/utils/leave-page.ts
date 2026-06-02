@@ -34,10 +34,7 @@ export function markSelfLeave(pageId: string): void {
  * Returns false for admin-initiated revokes or stale flags.
  */
 export function consumeSelfLeave(pageId: string): boolean {
-  if (
-    selfLeavePageId === pageId &&
-    Date.now() - selfLeaveTimestamp < SELF_LEAVE_WINDOW_MS
-  ) {
+  if (selfLeavePageId === pageId && Date.now() - selfLeaveTimestamp < SELF_LEAVE_WINDOW_MS) {
     selfLeavePageId = null;
     selfLeaveTimestamp = 0;
     return true;

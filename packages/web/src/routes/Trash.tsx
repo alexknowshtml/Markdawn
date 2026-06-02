@@ -103,9 +103,7 @@ export default function Trash() {
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
                       Deleted{' '}
-                      {page.deletedAt
-                        ? new Date(page.deletedAt).toLocaleDateString()
-                        : 'Unknown'}
+                      {page.deletedAt ? new Date(page.deletedAt).toLocaleDateString() : 'Unknown'}
                     </p>
                   </div>
                 </div>

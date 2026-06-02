@@ -28,9 +28,9 @@ import {
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { useAuth } from '../../hooks/useAuth';
+import { markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
-import { markSelfLeave } from '../../utils/leave-page';
 import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { PageTreeRow } from './PageTreeRow';
 

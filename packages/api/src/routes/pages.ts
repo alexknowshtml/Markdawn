@@ -679,10 +679,10 @@ pagesRoute.post(':id/leave', async (c) => {
     [pageId, user.id],
   );
 
-  await pool.query(
-    'delete from page_access_events where page_id = $1 and user_id = $2',
-    [pageId, user.id],
-  );
+  await pool.query('delete from page_access_events where page_id = $1 and user_id = $2', [
+    pageId,
+    user.id,
+  ]);
 
   const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
   if (shareRow?.recipient_user_id) {
