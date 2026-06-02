@@ -1,7 +1,7 @@
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LogIn } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -54,6 +54,7 @@ export default function Page({ linkPermission = null }: PageProps) {
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
+  const queryClient = useQueryClient();
 
   // Clear state on page navigation.
   // Skip when pageId transitions from undefined → UUID (initialization, not navigation)
@@ -124,12 +125,17 @@ export default function Page({ linkPermission = null }: PageProps) {
       return;
     }
     accessRecordedRef.current = pageId;
-    void fetch(`/api/pages/${pageId}/access`, {
+    fetch(`/api/pages/${pageId}/access`, {
       method: 'POST',
-    }).catch(() => {
-      void 0;
-    });
-  }, [page?.isPublic, pageId]);
+    })
+      .then(() => {
+        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      })
+      .catch(() => {
+        void 0;
+      });
+  }, [page?.isPublic, pageId, queryClient]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
@@ -178,7 +184,7 @@ export default function Page({ linkPermission = null }: PageProps) {
 
   const { data: pageTree } = usePageTree();
   const { data: folderTree } = useFolderTree();
-  const { isAnonymous } = useShareContext();
+  const { isAnonymous, capabilities } = useShareContext();
 
   const flatPages = useMemo(() => {
     if (isAnonymous) return [];
@@ -256,31 +262,25 @@ export default function Page({ linkPermission = null }: PageProps) {
         <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl">
           <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400">
             {isAnonymous ? (
-              <div className="flex items-center gap-2">
-                {linkPermission === 'view' ? (
-                  <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
-                    View only
-                  </span>
-                ) : (
-                  <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/30 rounded-full">
-                    Can edit
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => navigate('/login')}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
-                >
-                  <LogIn size={14} />
-                  Sign in
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => navigate('/login')}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-lg transition-colors cursor-pointer"
+              >
+                <LogIn size={14} />
+                Sign in
+              </button>
             ) : (
               <div>
                 <Breadcrumbs pages={flatPages} folders={flatFolders} currentPageId={pageId} />
               </div>
             )}
             <div className="flex items-center gap-2">
+              {!capabilities.canEdit && (
+                <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
+                  View only
+                </span>
+              )}
               {!isAnonymous && <PageActions pageId={pageId} page={page} />}
               {isAnonymous && <ThemeToggle />}
               <PageStatus provider={provider} collabStatus={collabStatus} />

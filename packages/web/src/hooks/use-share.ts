@@ -123,6 +123,38 @@ export function useInviteToEntity() {
   });
 }
 
+async function updateSharePermission({
+  shareId,
+  permission,
+}: {
+  shareId: string;
+  permission: SharePermission;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/shares/${shareId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ permission }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to update permission' }));
+    throw new Error(error.message);
+  }
+}
+
+export function useUpdateSharePermission() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateSharePermission,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
+      showSuccessToast('Permission updated');
+    },
+    onError: (error: Error) => {
+      showErrorToast(error.message);
+    },
+  });
+}
+
 export function useRemoveShare() {
   const queryClient = useQueryClient();
   return useMutation({

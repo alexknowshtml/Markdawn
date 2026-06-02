@@ -1,3 +1,4 @@
+import { type CapabilitySet, deriveCapabilities } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactNode } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
@@ -7,6 +8,30 @@ import { useAuth } from '../../hooks/useAuth';
 async function fetchPagePublic(pageId: string) {
   const res = await fetch(`/api/pages/${pageId}`);
   if (!res.ok) throw new Error('Failed to fetch page');
+  return res.json();
+}
+
+type Accessor = {
+  shareId: string | null;
+  userId: string;
+  name: string | null;
+  email: string | null;
+  permission: 'view' | 'edit' | 'admin';
+  source: string;
+  isOwner: boolean;
+};
+
+type SharesResponse = {
+  entity: { type: string; id: string; title: string; ownerId: string | null };
+  link: { permission: 'view' | 'edit' | 'private'; token: string | null; url: string | null };
+  accessors: Accessor[];
+  userPermission: 'view' | 'edit' | 'admin' | null;
+  capabilities: CapabilitySet;
+};
+
+async function fetchPageShares(pageId: string): Promise<SharesResponse> {
+  const res = await fetch(`/api/shares/entity/page/${pageId}`);
+  if (!res.ok) throw new Error('Failed to fetch share info');
   return res.json();
 }
 
@@ -35,7 +60,26 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
     retry: false,
   });
 
-  if (authPending || (!session?.user && pageLoading)) {
+  // For authenticated users, fetch their effective page permission from the
+  // shares API — this reuses the same endpoint the share dialog uses.
+  // We block rendering until it resolves so the initial linkPermission is
+  // correct, avoiding a flash of editable state (same as the anonymous path).
+  const { data: sharesData, isLoading: sharesLoading } = useQuery({
+    queryKey: ['shares', 'entity', 'page', pageId],
+    queryFn: () => {
+      if (!pageId) throw new Error('pageId is required');
+      return fetchPageShares(pageId);
+    },
+    enabled: !authPending && !!pageId && !!session?.user,
+    retry: false,
+  });
+
+  // Wait for auth + the relevant data query before rendering anything.
+  // The anonymous path waits for page data; the authenticated path waits
+  // for shares data (which contains the user's effective permission).
+  const isLoading = authPending || sharesLoading || (!session?.user && pageLoading);
+
+  if (isLoading) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
         <div className="flex flex-col items-center gap-4 w-full max-w-md p-8">
@@ -48,7 +92,14 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
   }
 
   if (session?.user) {
-    return <ShareProvider linkPermission={null}>{children}</ShareProvider>;
+    const permission = sharesData?.userPermission ?? null;
+    const capabilities = sharesData?.capabilities ?? deriveCapabilities(permission);
+    const linkPermission = permission === 'admin' ? 'edit' : permission;
+    return (
+      <ShareProvider linkPermission={linkPermission} capabilities={capabilities}>
+        {children}
+      </ShareProvider>
+    );
   }
 
   if (!pageId) {

@@ -79,17 +79,15 @@ export function Breadcrumbs({ pages, folders, currentPageId }: BreadcrumbsProps)
             <React.Fragment key={item.id}>
               <ChevronRight size={14} className="text-zinc-300 dark:text-zinc-600 shrink-0" />
               {isLast ? (
-                <span className="text-zinc-900 dark:text-zinc-100 truncate max-w-[200px] px-1.5 py-0.5">
+                <span className="text-zinc-900 dark:text-zinc-100 px-1.5 py-0.5">
                   {item.title || 'Untitled'}
                 </span>
               ) : item.isFolder ? (
-                <span className="text-zinc-600 dark:text-zinc-400 truncate max-w-[150px] px-1.5 py-0.5">
-                  {item.title}
-                </span>
+                <span className="text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5">{item.title}</span>
               ) : (
                 <Link
                   to={buildPagePath(item.title, item.id)}
-                  className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors px-1.5 py-0.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50 truncate max-w-[150px]"
+                  className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors px-1.5 py-0.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
                 >
                   {item.title || 'Untitled'}
                 </Link>

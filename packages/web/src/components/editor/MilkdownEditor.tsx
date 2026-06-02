@@ -1,8 +1,13 @@
+import { deriveCapabilities } from '@markdawn/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useIsReadOnly, useSetReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
-import { useSetLinkPermission, useShareContext } from '../../contexts/ShareContext';
+import {
+  useSetCapabilities,
+  useSetLinkPermission,
+  useShareContext,
+} from '../../contexts/ShareContext';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
@@ -12,6 +17,7 @@ import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import { getAnonymousId } from '../../utils/anonymous-cookie';
 import { showInfoToast } from '../../utils/toast';
+import { consumeSelfLeave } from '../../utils/leave-page';
 import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
@@ -72,6 +78,7 @@ export function MilkdownEditor({
   const isReadOnly = useIsReadOnly();
   const setReadOnly = useSetReadOnly();
   const setLinkPermission = useSetLinkPermission();
+  const setCapabilities = useSetCapabilities();
   const navigate = useNavigate();
 
   const {
@@ -954,20 +961,58 @@ export function MilkdownEditor({
 
     const handleStateless = ({ payload }: { payload: string }) => {
       try {
-        const message = JSON.parse(payload) as { type?: string; permission?: string };
+        const message = JSON.parse(payload) as Record<string, unknown>;
+
+        // Old format (backward compat during rollout): { type: 'permission_changed', permission }
         if (message.type === 'permission_changed') {
-          logger.info`[collab] permission changed: ${message.permission}`;
-          if (message.permission === 'view') {
+          const permission = message.permission as string | undefined;
+          logger.info`[collab] permission changed: ${permission}`;
+          if (permission === 'view') {
             setReadOnly(true);
             setLinkPermission('view');
+            setCapabilities(deriveCapabilities('view'));
             showInfoToast('This page is now view-only');
-          } else if (message.permission === 'edit') {
+          } else if (permission === 'edit') {
             setReadOnly(false);
             setLinkPermission('edit');
+            setCapabilities(deriveCapabilities('edit'));
             showInfoToast('You can now edit this page');
-          } else if (message.permission === 'private') {
-            showInfoToast('Access revoked');
-            navigate('/login');
+          } else if (permission === 'private') {
+            if (!consumeSelfLeave(pageId)) {
+              showInfoToast('Removed from your view');
+            }
+            navigate('/');
+          }
+          return;
+        }
+
+        // New unified format: { type: 'share_event', action, permission }
+        if (message.type === 'share_event') {
+          const action = message.action as string | undefined;
+          const permission = message.permission as string | undefined;
+          logger.info`[collab] share event: action=${action} permission=${permission}`;
+          if (action === 'revoke') {
+            if (!consumeSelfLeave(pageId)) {
+              showInfoToast('Removed from your view');
+            }
+            navigate('/');
+          } else if (action === 'grant' || action === 'update') {
+            if (permission === 'view') {
+              setReadOnly(true);
+              setLinkPermission('view');
+              setCapabilities(deriveCapabilities('view'));
+              showInfoToast('This page is now view-only');
+            } else if (permission === 'edit') {
+              setReadOnly(false);
+              setLinkPermission('edit');
+              setCapabilities(deriveCapabilities('edit'));
+              showInfoToast('You can now edit this page');
+            } else if (permission === 'admin') {
+              setReadOnly(false);
+              setLinkPermission('edit');
+              setCapabilities(deriveCapabilities('admin'));
+              showInfoToast('You are now an admin');
+            }
           }
         }
       } catch {

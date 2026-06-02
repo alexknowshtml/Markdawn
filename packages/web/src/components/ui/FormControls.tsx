@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { Check, ChevronDown } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type TextBoxProps = {
   value: string;
@@ -71,7 +72,8 @@ export function Dropdown<TValue extends string>({
   triggerClassName,
 }: DropdownProps<TValue>) {
   const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
 
   const currentLabel = useMemo(
     () => options.find((option) => option.value === value)?.label ?? '',
@@ -79,23 +81,35 @@ export function Dropdown<TValue extends string>({
   );
 
   useEffect(() => {
+    if (!open || !triggerRef.current) return;
+    const rect = triggerRef.current.getBoundingClientRect();
+    setMenuStyle({
+      position: 'fixed',
+      left: rect.left,
+      top: rect.bottom + 4,
+      minWidth: Math.max(rect.width, 80),
+    });
+  }, [open]);
+
+  useEffect(() => {
     if (!open) return;
 
-    const handleOutsideClick = (event: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(event.target as Node)) {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (triggerRef.current && !triggerRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
 
-    document.addEventListener('mousedown', handleOutsideClick);
+    document.addEventListener('mousedown', handleClickOutside);
     return () => {
-      document.removeEventListener('mousedown', handleOutsideClick);
+      document.removeEventListener('mousedown', handleClickOutside);
     };
   }, [open]);
 
   return (
-    <div ref={rootRef} className={clsx('relative inline-flex items-center', className)}>
+    <div className={clsx('inline-flex items-center', className)}>
       <button
+        ref={triggerRef}
         type="button"
         disabled={disabled}
         onClick={() => setOpen((prev) => !prev)}
@@ -111,33 +125,40 @@ export function Dropdown<TValue extends string>({
         />
       </button>
 
-      {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 min-w-full overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900">
-          {options.map((option) => {
-            const active = option.value === value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  onChange(option.value);
-                  setOpen(false);
-                }}
-                className={clsx(
-                  'flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer',
-                  active
-                    ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100'
-                    : 'text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/50',
-                )}
-              >
-                <span className="truncate">{option.label}</span>
-                {active ? <Check size={14} className="shrink-0 text-zinc-500" /> : null}
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {open &&
+        createPortal(
+          <div
+            style={menuStyle}
+            className="z-50 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            {options.map((option) => {
+              const active = option.value === value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onChange(option.value);
+                    setOpen(false);
+                  }}
+                  className={clsx(
+                    'flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left text-xs transition-colors cursor-pointer',
+                    active
+                      ? 'bg-zinc-100 text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100'
+                      : 'text-zinc-700 hover:bg-zinc-50 dark:text-zinc-300 dark:hover:bg-zinc-800/50',
+                  )}
+                >
+                  <span className="truncate">{option.label}</span>
+                  {active ? <Check size={14} className="shrink-0 text-zinc-500" /> : null}
+                </button>
+              );
+            })}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

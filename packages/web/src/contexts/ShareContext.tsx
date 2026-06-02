@@ -1,4 +1,4 @@
-import { getAnonymousName } from '@markdawn/shared';
+import { type CapabilitySet, deriveCapabilities, getAnonymousName } from '@markdawn/shared';
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getAnonymousId } from '../utils/anonymous-cookie';
@@ -10,6 +10,8 @@ interface ShareContextType {
   anonymousId: string | null;
   anonymousName: string | null;
   linkPermission: LinkPermission;
+  capabilities: CapabilitySet;
+  /** @deprecated Use capabilities.canEdit instead */
   canEdit: boolean;
 }
 
@@ -17,20 +19,46 @@ const ShareContext = createContext<ShareContextType | undefined>(undefined);
 const SetLinkPermissionContext = createContext<
   React.Dispatch<React.SetStateAction<LinkPermission>>
 >(() => {});
+const SetCapabilitiesContext = createContext<React.Dispatch<React.SetStateAction<CapabilitySet>>>(
+  () => {},
+);
+
+const DEFAULT_CAPABILITIES: CapabilitySet = {
+  canEdit: false,
+  canComment: false,
+  canShare: false,
+  canDelete: false,
+  canCopy: false,
+};
 
 interface ShareProviderProps {
   children: ReactNode;
   linkPermission?: LinkPermission;
+  capabilities?: CapabilitySet;
 }
 
-export function ShareProvider({ children, linkPermission: initial = null }: ShareProviderProps) {
+export function ShareProvider({
+  children,
+  linkPermission: initial = null,
+  capabilities: initialCapabilities,
+}: ShareProviderProps) {
   const { data: session } = useAuth();
   const isAnonymous = !session?.user;
   const [linkPermission, setLinkPermission] = useState(initial);
+  // Default to no capabilities while loading to prevent flash of editable content
+  const [capabilities, setCapabilities] = useState<CapabilitySet>(
+    initialCapabilities ?? DEFAULT_CAPABILITIES,
+  );
 
   useEffect(() => {
     setLinkPermission(initial);
   }, [initial]);
+
+  useEffect(() => {
+    if (initialCapabilities) {
+      setCapabilities(initialCapabilities);
+    }
+  }, [initialCapabilities]);
 
   const value = useMemo(() => {
     if (!isAnonymous) {
@@ -39,26 +67,34 @@ export function ShareProvider({ children, linkPermission: initial = null }: Shar
         anonymousId: null,
         anonymousName: null,
         linkPermission,
-        canEdit: true,
+        capabilities,
+        canEdit: capabilities.canEdit,
       };
     }
 
     const anonymousId = getAnonymousId();
     const anonymousName = getAnonymousName(anonymousId);
+    // For anonymous users, derive capabilities from the link permission
+    const anonCapabilities = deriveCapabilities(
+      linkPermission === 'edit' ? 'edit' : linkPermission === 'view' ? 'view' : null,
+    );
 
     return {
       isAnonymous: true,
       anonymousId,
       anonymousName,
       linkPermission,
-      canEdit: linkPermission === 'edit',
+      capabilities: anonCapabilities,
+      canEdit: anonCapabilities.canEdit,
     };
-  }, [isAnonymous, linkPermission]);
+  }, [isAnonymous, linkPermission, capabilities]);
 
   return (
-    <SetLinkPermissionContext.Provider value={setLinkPermission}>
-      <ShareContext.Provider value={value}>{children}</ShareContext.Provider>
-    </SetLinkPermissionContext.Provider>
+    <SetCapabilitiesContext.Provider value={setCapabilities}>
+      <SetLinkPermissionContext.Provider value={setLinkPermission}>
+        <ShareContext.Provider value={value}>{children}</ShareContext.Provider>
+      </SetLinkPermissionContext.Provider>
+    </SetCapabilitiesContext.Provider>
   );
 }
 
@@ -67,7 +103,8 @@ const DEFAULT_SHARE_CONTEXT: ShareContextType = {
   anonymousId: null,
   anonymousName: null,
   linkPermission: null,
-  canEdit: true,
+  capabilities: DEFAULT_CAPABILITIES,
+  canEdit: false,
 };
 
 export function useShareContext(): ShareContextType {
@@ -77,4 +114,8 @@ export function useShareContext(): ShareContextType {
 
 export function useSetLinkPermission(): React.Dispatch<React.SetStateAction<LinkPermission>> {
   return useContext(SetLinkPermissionContext);
+}
+
+export function useSetCapabilities(): React.Dispatch<React.SetStateAction<CapabilitySet>> {
+  return useContext(SetCapabilitiesContext);
 }
