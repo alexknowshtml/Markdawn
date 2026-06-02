@@ -1,5 +1,5 @@
 import type { ShareEntityType, SharePermission } from '@markdawn/shared';
-import { Check, Copy, Globe2, Lock, Mail, Trash2, UserRound, X } from 'lucide-react';
+import { Check, Copy, Globe2, Lock, Mail, UserRound, X } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -50,7 +50,7 @@ export function PublicShareDialog({
   const [email, setEmail] = useState('');
   const [invitePermission, setInvitePermission] = useState<SharePermission>('view');
   const [copied, setCopied] = useState(false);
-  const [leaveConfirmId, setLeaveConfirmId] = useState<string | null>(null);
+
   const [isRestricted, setIsRestricted] = useState(false);
   const { data: summary, isLoading } = useShareSummary(entityType, entityId);
   const updateLinkMutation = useUpdateLinkPermission();
@@ -114,11 +114,7 @@ export function PublicShareDialog({
   };
 
   const handleRemove = (shareId: string) => {
-    removeShareMutation.mutate(shareId, {
-      onSuccess: () => {
-        setLeaveConfirmId(null);
-      },
-    });
+    removeShareMutation.mutate(shareId);
   };
 
   return createPortal(
@@ -324,10 +320,9 @@ export function PublicShareDialog({
               </div>
 
               <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-                <div className="grid grid-cols-[minmax(0,1.4fr)_0.7fr_2rem] gap-2 border-b border-zinc-200 px-3 py-2 text-[11px] font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+                <div className="grid grid-cols-[minmax(0,1.4fr)_0.7fr] gap-2 border-b border-zinc-200 px-3 py-2 text-[11px] font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
                   <span>Name</span>
                   <span>Access type</span>
-                  <span />
                 </div>
                 {accessEntries.length === 0 ? (
                   <p className="px-3 py-2.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
@@ -344,13 +339,11 @@ export function PublicShareDialog({
                       !isTargetOwner &&
                       !(summary?.userPermission === 'admin' && isTargetAdmin);
                     const canSelfRemove = isCurrentUser && !isTargetOwner && entry.shareId;
-                    const showRemove = canChangePermission || canSelfRemove;
-                    const isLeaveConfirm = leaveConfirmId === entry.id;
 
                     return (
                       <div
                         key={entry.id}
-                        className="grid grid-cols-[minmax(0,1.4fr)_0.7fr_2rem] items-center gap-2 border-b border-zinc-200 px-3 py-1.5 last:border-b-0 dark:border-zinc-800"
+                        className="grid grid-cols-[minmax(0,1.4fr)_0.7fr] items-center gap-2 border-b border-zinc-200 px-3 py-1.5 last:border-b-0 dark:border-zinc-800"
                       >
                         <div className="flex items-center gap-2 min-w-0">
                           <div
@@ -370,7 +363,7 @@ export function PublicShareDialog({
                               </span>
                             )}
                           </div>
-                          <p className="text-sm text-zinc-900 dark:text-zinc-100 truncate">
+                          <p className="text-sm text-zinc-900 dark:text-zinc-100 truncate max-w-[20ch]">
                             {displayName}
                           </p>
                         </div>
@@ -383,9 +376,18 @@ export function PublicShareDialog({
                               { value: 'view', label: 'View' },
                               { value: 'edit', label: 'Edit' },
                               { value: 'admin', label: 'Admin' },
+                              { value: 'remove', label: 'Remove' },
                             ]}
                             onChange={(permission) => {
-                              if (entry.shareId) {
+                              if (permission === 'remove') {
+                                if (canSelfRemove && entry.shareId) {
+                                  if (window.confirm('Are you sure you want to leave?')) {
+                                    handleRemove(entry.shareId);
+                                  }
+                                } else if (entry.shareId) {
+                                  handleRemove(entry.shareId);
+                                }
+                              } else if (entry.shareId) {
                                 updatePermissionMutation.mutate({
                                   shareId: entry.shareId,
                                   permission,
@@ -404,56 +406,6 @@ export function PublicShareDialog({
                                 : 'View'}
                           </span>
                         )}
-                        <div className="flex items-center justify-end">
-                          {showRemove &&
-                            (isLeaveConfirm ? (
-                              <div className="flex items-center gap-1">
-                                <span className="text-[10px] text-zinc-500 dark:text-zinc-400">
-                                  Leave?
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    if (entry.shareId) {
-                                      handleRemove(entry.shareId);
-                                    }
-                                  }}
-                                  disabled={removeShareMutation.isPending}
-                                  className="flex h-5 items-center rounded-md bg-red-50 px-1.5 text-[10px] font-medium text-red-600 hover:bg-red-100 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 disabled:opacity-40 cursor-pointer"
-                                >
-                                  Yes
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => setLeaveConfirmId(null)}
-                                  className="flex h-5 items-center rounded-md bg-zinc-100 px-1.5 text-[10px] font-medium text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400 dark:hover:bg-zinc-700 cursor-pointer"
-                                >
-                                  No
-                                </button>
-                              </div>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (canSelfRemove) {
-                                    setLeaveConfirmId(entry.id);
-                                  } else if (entry.shareId) {
-                                    handleRemove(entry.shareId);
-                                  }
-                                }}
-                                disabled={removeShareMutation.isPending}
-                                className="flex h-6 w-6 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-100 hover:text-red-600 dark:hover:bg-zinc-800 dark:hover:text-red-400 disabled:opacity-40 cursor-pointer"
-                                title={canSelfRemove ? 'Leave' : 'Remove access'}
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            ))}
-                          {isTargetOwner && !showRemove && (
-                            <span className="text-[10px] text-zinc-400 dark:text-zinc-500">
-                              Owner
-                            </span>
-                          )}
-                        </div>
                       </div>
                     );
                   })
