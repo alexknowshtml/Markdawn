@@ -53,10 +53,11 @@ podman exec markdawn-postgres pg_dump -U markdawn -d markdawn --no-owner > /tmp/
 podman volume export markdawn-data > /tmp/markdawn-data.tar
 ```
 
-**Copy both to your laptop, then to the new server:**
+**Copy everything to your laptop, then to the new server:**
 ```bash
 scp old-server:/tmp/markdawn-db-dump.sql /tmp/
 scp old-server:/tmp/markdawn-data.tar /tmp/
+scp old-server:/var/www/markdawn/.env /tmp/
 scp /tmp/markdawn-db-dump.sql new-server:/tmp/
 scp /tmp/markdawn-data.tar new-server:/tmp/
 scp /tmp/.env new-server:/var/www/markdawn/.env
@@ -127,4 +128,4 @@ Without this, you wait up to an hour for the next cert check cycle.
 | Restart | `systemctl --user restart markdawn-api.service markdawn-collab.service` |
 | API health | `curl https://markdawn.space/api/health` |
 | Dump DB | `podman exec markdawn-postgres pg_dump -U markdawn -d markdawn --no-owner > dump.sql` |
-| Restore DB | `cat dump.sql \| podman exec -i markdawn-postgres psql -U markdawn -d markdawn` |
+| Restore DB | `cat dump.sql | podman exec -i markdawn-postgres psql -U markdawn -d markdawn` |

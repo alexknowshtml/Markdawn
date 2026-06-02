@@ -112,7 +112,7 @@ for i in {1..30}; do
 done
 
 echo -e "${YELLOW}[SCHEMA] Running db:migrate to initialize database...${NC}"
-pnpm --filter @markdawn/api db:migrate  
+pnpm --filter @markdawn/api db:migrate
 
 echo -e "${YELLOW}[SCHEMA] Applying schema fixes not covered by migrations...${NC}"
 # TODO(#102): Remove these workarounds after feat/share-ui merges and proper migrations are created

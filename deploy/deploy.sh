@@ -13,17 +13,17 @@ NC='\033[0m'
 
 cd "$REPO_DIR"
 
-echo -e "${YELLOW}[STEP 1/6] Pulling latest code...${NC}"
+echo -e "${YELLOW}[STEP 1/8] Pulling latest code...${NC}"
 git pull origin master
 
-echo -e "${YELLOW}[STEP 2/6] Installing dependencies...${NC}"
+echo -e "${YELLOW}[STEP 2/8] Installing dependencies...${NC}"
 pnpm install
 
-echo -e "${YELLOW}[STEP 3/6] Building packages...${NC}"
+echo -e "${YELLOW}[STEP 3/8] Building packages...${NC}"
 pnpm --filter @markdawn/shared build
 pnpm --filter @markdawn/web build
 
-echo -e "${YELLOW}[STEP 4/6] Updating Podman Quadlet units...${NC}"
+echo -e "${YELLOW}[STEP 4/8] Updating Podman Quadlet units...${NC}"
 podman volume create postgres-data 2>/dev/null || true
 podman volume create markdawn-data 2>/dev/null || true
 cp "$REPO_DIR/deploy/quadlet/markdawn.pod" ~/.config/containers/systemd/
@@ -31,14 +31,17 @@ cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/s
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
-echo -e "${YELLOW}[STEP 5/7] Rebuilding container images...${NC}"
+echo -e "${YELLOW}[STEP 5/8] Rebuilding container images...${NC}"
 podman build -t localhost/markdawn-api:latest -f "$REPO_DIR/deploy/Containerfile.api" "$REPO_DIR"
 podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerfile.collab" "$REPO_DIR"
 
-echo -e "${YELLOW}[STEP 6/7] Running database migrations...${NC}"
+echo -e "${YELLOW}[STEP 6/8] Stopping services before migration...${NC}"
+systemctl --user stop markdawn-api.service markdawn-collab.service
+
+echo -e "${YELLOW}[STEP 7/8] Running database migrations...${NC}"
 pnpm --filter @markdawn/api db:migrate
 
-echo -e "${YELLOW}[STEP 7/7] Restarting api and collab services...${NC}"
+echo -e "${YELLOW}[STEP 8/8] Restarting api and collab services...${NC}"
 systemctl --user daemon-reload
 systemctl --user restart \
   markdawn-api.service \
