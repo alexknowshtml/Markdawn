@@ -364,12 +364,14 @@ export function PublicShareDialog({
                               { value: 'edit', label: 'Edit' },
                               { value: 'admin', label: 'Admin' },
                             ]}
-                            onChange={(permission) =>
-                              updatePermissionMutation.mutate({
-                                shareId: entry.shareId!,
-                                permission,
-                              })
-                            }
+                            onChange={(permission) => {
+                              if (entry.shareId) {
+                                updatePermissionMutation.mutate({
+                                  shareId: entry.shareId,
+                                  permission,
+                                });
+                              }
+                            }}
                             className="w-fit"
                             triggerClassName="px-1.5 text-xs"
                           />
