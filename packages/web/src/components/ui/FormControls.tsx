@@ -128,6 +128,7 @@ export function Dropdown<TValue extends string>({
       {open &&
         createPortal(
           <div
+            role="listbox"
             style={menuStyle}
             className="z-50 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
             onMouseDown={(event) => event.stopPropagation()}
