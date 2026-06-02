@@ -5,7 +5,6 @@ import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
 import {
   ensureCanAdminEntity,
-  ensureCanManageEntity,
   ensureFolderAccess,
   ensurePageAccess,
   parseEntityType,
