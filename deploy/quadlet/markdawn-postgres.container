@@ -10,7 +10,7 @@ Environment=POSTGRES_USER=markdawn
 Environment=POSTGRES_DB=markdawn
 EnvironmentFile=/var/www/markdawn/.env
 Volume=postgres-data:/var/lib/postgresql/data:Z
-HealthCmd=CMD-SHELL pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"
+HealthCmd=pg_isready -U markdawn -d markdawn
 HealthInterval=10s
 HealthTimeout=5s
 HealthRetries=5
