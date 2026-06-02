@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
+import { pool } from '../db/connection';
+import {
+  createTestApp,
+  createTestFolder,
+  createTestPage,
+  createTestSession,
+  createTestUser,
+  createTestWorkspaceMember,
+} from '../test-utils';
 
 describe('shares API', () => {
   it('invites an existing user to a page and grants page access', async () => {
@@ -109,14 +117,113 @@ describe('shares API', () => {
     });
     expect(summaryRes.status).toBe(200);
     const summary = (await summaryRes.json()) as {
-      accessors: Array<{ name: string | null; source: string; permission: string }>;
+      accessors: Array<{
+        name: string | null;
+        source: string;
+        permission: string;
+        isOwner: boolean;
+      }>;
     };
+    expect(summary.accessors[0]).toEqual(
+      expect.objectContaining({
+        name: 'Owner',
+        source: 'owner',
+        permission: 'edit',
+        isOwner: true,
+      }),
+    );
     expect(summary.accessors).toContainEqual(
       expect.objectContaining({
         name: 'Recipient',
-        source: 'Email + Link',
         permission: 'edit',
+        isOwner: false,
       }),
     );
+  });
+
+  describe('workspace membership (E2E)', () => {
+    it('grants workspace member access to owners page via HTTP', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const memberSession = await createTestSession(member.id);
+      const page = await createTestPage(owner.id, { title: 'Workspace page' });
+      await createTestWorkspaceMember(owner.id, member.id);
+
+      const res = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: memberSession.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as { title: string };
+      expect(data.title).toBe('Workspace page');
+    });
+
+    it('denies workspace member access to page inside restricted folder via HTTP', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const memberSession = await createTestSession(member.id);
+      const folder = await createTestFolder(owner.id, { name: 'Restricted' });
+      await pool.query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
+      const page = await createTestPage(owner.id, {
+        title: 'Secret page',
+        parentId: folder.id,
+      });
+      await createTestWorkspaceMember(owner.id, member.id);
+
+      const res = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: memberSession.Cookie },
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('allows workspace member to list owners pages in page tree', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const memberSession = await createTestSession(member.id);
+      await createTestPage(owner.id, { title: 'Owner page 1' });
+      await createTestPage(owner.id, { title: 'Owner page 2' });
+      await createTestWorkspaceMember(owner.id, member.id);
+
+      const res = await app.request('/api/pages/tree', {
+        headers: { Cookie: memberSession.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      const pages = (await res.json()) as Array<{ title: string }>;
+      expect(pages).toContainEqual(expect.objectContaining({ title: 'Owner page 1' }));
+      expect(pages).toContainEqual(expect.objectContaining({ title: 'Owner page 2' }));
+    });
+
+    it('excludes pages inside restricted folder from workspace members page tree', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const memberSession = await createTestSession(member.id);
+      const restrictedFolder = await createTestFolder(owner.id, { name: 'Secret' });
+      await pool.query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [
+        restrictedFolder.id,
+      ]);
+      await createTestPage(owner.id, {
+        title: 'Public page',
+      });
+      await createTestPage(owner.id, {
+        title: 'Secret page',
+        parentId: restrictedFolder.id,
+      });
+      await createTestWorkspaceMember(owner.id, member.id);
+
+      const res = await app.request('/api/pages/tree', {
+        headers: { Cookie: memberSession.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      const pages = (await res.json()) as Array<{ title: string }>;
+      expect(pages).toContainEqual(expect.objectContaining({ title: 'Public page' }));
+      expect(pages).not.toContainEqual(expect.objectContaining({ title: 'Secret page' }));
+    });
   });
 });

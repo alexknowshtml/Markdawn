@@ -86,7 +86,33 @@ searchRoute.get('/', async (c) => {
     : '';
 
   const result = await pool.query(
-    `select p.id,
+    `with recursive
+      shared_folders as (
+        select f.id
+        from shares s
+        join folders f on f.id = s.entity_id
+        where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
+        union all
+        select child.id
+        from folders child
+        join shared_folders parent on child.parent_id = parent.id
+        where child.is_deleted = false
+      ),
+      restricted_roots as (
+        select id from folders where is_access_restricted = true and is_deleted = false
+      ),
+      restricted_tree as (
+        select id from restricted_roots
+        union all
+        select child.id
+        from folders child
+        join restricted_tree parent on child.parent_id = parent.id
+        where child.is_deleted = false
+      ),
+      workspace_owners as (
+        select workspace_owner_id from workspace_members where member_id = $1
+      )
+    select p.id,
       p.title,
       p.icon,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
@@ -105,20 +131,9 @@ searchRoute.get('/', async (c) => {
       and (
         p.created_by = $1
         or p.id in (select entity_id from shares where entity_type = 'page' and recipient_user_id = $1)
-        or p.parent_id in (
-          with recursive shared_folders as (
-            select f.id
-            from shares s
-            join folders f on f.id = s.entity_id
-            where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
-            union all
-            select child.id
-            from folders child
-            join shared_folders parent on child.parent_id = parent.id
-            where child.is_deleted = false
-          )
-          select id from shared_folders
-        )
+        or p.parent_id in (select id from shared_folders)
+        or (p.created_by in (select workspace_owner_id from workspace_owners)
+            and (p.parent_id is null or p.parent_id not in (select id from restricted_tree)))
       )
       ${textSearchClause}
       ${whereClause}

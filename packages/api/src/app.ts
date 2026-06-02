@@ -19,6 +19,7 @@ import templatesRoute from './routes/templates';
 import testSetupRoute from './routes/test-setup';
 import uploadsRoute from './routes/uploads';
 import versionsRoute from './routes/versions';
+import workspaceRoute from './routes/workspace';
 
 export async function createApp() {
   const { setupLogger, getApiLogger } = await import('@markdawn/shared');
@@ -88,19 +89,21 @@ export async function createApp() {
   app.route('/api/tags', tagsRoute);
   app.route('/api/backlinks', backlinksRoute);
 
+  app.route('/api/workspace', workspaceRoute);
+
   app.route('/api', testSetupRoute);
 
   // Legacy /api/public routes removed — public pages are now served at /api/pages/:id
   app.route('/api', authRoutes);
 
-  app.notFound((c) => c.json({ error: 'Not Found' }, 404));
+  app.notFound((c) => c.json({ message: 'Not Found' }, 404));
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
-      return err.getResponse();
+      return c.json({ message: err.message }, err.status);
     }
     appLogger.error(`Unhandled error: ${err.message}`, { stack: err.stack });
-    return c.json({ error: 'Internal Server Error' }, 500);
+    return c.json({ message: 'Internal Server Error' }, 500);
   });
 
   return app;

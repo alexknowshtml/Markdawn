@@ -1,8 +1,10 @@
+import { deriveCapabilities } from '@markdawn/shared';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { pool } from '../db/connection';
 import { requireAuth } from '../middleware/auth';
 import {
+  ensureCanAdminEntity,
   ensureCanManageEntity,
   ensureFolderAccess,
   ensurePageAccess,
@@ -11,6 +13,7 @@ import {
   type ShareEntityType,
   type SharePermission,
 } from '../utils/share-access';
+import { notifyShareGrant, notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
 
 type EntityInfo = {
   id: string;
@@ -43,7 +46,6 @@ type AccessorRow = {
   source: string;
 };
 
-const permissionRank = (permission: SharePermission) => (permission === 'edit' ? 2 : 1);
 const slugifyTitle = (title: string) =>
   title
     .toLowerCase()
@@ -52,11 +54,6 @@ const slugifyTitle = (title: string) =>
 
 const buildPagePath = (title: string, pageId: string) =>
   `/app/${slugifyTitle(title) || 'page'}-${pageId}`;
-
-const mergeSource = (sources: Set<string>) => {
-  const ordered = ['Email', 'Link'].filter((source) => sources.has(source));
-  return ordered.join(' + ');
-};
 
 const sharesRoute = new Hono();
 
@@ -79,7 +76,20 @@ const normalizeShare = (row: ShareRow) => ({
 });
 
 const getPageAccessors = async (pageId: string) => {
-  const [inviteResult, accessResult] = await Promise.all([
+  const ownerResult = await pool.query(
+    `
+      select p.created_by as user_id, u.name, u.email
+      from pages p
+      join users u on u.id = p.created_by
+      where p.id = $1 and p.is_deleted = false
+    `,
+    [pageId],
+  );
+  const ownerRow = ownerResult.rows[0] as
+    | { user_id: string; name: string | null; email: string | null }
+    | undefined;
+
+  const [inviteResult, linkResult] = await Promise.all([
     pool.query(
       `
         select
@@ -95,76 +105,60 @@ const getPageAccessors = async (pageId: string) => {
           and s.entity_id = $1
           and s.recipient_user_id is not null
           and s.token is null
+          and s.recipient_user_id != $2
       `,
-      [pageId],
+      [pageId, ownerRow?.user_id ?? ''],
     ),
     pool.query(
-      `
-        select
-          null::uuid as share_id,
-          pae.user_id,
-          recipient.name,
-          recipient.email,
-          pae.permission,
-          'Link' as source
-        from page_access_events pae
-        join users recipient on recipient.id = pae.user_id
-        where pae.page_id = $1
-      `,
+      "select permission from shares where entity_type = 'page' and entity_id = $1 and token is not null limit 1",
       [pageId],
     ),
   ]);
 
-  const accessors = new Map<
-    string,
-    {
-      shareId: string | null;
-      userId: string;
-      name: string | null;
-      email: string | null;
-      permission: SharePermission;
-      sources: Set<string>;
-    }
-  >();
+  const linkPermission = linkResult.rows[0]?.permission as SharePermission | undefined;
 
-  for (const row of [...inviteResult.rows, ...accessResult.rows]) {
-    const item = row as AccessorRow;
-    const existing = accessors.get(item.user_id);
-    if (existing) {
-      existing.permission =
-        permissionRank(item.permission) > permissionRank(existing.permission)
-          ? item.permission
-          : existing.permission;
-      existing.sources.add(item.source);
-      if (!existing.name && item.name) {
-        existing.name = item.name;
-      }
-      if (!existing.email && item.email) {
-        existing.email = item.email;
-      }
-      if (!existing.shareId && item.share_id) {
-        existing.shareId = item.share_id;
-      }
-    } else {
-      accessors.set(item.user_id, {
-        shareId: item.share_id,
-        userId: item.user_id,
-        name: item.name,
-        email: item.email,
-        permission: item.permission,
-        sources: new Set([item.source]),
-      });
-    }
+  const rank = (p: SharePermission) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
+
+  const result: Array<{
+    shareId: string | null;
+    userId: string;
+    name: string | null;
+    email: string | null;
+    permission: SharePermission;
+    source: string;
+    isOwner: boolean;
+  }> = [];
+
+  if (ownerRow) {
+    result.push({
+      shareId: null,
+      userId: ownerRow.user_id,
+      name: ownerRow.name,
+      email: ownerRow.email,
+      permission: 'edit',
+      source: 'owner',
+      isOwner: true,
+    });
   }
 
-  return Array.from(accessors.values()).map((item) => ({
-    shareId: item.shareId,
-    userId: item.userId,
-    name: item.name,
-    email: item.email,
-    permission: item.permission,
-    source: mergeSource(item.sources),
-  }));
+  for (const row of inviteResult.rows) {
+    const item = row as AccessorRow;
+    const effectivePermission =
+      linkPermission && rank(linkPermission) > rank(item.permission)
+        ? linkPermission
+        : item.permission;
+    result.push({
+      shareId: item.share_id,
+      userId: item.user_id,
+      name: item.name,
+      email: item.email,
+      permission: effectivePermission,
+      source: 'Email',
+      isOwner: false,
+    });
+  }
+
+  return result;
 };
 
 const resolveEntity = async (
@@ -286,9 +280,12 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   const entityId = c.req.param('entityId');
   const user = c.get('user') as { id: string };
   const entity = await resolveEntity(entityType, entityId);
-  // Ensure the caller has at least view access to the entity
+  // Determine the caller's effective permission — ensures access and captures
+  // the highest permission across invites, folder inheritance, and link shares.
+  let userPermission: SharePermission | null = null;
   if (entityType === 'page') {
-    await ensurePageAccess(entity.id, user.id);
+    const access = await ensurePageAccess(entity.id, user.id);
+    userPermission = access.permission;
   } else {
     await ensureFolderAccess(entity.id, user.id);
   }
@@ -321,11 +318,126 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   const shares = (result.rows as ShareRow[]).map(normalizeShare);
   const linkShare = shares.find((share) => share.token);
   const accessors = entityType === 'page' ? await getPageAccessors(entityId) : [];
+
+  const permissionDetails: Array<{
+    source: string;
+    permission: string;
+    grantedByName?: string | null;
+    grantedByEmail?: string | null;
+    folderName?: string | null;
+    folderId?: string | null;
+  }> = [];
+  if (entityType === 'page') {
+    // Fetch each permission source separately to avoid parameter type inference issues
+    const inviteRows = await pool.query(
+      `SELECT permission FROM shares
+       WHERE entity_type = 'page' AND entity_id = $1 AND recipient_user_id = $2
+         AND token IS NULL AND (expires_at IS NULL OR expires_at > NOW())`,
+      [entityId, user.id],
+    );
+    inviteRows.rows.forEach((row: { permission: string }) => {
+      permissionDetails.push({ source: 'invite', permission: row.permission });
+    });
+
+    const folderRows = await pool.query(
+      `WITH RECURSIVE fa AS (
+         SELECT f.id, f.parent_id, f.name
+         FROM pages p JOIN folders f ON f.id = p.parent_id WHERE p.id = $1
+         UNION ALL
+         SELECT parent.id, parent.parent_id, parent.name
+         FROM folders parent JOIN fa child ON child.parent_id = parent.id
+       )
+       SELECT s.permission, u.name AS granted_by_name, u.email AS granted_by_email,
+              fa.name AS folder_name, fa.id::text AS folder_id
+       FROM shares s
+       JOIN fa ON fa.id = s.entity_id
+       LEFT JOIN users u ON u.id = s.shared_by
+       WHERE s.entity_type = 'folder' AND s.recipient_user_id = $2
+         AND (s.expires_at IS NULL OR s.expires_at > NOW())`,
+      [entityId, user.id],
+    );
+    folderRows.rows.forEach((row) => {
+      permissionDetails.push({
+        source: 'folder',
+        permission: row.permission,
+        grantedByName: row.granted_by_name ?? null,
+        grantedByEmail: row.granted_by_email ?? null,
+        folderName: row.folder_name ?? null,
+        folderId: row.folder_id ?? null,
+      });
+    });
+
+    const linkRows = await pool.query(
+      `SELECT permission FROM shares
+       WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL
+         AND (expires_at IS NULL OR expires_at > NOW())
+         AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)`,
+      [entityId],
+    );
+    linkRows.rows.forEach((row: { permission: string }) => {
+      permissionDetails.push({ source: 'link', permission: row.permission });
+    });
+
+    const workspaceRows = await pool.query(
+      `SELECT CASE WHEN wm.role = 'admin' THEN 'admin' ELSE 'edit' END AS permission
+       FROM workspace_members wm
+       JOIN pages p ON p.id = $1
+       WHERE wm.workspace_owner_id = p.created_by AND wm.member_id = $2
+         AND NOT EXISTS (
+           WITH RECURSIVE fa AS (
+             SELECT f.id, f.parent_id, f.is_access_restricted
+             FROM pages p2 JOIN folders f ON f.id = p2.parent_id WHERE p2.id = $1
+             UNION ALL
+             SELECT parent.id, parent.parent_id, parent.is_access_restricted
+             FROM folders parent JOIN fa child ON child.parent_id = parent.id
+           )
+           SELECT 1 FROM fa WHERE is_access_restricted = true
+         )`,
+      [entityId, user.id],
+    );
+    workspaceRows.rows.forEach((row: { permission: string }) => {
+      permissionDetails.push({ source: 'workspace', permission: row.permission });
+    });
+  }
+
+  const inheritedAccessors: Array<{
+    userId: string;
+    name: string | null;
+    email: string | null;
+    permission: string;
+    source: string;
+    folderName?: string | null;
+    folderId?: string | null;
+  }> = [];
+  if (entityType === 'page' && accessors.length > 0) {
+    const existingUserIds = new Set(accessors.map((a) => a.userId));
+    const inheritedResult = await pool.query(
+      `SELECT wm.member_id, u.name, u.email,
+              CASE WHEN wm.role = 'admin' THEN 'admin' ELSE 'edit' END AS permission
+       FROM workspace_members wm
+       JOIN users u ON u.id = wm.member_id
+       WHERE wm.workspace_owner_id = $1`,
+      [user.id],
+    );
+    for (const row of inheritedResult.rows) {
+      if (!existingUserIds.has(row.member_id)) {
+        inheritedAccessors.push({
+          userId: row.member_id,
+          name: row.name,
+          email: row.email,
+          permission: row.permission,
+          source: 'workspace',
+        });
+      }
+    }
+  }
+
   return c.json({
     entity: {
       type: entityType,
       id: entity.id,
       title: entity.title,
+      ownerId: entity.ownerId ?? null,
     },
     link: linkShare
       ? {
@@ -336,6 +448,10 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
       : { permission: 'private', token: null, url: null },
     invites: shares.filter((share) => !share.token),
     accessors,
+    userPermission,
+    capabilities: deriveCapabilities(userPermission),
+    permissionDetails,
+    inheritedAccessors,
   });
 });
 
@@ -344,7 +460,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
   const entityId = c.req.param('entityId');
   const user = c.get('user') as { id: string };
   const entity = await resolveEntity(entityType, entityId);
-  await ensureCanManageEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
+  await ensureCanAdminEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -362,19 +478,21 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
         'update pages set is_public = false, public_token = null, updated_at = now() where id = $1',
         [entityId],
       );
+      await pool.query("delete from page_access_events where page_id = $1 and source = 'link'", [
+        entityId,
+      ]);
     }
 
     // Notify collab server to disconnect anonymous users
     if (entityType === 'page') {
-      await pool.query("SELECT pg_notify('share_permission_changed', $1)", [
-        JSON.stringify({ pageId: entityId, permission: 'private' }),
-      ]);
+      await notifyShareRevoke({ entityType, entityId });
     }
 
     return c.json({ permission: 'private', token: null, url: null });
   }
 
   const nextPermission = parsePermission(permission);
+  const expiresAt = (body as { expiresAt?: string | null }).expiresAt ?? null;
   const existing = await pool.query(
     'select id, token from shares where entity_type = $1 and entity_id = $2 and token is not null limit 1',
     [entityType, entityId],
@@ -383,14 +501,14 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
   const token = existingRow?.token ?? crypto.randomUUID();
 
   if (existingRow) {
-    await pool.query('update shares set permission = $1, updated_at = now() where id = $2', [
-      nextPermission,
-      existingRow.id,
-    ]);
+    await pool.query(
+      'update shares set permission = $1, expires_at = $2, updated_at = now() where id = $3',
+      [nextPermission, expiresAt, existingRow.id],
+    );
   } else {
     await pool.query(
-      'insert into shares (entity_type, entity_id, shared_by, permission, token) values ($1, $2, $3, $4, $5)',
-      [entityType, entityId, user.id, nextPermission, token],
+      'insert into shares (entity_type, entity_id, shared_by, permission, token, expires_at) values ($1, $2, $3, $4, $5, $6)',
+      [entityType, entityId, user.id, nextPermission, token, expiresAt],
     );
   }
 
@@ -399,13 +517,15 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
       'update pages set is_public = true, public_token = $1, updated_at = now() where id = $2',
       [token, entityId],
     );
+    await pool.query(
+      'update page_access_events set permission = $1 where page_id = $2 and source = $3',
+      [nextPermission, entityId, 'link'],
+    );
   }
 
   // Notify collab server of permission change (e.g., edit → view downgrade)
   if (entityType === 'page') {
-    await pool.query("SELECT pg_notify('share_permission_changed', $1)", [
-      JSON.stringify({ pageId: entityId, permission: nextPermission }),
-    ]);
+    await notifyShareUpdate({ entityType, entityId, permission: nextPermission });
   }
 
   return c.json({
@@ -420,7 +540,7 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
   const entityId = c.req.param('entityId');
   const user = c.get('user') as { id: string };
   const entity = await resolveEntity(entityType, entityId);
-  await ensureCanManageEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
+  await ensureCanAdminEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -441,6 +561,10 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
   }
   if (recipient.id === user.id) {
     throw new HTTPException(400, { message: 'Cannot share with yourself' });
+  }
+
+  if (entity.ownerId && recipient.id === entity.ownerId) {
+    throw new HTTPException(400, { message: 'Owner already has full access' });
   }
 
   const nextPermission = parsePermission(permission);
@@ -472,6 +596,73 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
     );
   }
 
+  // Notify collab server to grant/update access for the recipient in realtime
+  if (entityType === 'page') {
+    await notifyShareGrant({
+      entityType,
+      entityId,
+      permission: nextPermission,
+      targetUserId: recipient.id,
+    });
+  }
+
+  return c.json({ ok: true });
+});
+
+sharesRoute.patch('/:shareId', async (c) => {
+  const shareId = c.req.param('shareId');
+  const user = c.get('user') as { id: string };
+
+  const result = await pool.query(
+    'select entity_type, entity_id, recipient_user_id from shares where id = $1 limit 1',
+    [shareId],
+  );
+  const row = result.rows[0] as
+    | { entity_type?: ShareEntityType; entity_id?: string; recipient_user_id?: string }
+    | undefined;
+  if (!row?.entity_type || !row.entity_id) {
+    throw new HTTPException(404, { message: 'Share not found' });
+  }
+
+  await ensureCanAdminEntity(
+    row.entity_type === 'page' ? 'page' : 'folder',
+    row.entity_id,
+    user.id,
+  );
+
+  // Admins cannot change other admins' permissions — only the owner can
+  const targetResult = await pool.query('select permission from shares where id = $1 limit 1', [
+    shareId,
+  ]);
+  const targetRow = targetResult.rows[0] as { permission?: SharePermission } | undefined;
+  if (targetRow?.permission === 'admin') {
+    const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
+    if (entity.ownerId !== user.id) {
+      throw new HTTPException(403, { message: "Only the owner can change an admin's permission" });
+    }
+  }
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    throw new HTTPException(400, { message: 'Invalid body' });
+  }
+  const permission = (body as { permission?: unknown }).permission;
+  const nextPermission = parsePermission(permission);
+
+  await pool.query('update shares set permission = $1, updated_at = now() where id = $2', [
+    nextPermission,
+    shareId,
+  ]);
+
+  if (row.entity_type === 'page') {
+    await notifyShareUpdate({
+      entityType: 'page',
+      entityId: row.entity_id,
+      permission: nextPermission,
+      ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
+    });
+  }
+
   return c.json({ ok: true });
 });
 
@@ -479,19 +670,47 @@ sharesRoute.delete('/:shareId', async (c) => {
   const shareId = c.req.param('shareId');
   const user = c.get('user') as { id: string };
   const result = await pool.query(
-    'select entity_type, entity_id from shares where id = $1 limit 1',
+    'select entity_type, entity_id, recipient_user_id from shares where id = $1 limit 1',
     [shareId],
   );
-  const row = result.rows[0] as { entity_type?: ShareEntityType; entity_id?: string } | undefined;
+  const row = result.rows[0] as
+    | { entity_type?: ShareEntityType; entity_id?: string; recipient_user_id?: string }
+    | undefined;
   if (!row?.entity_type || !row.entity_id) {
     throw new HTTPException(404, { message: 'Share not found' });
   }
-  await ensureCanManageEntity(
-    row.entity_type === 'page' ? 'page' : 'folder',
-    row.entity_id,
-    user.id,
-  );
+
+  const isSelfRemoval = row.recipient_user_id === user.id;
+  if (!isSelfRemoval) {
+    await ensureCanAdminEntity(
+      row.entity_type === 'page' ? 'page' : 'folder',
+      row.entity_id,
+      user.id,
+    );
+  }
+
   await pool.query('delete from shares where id = $1', [shareId]);
+
+  if (row.entity_type === 'page' && row.recipient_user_id) {
+    await pool.query('delete from page_access_events where page_id = $1 and user_id = $2', [
+      row.entity_id,
+      row.recipient_user_id,
+    ]);
+  }
+
+  // Notify collab server to revoke access in realtime
+  if (row.entity_type === 'page') {
+    if (row.recipient_user_id) {
+      await notifyShareRevoke({
+        entityType: 'page',
+        entityId: row.entity_id,
+        targetUserId: row.recipient_user_id,
+      });
+    } else {
+      await notifyShareRevoke({ entityType: 'page', entityId: row.entity_id });
+    }
+  }
+
   return c.json({ ok: true });
 });
 

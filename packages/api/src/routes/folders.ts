@@ -93,11 +93,31 @@ const buildFolderTree = (rows: FolderRow[]) => {
 };
 
 foldersRoute.get('/tree', async (c) => {
-  // Return folders the user can access (owned or shared)
+  // Return folders the user can access (owned, shared, or workspace)
   const user = c.get('user') as { id: string };
 
   const result = await pool.query(
     `
+      with recursive
+      restricted_roots as (
+        select id from folders where is_access_restricted = true and is_deleted = false
+      ),
+      restricted_tree as (
+        select id from restricted_roots
+        union all
+        select child.id
+        from folders child
+        join restricted_tree parent on child.parent_id = parent.id
+        where child.is_deleted = false
+      ),
+      workspace_owners as (
+        select workspace_owner_id from workspace_members where member_id = $1
+      ),
+      linked_page_folders as (
+        select p.parent_id from page_access_events pae
+        join pages p on p.id = pae.page_id
+        where pae.user_id = $1 and p.parent_id is not null
+      )
       select f.*
       from folders f
       where f.is_deleted = false
@@ -107,6 +127,9 @@ foldersRoute.get('/tree', async (c) => {
             select 1 from shares s
             where s.entity_type = 'folder' and s.entity_id = f.id and s.recipient_user_id = $1
           )
+          or (f.created_by in (select workspace_owner_id from workspace_owners)
+              and f.id not in (select id from restricted_tree))
+          or f.id in (select parent_id from linked_page_folders)
         )
       order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position asc
     `,
@@ -197,11 +220,12 @@ foldersRoute.patch(':id', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { name, icon, parentId, position } = body as {
+  const { name, icon, parentId, position, isAccessRestricted } = body as {
     name?: string;
     icon?: string | null;
     parentId?: string | null;
     position?: string | number;
+    isAccessRestricted?: boolean;
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
@@ -241,9 +265,13 @@ foldersRoute.patch(':id', async (c) => {
         ? String(position)
         : folder.position;
 
+  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
+  const nextRestricted = hasRestricted ? isAccessRestricted === true : folder.isAccessRestricted;
+
   const updateResult = await pool.query(
-    'update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *',
-    [nextName, nextIcon, nextParent, nextPosition, folderId],
+    `update folders set name = $1, icon = $2, parent_id = $3, position = $4,
+       is_access_restricted = $5, updated_at = now() where id = $6 returning *`,
+    [nextName, nextIcon, nextParent, nextPosition, nextRestricted, folderId],
   );
 
   if (updateResult.rowCount === 0) {

@@ -1,7 +1,7 @@
 import type { Hocuspocus } from '@hocuspocus/server';
 import { type Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import { getAnonymousName } from '@markdawn/shared';
+import { getAnonymousName, type ShareEventPayload } from '@markdawn/shared';
 import {
   type ConnectionDraft,
   extractConnectionsFromYDoc,
@@ -9,6 +9,7 @@ import {
 } from '@markdawn/shared/yjs-helpers';
 import { Client, type Pool, type PoolClient } from 'pg';
 import * as Y from 'yjs';
+import { handleShareEvent } from './permission-handler';
 import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
@@ -471,7 +472,7 @@ export function createCollabServer(config: CollabServerConfig) {
   async function assertPageAccess(
     documentName: string,
     userId: string,
-  ): Promise<{ permission: 'view' | 'edit' }> {
+  ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
     const ownerResult = await pool.query(
       'SELECT created_by FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
       [documentName],
@@ -488,23 +489,57 @@ export function createCollabServer(config: CollabServerConfig) {
     const shareResult = await pool.query(
       `
         WITH RECURSIVE folder_ancestors AS (
-          SELECT f.id, f.parent_id
+          SELECT f.id, f.parent_id, f.is_access_restricted
           FROM pages p
           JOIN folders f ON f.id = p.parent_id
           WHERE p.id = $1
           UNION ALL
-          SELECT parent.id, parent.parent_id
+          SELECT parent.id, parent.parent_id, parent.is_access_restricted
           FROM folders parent
           JOIN folder_ancestors child ON child.parent_id = parent.id
+        ),
+        restricted_check AS (
+          SELECT EXISTS(SELECT 1 FROM folder_ancestors WHERE is_access_restricted = true) AS blocked
         )
         SELECT permission
-        FROM shares s
-        WHERE s.recipient_user_id = $2
-          AND (
-            (s.entity_type = 'page' AND s.entity_id = $1)
-            OR (s.entity_type = 'folder' AND s.entity_id IN (SELECT id FROM folder_ancestors))
-          )
-        ORDER BY CASE WHEN permission = 'edit' THEN 0 ELSE 1 END
+        FROM (
+          -- Direct email invites on the page
+          SELECT permission, 1 AS src
+          FROM shares s
+          WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.recipient_user_id = $2
+            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+
+          UNION ALL
+
+          -- Email invites on ancestor folders
+          SELECT permission, 2 AS src
+          FROM shares s
+          WHERE s.entity_type = 'folder' AND s.entity_id IN (SELECT id FROM folder_ancestors) AND s.recipient_user_id = $2
+            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+
+          UNION ALL
+
+          -- Link share on the page (if public)
+          SELECT permission, 3 AS src
+          FROM shares s
+          WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.token IS NOT NULL
+            AND (s.expires_at IS NULL OR s.expires_at > NOW())
+            AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)
+
+          UNION ALL
+
+          -- Workspace membership (blocked if any ancestor folder is restricted)
+          SELECT
+            CASE WHEN wm.role = 'admin' THEN 'admin' ELSE 'edit' END,
+            4 AS src
+          FROM workspace_members wm
+          JOIN pages p ON p.id = $1
+          WHERE wm.workspace_owner_id = p.created_by AND wm.member_id = $2
+            AND NOT (SELECT blocked FROM restricted_check)
+        ) perms
+        ORDER BY
+          CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
+          src ASC
         LIMIT 1
       `,
       [documentName, userId],
@@ -516,7 +551,7 @@ export function createCollabServer(config: CollabServerConfig) {
     }
 
     const rawPermission = shareResult.rows[0].permission;
-    if (rawPermission !== 'view' && rawPermission !== 'edit') {
+    if (rawPermission !== 'view' && rawPermission !== 'edit' && rawPermission !== 'admin') {
       logger.debug(
         `[auth] user=${userId} denied access to page=${documentName} (invalid permission)`,
       );
@@ -534,7 +569,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
   async function assertAnonymousPageAccess(
     documentName: string,
-  ): Promise<{ permission: 'view' | 'edit' }> {
+  ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
     const pageResult = await pool.query(
       'SELECT is_public FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
       [documentName],
@@ -545,15 +580,75 @@ export function createCollabServer(config: CollabServerConfig) {
     }
 
     const shareResult = await pool.query(
-      "SELECT permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL LIMIT 1",
+      "SELECT permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1",
       [documentName],
     );
     const rawPermission = shareResult.rows[0]?.permission;
-    if (rawPermission !== 'view' && rawPermission !== 'edit') {
+    if (rawPermission !== 'view' && rawPermission !== 'edit' && rawPermission !== 'admin') {
       logger.debug(`[auth] anonymous denied: page ${documentName} has invalid permission`);
       throw new Error('Forbidden');
     }
     return { permission: rawPermission };
+  }
+
+  async function handleWorkspaceEvent(
+    action: 'member_removed' | 'role_changed',
+    ownerId: string,
+    memberId: string,
+  ): Promise<void> {
+    logger.debug(`[workspace] event: action=${action} owner=${ownerId} member=${memberId}`);
+
+    // For removal or role change, find active documents owned by this user
+    // and check if the affected member still has independent access
+    if (!server.hocuspocus?.documents) {
+      logger.debug(`[workspace] no active documents, skipping`);
+      return;
+    }
+
+    let affectedCount = 0;
+    for (const [pageId, doc] of server.hocuspocus.documents) {
+      // Only process UUID documents (not meta rooms)
+      if (!UUID_REGEX.test(pageId)) continue;
+
+      // Check if this page is owned by the workspace owner
+      const ownerCheck = await pool.query(
+        'SELECT 1 FROM pages WHERE id = $1 AND created_by = $2 AND is_deleted = false LIMIT 1',
+        [pageId, ownerId],
+      );
+      if (ownerCheck.rowCount === 0) continue;
+
+      const ownerDoc = doc as Document | undefined;
+      if (!ownerDoc) continue;
+
+      const connections = ownerDoc.getConnections();
+      for (const connection of connections) {
+        const ctx = connection.context as
+          | { user?: { id: string; isAnonymous?: boolean } }
+          | undefined;
+        if (!ctx?.user || ctx.user.id !== memberId) continue;
+
+        // Check if the member still has independent access (direct invite or owner)
+        const accessCheck = await pool.query(
+          `SELECT 1 FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND recipient_user_id = $2
+             AND token IS NULL AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1`,
+          [pageId, memberId],
+        );
+
+        if (accessCheck.rowCount === 0) {
+          // No remaining access — revoke the connection
+          connection.sendStateless(JSON.stringify({ type: 'share_event', action: 'revoke' }));
+          connection.close({ code: 4401, reason: 'Workspace access revoked' });
+          affectedCount++;
+          logger.info(
+            `[workspace] revoked workspace-only access for user=${memberId} on page=${pageId}`,
+          );
+        }
+      }
+    }
+
+    logger.info(
+      `[workspace] processed ${action} for owner=${ownerId}: ${affectedCount} connection(s) affected`,
+    );
   }
 
   const server = new Server({
@@ -621,7 +716,7 @@ export function createCollabServer(config: CollabServerConfig) {
         throw new Error('Unauthorized');
       }
 
-      let permission: 'view' | 'edit' = 'edit';
+      let permission: 'view' | 'edit' | 'admin' = 'edit';
 
       if (documentName) {
         if (isMetaRoom(documentName)) {
@@ -853,38 +948,6 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(`[listen] removed deleted page ${pageId} from meta room`);
     }
 
-    async function handleSharePermissionChanged(pageId: string, permission: string): Promise<void> {
-      logger.info(`[listen] share permission changed for page ${pageId}: ${permission}`);
-      const activeDoc = server.hocuspocus.documents.get(pageId) as Document | undefined;
-      if (!activeDoc) return;
-
-      const connections = activeDoc.getConnections();
-      for (const connection of connections) {
-        const ctx = connection.context as { user?: { isAnonymous?: boolean } } | undefined;
-        if (!ctx?.user?.isAnonymous) continue;
-
-        if (permission === 'private') {
-          logger.debug(`[listen] revoking anonymous access on page ${pageId}`);
-          connection.sendStateless(
-            JSON.stringify({ type: 'permission_changed', permission: 'private' }),
-          );
-          connection.close({ code: 4401, reason: 'Access revoked' });
-        } else if (permission === 'view') {
-          logger.debug(`[listen] setting anonymous connection to read-only on page ${pageId}`);
-          connection.readOnly = true;
-          connection.sendStateless(
-            JSON.stringify({ type: 'permission_changed', permission: 'view' }),
-          );
-        } else if (permission === 'edit') {
-          logger.debug(`[listen] granting anonymous edit access on page ${pageId}`);
-          connection.readOnly = false;
-          connection.sendStateless(
-            JSON.stringify({ type: 'permission_changed', permission: 'edit' }),
-          );
-        }
-      }
-    }
-
     function scheduleReconnect() {
       if (stopped) return;
       if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -911,30 +974,53 @@ export function createCollabServer(config: CollabServerConfig) {
         await client.connect();
         await client.query('LISTEN page_renamed');
         await client.query('LISTEN page_deleted');
-        await client.query('LISTEN share_permission_changed');
+        await client.query('LISTEN share_event');
+        await client.query('LISTEN workspace_event');
 
         client.on('notification', (msg) => {
           try {
-            const payload = JSON.parse(msg.payload ?? '{}') as {
-              pageId?: string;
-              newTitle?: string;
-              permission?: string;
-            };
-            const { pageId, newTitle, permission } = payload;
-            if (!pageId) return;
-
             if (msg.channel === 'page_deleted') {
-              void handlePageDeleted(pageId).catch((err) =>
+              const payload = JSON.parse(msg.payload ?? '{}') as { pageId?: string };
+              if (!payload.pageId) return;
+              void handlePageDeleted(payload.pageId).catch((err) =>
                 logger.error(`[listen] handlePageDeleted failed: ${err}`),
               );
-            } else if (msg.channel === 'page_renamed' && newTitle) {
-              void handlePageRenamed(pageId, newTitle).catch((err) =>
+            } else if (msg.channel === 'page_renamed') {
+              const payload = JSON.parse(msg.payload ?? '{}') as {
+                pageId?: string;
+                newTitle?: string;
+              };
+              if (!payload.pageId || !payload.newTitle) return;
+              void handlePageRenamed(payload.pageId, payload.newTitle).catch((err) =>
                 logger.error(`[listen] handlePageRenamed failed: ${err}`),
               );
-            } else if (msg.channel === 'share_permission_changed' && permission) {
-              void handleSharePermissionChanged(pageId, permission).catch((err) =>
-                logger.error(`[listen] handleSharePermissionChanged failed: ${err}`),
+            } else if (msg.channel === 'share_event') {
+              logger.debug(`[listen] received share_event: ${msg.payload}`);
+              const payload = JSON.parse(msg.payload ?? '{}') as ShareEventPayload;
+              if (!payload.entityId) {
+                logger.debug('[listen] share_event missing entityId, skipping');
+                return;
+              }
+              void handleShareEvent(server, payload, pool, logger).catch((err) =>
+                logger.error(`[listen] handleShareEvent failed: ${err}`),
               );
+            } else if (msg.channel === 'workspace_event') {
+              logger.debug(`[listen] received workspace_event: ${msg.payload}`);
+              const payload = JSON.parse(msg.payload ?? '{}') as {
+                type: string;
+                action: string;
+                ownerId: string;
+                memberId: string;
+              };
+              if (!payload.ownerId || !payload.memberId) {
+                logger.debug('[listen] workspace_event missing ownerId or memberId, skipping');
+                return;
+              }
+              void handleWorkspaceEvent(
+                payload.action as 'member_removed' | 'role_changed',
+                payload.ownerId,
+                payload.memberId,
+              ).catch((err) => logger.error(`[listen] handleWorkspaceEvent failed: ${err}`));
             }
           } catch (err) {
             logger.error(`[listen] failed to process notification: ${err}`);
@@ -953,9 +1039,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
         listenClient = client;
         reconnectAttempts = 0;
-        logger.info(
-          '[listen] subscribed to page_renamed, page_deleted, and share_permission_changed',
-        );
+        logger.info('[listen] subscribed to page_renamed, page_deleted, and share_event');
       } catch (err) {
         logger.error(`[listen] connection failed: ${err}`);
         listenClient = null;

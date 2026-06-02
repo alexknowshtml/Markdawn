@@ -189,6 +189,18 @@ export async function createTestPageLink(sourcePageId: string, targetPageId: str
   return { id, sourcePageId, targetPageId };
 }
 
+export async function createTestWorkspaceMember(
+  workspaceOwnerId: string,
+  memberId: string,
+  role: string = 'member',
+) {
+  await pool.query(
+    `INSERT INTO workspace_members (workspace_owner_id, member_id, role) VALUES ($1, $2, $3)`,
+    [workspaceOwnerId, memberId, role],
+  );
+  return { workspaceOwnerId, memberId, role };
+}
+
 export async function createTestPublicShare(pageId: string) {
   const token = randomUUID();
   await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [

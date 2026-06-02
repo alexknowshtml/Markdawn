@@ -67,7 +67,7 @@ describe('App shell', () => {
       const res = await app.request('/api/nonexistent');
       expect(res.status).toBe(404);
       const body = await res.json();
-      expect(body).toEqual({ error: 'Not Found' });
+      expect(body).toEqual({ message: 'Not Found' });
     });
 
     it('returns 404 for nested unknown routes', async () => {
@@ -83,7 +83,7 @@ describe('App shell', () => {
       const res = await app.request('/api/trigger-error');
       expect(res.status).toBe(500);
       const body = await res.json();
-      expect(body).toEqual({ error: 'Internal Server Error' });
+      expect(body).toEqual({ message: 'Internal Server Error' });
       expect(JSON.stringify(body)).not.toContain('stack');
     });
 

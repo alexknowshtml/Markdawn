@@ -33,6 +33,20 @@ exportRoute.get('/export', async (c) => {
         from folders child
         join shared_folders parent on child.parent_id = parent.id
         where child.is_deleted = false
+      ),
+      restricted_roots as (
+        select id from folders where is_access_restricted = true and is_deleted = false
+      ),
+      restricted_tree as (
+        select id from restricted_roots
+        union all
+        select child.id
+        from folders child
+        join restricted_tree parent on child.parent_id = parent.id
+        where child.is_deleted = false
+      ),
+      workspace_owners as (
+        select workspace_owner_id from workspace_members where member_id = $1
       )
       select id, title, ydoc, properties, icon
       from pages
@@ -41,6 +55,8 @@ exportRoute.get('/export', async (c) => {
           created_by = $1
           or id in (select entity_id from shares where entity_type = 'page' and recipient_user_id = $1)
           or parent_id in (select id from shared_folders)
+          or (created_by in (select workspace_owner_id from workspace_owners)
+              and (parent_id is null or parent_id not in (select id from restricted_tree)))
         )
       order by parent_id nulls first, position asc
     `,
