@@ -397,11 +397,9 @@ export function ExplorerItem({
           )}
         </div>
 
-        {collaborators.length > 0 && (
-          <div className="hidden md:block shrink-0 w-28">
-            <CollaboratorAvatars collaborators={collaborators} />
-          </div>
-        )}
+        <div className="hidden md:block shrink-0 w-28">
+          {collaborators.length > 0 && <CollaboratorAvatars collaborators={collaborators} />}
+        </div>
 
         <span className="text-xs text-zinc-400 dark:text-zinc-500 hidden md:block w-36 shrink-0">
           {formatItemDate(updatedDate)}
