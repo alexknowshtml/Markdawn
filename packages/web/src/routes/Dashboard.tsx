@@ -30,6 +30,7 @@ import {
   useFolderTree,
   useUpdateFolder,
 } from '../hooks/use-folders';
+import { usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, useDeletePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 import { buildPagePath } from '../utils/url';
@@ -138,6 +139,9 @@ export default function HomeView() {
     return (pages ?? []).filter((page) => (page.parentId ?? null) === (folderId ?? null));
   }, [pages, folderId]);
 
+  const pageIds = useMemo(() => currentPages.map((p) => p.id), [currentPages]);
+  const { data: collaboratorsMap } = usePageCollaborators(pageIds);
+
   const allItems: ExplorerItemData[] = useMemo(() => {
     const folderItems: ExplorerItemData[] = currentFolders.map((f) => ({
       id: f.id,
@@ -154,9 +158,10 @@ export default function HomeView() {
       updatedAt: p.updatedAt,
       coverType: p.coverType,
       coverValue: p.coverValue,
+      ...(collaboratorsMap?.[p.id] ? { collaborators: collaboratorsMap[p.id] } : {}),
     }));
     return [...folderItems, ...pageItems];
-  }, [currentFolders, currentPages]);
+  }, [currentFolders, currentPages, collaboratorsMap]);
 
   const favoriteItems = useMemo(
     () => allItems.filter((item) => item.type === 'page' && favoritePageIds.has(item.id)),
@@ -167,6 +172,8 @@ export default function HomeView() {
     () => new Map(allItems.map((item, index) => [item.id, index])),
     [allItems],
   );
+
+  const hasSelection = selection.selectedCount > 0;
 
   const handleCreatePage = async () => {
     try {
@@ -566,6 +573,7 @@ export default function HomeView() {
                     {...(item.type === 'page'
                       ? { onExport: () => void handleExport(item.id, item.title) }
                       : {})}
+                    collaborators={item.collaborators ?? []}
                   />
                 ))}
               </div>
@@ -608,6 +616,7 @@ export default function HomeView() {
                   }
                   onEditSave={() => void handleSaveRename()}
                   onEditKeyDown={handleEditKeyDown}
+                  collaborators={item.collaborators ?? []}
                 />
               ))}
             </div>
@@ -620,7 +629,14 @@ export default function HomeView() {
               <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
                 Favorites
               </h2>
-              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-clip">
+                <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
+                  <span className="w-8" />
+                  <span className="-ml-10">Name</span>
+                  <span className="hidden md:block w-28">Shared with</span>
+                  <span className="hidden md:block w-36">Last edited</span>
+                  <span className="w-8" />
+                </div>
                 <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
                   {favoriteItems.map((item) => (
                     <ExplorerItem
@@ -649,6 +665,8 @@ export default function HomeView() {
                             onExport: () => void handleExport(item.id, item.title),
                           }
                         : {})}
+                      collaborators={item.collaborators ?? []}
+                      showCheckboxes={hasSelection}
                     />
                   ))}
                 </div>
@@ -659,12 +677,12 @@ export default function HomeView() {
             <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
               All Pages
             </h2>
-            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-hidden">
-              <div className="grid grid-cols-[auto_auto_1fr_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
-                <span className="w-5" />
+            <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-clip">
+              <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
                 <span className="w-8" />
-                <span>Name</span>
-                <span className="hidden md:block w-32 text-right">Last edited</span>
+                <span className="-ml-10">Name</span>
+                <span className="hidden md:block w-28">Shared with</span>
+                <span className="hidden md:block w-36">Last edited</span>
                 <span className="w-8" />
               </div>
               <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
@@ -698,6 +716,8 @@ export default function HomeView() {
                     }
                     onEditSave={() => void handleSaveRename()}
                     onEditKeyDown={handleEditKeyDown}
+                    collaborators={item.collaborators ?? []}
+                    showCheckboxes={hasSelection}
                   />
                 ))}
               </div>
