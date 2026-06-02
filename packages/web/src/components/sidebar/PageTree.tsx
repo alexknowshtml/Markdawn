@@ -23,12 +23,14 @@ import {
   useCreatePage,
   useDeletePage,
   useImportMarkdown,
+  useLeavePage,
   usePageTree,
   useUpdatePage,
 } from '../../hooks/use-pages';
+import { useAuth } from '../../hooks/useAuth';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
-import { ConfirmDialog } from '../ConfirmDialog';
+import { markSelfLeave } from '../../utils/leave-page';
 import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { PageTreeRow } from './PageTreeRow';
 
@@ -42,6 +44,8 @@ export function PageTree() {
   const params = useParams();
   const activePageId = params.slugAndId ? extractUuidFromSlug(params.slugAndId) : undefined;
   const { isAnonymous } = useShareContext();
+  const { data: session } = useAuth();
+  const currentUserId = session?.user?.id;
 
   const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
@@ -55,6 +59,7 @@ export function PageTree() {
   const createPageMutation = useCreatePage();
   const updatePageMutation = useUpdatePage();
   const deletePageMutation = useDeletePage();
+  const leavePageMutation = useLeavePage();
   const createFolderMutation = useCreateFolder();
   const updateFolderMutation = useUpdateFolder();
   const deleteFolderMutation = useDeleteFolder();
@@ -66,11 +71,6 @@ export function PageTree() {
   const [allPagesCollapsed, setAllPagesCollapsed] = useState(false);
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
-  const [deleteFolderConfirm, setDeleteFolderConfirm] = useState<{
-    folderId: string;
-    childFolders: number;
-    childPages: number;
-  } | null>(null);
   const [shareTarget, setShareTarget] = useState<{
     type: 'page' | 'folder';
     id: string;
@@ -230,13 +230,16 @@ export function PageTree() {
   };
 
   const handleDeletePage = async (pageId: string) => {
-    try {
+    const page = pages?.find((p) => p.id === pageId);
+    const isOwnPage = page?.createdBy === currentUserId;
+    if (isOwnPage) {
       await deletePageMutation.mutateAsync(pageId);
-      if (activePageId === pageId) {
-        navigate('/app');
-      }
-    } catch {
-      showErrorToast('Failed to delete note');
+    } else {
+      markSelfLeave(pageId);
+      await leavePageMutation.mutateAsync(pageId);
+    }
+    if (activePageId === pageId) {
+      navigate('/app');
     }
   };
 
@@ -260,31 +263,10 @@ export function PageTree() {
   };
 
   const handleDeleteFolder = async (folderId: string, childFolders: number, childPages: number) => {
-    if (childFolders > 0 || childPages > 0) {
-      setDeleteFolderConfirm({ folderId, childFolders, childPages });
-      return;
-    }
-    try {
-      await deleteFolderMutation.mutateAsync({ folderId });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to delete folder';
-      showErrorToast(message);
-    }
-  };
-
-  const handleConfirmDeleteFolder = async () => {
-    if (!deleteFolderConfirm) return;
-    try {
-      await deleteFolderMutation.mutateAsync({
-        folderId: deleteFolderConfirm.folderId,
-        force: true,
-      });
-      setDeleteFolderConfirm(null);
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to delete folder';
-      showErrorToast(message);
-      setDeleteFolderConfirm(null);
-    }
+    await deleteFolderMutation.mutateAsync({
+      folderId,
+      force: childFolders > 0 || childPages > 0,
+    });
   };
 
   const handleToggleFavorite = async (pageId: string, isCurrentlyFavorite: boolean) => {
@@ -671,18 +653,6 @@ export function PageTree() {
           )}
         </div>
       </div>
-
-      {deleteFolderConfirm && (
-        <ConfirmDialog
-          isOpen={true}
-          title="Delete folder?"
-          message={`This folder contains ${deleteFolderConfirm.childFolders} subfolder${deleteFolderConfirm.childFolders !== 1 ? 's' : ''} and ${deleteFolderConfirm.childPages} note${deleteFolderConfirm.childPages !== 1 ? 's' : ''}. All contents will be moved to trash.`}
-          confirmText="Delete all"
-          cancelText="Cancel"
-          onConfirm={handleConfirmDeleteFolder}
-          onCancel={() => setDeleteFolderConfirm(null)}
-        />
-      )}
 
       {shareTarget && (
         <PublicShareDialog

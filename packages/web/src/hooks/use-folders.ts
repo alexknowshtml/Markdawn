@@ -93,7 +93,7 @@ export function useDeleteFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      showSuccessToast('Folder moved to trash');
+      showSuccessToast('Moved to trash');
     },
     onError: (error: Error) => {
       showErrorToast(error.message);

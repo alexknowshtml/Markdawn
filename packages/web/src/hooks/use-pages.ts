@@ -85,6 +85,19 @@ async function emptyTrash(): Promise<void> {
   }
 }
 
+async function leavePage(pageId: string): Promise<{ ok: boolean }> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}/leave`, {
+    method: 'POST',
+  });
+  if (!res.ok) {
+    const error = await res
+      .json()
+      .catch(() => ({ message: 'Failed to remove page from workspace' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
 async function movePage(pageId: string, parentId: string | null, position: string): Promise<Page> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/move`, {
     method: 'PATCH',
@@ -170,6 +183,20 @@ export function useDeletePage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Moved to trash');
+    },
+    onError: (error: Error) => {
+      showErrorToast(error.message);
+    },
+  });
+}
+
+export function useLeavePage() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (pageId: string) => leavePage(pageId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      showSuccessToast('Removed from your view');
     },
     onError: (error: Error) => {
       showErrorToast(error.message);

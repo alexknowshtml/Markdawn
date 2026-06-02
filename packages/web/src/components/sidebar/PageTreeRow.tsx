@@ -16,7 +16,6 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { buildPagePath } from '../../utils/url';
-import { ConfirmDialog } from '../ConfirmDialog';
 
 interface PageTreeRowProps {
   id: string;
@@ -73,7 +72,6 @@ export function PageTreeRow({
 }: PageTreeRowProps) {
   const navigate = useNavigate();
   const [showMenu, setShowMenu] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
   const menuRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -151,14 +149,7 @@ export function PageTreeRow({
   const handleDeleteClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowMenu(false);
-    setShowDeleteDialog(true);
-  };
-
-  const handleConfirmDelete = async () => {
-    if (onDelete) {
-      await onDelete();
-      setShowDeleteDialog(false);
-    }
+    onDelete?.();
   };
 
   const handleExportClick = async (e: React.MouseEvent) => {
@@ -355,17 +346,6 @@ export function PageTreeRow({
           </div>
         )}
       </div>
-
-      {onDelete && (
-        <ConfirmDialog
-          isOpen={showDeleteDialog}
-          title="Move to trash"
-          message={`Are you sure you want to move "${title}" to the trash?`}
-          confirmText="Move to trash"
-          onConfirm={handleConfirmDelete}
-          onCancel={() => setShowDeleteDialog(false)}
-        />
-      )}
     </>
   );
 }
