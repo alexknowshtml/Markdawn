@@ -11,6 +11,7 @@ import {
   useUpdateSharePermission,
 } from '../../hooks/use-share';
 import { useAuth } from '../../hooks/useAuth';
+import { getInitial } from '../../utils/avatar';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { ChoiceGroup, Dropdown, TextBox } from '../ui/FormControls';
 
@@ -32,6 +33,7 @@ type AccessEntry = {
   shareId: string | null;
   id: string;
   name: string;
+  avatarUrl: string | null;
   permission: SharePermission;
   isOwner: boolean;
 };
@@ -75,6 +77,7 @@ export function PublicShareDialog({
     shareId: accessor.shareId,
     id: accessor.userId,
     name: accessor.name ?? accessor.email ?? 'Unknown user',
+    avatarUrl: accessor.avatarUrl ?? null,
     permission: accessor.permission,
     isOwner: accessor.isOwner,
   }));
@@ -349,8 +352,25 @@ export function PublicShareDialog({
                         key={entry.id}
                         className="grid grid-cols-[minmax(0,1.4fr)_0.7fr_2rem] items-center gap-2 border-b border-zinc-200 px-3 py-1.5 last:border-b-0 dark:border-zinc-800"
                       >
-                        <div className="min-w-0">
-                          <p className="truncate text-sm text-zinc-900 dark:text-zinc-100">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div
+                            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full overflow-hidden"
+                            style={{ backgroundColor: entry.avatarUrl ? undefined : '#71717a' }}
+                          >
+                            {entry.avatarUrl ? (
+                              <img
+                                src={entry.avatarUrl}
+                                alt={entry.name}
+                                className="h-full w-full object-cover"
+                                referrerPolicy="no-referrer"
+                              />
+                            ) : (
+                              <span className="text-[9px] font-bold text-white">
+                                {getInitial(entry.name)}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-zinc-900 dark:text-zinc-100 truncate">
                             {displayName}
                           </p>
                         </div>
