@@ -41,6 +41,7 @@ type AccessorRow = {
   user_id: string;
   name: string | null;
   email: string | null;
+  avatar_url: string | null;
   permission: SharePermission;
   source: string;
 };
@@ -77,7 +78,7 @@ const normalizeShare = (row: ShareRow) => ({
 const getPageAccessors = async (pageId: string) => {
   const ownerResult = await pool.query(
     `
-      select p.created_by as user_id, u.name, u.email
+      select p.created_by as user_id, u.name, u.email, coalesce(u.avatar_url, u.image) as avatar_url
       from pages p
       join users u on u.id = p.created_by
       where p.id = $1 and p.is_deleted = false
@@ -85,7 +86,7 @@ const getPageAccessors = async (pageId: string) => {
     [pageId],
   );
   const ownerRow = ownerResult.rows[0] as
-    | { user_id: string; name: string | null; email: string | null }
+    | { user_id: string; name: string | null; email: string | null; avatar_url: string | null }
     | undefined;
 
   const [inviteResult, linkResult] = await Promise.all([
@@ -96,6 +97,7 @@ const getPageAccessors = async (pageId: string) => {
           s.recipient_user_id as user_id,
           recipient.name,
           recipient.email,
+          coalesce(recipient.avatar_url, recipient.image) as avatar_url,
           s.permission,
           'Email' as source
         from shares s
@@ -123,6 +125,7 @@ const getPageAccessors = async (pageId: string) => {
     userId: string;
     name: string | null;
     email: string | null;
+    avatarUrl: string | null;
     permission: SharePermission;
     source: string;
     isOwner: boolean;
@@ -134,6 +137,7 @@ const getPageAccessors = async (pageId: string) => {
       userId: ownerRow.user_id,
       name: ownerRow.name,
       email: ownerRow.email,
+      avatarUrl: ownerRow.avatar_url,
       permission: 'edit',
       source: 'owner',
       isOwner: true,
@@ -141,7 +145,7 @@ const getPageAccessors = async (pageId: string) => {
   }
 
   for (const row of inviteResult.rows) {
-    const item = row as AccessorRow;
+    const item = row as AccessorRow & { avatar_url: string | null };
     const effectivePermission =
       linkPermission && rank(linkPermission) > rank(item.permission)
         ? linkPermission
@@ -151,6 +155,7 @@ const getPageAccessors = async (pageId: string) => {
       userId: item.user_id,
       name: item.name,
       email: item.email,
+      avatarUrl: item.avatar_url,
       permission: effectivePermission,
       source: 'Email',
       isOwner: false,
@@ -272,6 +277,28 @@ sharesRoute.get('/with-me', async (c) => {
       };
     }),
   );
+});
+
+sharesRoute.get('/pages/collaborators', async (c) => {
+  const pageIdsParam = c.req.query('pageIds');
+  if (!pageIdsParam) {
+    return c.json({ error: 'pageIds query parameter is required' }, 400);
+  }
+
+  const pageIds = pageIdsParam
+    .split(',')
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+
+  if (pageIds.length === 0) {
+    return c.json({});
+  }
+
+  const limitedPageIds = pageIds.slice(0, 50);
+  const results = await Promise.all(limitedPageIds.map((id) => getPageAccessors(id)));
+  const collaborators = Object.fromEntries(limitedPageIds.map((id, i) => [id, results[i]]));
+
+  return c.json(collaborators);
 });
 
 sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
