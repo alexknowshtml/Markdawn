@@ -1,6 +1,7 @@
 export * from './logger.js';
 export * from './types/api.js';
 export * from './types/page.js';
+export * from './types/sharing.js';
 export * from './types/user.js';
 
 export * from './utils/anonymous.js';

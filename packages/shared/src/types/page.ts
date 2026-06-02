@@ -39,7 +39,7 @@ export interface PageTreeNode extends Page {
 }
 
 export type ShareEntityType = 'folder' | 'page';
-export type SharePermission = 'view' | 'edit';
+export type SharePermission = 'view' | 'edit' | 'admin';
 
 export interface EntityShare {
   id: string;
@@ -64,6 +64,59 @@ export interface EntityAccessor {
   email: string | null;
   permission: SharePermission;
   source: string;
+  isOwner: boolean;
+}
+
+export interface CapabilitySet {
+  canEdit: boolean;
+  canComment: boolean;
+  canShare: boolean;
+  canDelete: boolean;
+  canCopy: boolean;
+}
+
+export function deriveCapabilities(permission: SharePermission | null): CapabilitySet {
+  switch (permission) {
+    case 'admin':
+      return { canEdit: true, canComment: true, canShare: true, canDelete: true, canCopy: true };
+    case 'edit':
+      return { canEdit: true, canComment: true, canShare: true, canDelete: false, canCopy: true };
+    case 'view':
+      return {
+        canEdit: false,
+        canComment: false,
+        canShare: false,
+        canDelete: false,
+        canCopy: true,
+      };
+    default:
+      return {
+        canEdit: false,
+        canComment: false,
+        canShare: false,
+        canDelete: false,
+        canCopy: false,
+      };
+  }
+}
+
+export interface PermissionDetail {
+  source: 'owner' | 'invite' | 'folder' | 'workspace' | 'link';
+  permission: SharePermission;
+  grantedByName?: string | null;
+  grantedByEmail?: string | null;
+  folderName?: string | null;
+  folderId?: string | null;
+}
+
+export interface InheritedAccessor {
+  userId: string;
+  name: string | null;
+  email: string | null;
+  permission: SharePermission;
+  source: 'folder' | 'workspace';
+  folderName?: string | null;
+  folderId?: string | null;
 }
 
 export interface ShareSummary {
@@ -71,6 +124,7 @@ export interface ShareSummary {
     type: ShareEntityType;
     id: string;
     title: string;
+    ownerId: string | null;
   };
   link: {
     permission: SharePermission | 'private';
@@ -79,6 +133,14 @@ export interface ShareSummary {
   };
   invites: EntityShare[];
   accessors: EntityAccessor[];
+  /** Effective permission for the requesting user (highest across all sources). */
+  userPermission: SharePermission | null;
+  /** Computed capabilities derived from userPermission. */
+  capabilities: CapabilitySet;
+  /** Breakdown of all permission sources for the requesting user. */
+  permissionDetails: PermissionDetail[];
+  /** Users who have access via inheritance (workspace membership or folder). */
+  inheritedAccessors: InheritedAccessor[];
 }
 
 export interface SharedWithMeItem extends EntityShare {

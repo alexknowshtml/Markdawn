@@ -1,0 +1,41 @@
+import type { ShareEntityType, SharePermission } from './page.js';
+
+/**
+ * Discriminated action for a share-related realtime event.
+ * - `grant`: a new share was created (email invite)
+ * - `update`: an existing share's permission changed (link or email)
+ * - `revoke`: a share was deleted or set to private
+ */
+export type ShareEventAction = 'grant' | 'update' | 'revoke';
+
+/**
+ * Canonical payload sent over PostgreSQL LISTEN/NOTIFY from the API server
+ * to the collab (WebSocket) server.
+ *
+ * `targetUserId` determines which connections are affected:
+ * - `undefined` → affects all anonymous connections (link share changes)
+ * - a user ID  → affects that specific authenticated connection (email invite changes)
+ */
+export interface ShareEventPayload {
+  type: 'share_event';
+  action: ShareEventAction;
+  entityType: ShareEntityType;
+  entityId: string;
+  permission?: SharePermission;
+  targetUserId?: string;
+}
+
+/**
+ * Stateless message sent over WebSocket from the collab server to affected
+ * client connections. Clients use this to update their readOnly state,
+ * show toasts, or redirect — no permission logic lives on the client.
+ *
+ * The permission value is sent as-is (including `'admin'`). Clients are
+ * responsible for mapping `'admin'` to `'edit'` for read-only state but
+ * may use the raw value for display purposes (e.g. toast messages).
+ */
+export interface StatelessShareMessage {
+  type: 'share_event';
+  action: ShareEventAction;
+  permission?: SharePermission;
+}

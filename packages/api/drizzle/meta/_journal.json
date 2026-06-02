@@ -85,6 +85,20 @@
       "when": 1779754200000,
       "tag": "0011_share_constraints",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1814400000000,
+      "tag": "0012_connections_unique_constraint",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1815000000000,
+      "tag": "0013_workspace_members",
+      "breakpoints": true
     }
   ]
 }

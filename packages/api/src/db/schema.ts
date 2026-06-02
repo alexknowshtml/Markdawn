@@ -97,8 +97,9 @@ export const shares = pgTable(
       onDelete: 'cascade',
     }),
     recipientEmail: text('recipient_email'),
-    permission: text('permission').notNull().default('view').$type<'view' | 'edit'>(),
+    permission: text('permission').notNull().default('view').$type<'view' | 'edit' | 'admin'>(),
     token: text('token').unique(),
+    expiresAt: timestamp('expires_at'),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },
@@ -106,6 +107,7 @@ export const shares = pgTable(
     entityIdx: index('shares_entity_idx').on(table.entityType, table.entityId),
     recipientIdx: index('shares_recipient_idx').on(table.recipientUserId),
     tokenIdx: index('shares_token_idx').on(table.token),
+    expiresAtIdx: index('shares_expires_at_idx').on(table.expiresAt),
     inviteUnique: unique('shares_invite_unique').on(
       table.entityType,
       table.entityId,
@@ -126,7 +128,7 @@ export const pageAccessEvents = pgTable(
       .notNull(),
     source: text('source').notNull().default('link').$type<'link'>(),
     token: text('token').notNull(),
-    permission: text('permission').notNull().$type<'view' | 'edit'>(),
+    permission: text('permission').notNull().$type<'view' | 'edit' | 'admin'>(),
     firstSeenAt: timestamp('first_seen_at').defaultNow(),
     lastSeenAt: timestamp('last_seen_at').defaultNow(),
   },
@@ -153,7 +155,30 @@ export const folders = pgTable('folders', {
   isDeleted: boolean('is_deleted').default(false),
 
   deletedAt: timestamp('deleted_at'),
+
+  isAccessRestricted: boolean('is_access_restricted').default(false),
 });
+
+export const workspaceMembers = pgTable(
+  'workspace_members',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    workspaceOwnerId: uuid('workspace_owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().default('member').$type<'member' | 'admin'>(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    ownerMemberUnique: unique('workspace_members_owner_member_unique').on(
+      table.workspaceOwnerId,
+      table.memberId,
+    ),
+  }),
+);
 
 export const pages = pgTable(
   'pages',
