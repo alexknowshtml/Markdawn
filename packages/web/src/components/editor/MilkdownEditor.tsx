@@ -1,4 +1,5 @@
 import { deriveCapabilities } from '@markdawn/shared';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useIsReadOnly, useSetReadOnly } from '../../contexts/EditorReadOnlyContext';
@@ -80,6 +81,7 @@ export function MilkdownEditor({
   const setLinkPermission = useSetLinkPermission();
   const setCapabilities = useSetCapabilities();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
   const {
     suggestions,
@@ -981,6 +983,8 @@ export function MilkdownEditor({
             if (!consumeSelfLeave(pageId)) {
               showInfoToast('Removed from your view');
             }
+            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
             navigate('/');
           }
           return;
@@ -995,6 +999,8 @@ export function MilkdownEditor({
             if (!consumeSelfLeave(pageId)) {
               showInfoToast('Removed from your view');
             }
+            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
             navigate('/');
           } else if (action === 'grant' || action === 'update') {
             if (permission === 'view') {

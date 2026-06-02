@@ -162,6 +162,9 @@ export function useRemoveShare() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
       showSuccessToast('Access removed');
     },
     onError: () => {

@@ -196,6 +196,7 @@ export function useLeavePage() {
     mutationFn: (pageId: string) => leavePage(pageId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       showSuccessToast('Removed from your view');
     },
     onError: (error: Error) => {
