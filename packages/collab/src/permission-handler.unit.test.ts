@@ -1,3 +1,6 @@
+import type { Server } from '@hocuspocus/server';
+import type { Logger } from '@logtape/logtape';
+import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
 import { handleShareEvent } from './permission-handler';
 
@@ -18,8 +21,7 @@ function createLogger() {
     },
     log: fn(),
     trace: fn(),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as unknown as Logger;
 }
 
 function createConnection(overrides?: {
@@ -47,12 +49,10 @@ function createServer(doc: ReturnType<typeof createDocument> | undefined) {
         get: vi.fn().mockReturnValue(doc),
       },
     },
-    // Hocuspocus Server type expects these
     configure: vi.fn(),
     destroy: vi.fn(),
     listen: vi.fn(),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as unknown as Server;
 }
 
 function createPool(entries: Array<{ user_id: string; permission: string }> = []) {
@@ -60,8 +60,7 @@ function createPool(entries: Array<{ user_id: string; permission: string }> = []
     query: vi.fn().mockResolvedValue({
       rows: entries,
     }),
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any;
+  } as unknown as Pool;
 }
 
 function privilegedEntry(userId: string, permission: string = 'view') {
