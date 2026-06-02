@@ -22,8 +22,6 @@ pnpm install
 echo -e "${YELLOW}[STEP 3/6] Building packages...${NC}"
 pnpm --filter @markdawn/shared build
 pnpm --filter @markdawn/web build
-pnpm --filter @markdawn/api build
-pnpm --filter @markdawn/collab build
 
 echo -e "${YELLOW}[STEP 4/6] Updating Podman Quadlet units...${NC}"
 podman volume create postgres-data 2>/dev/null || true
@@ -33,35 +31,38 @@ cp "$REPO_DIR/deploy/quadlet/markdawn-postgres.container" ~/.config/containers/s
 cp "$REPO_DIR/deploy/quadlet/markdawn-api.container" ~/.config/containers/systemd/
 cp "$REPO_DIR/deploy/quadlet/markdawn-collab.container" ~/.config/containers/systemd/
 
-echo -e "${YELLOW}[STEP 5/6] Rebuilding container images...${NC}"
+echo -e "${YELLOW}[STEP 5/7] Rebuilding container images...${NC}"
 podman build -t localhost/markdawn-api:latest -f "$REPO_DIR/deploy/Containerfile.api" "$REPO_DIR"
 podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerfile.collab" "$REPO_DIR"
 
-echo -e "${YELLOW}[STEP 6/6] Restarting services...${NC}"
+echo -e "${YELLOW}[STEP 6/7] Running database migrations...${NC}"
+pnpm --filter @markdawn/api db:migrate
+
+echo -e "${YELLOW}[STEP 7/7] Restarting api and collab services...${NC}"
 systemctl --user daemon-reload
 systemctl --user restart \
-  markdawn-pod.service \
-  markdawn-postgres.service \
   markdawn-api.service \
   markdawn-collab.service
 
-echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
-for i in {1..30}; do
-    if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
-        echo -e "${GREEN}[OK] PostgreSQL is ready.${NC}"
+echo -e "${YELLOW}[CHECK] Verifying API is healthy...${NC}"
+for i in {1..15}; do
+    if curl -sf --max-time 5 "http://127.0.0.1:3001/api/health" > /dev/null 2>&1; then
+        echo -e "${GREEN}[OK] API is healthy.${NC}"
         break
     fi
-    if [ "$i" -eq 30 ]; then
-        echo -e "${RED}[ERROR] PostgreSQL did not become ready in time.${NC}"
+    if [ "$i" -eq 15 ]; then
+        echo -e "${RED}[ERROR] API health check failed after restart.${NC}"
         exit 1
     fi
     sleep 2
 done
 
-echo -e "${YELLOW}[SCHEMA] Pushing database schema...${NC}"
-pnpm --filter @markdawn/api db:migrate
+DEPLOYED_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
+echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') deploy: $DEPLOYED_COMMIT" >> "$REPO_DIR/.deploy-log"
 
 echo -e "${GREEN}[DONE] Deployment complete!${NC}"
 echo ""
-echo "Check status: systemctl --user status markdawn-postgres.service markdawn-api.service markdawn-collab.service"
+echo "Deployed commit: $DEPLOYED_COMMIT"
+echo "Check status: systemctl --user status markdawn-api.service markdawn-collab.service"
+echo "View logs:    journalctl --user -u markdawn-api.service -f"
 echo "API health:   curl https://markdawn.space/api/health"
