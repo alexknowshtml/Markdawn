@@ -1,3 +1,4 @@
+import type { EntityAccessor } from '@markdawn/shared';
 import clsx from 'clsx';
 import {
   Check,
@@ -18,6 +19,7 @@ import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { buildPagePath } from '../../utils/url';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { CollaboratorAvatars, formatItemDate } from './CollaboratorAvatars';
 
 export type ExplorerItemType = 'page' | 'folder';
 
@@ -29,6 +31,7 @@ export interface ExplorerItemData {
   updatedAt: string | Date;
   coverType?: string | null;
   coverValue?: string | null;
+  collaborators?: EntityAccessor[];
 }
 
 interface ExplorerItemProps {
@@ -50,6 +53,8 @@ interface ExplorerItemProps {
   onEditChange?: (value: string) => void;
   onEditSave?: () => void;
   onEditKeyDown?: (e: React.KeyboardEvent) => void;
+  collaborators?: EntityAccessor[];
+  showCheckboxes?: boolean;
 }
 
 interface ExplorerItemMenuProps {
@@ -280,8 +285,11 @@ export function ExplorerItem({
   onEditChange,
   onEditSave,
   onEditKeyDown,
+  collaborators = [],
+  showCheckboxes = false,
 }: ExplorerItemProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const [isHovered, setIsHovered] = useState(false);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -324,12 +332,14 @@ export function ExplorerItem({
         role="button"
         tabIndex={0}
         className={clsx(
-          'group flex items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150 w-full text-left',
+          'group grid grid-cols-[auto_1fr_auto_auto_auto] items-center gap-3 px-4 py-2.5 rounded-lg cursor-pointer transition-all duration-150 w-full text-left',
           isSelected
             ? 'bg-zinc-100 dark:bg-zinc-800'
             : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50',
         )}
         onClick={handleClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
         onKeyDown={(e) => {
           if (isEditing) return;
           if (e.key === 'Enter' || e.key === ' ') {
@@ -338,21 +348,28 @@ export function ExplorerItem({
           }
         }}
       >
-        <button
-          type="button"
+        <div
           className={clsx(
-            'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
-            isSelected
-              ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
-              : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
+            'flex items-center justify-center w-8 h-8 rounded-md shrink-0 transition-colors',
+            isSelected || isHovered || showCheckboxes
+              ? 'bg-transparent'
+              : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400',
           )}
-          onClick={handleCheckboxClick}
         >
-          {isSelected && <Check size={12} strokeWidth={3} />}
-        </button>
-
-        <div className="flex items-center justify-center w-8 h-8 rounded-md bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400 shrink-0">
-          {item.type === 'folder' ? (
+          {isSelected || isHovered || showCheckboxes ? (
+            <button
+              type="button"
+              className={clsx(
+                'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
+                isSelected
+                  ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
+                  : 'border-zinc-300 dark:border-zinc-600 hover:border-zinc-500 dark:hover:border-zinc-400',
+              )}
+              onClick={handleCheckboxClick}
+            >
+              {isSelected && <Check size={12} strokeWidth={3} />}
+            </button>
+          ) : item.type === 'folder' ? (
             <Folder size={18} />
           ) : item.icon ? (
             <span className="text-lg leading-none">{item.icon}</span>
@@ -380,8 +397,14 @@ export function ExplorerItem({
           )}
         </div>
 
-        <span className="text-xs text-zinc-400 dark:text-zinc-500 hidden md:block w-32 text-right shrink-0">
-          {new Date(updatedDate).toLocaleDateString()}
+        {collaborators.length > 0 && (
+          <div className="hidden md:block shrink-0 w-28">
+            <CollaboratorAvatars collaborators={collaborators} />
+          </div>
+        )}
+
+        <span className="text-xs text-zinc-400 dark:text-zinc-500 hidden md:block w-36 shrink-0">
+          {formatItemDate(updatedDate)}
         </span>
 
         <ExplorerItemMenu {...menuProps} />
@@ -396,7 +419,7 @@ export function ExplorerItem({
       role="button"
       tabIndex={0}
       className={clsx(
-        'group relative block w-full text-left p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200',
+        'group relative block w-full text-left p-5 bg-white dark:bg-zinc-900 border rounded-xl cursor-pointer transition-all duration-200 overflow-visible',
         isSelected
           ? 'border-zinc-900 dark:border-zinc-100 ring-2 ring-zinc-900 dark:ring-zinc-100'
           : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]',
@@ -423,6 +446,10 @@ export function ExplorerItem({
         >
           {isSelected && <Check size={12} strokeWidth={3} />}
         </button>
+      </div>
+
+      <div className="absolute top-3 right-3 z-10">
+        <ExplorerItemMenu {...menuProps} />
       </div>
 
       <div
@@ -465,14 +492,18 @@ export function ExplorerItem({
               {item.title || 'Untitled'}
             </h3>
           )}
-          <p className="text-xs text-zinc-400 dark:text-zinc-500 mt-0.5">
-            {item.type === 'folder'
-              ? 'Folder'
-              : `Edited ${new Date(updatedDate).toLocaleDateString()}`}
-          </p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="text-xs text-zinc-400 dark:text-zinc-500">
+              {item.type === 'folder' ? 'Folder' : `Edited ${formatItemDate(updatedDate)}`}
+            </p>
+          </div>
         </div>
 
-        <ExplorerItemMenu {...menuProps} />
+        {collaborators.length > 0 && (
+          <div className="shrink-0">
+            <CollaboratorAvatars collaborators={collaborators} max={3} />
+          </div>
+        )}
       </div>
     </div>
     /* biome-ignore-end lint/a11y/useSemanticElements: nested buttons not possible */
