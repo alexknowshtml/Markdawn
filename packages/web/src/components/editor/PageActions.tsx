@@ -13,7 +13,6 @@ interface PageActionsProps {
 
 export function PageActions({ pageId, page }: PageActionsProps) {
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
-  const [shareAnchorRect, setShareAnchorRect] = useState<DOMRect | null>(null);
   const { data: favorites } = useFavorites();
   const toggleFavoriteMutation = useToggleFavorite();
 
@@ -50,10 +49,7 @@ export function PageActions({ pageId, page }: PageActionsProps) {
           <Tooltip label="Share to web" position="bottom">
             <button
               type="button"
-              onClick={(event) => {
-                setShareAnchorRect(event.currentTarget.getBoundingClientRect());
-                setIsShareDialogOpen(true);
-              }}
+              onClick={() => setIsShareDialogOpen(true)}
               className={`p-2 rounded-md transition-colors cursor-pointer ${
                 page.isPublic
                   ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
@@ -68,7 +64,6 @@ export function PageActions({ pageId, page }: PageActionsProps) {
               entityType="page"
               entityId={page.id}
               title={page.title}
-              anchorRect={shareAnchorRect}
               onClose={() => setIsShareDialogOpen(false)}
             />
           )}
