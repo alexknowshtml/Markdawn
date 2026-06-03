@@ -23,15 +23,10 @@ import {
   useBulkMovePages,
 } from '../hooks/use-bulk-actions';
 import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
-import { useFavorites, useToggleFavorite } from '../hooks/use-favorites';
-import {
-  useCreateFolder,
-  useDeleteFolder,
-  useFolderTree,
-  useUpdateFolder,
-} from '../hooks/use-folders';
+import { useFavorites } from '../hooks/use-favorites';
+import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-folders';
 import { usePageCollaborators } from '../hooks/use-page-collaborators';
-import { useCreatePage, useDeletePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useAuth } from '../hooks/useAuth';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 import { buildPagePath } from '../utils/url';
@@ -61,15 +56,12 @@ export default function HomeView() {
   const createFolderMutation = useCreateFolder();
   const updatePageMutation = useUpdatePage();
   const updateFolderMutation = useUpdateFolder();
-  const deletePageMutation = useDeletePage();
-  const deleteFolderMutation = useDeleteFolder();
   const copyPageMutation = useCopyPage();
   const copyFolderMutation = useCopyFolder();
   const bulkDeletePagesMutation = useBulkDeletePages();
   const bulkDeleteFoldersMutation = useBulkDeleteFolders();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
-  const toggleFavoriteMutation = useToggleFavorite();
 
   const clipboard = useClipboard();
   const selection = useSelection();
@@ -229,19 +221,6 @@ export default function HomeView() {
     }
   };
 
-  const handleDeleteItem = async (item: ExplorerItemData) => {
-    try {
-      if (item.type === 'page') {
-        await deletePageMutation.mutateAsync(item.id);
-      } else {
-        await deleteFolderMutation.mutateAsync({ folderId: item.id });
-      }
-      selection.deselect(item.id);
-    } catch {
-      showErrorToast('Failed to delete');
-    }
-  };
-
   const handleRenameItem = (item: ExplorerItemData) => {
     setEditingTarget({ kind: item.type, id: item.id, value: item.title });
   };
@@ -273,36 +252,6 @@ export default function HomeView() {
     } else if (e.key === 'Escape') {
       setEditingTarget(null);
     }
-  };
-
-  const handleExport = async (pageId: string, title: string) => {
-    try {
-      const res = await fetch(`/api/pages/${pageId}/export/markdown`);
-      if (!res.ok) throw new Error('Failed to export');
-      const blob = await res.blob();
-      const disposition = res.headers.get('content-disposition');
-      const match = disposition?.match(/filename="?([^";]+)"?/i);
-      const filename = match?.[1] ?? `${title || 'page'}.md`;
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      showSuccessToast('Exported to markdown');
-    } catch {
-      showErrorToast('Failed to export');
-    }
-  };
-
-  const handleToggleFavorite = async (pageId: string) => {
-    const isCurrentlyFavorite = favoritePageIds.has(pageId);
-    await toggleFavoriteMutation.mutateAsync({
-      pageId,
-      isFavorite: isCurrentlyFavorite,
-    });
   };
 
   const handleBulkDelete = async () => {
@@ -393,26 +342,6 @@ export default function HomeView() {
     } catch {
       showErrorToast('Failed to paste');
     }
-  };
-
-  const handleCopyItem = (item: ExplorerItemData) => {
-    selection.clear();
-    selection.select({ id: item.id, type: item.type });
-    clipboard.copy([{ id: item.id, type: item.type }]);
-    showSuccessToast('Copied to clipboard');
-  };
-
-  const handleCutItem = (item: ExplorerItemData) => {
-    selection.clear();
-    selection.select({ id: item.id, type: item.type });
-    clipboard.cut([{ id: item.id, type: item.type }]);
-    showSuccessToast('Cut to clipboard');
-  };
-
-  const handleMoveItem = (item: ExplorerItemData) => {
-    selection.clear();
-    selection.select({ id: item.id, type: item.type });
-    setMoveDialogOpen(true);
   };
 
   const isLoading = isPagesLoading || isFoldersLoading;
@@ -567,22 +496,12 @@ export default function HomeView() {
                     viewMode="card"
                     isSelected={selection.isSelected(item.id)}
                     isFavorite={favoritePageIds.has(item.id)}
-                    onToggleFavorite={() => {
-                      void handleToggleFavorite(item.id);
-                    }}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
                     }}
                     onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
-                    onDelete={() => void handleDeleteItem(item)}
                     onRename={() => handleRenameItem(item)}
-                    onCopy={() => handleCopyItem(item)}
-                    onCut={() => handleCutItem(item)}
-                    onMove={() => handleMoveItem(item)}
-                    {...(item.type === 'page'
-                      ? { onExport: () => void handleExport(item.id, item.title) }
-                      : {})}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
                   />
                 ))}
@@ -600,25 +519,13 @@ export default function HomeView() {
                   item={item}
                   viewMode="card"
                   isSelected={selection.isSelected(item.id)}
+                  isFavorite={favoritePageIds.has(item.id)}
                   onSelect={(e) => {
                     e.stopPropagation();
                     selection.toggle({ id: item.id, type: item.type });
                   }}
                   onNavigate={(e) => handleItemClick(item, index, e)}
-                  onDelete={() => void handleDeleteItem(item)}
                   onRename={() => handleRenameItem(item)}
-                  onCopy={() => handleCopyItem(item)}
-                  onCut={() => handleCutItem(item)}
-                  onMove={() => handleMoveItem(item)}
-                  {...(item.type === 'page'
-                    ? {
-                        onExport: () => void handleExport(item.id, item.title),
-                        isFavorite: favoritePageIds.has(item.id),
-                        onToggleFavorite: () => {
-                          void handleToggleFavorite(item.id);
-                        },
-                      }
-                    : {})}
                   isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
                   editValue={editingTarget?.value ?? ''}
                   onEditChange={(value) =>
@@ -655,9 +562,6 @@ export default function HomeView() {
                       viewMode="list"
                       isSelected={selection.isSelected(item.id)}
                       isFavorite={favoritePageIds.has(item.id)}
-                      onToggleFavorite={() => {
-                        void handleToggleFavorite(item.id);
-                      }}
                       onSelect={(e) => {
                         e.stopPropagation();
                         selection.toggle({ id: item.id, type: item.type });
@@ -665,16 +569,7 @@ export default function HomeView() {
                       onNavigate={(e) =>
                         handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)
                       }
-                      onDelete={() => void handleDeleteItem(item)}
                       onRename={() => handleRenameItem(item)}
-                      onCopy={() => handleCopyItem(item)}
-                      onCut={() => handleCutItem(item)}
-                      onMove={() => handleMoveItem(item)}
-                      {...(item.type === 'page'
-                        ? {
-                            onExport: () => void handleExport(item.id, item.title),
-                          }
-                        : {})}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
                       showCheckboxes={hasSelection}
                     />
@@ -703,22 +598,12 @@ export default function HomeView() {
                     viewMode="list"
                     isSelected={selection.isSelected(item.id)}
                     isFavorite={favoritePageIds.has(item.id)}
-                    onToggleFavorite={() => {
-                      void handleToggleFavorite(item.id);
-                    }}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
                     }}
                     onNavigate={(e) => handleItemClick(item, index, e)}
-                    onDelete={() => void handleDeleteItem(item)}
                     onRename={() => handleRenameItem(item)}
-                    onCopy={() => handleCopyItem(item)}
-                    onCut={() => handleCutItem(item)}
-                    onMove={() => handleMoveItem(item)}
-                    {...(item.type === 'page'
-                      ? { onExport: () => void handleExport(item.id, item.title) }
-                      : {})}
                     isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
                     editValue={editingTarget?.value ?? ''}
                     onEditChange={(value) =>

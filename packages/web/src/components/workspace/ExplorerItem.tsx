@@ -1,24 +1,9 @@
 import type { EntityAccessor } from '@markdawn/shared';
 import clsx from 'clsx';
-import {
-  Check,
-  Copy,
-  Download,
-  Edit2,
-  FileText,
-  Folder,
-  FolderInput,
-  MoreHorizontal,
-  Scissors,
-  Star,
-  Trash2,
-} from 'lucide-react';
+import { Check, FileText, Folder } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
-import { buildPagePath } from '../../utils/url';
-import { ConfirmDialog } from '../ConfirmDialog';
+import { PageContextMenu } from '../ui/PageContextMenu';
 import { CollaboratorAvatars, formatItemDate } from './CollaboratorAvatars';
 
 export type ExplorerItemType = 'page' | 'folder';
@@ -39,15 +24,9 @@ interface ExplorerItemProps {
   viewMode: 'card' | 'list';
   isSelected: boolean;
   isFavorite?: boolean;
-  onToggleFavorite?: () => void;
   onSelect: (e: React.MouseEvent | React.KeyboardEvent) => void;
   onNavigate: (e: React.MouseEvent | React.KeyboardEvent) => void;
-  onDelete?: () => void;
   onRename?: () => void;
-  onCopy?: () => void;
-  onCut?: () => void;
-  onMove?: () => void;
-  onExport?: () => void;
   isEditing?: boolean;
   editValue?: string;
   onEditChange?: (value: string) => void;
@@ -57,229 +36,14 @@ interface ExplorerItemProps {
   showCheckboxes?: boolean;
 }
 
-interface ExplorerItemMenuProps {
-  item: ExplorerItemData;
-  isFavorite: boolean;
-  onToggleFavorite?: () => void;
-  onRename: () => void;
-  onCopy: () => void;
-  onCut: () => void;
-  onMove: () => void;
-  onExport?: () => void;
-  onDelete: () => void;
-}
-
-const menuItemClass =
-  'flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors';
-
-function ExplorerItemMenu({
-  item,
-  isFavorite,
-  onToggleFavorite,
-  onRename,
-  onCopy,
-  onCut,
-  onMove,
-  onExport,
-  onDelete,
-}: ExplorerItemMenuProps) {
-  const navigate = useNavigate();
-  const [showMenu, setShowMenu] = useState(false);
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
-  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
-  const menuRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(event.target as Node) &&
-        buttonRef.current &&
-        !buttonRef.current.contains(event.target as Node)
-      ) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (!showMenu || !buttonRef.current) {
-      setMenuStyle({});
-      return;
-    }
-
-    const rect = buttonRef.current.getBoundingClientRect();
-    const estimatedHeight = 220;
-    const spaceBelow = window.innerHeight - rect.bottom - 16;
-    const spaceAbove = rect.top - 16;
-    const openUpward = spaceBelow < estimatedHeight && spaceAbove >= estimatedHeight;
-    const top = openUpward
-      ? `${Math.max(8, rect.top - estimatedHeight)}px`
-      : `${rect.bottom + 4}px`;
-
-    setMenuStyle({
-      position: 'fixed',
-      right: `${window.innerWidth - rect.right}px`,
-      top,
-      zIndex: 9999,
-      transformOrigin: openUpward ? 'bottom right' : 'top right',
-    });
-  }, [showMenu]);
-
-  return (
-    <>
-      <div className="relative shrink-0">
-        <button
-          ref={buttonRef}
-          type="button"
-          className="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-          onClick={(e) => {
-            e.stopPropagation();
-            setShowMenu(!showMenu);
-          }}
-        >
-          <MoreHorizontal size={16} />
-        </button>
-
-        {showMenu &&
-          createPortal(
-            <div
-              ref={menuRef}
-              style={menuStyle}
-              className="w-40 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-xl rounded-xl p-1.5 flex flex-col animate-scale-in"
-            >
-              {item.type === 'page' && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    navigate(buildPagePath(item.title, item.id));
-                  }}
-                  className={menuItemClass}
-                >
-                  <FileText size={14} /> Open
-                </button>
-              )}
-              {item.type === 'page' && onToggleFavorite && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onToggleFavorite();
-                  }}
-                  className={menuItemClass}
-                >
-                  <Star size={14} className={isFavorite ? 'text-yellow-500' : ''} />
-                  {isFavorite ? 'Unfavorite' : 'Favorite'}
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(false);
-                  onRename();
-                }}
-                className={menuItemClass}
-              >
-                <Edit2 size={14} /> Rename
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(false);
-                  onCopy();
-                }}
-                className={menuItemClass}
-              >
-                <Copy size={14} /> Copy
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(false);
-                  onCut();
-                }}
-                className={menuItemClass}
-              >
-                <Scissors size={14} /> Cut
-              </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(false);
-                  onMove();
-                }}
-                className={menuItemClass}
-              >
-                <FolderInput size={14} /> Move
-              </button>
-              {onExport && (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setShowMenu(false);
-                    onExport();
-                  }}
-                  className={menuItemClass}
-                >
-                  <Download size={14} /> Export
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setShowMenu(false);
-                  setShowDeleteDialog(true);
-                }}
-                className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-              >
-                <Trash2 size={14} /> Delete
-              </button>
-            </div>,
-            document.body,
-          )}
-      </div>
-
-      <ConfirmDialog
-        isOpen={showDeleteDialog}
-        title="Move to trash"
-        message={`Are you sure you want to move "${item.title || 'Untitled'}" to the trash?`}
-        confirmText="Move to trash"
-        onConfirm={() => {
-          onDelete();
-          setShowDeleteDialog(false);
-        }}
-        onCancel={() => setShowDeleteDialog(false)}
-      />
-    </>
-  );
-}
-
 export function ExplorerItem({
   item,
   viewMode,
   isSelected,
   isFavorite = false,
-  onToggleFavorite,
   onSelect,
   onNavigate,
-  onDelete = () => {},
   onRename = () => {},
-  onCopy = () => {},
-  onCut = () => {},
-  onMove = () => {},
-  onExport,
   isEditing = false,
   editValue = '',
   onEditChange,
@@ -312,18 +76,6 @@ export function ExplorerItem({
 
   const updatedDate =
     typeof item.updatedAt === 'string' ? item.updatedAt : item.updatedAt.toISOString();
-
-  const menuProps: ExplorerItemMenuProps = {
-    item,
-    isFavorite,
-    onRename,
-    onCopy,
-    onCut,
-    onMove,
-    onDelete,
-    ...(onToggleFavorite && { onToggleFavorite }),
-    ...(onExport && { onExport }),
-  };
 
   if (viewMode === 'list') {
     return (
@@ -405,7 +157,15 @@ export function ExplorerItem({
           {formatItemDate(updatedDate)}
         </span>
 
-        <ExplorerItemMenu {...menuProps} />
+        <div className="shrink-0">
+          <PageContextMenu
+            item={item}
+            isFavorite={isFavorite}
+            confirmDelete
+            triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+            onRename={onRename}
+          />
+        </div>
       </div>
       /* biome-ignore-end lint/a11y/useSemanticElements: nested buttons not possible */
     );
@@ -447,7 +207,13 @@ export function ExplorerItem({
       </div>
 
       <div className="absolute top-3 right-3 z-10">
-        <ExplorerItemMenu {...menuProps} />
+        <PageContextMenu
+          item={item}
+          isFavorite={isFavorite}
+          confirmDelete
+          triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+          onRename={onRename}
+        />
       </div>
 
       <div

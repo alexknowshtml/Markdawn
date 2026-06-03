@@ -1,21 +1,10 @@
 import clsx from 'clsx';
-import {
-  ChevronDown,
-  ChevronRight,
-  Download,
-  Edit2,
-  FileText,
-  MoreHorizontal,
-  Plus,
-  Share2,
-  Star,
-  Trash2,
-} from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { buildPagePath } from '../../utils/url';
+import { PageContextMenu } from '../ui/PageContextMenu';
 
 interface PageTreeRowProps {
   id: string;
@@ -28,13 +17,10 @@ interface PageTreeRowProps {
   isFavorite?: boolean;
   showDragHandle?: boolean;
   onToggleExpand?: () => void;
-  onToggleFavorite?: () => void;
   onCreateChild?: () => void;
-  onDelete?: () => void;
-  onRename?: () => void;
-  onExport?: () => void;
-  onShare?: (anchorRect: DOMRect) => void;
   onNavigate?: () => void;
+  onRename?: () => void;
+  onDelete?: () => void;
   isEditing?: boolean;
   editTitle?: string;
   onEditChange?: (value: string) => void;
@@ -55,13 +41,10 @@ export function PageTreeRow({
   isFavorite = false,
   showDragHandle = false,
   onToggleExpand,
-  onToggleFavorite,
   onCreateChild,
-  onDelete,
-  onRename,
-  onExport,
-  onShare,
   onNavigate,
+  onRename,
+  onDelete,
   isEditing = false,
   editTitle = '',
   onEditChange,
@@ -71,50 +54,8 @@ export function PageTreeRow({
   isFolder = false,
 }: PageTreeRowProps) {
   const navigate = useNavigate();
-  const [showMenu, setShowMenu] = useState(false);
-  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
-  const menuRef = useRef<HTMLDivElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (
-        menuRef.current &&
-        !menuRef.current.contains(event.target as Node) &&
-        buttonRef.current &&
-        !buttonRef.current.contains(event.target as Node)
-      ) {
-        setShowMenu(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  useEffect(() => {
-    if (!showMenu || !buttonRef.current) {
-      setMenuStyle({});
-      return;
-    }
-
-    const rect = buttonRef.current.getBoundingClientRect();
-    const estimatedHeight = 140;
-    const spaceBelow = window.innerHeight - rect.bottom - 16;
-    const spaceAbove = rect.top - 16;
-    const openUpward = spaceBelow < estimatedHeight && spaceAbove >= estimatedHeight;
-    const top = openUpward
-      ? `${Math.max(8, rect.top - estimatedHeight)}px`
-      : `${rect.bottom + 4}px`;
-
-    setMenuStyle({
-      position: 'fixed',
-      right: `${window.innerWidth - rect.right}px`,
-      top,
-      zIndex: 9999,
-      transformOrigin: openUpward ? 'bottom right' : 'top right',
-    });
-  }, [showMenu]);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -136,38 +77,9 @@ export function PageTreeRow({
     if (onToggleExpand) onToggleExpand();
   };
 
-  const handleToggleFavorite = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onToggleFavorite) onToggleFavorite();
-  };
-
   const handleCreateChild = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (onCreateChild) onCreateChild();
-  };
-
-  const handleDeleteClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowMenu(false);
-    onDelete?.();
-  };
-
-  const handleExportClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowMenu(false);
-    if (onExport) onExport();
-  };
-
-  const handleRenameClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowMenu(false);
-    if (onRename) onRename();
-  };
-
-  const handleShareClick = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    setShowMenu(false);
-    onShare?.(e.currentTarget.getBoundingClientRect());
   };
 
   return (
@@ -227,7 +139,7 @@ export function PageTreeRow({
       <div
         className={clsx(
           'flex-1 flex items-center min-w-0 transition-[padding] duration-150',
-          showMenu ? 'pr-14' : 'pr-2 group-hover:pr-14',
+          isMenuOpen ? 'pr-14' : 'pr-2 group-hover:pr-14',
         )}
       >
         {isEditing ? (
@@ -250,27 +162,11 @@ export function PageTreeRow({
         <div
           className={clsx(
             'absolute right-1 z-20 flex items-center gap-0.5 transition-opacity',
-            showMenu
+            isMenuOpen
               ? 'opacity-100 pointer-events-auto'
               : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto',
           )}
         >
-          {onToggleFavorite && (
-            <button
-              type="button"
-              onClick={handleToggleFavorite}
-              className={clsx(
-                'p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 cursor-pointer transition-colors',
-                isFavorite
-                  ? 'text-yellow-500 hover:text-yellow-600'
-                  : 'text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100',
-              )}
-              title={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-            >
-              <Star size={14} fill={isFavorite ? 'currentColor' : 'none'} />
-            </button>
-          )}
-
           {onCreateChild && (
             <button
               type="button"
@@ -282,66 +178,15 @@ export function PageTreeRow({
             </button>
           )}
 
-          <div className="relative">
-            <button
-              ref={buttonRef}
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowMenu(!showMenu);
-              }}
-              className="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors"
-            >
-              <MoreHorizontal size={14} />
-            </button>
-
-            {showMenu &&
-              createPortal(
-                <div
-                  ref={menuRef}
-                  style={menuStyle}
-                  className="w-36 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] rounded-2xl p-1.5 flex flex-col animate-scale-in"
-                >
-                  {onRename && (
-                    <button
-                      type="button"
-                      onClick={handleRenameClick}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Edit2 size={14} /> Rename
-                    </button>
-                  )}
-                  {onExport && (
-                    <button
-                      type="button"
-                      onClick={handleExportClick}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Download size={14} /> Export
-                    </button>
-                  )}
-                  {onShare && (
-                    <button
-                      type="button"
-                      onClick={handleShareClick}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Share2 size={14} /> Share
-                    </button>
-                  )}
-                  {onDelete && (
-                    <button
-                      type="button"
-                      onClick={handleDeleteClick}
-                      className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-500/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                    >
-                      <Trash2 size={14} /> Delete
-                    </button>
-                  )}
-                </div>,
-                document.body,
-              )}
-          </div>
+          <PageContextMenu
+            item={{ id, type: isFolder ? 'folder' : 'page', title, icon: icon ?? null }}
+            isFavorite={isFavorite}
+            triggerClassName="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors"
+            menuClassName="w-40 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] rounded-2xl p-1.5 flex flex-col z-[9999]"
+            onOpenChange={setIsMenuOpen}
+            {...(onRename != null ? { onRename } : {})}
+            {...(onDelete != null ? { onDelete } : {})}
+          />
         </div>
       )}
     </div>

@@ -12,7 +12,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useShareContext } from '../../contexts/ShareContext';
-import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
+import { useFavorites } from '../../hooks/use-favorites';
 import {
   useCreateFolder,
   useDeleteFolder,
@@ -29,9 +29,8 @@ import {
 } from '../../hooks/use-pages';
 import { useAuth } from '../../hooks/useAuth';
 import { markSelfLeave } from '../../utils/leave-page';
-import { showErrorToast, showSuccessToast } from '../../utils/toast';
+import { showErrorToast } from '../../utils/toast';
 import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
-import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { PageTreeRow } from './PageTreeRow';
 
 type EditingTarget =
@@ -63,7 +62,6 @@ export function PageTree() {
   const createFolderMutation = useCreateFolder();
   const updateFolderMutation = useUpdateFolder();
   const deleteFolderMutation = useDeleteFolder();
-  const toggleFavoriteMutation = useToggleFavorite();
   const importMarkdownMutation = useImportMarkdown();
 
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
@@ -71,24 +69,6 @@ export function PageTree() {
   const [allPagesCollapsed, setAllPagesCollapsed] = useState(false);
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
-  const [shareTarget, setShareTarget] = useState<{
-    type: 'page' | 'folder';
-    id: string;
-    title: string;
-  } | null>(null);
-  const [shareAnchorRect, setShareAnchorRect] = useState<DOMRect | null>(null);
-
-  const openShare = (
-    target: {
-      type: 'page' | 'folder';
-      id: string;
-      title: string;
-    },
-    anchorRect: DOMRect,
-  ) => {
-    setShareTarget(target);
-    setShareAnchorRect(anchorRect);
-  };
 
   const handleCreateRootPage = useCallback(async () => {
     try {
@@ -269,35 +249,6 @@ export function PageTree() {
     });
   };
 
-  const handleToggleFavorite = async (pageId: string, isCurrentlyFavorite: boolean) => {
-    await toggleFavoriteMutation.mutateAsync({
-      pageId,
-      isFavorite: isCurrentlyFavorite,
-    });
-  };
-
-  const handleExport = async (pageId: string, title: string) => {
-    try {
-      const res = await fetch(`/api/pages/${pageId}/export/markdown`);
-      if (!res.ok) throw new Error('Failed to export');
-      const blob = await res.blob();
-      const disposition = res.headers.get('content-disposition');
-      const match = disposition?.match(/filename="?([^";]+)"?/i);
-      const filename = match?.[1] ?? `${title || 'page'}.md`;
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      showSuccessToast('Exported to markdown');
-    } catch {
-      showErrorToast('Failed to export note');
-    }
-  };
-
   const beginRenameFolder = (folder: FolderTreeNode) => {
     setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
   };
@@ -367,9 +318,6 @@ export function PageTree() {
           onCreateChild={() => handleCreatePageInFolder(folder.id)}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
           onRename={() => beginRenameFolder(folder)}
-          onShare={(anchorRect) =>
-            openShare({ type: 'folder', id: folder.id, title: folder.name }, anchorRect)
-          }
           onNavigate={() => toggleFolderExpanded(folder.id)}
           isEditing={isEditingFolder}
           isFolder={true}
@@ -394,15 +342,8 @@ export function PageTree() {
                   depth={depth + 1}
                   isActive={activePageId === page.id}
                   isFavorite={favoritePageIds.has(page.id)}
-                  onToggleFavorite={() =>
-                    handleToggleFavorite(page.id, favoritePageIds.has(page.id))
-                  }
                   onDelete={() => handleDeletePage(page.id)}
                   onRename={() => beginRenamePage(page)}
-                  onExport={() => handleExport(page.id, page.title)}
-                  onShare={(anchorRect) =>
-                    openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
-                  }
                   isEditing={isEditingPage}
                   editTitle={isEditingPage ? editingTarget.value : page.title}
                   onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -554,11 +495,9 @@ export function PageTree() {
                     icon={fav.icon}
                     isActive={activePageId === fav.pageId}
                     isFavorite={true}
-                    onToggleFavorite={() => handleToggleFavorite(fav.pageId, true)}
                     onDelete={() => handleDeletePage(fav.pageId)}
-                    onExport={() => handleExport(fav.pageId, fav.title)}
-                    onShare={(anchorRect) =>
-                      openShare({ type: 'page', id: fav.pageId, title: fav.title }, anchorRect)
+                    onRename={() =>
+                      setEditingTarget({ kind: 'page', id: fav.pageId, value: fav.title })
                     }
                   />
                 ))}
@@ -595,15 +534,8 @@ export function PageTree() {
                     icon={page.icon}
                     isActive={activePageId === page.id}
                     isFavorite={favoritePageIds.has(page.id)}
-                    onToggleFavorite={() =>
-                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
-                    }
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
-                    onExport={() => handleExport(page.id, page.title)}
-                    onShare={(anchorRect) =>
-                      openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
-                    }
                     isEditing={isEditingPage}
                     editTitle={isEditingPage ? editingTarget.value : page.title}
                     onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -625,15 +557,8 @@ export function PageTree() {
                     icon={page.icon}
                     isActive={activePageId === page.id}
                     isFavorite={favoritePageIds.has(page.id)}
-                    onToggleFavorite={() =>
-                      handleToggleFavorite(page.id, favoritePageIds.has(page.id))
-                    }
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
-                    onExport={() => handleExport(page.id, page.title)}
-                    onShare={(anchorRect) =>
-                      openShare({ type: 'page', id: page.id, title: page.title }, anchorRect)
-                    }
                     isEditing={isEditingPage}
                     editTitle={isEditingPage ? editingTarget.value : page.title}
                     onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
@@ -653,16 +578,6 @@ export function PageTree() {
           )}
         </div>
       </div>
-
-      {shareTarget && (
-        <PublicShareDialog
-          entityType={shareTarget.type}
-          entityId={shareTarget.id}
-          title={shareTarget.title}
-          anchorRect={shareAnchorRect}
-          onClose={() => setShareTarget(null)}
-        />
-      )}
     </div>
   );
 }
