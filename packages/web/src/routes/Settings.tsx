@@ -4,14 +4,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ObsidianImportDialog } from '../components/import/ObsidianImportDialog';
 import { WorkspaceMembersPanel } from '../components/workspace/WorkspaceMembersPanel';
-import { useRootFolder } from '../hooks/use-folders';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 export default function Settings() {
   const queryClient = useQueryClient();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const { rootFolderId, isLoading } = useRootFolder();
 
   const handleExportAll = async () => {
     setIsExporting(true);
@@ -64,13 +62,7 @@ export default function Settings() {
           </p>
         </div>
 
-        {rootFolderId ? (
-          <WorkspaceMembersPanel />
-        ) : (
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            {isLoading ? 'Loading workspace...' : 'Unable to load workspace'}
-          </p>
-        )}
+        <WorkspaceMembersPanel />
       </section>
 
       <section className="rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-900 p-6 space-y-4">

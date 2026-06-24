@@ -1,6 +1,5 @@
 import type { Folder, FolderTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useEffect, useRef } from 'react';
 import { useLeaveEntity } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
@@ -119,24 +118,4 @@ export function useLeaveFolder() {
   return useLeaveEntity('folder');
 }
 
-export function useRootFolder() {
-  const { data: treeData, isLoading: isTreeLoading } = useFolderTree();
-  const createMutation = useCreateFolder();
-  const hasAttemptedCreate = useRef(false);
 
-  const rootFolder = treeData?.find((f) => f.parentId === null);
-  const rootFolderId = rootFolder?.id ?? null;
-
-  useEffect(() => {
-    if (!isTreeLoading && treeData && !rootFolder && !hasAttemptedCreate.current) {
-      hasAttemptedCreate.current = true;
-      createMutation.mutate({ name: 'Home' });
-    }
-  }, [isTreeLoading, treeData, rootFolder, createMutation]);
-
-  return {
-    rootFolderId,
-    isLoading: isTreeLoading || (createMutation.isPending && !rootFolderId),
-    error: createMutation.error,
-  };
-}
