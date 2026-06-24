@@ -2,17 +2,23 @@
 
 ## Key Decisions
 
-### Use `pool.query` in Route Handlers
+### Database Access
 
-Due to type mismatches between root and package installations, prefer `pool.query` over Drizzle's `db.select/insert` in route handlers. Auth helpers and migrations may use Drizzle directly.
+Use Drizzle's typed query builder for straightforward CRUD and simple filters. The API exports `db` from `src/db/connection.ts`, backed by the same `pg.Pool`, so there is no package-installation reason to avoid it.
+
+Use the Drizzle-backed `query` / `executeQuery` helpers from `src/db/query.ts` or Drizzle's `sql` template operator when raw SQL is the clearer tool:
+- recursive CTEs and closure-table maintenance
+- permission functions and calls to SQL functions
+- `pg_notify` / LISTEN-related statements
+- transaction bodies via `db.transaction` and `executeQuery(tx, ...)`
+- one-off database maintenance or test setup
 
 ```typescript
-import { pool } from '../db/connection';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/connection';
+import { pages } from '../db/schema';
 
-const result = await pool.query(
-  'SELECT * FROM pages WHERE workspace_id = $1',
-  [workspaceId],
-);
+const result = await db.select().from(pages).where(eq(pages.id, pageId));
 ```
 
 ### Yjs Binary Export

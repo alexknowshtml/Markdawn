@@ -117,7 +117,7 @@ This script will:
 4. Copy Quadlet files to `~/.config/containers/systemd/`
 5. Build container images
 6. Start PostgreSQL and wait for it to be healthy
-7. Run `db:push` to initialize the database schema
+7. Run `db:migrate` to initialize the database schema
 8. Start API and Collab systemd user services
 
 ### 8. Verify Deployment
