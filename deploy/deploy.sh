@@ -39,11 +39,8 @@ podman build -t localhost/markdawn-collab:latest -f "$REPO_DIR/deploy/Containerf
 
 echo -e "${YELLOW}[STEP 6/6] Restarting services...${NC}"
 systemctl --user daemon-reload
-systemctl --user restart \
-  markdawn-pod.service \
-  markdawn-postgres.service \
-  markdawn-api.service \
-  markdawn-collab.service
+systemctl --user stop markdawn-api.service markdawn-collab.service 2>/dev/null || true
+systemctl --user restart markdawn-pod.service markdawn-postgres.service
 
 echo -e "${YELLOW}[WAIT] Waiting for PostgreSQL to be ready...${NC}"
 for i in {1..30}; do
@@ -58,8 +55,11 @@ for i in {1..30}; do
     sleep 2
 done
 
-echo -e "${YELLOW}[SCHEMA] Pushing database schema...${NC}"
+echo -e "${YELLOW}[SCHEMA] Running database migrations...${NC}"
 pnpm --filter @markdawn/api db:migrate
+
+echo -e "${YELLOW}[APP] Starting application services...${NC}"
+systemctl --user restart markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Deployment complete!${NC}"
 echo ""
