@@ -1,16 +1,15 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { type QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import React, { type ReactNode } from 'react';
+import { createQueryClient } from '../lib/query-client';
 
 export function createTestQueryClient(): QueryClient {
-  return new QueryClient({
-    defaultOptions: {
-      queries: {
-        retry: false,
-        gcTime: Number.POSITIVE_INFINITY,
-      },
-      mutations: {
-        retry: false,
-      },
+  return createQueryClient({
+    queries: {
+      retry: false,
+      gcTime: Number.POSITIVE_INFINITY,
+    },
+    mutations: {
+      retry: false,
     },
   });
 }

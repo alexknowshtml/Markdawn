@@ -23,3 +23,24 @@ export function usePageCollaborators(pageIds: string[]) {
     enabled: sortedIds.length > 0,
   });
 }
+
+async function fetchFolderCollaborators(folderIds: string[]): Promise<CollaboratorsResponse> {
+  if (folderIds.length === 0) return {};
+  const res = await fetch(
+    `${API_BASE}/shares/folders/collaborators?folderIds=${folderIds.join(',')}`,
+  );
+  if (!res.ok) {
+    throw new Error('Failed to fetch folder collaborators');
+  }
+  return res.json();
+}
+
+export function useFolderCollaborators(folderIds: string[]) {
+  const sortedIds = [...new Set(folderIds)].sort();
+  return useQuery({
+    queryKey: ['folderCollaborators', sortedIds],
+    queryFn: () => fetchFolderCollaborators(sortedIds),
+    staleTime: 1000 * 60,
+    enabled: sortedIds.length > 0,
+  });
+}

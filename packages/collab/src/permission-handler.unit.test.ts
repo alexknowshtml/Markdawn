@@ -25,11 +25,11 @@ function createLogger() {
 }
 
 function createConnection(overrides?: {
-  context?: { user?: { id: string; isAnonymous?: boolean } };
+  context?: { user?: { id: string; isAnonymous?: boolean }; permission?: string };
   readOnly?: boolean;
 }) {
   return {
-    context: overrides?.context ?? { user: { id: 'user-1' } },
+    context: overrides?.context ?? { user: { id: 'user-1' }, permission: 'edit' },
     readOnly: overrides?.readOnly ?? false,
     sendStateless: vi.fn(),
     close: vi.fn(),
@@ -435,5 +435,152 @@ describe('handleShareEvent', () => {
     );
 
     expect(conn.close).not.toHaveBeenCalled();
+  });
+
+  it('updates connection.context.permission on targeted grant', async () => {
+    const logger = createLogger();
+    const conn = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'view' },
+      readOnly: true,
+    });
+    const doc = createDocument([conn]);
+    const server = createServer(doc);
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'grant',
+        entityType: 'page',
+        entityId: 'page-1',
+        permission: 'edit',
+        targetUserId: 'user-1',
+      },
+      undefined,
+      logger,
+    );
+
+    expect(conn.context.permission).toBe('edit');
+    expect(conn.readOnly).toBe(false);
+  });
+
+  it('updates connection.context.permission on link share update', async () => {
+    const logger = createLogger();
+    const conn = createConnection({
+      context: { user: { id: 'anon-1', isAnonymous: true }, permission: 'view' },
+      readOnly: true,
+    });
+    const doc = createDocument([conn]);
+    const server = createServer(doc);
+    const pool = createPool();
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'update',
+        entityType: 'page',
+        entityId: 'page-1',
+        permission: 'edit',
+      },
+      pool,
+      logger,
+    );
+
+    expect(conn.context.permission).toBe('edit');
+    expect(conn.readOnly).toBe(false);
+  });
+
+  it('does not revoke workspace member when link share is revoked', async () => {
+    const logger = createLogger();
+    const ownerConn = createConnection({
+      context: { user: { id: 'owner-id' } },
+    });
+    const workspaceMemberConn = createConnection({
+      context: { user: { id: 'workspace-member' } },
+    });
+    const linkOnlyConn = createConnection({
+      context: { user: { id: 'link-only-user' } },
+    });
+    const doc = createDocument([ownerConn, workspaceMemberConn, linkOnlyConn]);
+    const server = createServer(doc);
+    const pool = createPool([
+      privilegedEntry('owner-id', 'edit'),
+      privilegedEntry('workspace-member', 'edit'),
+    ]);
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'revoke',
+        entityType: 'page',
+        entityId: 'page-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(ownerConn.close).not.toHaveBeenCalled();
+    expect(workspaceMemberConn.close).not.toHaveBeenCalled();
+    expect(linkOnlyConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
+  });
+
+  it('computes effective permission as max of base and link permission', async () => {
+    const logger = createLogger();
+    const invitedConn = createConnection({
+      context: { user: { id: 'invited-user' } },
+      readOnly: false,
+    });
+    const doc = createDocument([invitedConn]);
+    const server = createServer(doc);
+    const pool = createPool([privilegedEntry('invited-user', 'edit')]);
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'update',
+        entityType: 'page',
+        entityId: 'page-1',
+        permission: 'view',
+      },
+      pool,
+      logger,
+    );
+
+    // effective = max('edit', 'view') = 'edit', readOnly unchanged, no notification sent
+    expect(invitedConn.readOnly).toBe(false);
+    expect(invitedConn.sendStateless).not.toHaveBeenCalled();
+  });
+
+  it('sends notification when effective permission changes for link share', async () => {
+    const logger = createLogger();
+    const invitedConn = createConnection({
+      context: { user: { id: 'invited-user' } },
+      readOnly: true,
+    });
+    const doc = createDocument([invitedConn]);
+    const server = createServer(doc);
+    const pool = createPool([privilegedEntry('invited-user', 'view')]);
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'update',
+        entityType: 'page',
+        entityId: 'page-1',
+        permission: 'edit',
+      },
+      pool,
+      logger,
+    );
+
+    // effective = max('view', 'edit') = 'edit', readOnly changes from true → false
+    expect(invitedConn.readOnly).toBe(false);
+    expect(invitedConn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"permission":"edit"'),
+    );
   });
 });

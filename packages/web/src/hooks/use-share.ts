@@ -1,11 +1,6 @@
-import type {
-  SharedWithMeItem,
-  ShareEntityType,
-  SharePermission,
-  ShareSummary,
-} from '@markdawn/shared';
+import type { ShareEntityType, SharePermission, ShareSummary } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -30,7 +25,7 @@ async function updateLinkPermission({
   entityType: ShareEntityType;
   entityId: string;
   permission: LinkPermission;
-}): Promise<ShareSummary['link']> {
+}): Promise<ShareSummary['link'] & { message?: string }> {
   const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/link`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -48,36 +43,32 @@ async function inviteToEntity({
   entityId,
   email,
   permission,
+  expiresAt,
 }: {
   entityType: ShareEntityType;
   entityId: string;
   email: string;
   permission: SharePermission;
-}): Promise<void> {
+  expiresAt?: string;
+}): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/invite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, permission }),
+    body: JSON.stringify({ email, permission, expiresAt }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to invite user' }));
     throw new Error(error.message);
   }
+  return res.json();
 }
 
-async function removeShare(shareId: string): Promise<void> {
+async function removeShare(shareId: string): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/shares/${shareId}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
     throw new Error('Failed to remove access');
-  }
-}
-
-async function fetchSharedWithMe(): Promise<SharedWithMeItem[]> {
-  const res = await fetch(`${API_BASE}/shares/with-me`);
-  if (!res.ok) {
-    throw new Error('Failed to fetch shared items');
   }
   return res.json();
 }
@@ -90,6 +81,7 @@ export function useShareSummary(entityType: ShareEntityType, entityId?: string) 
       return fetchShareSummary(entityType, entityId);
     },
     enabled: !!entityId,
+    refetchOnMount: 'always',
   });
 }
 
@@ -97,14 +89,14 @@ export function useUpdateLinkPermission() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: updateLinkPermission,
-    onSuccess: (_, { entityType, entityId, permission }) => {
+    onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
-      showSuccessToast(permission === 'private' ? 'Link disabled' : 'Link access updated');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to update link' },
   });
 }
 
@@ -112,14 +104,14 @@ export function useInviteToEntity() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: inviteToEntity,
-    onSuccess: (_, { entityType, entityId }) => {
+    onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      showSuccessToast('Access granted');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to invite user' },
   });
 }
 
@@ -129,7 +121,7 @@ async function updateSharePermission({
 }: {
   shareId: string;
   permission: SharePermission;
-}): Promise<void> {
+}): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/shares/${shareId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -139,19 +131,20 @@ async function updateSharePermission({
     const error = await res.json().catch(() => ({ message: 'Failed to update permission' }));
     throw new Error(error.message);
   }
+  return res.json();
 }
 
 export function useUpdateSharePermission() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: updateSharePermission,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['shares'] });
-      showSuccessToast('Permission updated');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to update permission' },
   });
 }
 
@@ -159,24 +152,50 @@ export function useRemoveShare() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: removeShare,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
-      showSuccessToast('Access removed');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: () => {
-      showErrorToast('Failed to remove access');
-    },
+    meta: { errorMessage: 'Failed to remove access' },
   });
 }
 
-export function useSharedWithMe() {
-  return useQuery({
-    queryKey: ['shared-with-me'],
-    queryFn: fetchSharedWithMe,
-    staleTime: 1000 * 60,
+async function toggleFolderRestriction({
+  folderId,
+  isRestricted,
+}: {
+  folderId: string;
+  isRestricted: boolean;
+}): Promise<{ message?: string }> {
+  const res = await fetch(`${API_BASE}/folders/${folderId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ isAccessRestricted: isRestricted }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to update folder access' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
+export function useToggleFolderRestriction() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: toggleFolderRestriction,
+    onSuccess: (data, { folderId }) => {
+      queryClient.invalidateQueries({ queryKey: ['shares', 'folder', folderId] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
+    },
+    meta: { errorMessage: 'Failed to update folder access' },
   });
 }

@@ -1,6 +1,8 @@
 import type { Folder, FolderTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { useEffect, useRef } from 'react';
+import { useLeaveEntity } from '../utils/entity-actions';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -12,11 +14,11 @@ async function fetchFolderTree(): Promise<FolderTreeNode[]> {
   return res.json();
 }
 
-async function createFolder(parentId?: string): Promise<Folder> {
+async function createFolder(parentId?: string, name?: string): Promise<Folder> {
   const res = await fetch(`${API_BASE}/folders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ parentId, name: 'New Folder' }),
+    body: JSON.stringify({ parentId, name: name ?? 'New Folder' }),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to create folder' }));
@@ -74,13 +76,11 @@ export function useFolderTree() {
 export function useCreateFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ parentId }: { parentId?: string }) => createFolder(parentId),
+    mutationFn: ({ parentId, name }: { parentId?: string; name?: string }) =>
+      createFolder(parentId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       showSuccessToast('Folder created');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }
@@ -94,9 +94,6 @@ export function useDeleteFolder() {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Moved to trash');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }
@@ -115,8 +112,31 @@ export function useUpdateFolder() {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       showSuccessToast('Folder updated');
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
+}
+
+export function useLeaveFolder() {
+  return useLeaveEntity('folder');
+}
+
+export function useRootFolder() {
+  const { data: treeData, isLoading: isTreeLoading } = useFolderTree();
+  const createMutation = useCreateFolder();
+  const hasAttemptedCreate = useRef(false);
+
+  const rootFolder = treeData?.find((f) => f.parentId === null);
+  const rootFolderId = rootFolder?.id ?? null;
+
+  useEffect(() => {
+    if (!isTreeLoading && treeData && !rootFolder && !hasAttemptedCreate.current) {
+      hasAttemptedCreate.current = true;
+      createMutation.mutate({ name: 'Home' });
+    }
+  }, [isTreeLoading, treeData, rootFolder, createMutation]);
+
+  return {
+    rootFolderId,
+    isLoading: isTreeLoading || (createMutation.isPending && !rootFolderId),
+    error: createMutation.error,
+  };
 }

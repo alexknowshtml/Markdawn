@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensurePageAccess } from '../utils/share-access';
 
@@ -16,7 +16,7 @@ backlinksRoute.get('/', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  const result = await pool.query(
+  const result = await query(
     `select c.id, c.source_id as "sourcePageId", c.link_text as "linkText",
             c.connection_type as "linkType", c.updated_at as "createdAt",
             p.title as "sourceTitle", p.icon as "sourceIcon"
@@ -42,7 +42,7 @@ backlinksRoute.get('/outgoing', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  const result = await pool.query(
+  const result = await query(
     `select c.id, c.target_id as "targetPageId", c.target_label as "targetTitle",
             c.link_text as "linkText", c.connection_type as "linkType",
             p.title as "targetPageTitle", p.icon as "targetPageIcon"

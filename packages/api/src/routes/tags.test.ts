@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 async function createTagConnection(pageId: string, tag: string) {
-  await pool.query(
+  await query(
     `insert into connections (
        source_type, source_id, target_type, target_slug,
        target_label, connection_type, link_text, occurrence_count, updated_at

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createApp } from './app';
-import { pool } from './db/connection';
+import { query } from './db/query';
 
 export async function createTestApp() {
   return createApp();
@@ -19,7 +19,7 @@ export async function createTestUser(overrides?: CreateUserOptions) {
   const email = overrides?.email ?? `test-${id.slice(0, 8)}@example.com`;
   const name = overrides?.name ?? 'Test User';
 
-  await pool.query(
+  await query(
     `INSERT INTO users (id, email, name, email_verified, created_at, updated_at)
      VALUES ($1, $2, $3, true, NOW(), NOW())`,
     [id, email, name],
@@ -52,7 +52,7 @@ export async function createTestSession(userId: string) {
   const secret = process.env.BETTER_AUTH_SECRET ?? '';
   const signedToken = await signCookieValue(token, secret);
 
-  await pool.query(
+  await query(
     `INSERT INTO sessions (id, token, expires_at, created_at, updated_at, user_id)
      VALUES ($1, $2, NOW() + INTERVAL '1 day', NOW(), NOW(), $3)`,
     [sessionId, token, userId],
@@ -68,7 +68,7 @@ type CreatePageOptions = {
 export async function createTestPage(createdBy: string, overrides?: CreatePageOptions) {
   const id = randomUUID();
   const title = overrides?.title ?? 'Test Page';
-  await pool.query(
+  await query(
     `INSERT INTO pages (id, parent_id, title, position, created_by, created_at, updated_at)
      VALUES ($1, $2, $3, '0', $4, NOW(), NOW())`,
     [id, overrides?.parentId ?? null, title, createdBy],
@@ -85,7 +85,7 @@ type CreateFolderOptions = {
 export async function createTestFolder(createdBy: string, overrides?: CreateFolderOptions) {
   const id = randomUUID();
   const name = overrides?.name ?? 'Test Folder';
-  await pool.query(
+  await query(
     `INSERT INTO folders (id, parent_id, name, icon, position, created_by, created_at, updated_at)
      VALUES ($1, $2, $3, $4, '0', $5, NOW(), NOW())`,
     [id, overrides?.parentId ?? null, name, overrides?.icon ?? null, createdBy],
@@ -105,7 +105,7 @@ export async function createTestComment(
 ) {
   const id = randomUUID();
   const content = overrides?.content ?? 'Test comment';
-  await pool.query(
+  await query(
     `INSERT INTO comments (id, page_id, user_id, content, anchor_block_id)
      VALUES ($1, $2, $3, $4, $5)`,
     [id, pageId, userId, content, overrides?.anchorBlockId ?? null],
@@ -124,7 +124,7 @@ export async function createTestReply(
 ) {
   const id = randomUUID();
   const content = overrides?.content ?? 'Test reply';
-  await pool.query(
+  await query(
     `INSERT INTO comment_replies (id, comment_id, user_id, content)
      VALUES ($1, $2, $3, $4)`,
     [id, commentId, userId, content],
@@ -145,7 +145,7 @@ export async function createTestVersion(
   const id = randomUUID();
   const title = overrides?.title ?? 'Version';
   const content = overrides?.content ?? { type: 'doc', content: [] };
-  await pool.query(
+  await query(
     `INSERT INTO page_versions (id, page_id, title, content, created_by)
      VALUES ($1, $2, $3, $4::jsonb, $5)`,
     [id, pageId, title, JSON.stringify(content), userId],
@@ -162,7 +162,7 @@ export async function createTestTemplate(userId: string, overrides?: CreateTempl
   const id = randomUUID();
   const title = overrides?.title ?? 'Test Template';
   const contentBlocks = overrides?.contentBlocks ?? { type: 'doc', content: [] };
-  await pool.query(
+  await query(
     `INSERT INTO templates (id, title, content_blocks, created_by)
      VALUES ($1, $2, $3::jsonb, $4)`,
     [id, title, JSON.stringify(contentBlocks), userId],
@@ -172,13 +172,13 @@ export async function createTestTemplate(userId: string, overrides?: CreateTempl
 
 export async function createTestPageLink(sourcePageId: string, targetPageId: string) {
   const id = randomUUID();
-  const targetResult = await pool.query<{ title: string }>(
+  const targetResult = await query<{ title: string }>(
     'select title from pages where id = $1 limit 1',
     [targetPageId],
   );
   const targetTitle = targetResult.rows[0]?.title ?? 'target';
 
-  await pool.query(
+  await query(
     `INSERT INTO connections (
        id, source_type, source_id, target_type, target_id, target_slug,
        target_label, connection_type, link_text, occurrence_count, updated_at
@@ -192,9 +192,9 @@ export async function createTestPageLink(sourcePageId: string, targetPageId: str
 export async function createTestWorkspaceMember(
   workspaceOwnerId: string,
   memberId: string,
-  role: string = 'member',
+  role: string = 'editor',
 ) {
-  await pool.query(
+  await query(
     `INSERT INTO workspace_members (workspace_owner_id, member_id, role) VALUES ($1, $2, $3)`,
     [workspaceOwnerId, memberId, role],
   );
@@ -203,7 +203,7 @@ export async function createTestWorkspaceMember(
 
 export async function createTestPublicShare(pageId: string) {
   const token = randomUUID();
-  await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+  await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
     token,
     pageId,
   ]);
@@ -251,5 +251,5 @@ export function createTestTempFile(
 // `rowCount === 0` branches after INSERT/UPDATE. In production, Postgres
 // either succeeds with rowCount > 0 or throws an exception. The rowCount === 0
 // checks are defensive guards for impossible states; testing them would require
-// mocking pool.query, which undermines the value of integration tests that use
+// mocking query, which undermines the value of integration tests that use
 // a real database.

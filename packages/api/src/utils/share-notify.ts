@@ -1,11 +1,14 @@
 import type { ShareEntityType, SharePermission } from '@markdawn/shared';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 
 interface ShareEventBase {
   entityType: ShareEntityType;
   entityId: string;
   permission?: SharePermission;
   targetUserId?: string;
+  entityTitle?: string;
+  sharedByName?: string;
+  message?: string;
 }
 
 function fireShareEvent(action: 'grant' | 'update' | 'revoke', params: ShareEventBase) {
@@ -16,12 +19,26 @@ function fireShareEvent(action: 'grant' | 'update' | 'revoke', params: ShareEven
     entityId: params.entityId,
     ...(params.permission !== undefined && { permission: params.permission }),
     ...(params.targetUserId !== undefined && { targetUserId: params.targetUserId }),
+    ...(params.message !== undefined && { message: params.message }),
   };
-  return pool.query("SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
+  return query("SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
 }
 
 export function notifyShareGrant(params: ShareEventBase) {
-  return fireShareEvent('grant', params);
+  const events: Promise<unknown>[] = [fireShareEvent('grant', params)];
+  if (params.targetUserId && params.entityTitle && params.sharedByName) {
+    const invitePayload = {
+      type: 'invite_received',
+      entityType: params.entityType,
+      entityId: params.entityId,
+      entityTitle: params.entityTitle,
+      sharedByName: params.sharedByName,
+      targetUserId: params.targetUserId,
+      message: params.message,
+    };
+    events.push(query("SELECT pg_notify('share_event', $1)", [JSON.stringify(invitePayload)]));
+  }
+  return Promise.all(events);
 }
 
 export function notifyShareUpdate(params: ShareEventBase) {
@@ -36,7 +53,14 @@ export function notifyWorkspaceEvent(
   action: 'member_added' | 'member_removed' | 'role_changed',
   ownerId: string,
   memberId: string,
+  message?: string,
 ) {
-  const payload = { type: 'workspace_event', action, ownerId, memberId };
-  return pool.query("SELECT pg_notify('workspace_event', $1)", [JSON.stringify(payload)]);
+  const payload = {
+    type: 'workspace_event',
+    action,
+    ownerId,
+    memberId,
+    ...(message !== undefined && { message }),
+  };
+  return query("SELECT pg_notify('workspace_event', $1)", [JSON.stringify(payload)]);
 }

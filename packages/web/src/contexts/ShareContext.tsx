@@ -5,12 +5,42 @@ import { getAnonymousId } from '../utils/anonymous-cookie';
 
 export type LinkPermission = 'view' | 'edit' | null;
 
+export type PublicFolderPage = {
+  id: string;
+  parent_id?: string | null;
+  parentId?: string | null;
+  title: string;
+  icon?: string | null;
+  created_by?: string | null;
+  createdBy?: string | null;
+  created_at?: string | Date | null;
+  createdAt?: string | Date | null;
+  updated_at?: string | Date | null;
+  updatedAt?: string | Date | null;
+};
+
+export type PublicFolderPayload = {
+  id: string;
+  parentId?: string | null;
+  name: string;
+  icon?: string | null;
+  position?: string | null;
+  createdBy?: string | null;
+  createdAt?: string | Date | null;
+  updatedAt?: string | Date | null;
+  isPublic?: boolean;
+  linkPermission?: LinkPermission;
+  pages?: PublicFolderPage[];
+  folders?: PublicFolderPayload[];
+};
+
 interface ShareContextType {
   isAnonymous: boolean;
   anonymousId: string | null;
   anonymousName: string | null;
   linkPermission: LinkPermission;
   capabilities: CapabilitySet;
+  publicEntity: PublicFolderPayload | null;
   /** @deprecated Use capabilities.canEdit instead */
   canEdit: boolean;
 }
@@ -26,7 +56,6 @@ const SetCapabilitiesContext = createContext<React.Dispatch<React.SetStateAction
 const DEFAULT_CAPABILITIES: CapabilitySet = {
   canEdit: false,
   canComment: false,
-  canShare: false,
   canDelete: false,
   canCopy: false,
 };
@@ -35,12 +64,14 @@ interface ShareProviderProps {
   children: ReactNode;
   linkPermission?: LinkPermission;
   capabilities?: CapabilitySet;
+  publicEntity?: PublicFolderPayload | null;
 }
 
 export function ShareProvider({
   children,
   linkPermission: initial = null,
   capabilities: initialCapabilities,
+  publicEntity = null,
 }: ShareProviderProps) {
   const { data: session } = useAuth();
   const isAnonymous = !session?.user;
@@ -68,6 +99,7 @@ export function ShareProvider({
         anonymousName: null,
         linkPermission,
         capabilities,
+        publicEntity,
         canEdit: capabilities.canEdit,
       };
     }
@@ -85,9 +117,10 @@ export function ShareProvider({
       anonymousName,
       linkPermission,
       capabilities: anonCapabilities,
+      publicEntity,
       canEdit: anonCapabilities.canEdit,
     };
-  }, [isAnonymous, linkPermission, capabilities]);
+  }, [isAnonymous, linkPermission, capabilities, publicEntity]);
 
   return (
     <SetCapabilitiesContext.Provider value={setCapabilities}>
@@ -104,6 +137,7 @@ const DEFAULT_SHARE_CONTEXT: ShareContextType = {
   anonymousName: null,
   linkPermission: null,
   capabilities: DEFAULT_CAPABILITIES,
+  publicEntity: null,
   canEdit: false,
 };
 

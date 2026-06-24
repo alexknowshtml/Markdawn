@@ -3,7 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 
@@ -20,7 +20,7 @@ const uploadsRoute = new Hono();
 uploadsRoute.use('*', requireAuth);
 
 const getUploadByFilename = async (filename: string) => {
-  const result = await pool.query('select * from uploads where filename = $1 limit 1', [filename]);
+  const result = await query('select * from uploads where filename = $1 limit 1', [filename]);
   return result.rows[0] ?? null;
 };
 
@@ -54,7 +54,7 @@ uploadsRoute.post('/', async (c) => {
   await writeFile(filePath, buffer);
 
   // Save upload record to database
-  await pool.query(
+  await query(
     `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
      values ($1, $2, $3, $4, $5)`,
     [filename, file.name, file.type, file.size, user.id],
@@ -78,7 +78,35 @@ uploadsRoute.get('/:filename', async (c) => {
   }
 
   if (upload.uploaded_by !== user.id) {
-    throw new HTTPException(403, { message: 'Forbidden' });
+    // Check if the user has access to any page by the upload owner (shared, workspace, etc.)
+    const accessResult = await query(
+      `SELECT 1 FROM pages p
+	       WHERE p.created_by = $1
+	         AND p.is_deleted = false
+	         AND (
+	           EXISTS (SELECT 1 FROM shares s WHERE s.entity_type = 'page' AND s.entity_id = p.id AND s.recipient_user_id = $2)
+	           OR EXISTS (SELECT 1 FROM page_access_events pae WHERE pae.page_id = p.id AND pae.user_id = $2)
+	           OR EXISTS (SELECT 1 FROM shares s
+	                       JOIN folder_closure fc ON fc.ancestor_id = s.entity_id
+	                      WHERE s.entity_type = 'folder' AND s.recipient_user_id = $2
+	                        AND p.parent_id IS NOT NULL
+	                        AND fc.descendant_id = p.parent_id)
+	           OR EXISTS (SELECT 1 FROM workspace_members wm
+	                       WHERE wm.workspace_owner_id = p.created_by AND wm.member_id = $2
+	                         AND p.is_access_restricted IS NOT TRUE
+	                         AND NOT EXISTS (
+	                           SELECT 1 FROM folder_closure fc
+	                           JOIN folders f ON f.id = fc.ancestor_id
+	                           WHERE fc.descendant_id = p.parent_id
+                             AND f.is_access_restricted = true AND f.is_deleted = false
+                         ))
+         )
+       LIMIT 1`,
+      [upload.uploaded_by, user.id],
+    );
+    if (accessResult.rowCount === 0) {
+      throw new HTTPException(403, { message: "You don't have access to this file" });
+    }
   }
 
   const filePath = path.join(uploadsDir, filename);

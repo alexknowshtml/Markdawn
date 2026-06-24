@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { pool } from '../db/connection';
-import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
+import { query } from '../db/query';
+import {
+  createTestApp,
+  createTestFolder,
+  createTestPage,
+  createTestSession,
+  createTestUser,
+  createTestWorkspaceMember,
+} from '../test-utils';
 
 describe('pages API', () => {
   describe('auth guard', () => {
@@ -91,6 +98,47 @@ describe('pages API', () => {
       expect(body.map((p: { title: string }) => p.title).sort()).toEqual(['Page 1', 'Page 2']);
       expect(body[0]).toHaveProperty('id');
     });
+
+    it("includes root workspace owner's pages for workspace members", async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const session = await createTestSession(member.id);
+      const page = await createTestPage(owner.id, { title: 'Workspace Root Page' });
+      await createTestWorkspaceMember(owner.id, member.id, 'viewer');
+
+      const res = await app.request('/api/pages/tree', {
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
+    });
+
+    it("excludes restricted root workspace owner's pages for workspace members", async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const member = await createTestUser();
+      const session = await createTestSession(member.id);
+      const page = await createTestPage(owner.id, { title: 'Restricted Workspace Page' });
+      await createTestWorkspaceMember(owner.id, member.id, 'viewer');
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request('/api/pages/tree', {
+        headers: {
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(false);
+    });
   });
 
   describe('GET /api/pages/trash', () => {
@@ -168,6 +216,37 @@ describe('pages API', () => {
     });
   });
 
+  describe('GET /api/pages/:id public access', () => {
+    it('allows anonymous access to a page through a public ancestor folder link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, {
+        parentId: folder.id,
+        title: 'Inherited Public Page',
+      });
+      const token = crypto.randomUUID();
+
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}`);
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.title).toBe('Inherited Public Page');
+      expect(body.isPublic).toBe(true);
+      expect(body.linkPermission).toBe('view');
+    });
+  });
+
   describe('PATCH /api/pages/:id/restore', () => {
     it('restores a soft-deleted page', async () => {
       const app = await createTestApp();
@@ -231,6 +310,34 @@ describe('pages API', () => {
         body: JSON.stringify({ parentId: page.id }),
       });
       expect(res.status).toBe(400);
+    });
+
+    it('rejects moving a shared page into a folder the caller cannot edit', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const collaborator = await createTestUser();
+      const otherOwner = await createTestUser();
+      const session = await createTestSession(collaborator.id);
+      const page = await createTestPage(owner.id);
+      const forbiddenFolder = await createTestFolder(otherOwner.id);
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'edit')`,
+        [page.id, owner.id, collaborator.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ parentId: forbiddenFolder.id }),
+      });
+
+      expect(res.status).toBe(403);
     });
   });
 
@@ -580,7 +687,7 @@ describe('pages API', () => {
       const session = await createTestSession(recipient.id);
       const page = await createTestPage(owner.id);
 
-      await pool.query(
+      await query(
         `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
          VALUES ('page', $1, $2, $3, 'view')`,
         [page.id, owner.id, recipient.id],
@@ -597,7 +704,7 @@ describe('pages API', () => {
       const body = await res.json();
       expect(body.ok).toBe(true);
 
-      const shareCheck = await pool.query(
+      const shareCheck = await query(
         `SELECT id FROM shares WHERE entity_id = $1 AND recipient_user_id = $2`,
         [page.id, recipient.id],
       );
@@ -611,7 +718,7 @@ describe('pages API', () => {
       const session = await createTestSession(user.id);
       const page = await createTestPage(owner.id);
 
-      await pool.query(
+      await query(
         `INSERT INTO page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
          VALUES ($1, $2, 'link', 'test-token', 'view', now(), now())`,
         [page.id, user.id],
@@ -627,7 +734,7 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       expect((await res.json()).ok).toBe(true);
 
-      const paeCheck = await pool.query(
+      const paeCheck = await query(
         `SELECT id FROM page_access_events WHERE page_id = $1 AND user_id = $2`,
         [page.id, user.id],
       );

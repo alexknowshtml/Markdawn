@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensurePageAccess } from '../utils/share-access';
 
@@ -18,7 +18,7 @@ favoritesRoute.use('*', requireAuth);
 favoritesRoute.get('/', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     'select uf.page_id, p.title, p.icon, uf.created_at from user_favorites uf join pages p on p.id = uf.page_id where uf.user_id = $1 and p.is_deleted = false order by uf.created_at desc nulls last',
     [user.id],
   );
@@ -44,7 +44,7 @@ favoritesRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'pageId is required' });
   }
 
-  const pageResult = await pool.query('select id, is_deleted from pages where id = $1 limit 1', [
+  const pageResult = await query('select id, is_deleted from pages where id = $1 limit 1', [
     pageId,
   ]);
   const page = pageResult.rows[0] as { id: string; is_deleted: boolean | null } | undefined;
@@ -55,7 +55,7 @@ favoritesRoute.post('/', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  const insertResult = await pool.query(
+  const insertResult = await query(
     'insert into user_favorites (user_id, page_id) values ($1, $2) on conflict (user_id, page_id) do nothing returning id',
     [user.id, pageId],
   );
@@ -69,7 +69,7 @@ favoritesRoute.post('/', async (c) => {
 
 favoritesRoute.delete(':pageId', async (c) => {
   const pageId = c.req.param('pageId');
-  const pageResult = await pool.query('select id from pages where id = $1 limit 1', [pageId]);
+  const pageResult = await query('select id from pages where id = $1 limit 1', [pageId]);
   if (!pageResult.rows[0]) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
@@ -77,10 +77,7 @@ favoritesRoute.delete(':pageId', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  await pool.query('delete from user_favorites where user_id = $1 and page_id = $2', [
-    user.id,
-    pageId,
-  ]);
+  await query('delete from user_favorites where user_id = $1 and page_id = $2', [user.id, pageId]);
 
   return c.json({ deleted: true });
 });

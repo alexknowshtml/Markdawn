@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { useBulkLeaveEntities } from '../utils/entity-actions';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -42,9 +43,6 @@ export function useBulkDeletePages() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Pages moved to trash');
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
 }
 
@@ -59,9 +57,6 @@ export function useBulkDeleteFolders() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folders moved to trash');
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
 }
 
@@ -74,9 +69,6 @@ export function useBulkMovePages() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Pages moved');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }
@@ -98,8 +90,13 @@ export function useBulkMoveFolders() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folders moved');
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
+}
+
+export function useBulkLeavePages() {
+  return useBulkLeaveEntities('page');
+}
+
+export function useBulkLeaveFolders() {
+  return useBulkLeaveEntities('folder');
 }

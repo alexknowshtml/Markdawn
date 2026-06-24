@@ -5,10 +5,12 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ShareablePageRoute } from './components/auth/ShareablePageRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Dashboard from './routes/Dashboard';
+import FolderEntry from './routes/FolderEntry';
 import Home from './routes/Home';
 import Login from './routes/Login';
 import PageEntry from './routes/PageEntry';
 import Settings from './routes/Settings';
+import SharedWithMe from './routes/SharedWithMe';
 import Trash from './routes/Trash';
 
 function App() {
@@ -33,12 +35,13 @@ function App() {
               <Route index element={<Dashboard />} />
               <Route path="settings" element={<Settings />} />
               <Route path="trash" element={<Trash />} />
+              <Route path="shared-with-me" element={<SharedWithMe />} />
             </Route>
 
             <Route
               path="/app/:slugAndId"
               element={
-                <ShareablePageRoute>
+                <ShareablePageRoute entityType="page">
                   <AppProviders>
                     <AppShell />
                   </AppProviders>
@@ -46,6 +49,19 @@ function App() {
               }
             >
               <Route index element={<PageEntry />} />
+            </Route>
+
+            <Route
+              path="/app/folder/:slugAndId"
+              element={
+                <ShareablePageRoute entityType="folder">
+                  <AppProviders>
+                    <AppShell />
+                  </AppProviders>
+                </ShareablePageRoute>
+              }
+            >
+              <Route index element={<FolderEntry />} />
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

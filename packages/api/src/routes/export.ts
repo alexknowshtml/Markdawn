@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import JSZip from 'jszip';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
@@ -21,43 +21,12 @@ exportRoute.use('*', requireAuth);
 exportRoute.get('/export', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `
-      with recursive shared_folders as (
-        select f.id
-        from shares s
-        join folders f on f.id = s.entity_id
-        where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
-        union all
-        select child.id
-        from folders child
-        join shared_folders parent on child.parent_id = parent.id
-        where child.is_deleted = false
-      ),
-      restricted_roots as (
-        select id from folders where is_access_restricted = true and is_deleted = false
-      ),
-      restricted_tree as (
-        select id from restricted_roots
-        union all
-        select child.id
-        from folders child
-        join restricted_tree parent on child.parent_id = parent.id
-        where child.is_deleted = false
-      ),
-      workspace_owners as (
-        select workspace_owner_id from workspace_members where member_id = $1
-      )
       select id, title, ydoc, properties, icon
       from pages
       where is_deleted = false
-        and (
-          created_by = $1
-          or id in (select entity_id from shares where entity_type = 'page' and recipient_user_id = $1)
-          or parent_id in (select id from shared_folders)
-          or (created_by in (select workspace_owner_id from workspace_owners)
-              and (parent_id is null or parent_id not in (select id from restricted_tree)))
-        )
+        and id in (select page_id from get_accessible_page_ids($1))
       order by parent_id nulls first, position asc
     `,
     [user.id],

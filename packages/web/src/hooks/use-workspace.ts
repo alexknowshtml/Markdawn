@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -10,7 +10,7 @@ export type WorkspaceMember = {
   member_name: string | null;
   member_email: string;
   member_avatar_url: string | null;
-  role: 'member' | 'admin';
+  role: 'viewer' | 'editor' | 'admin';
   created_at: string;
 };
 
@@ -33,8 +33,8 @@ async function inviteToWorkspace({
   role,
 }: {
   email: string;
-  role: 'member' | 'admin';
-}): Promise<void> {
+  role: 'viewer' | 'editor' | 'admin';
+}): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/workspace/members/invite`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -44,19 +44,21 @@ async function inviteToWorkspace({
     const error = await res.json().catch(() => ({ message: 'Failed to invite' }));
     throw new Error(error.message);
   }
+  return res.json();
 }
 
 export function useInviteToWorkspace() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: inviteToWorkspace,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-members'] });
-      showSuccessToast('Member invited');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to invite' },
   });
 }
 
@@ -65,8 +67,8 @@ async function changeMemberRole({
   role,
 }: {
   memberId: string;
-  role: 'member' | 'admin';
-}): Promise<void> {
+  role: 'viewer' | 'editor' | 'admin';
+}): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/workspace/members/${memberId}/role`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
@@ -76,39 +78,43 @@ async function changeMemberRole({
     const error = await res.json().catch(() => ({ message: 'Failed to change role' }));
     throw new Error(error.message);
   }
+  return res.json();
 }
 
 export function useChangeMemberRole() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: changeMemberRole,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-members'] });
-      showSuccessToast('Role updated');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to change role' },
   });
 }
 
-async function removeWorkspaceMember(memberId: string): Promise<void> {
+async function removeWorkspaceMember(memberId: string): Promise<{ message?: string }> {
   const res = await fetch(`${API_BASE}/workspace/members/${memberId}`, {
     method: 'DELETE',
   });
   if (!res.ok) throw new Error('Failed to remove member');
+  return res.json();
 }
 
 export function useRemoveWorkspaceMember() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: removeWorkspaceMember,
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['workspace-members'] });
-      showSuccessToast('Member removed');
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
+      if (data?.message) showSuccessToast(data.message);
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
+    meta: { errorMessage: 'Failed to remove member' },
   });
 }

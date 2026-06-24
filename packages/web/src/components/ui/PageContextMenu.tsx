@@ -4,10 +4,11 @@ import { useState } from 'react';
 import { useClipboard } from '../../contexts/ClipboardContext';
 import { useBulkMoveFolders, useBulkMovePages } from '../../hooks/use-bulk-actions';
 import { useToggleFavorite } from '../../hooks/use-favorites';
-import { useDeleteFolder, useFolderTree } from '../../hooks/use-folders';
-import { useDeletePage } from '../../hooks/use-pages';
+import { useFolderTree } from '../../hooks/use-folders';
+import { useAuth } from '../../hooks/useAuth';
+import { useEntityDeletion } from '../../utils/entity-actions';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
-import { ConfirmDialog } from '../ConfirmDialog';
+// showErrorToast kept for non-mutation use in handleExport
 import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { MoveDialog } from '../workspace/MoveDialog';
 import { KebabMenu } from './KebabMenu';
@@ -18,9 +19,9 @@ type PageContextMenuProps = {
     type: 'page' | 'folder';
     title: string;
     icon?: string | null;
+    createdBy?: string | null;
   };
   isFavorite?: boolean;
-  confirmDelete?: boolean;
   triggerClassName?: string;
   menuClassName?: string;
   onOpenChange?: ((isOpen: boolean) => void) | undefined;
@@ -32,7 +33,6 @@ type PageContextMenuProps = {
 export function PageContextMenu({
   item,
   isFavorite = false,
-  confirmDelete = false,
   triggerClassName,
   menuClassName,
   onOpenChange,
@@ -41,14 +41,18 @@ export function PageContextMenu({
   onMutated,
 }: PageContextMenuProps) {
   const clipboard = useClipboard();
-  const deletePageMutation = useDeletePage();
-  const deleteFolderMutation = useDeleteFolder();
+  const { data: session } = useAuth();
+  const currentUserId = session?.user?.id;
   const toggleFavoriteMutation = useToggleFavorite();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
   const { data: folders } = useFolderTree();
+  const { handleDelete } = useEntityDeletion({
+    entityType: item.type,
+    currentUserId,
+    onSuccess: onMutated,
+  });
 
-  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
 
@@ -61,23 +65,18 @@ export function PageContextMenu({
     setMoveDialogOpen(true);
   };
 
-  const handleConfirmMove = async (targetFolderId: string | null) => {
-    try {
-      if (item.type === 'page') {
-        await bulkMovePagesMutation.mutateAsync({
-          pageIds: [item.id],
-          parentId: targetFolderId,
-        });
-      } else {
-        await bulkMoveFoldersMutation.mutateAsync({
-          folderIds: [item.id],
-          parentId: targetFolderId,
-        });
-      }
+  const handleConfirmMove = (targetFolderId: string | null) => {
+    const onSuccess = () => {
       setMoveDialogOpen(false);
       onMutated?.();
-    } catch {
-      showErrorToast('Failed to move item');
+    };
+    if (item.type === 'page') {
+      bulkMovePagesMutation.mutate({ pageIds: [item.id], parentId: targetFolderId }, { onSuccess });
+    } else {
+      bulkMoveFoldersMutation.mutate(
+        { folderIds: [item.id], parentId: targetFolderId },
+        { onSuccess },
+      );
     }
   };
 
@@ -103,12 +102,11 @@ export function PageContextMenu({
     }
   };
 
-  const handleToggleFavorite = async () => {
-    await toggleFavoriteMutation.mutateAsync({
-      pageId: item.id,
-      isFavorite: !isFavorite,
-    });
-    onMutated?.();
+  const handleToggleFavorite = () => {
+    toggleFavoriteMutation.mutate(
+      { pageId: item.id, isFavorite: !isFavorite },
+      { onSuccess: () => onMutated?.() },
+    );
   };
 
   const handleDeleteClick = () => {
@@ -116,23 +114,17 @@ export function PageContextMenu({
       onDelete();
       return;
     }
-    if (confirmDelete) {
-      setShowDeleteDialog(true);
-      return;
-    }
     performDelete();
   };
 
   const performDelete = async () => {
     try {
-      if (item.type === 'page') {
-        await deletePageMutation.mutateAsync(item.id);
-      } else {
-        await deleteFolderMutation.mutateAsync({ folderId: item.id, force: true });
-      }
-      onMutated?.();
+      await handleDelete(
+        { id: item.id, type: item.type, createdBy: item.createdBy },
+        { force: item.type === 'folder' },
+      );
     } catch {
-      showErrorToast('Failed to delete');
+      // Error toast handled globally by MutationCache.onError
     }
   };
 
@@ -159,8 +151,8 @@ export function PageContextMenu({
     },
     {
       label: 'Delete',
-      icon: <Trash2 size={14} />,
-      className: 'text-red-600 dark:text-red-400 hover:bg-red-500/10',
+      icon: <Trash2 size={14} className="text-red-600 dark:text-red-400" />,
+      className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
       onClick: handleDeleteClick,
     },
     {
@@ -188,19 +180,6 @@ export function PageContextMenu({
         {...(onOpenChange != null ? { onOpenChange } : {})}
         items={menuItems}
       />
-      {confirmDelete && (
-        <ConfirmDialog
-          isOpen={showDeleteDialog}
-          title="Move to trash"
-          message={`Are you sure you want to move "${item.title || 'Untitled'}" to the trash?`}
-          confirmText="Move to trash"
-          onConfirm={() => {
-            void performDelete();
-            setShowDeleteDialog(false);
-          }}
-          onCancel={() => setShowDeleteDialog(false)}
-        />
-      )}
       {showShareDialog && (
         <PublicShareDialog
           entityType={item.type}

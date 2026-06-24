@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -65,9 +65,7 @@ export function useCreateTemplate() {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       showSuccessToast('Template created');
     },
-    onError: () => {
-      showErrorToast('Failed to create template');
-    },
+    meta: { errorMessage: 'Failed to create template' },
   });
 }
 
@@ -79,8 +77,6 @@ export function useDeleteTemplate() {
       queryClient.invalidateQueries({ queryKey: ['templates'] });
       showSuccessToast('Template deleted');
     },
-    onError: () => {
-      showErrorToast('Failed to delete template');
-    },
+    meta: { errorMessage: 'Failed to delete template' },
   });
 }

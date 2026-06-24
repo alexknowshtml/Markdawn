@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 
 const tagsRoute = new Hono();
@@ -9,7 +9,7 @@ tagsRoute.use('*', requireAuth);
 tagsRoute.get('/', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `select c.target_slug as id,
             trim(leading '#' from c.target_slug) as name,
             count(distinct c.source_id) as page_count
@@ -35,7 +35,7 @@ tagsRoute.get('/pages', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `select p.id, p.title, p.icon, p.parent_id as "parentId"
      from pages p
      join connections c on c.source_id = p.id

@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensurePageAccess } from '../utils/share-access';
 
@@ -17,7 +17,7 @@ const versionsRoute = new Hono();
 versionsRoute.use('*', requireAuth);
 
 const ensurePageExists = async (pageId: string) => {
-  const result = await pool.query('select id from pages where id = $1 limit 1', [pageId]);
+  const result = await query('select id from pages where id = $1 limit 1', [pageId]);
   return !!result.rows[0];
 };
 
@@ -32,7 +32,7 @@ versionsRoute.get(':pageId/versions', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  const versionsResult = await pool.query(
+  const versionsResult = await query(
     'select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = $1 order by pv.created_at desc',
     [pageId],
   );
@@ -66,7 +66,7 @@ versionsRoute.post(':pageId/versions', async (c) => {
     throw new HTTPException(400, { message: 'title is required' });
   }
 
-  const result = await pool.query(
+  const result = await query(
     "insert into page_versions (page_id, content, title, created_by) values ($1, '{}'::jsonb, $2, $3) returning id, page_id, title, created_at",
     [pageId, title.trim(), user.id],
   );
@@ -98,7 +98,7 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id, 'edit');
 
-  const versionResult = await pool.query(
+  const versionResult = await query(
     'select title from page_versions where id = $1 and page_id = $2 limit 1',
     [versionId, pageId],
   );
@@ -109,7 +109,7 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
 
   const versionTitle = (versionResult.rows[0] as { title: string | null }).title ?? null;
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     'update pages set title = $1 where id = $2 returning id, title',
     [versionTitle, pageId],
   );

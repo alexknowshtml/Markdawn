@@ -1,9 +1,12 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { auth } from '../auth';
 import type { folders } from '../db';
-import { pool } from '../db/connection';
+import { db } from '../db/connection';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensureFolderAccess } from '../utils/share-access';
+import { ensureCanAdminEntity, ensureFolderAccess } from '../utils/share-access';
+import { notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
 
 type FolderRow = typeof folders.$inferSelect;
 type RawFolderRow = FolderRow & {
@@ -13,9 +16,19 @@ type RawFolderRow = FolderRow & {
   updated_at?: Date | null;
   is_deleted?: boolean | null;
   deleted_at?: Date | null;
+  is_public?: boolean | null;
+  public_token?: string | null;
+  is_access_restricted?: boolean | null;
+};
+
+type LinkPermission = 'view' | 'edit';
+type FolderLinkAccess = {
+  permission: LinkPermission;
+  token: string;
 };
 
 const foldersRoute = new Hono();
+const foldersPublicRoute = new Hono();
 
 foldersRoute.use('*', requireAuth);
 
@@ -27,10 +40,62 @@ const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
   isDeleted: row.isDeleted ?? row.is_deleted ?? false,
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
+  isPublic: row.isPublic ?? row.is_public ?? false,
+  publicToken: row.publicToken ?? row.public_token ?? null,
+  isAccessRestricted: row.isAccessRestricted ?? row.is_access_restricted ?? false,
 });
 
+const normalizeLinkPermission = (permission: string | null | undefined): LinkPermission => {
+  return permission === 'edit' || permission === 'admin' ? 'edit' : 'view';
+};
+
+const getFolderLinkAccess = async (folderId: string): Promise<FolderLinkAccess | null> => {
+  const result = await query(
+    `
+      select
+        coalesce(s.permission, 'view') as permission,
+        coalesce(s.token, f.public_token, f.id::text) as token
+      from folder_closure fc
+      join folders f on f.id = fc.ancestor_id and f.is_deleted = false
+      left join lateral (
+        select permission, token
+        from shares
+        where entity_type = 'folder'
+          and entity_id = f.id
+          and token is not null
+          and (expires_at is null or expires_at > now())
+        order by updated_at desc nulls last
+        limit 1
+      ) s on true
+      where fc.descendant_id = $1
+        and f.is_public = true
+      order by
+        case coalesce(s.permission, 'view')
+          when 'admin' then 3
+          when 'edit' then 2
+          else 1
+        end desc,
+        fc.depth asc
+      limit 1
+    `,
+    [folderId],
+  );
+
+  const row = result.rows[0] as { permission?: string | null; token?: string | null } | undefined;
+  if (!row?.token) {
+    return null;
+  }
+
+  return {
+    permission: normalizeLinkPermission(row.permission),
+    token: row.token,
+  };
+};
+
 const getFolderById = async (folderId: string) => {
-  const result = await pool.query('select * from folders where id = $1 limit 1', [folderId]);
+  const result = await query('select * from folders where id = $1 and is_deleted = false limit 1', [
+    folderId,
+  ]);
   const row = (result.rows[0] as RawFolderRow | undefined) ?? null;
   return row ? normalizeFolderRow(row) : null;
 };
@@ -38,39 +103,25 @@ const getFolderById = async (folderId: string) => {
 const ensureNoFolderCycle = async (
   folderId: string,
   targetParentId: string | null,
-  userId: string,
+  _userId: string,
 ) => {
   if (!targetParentId) {
     return;
   }
 
-  const result = await pool.query(
-    'select id, parent_id from folders where is_deleted = false and created_by = $1',
-    [userId],
+  // Check if targetParentId is already a descendant of folderId (would create a cycle)
+  const result = await query(
+    `SELECT 1 FROM folder_closure
+     WHERE ancestor_id = $1 AND descendant_id = $2 AND depth > 0`,
+    [folderId, targetParentId],
   );
-
-  const parentById = new Map<string, string | null>();
-  for (const row of result.rows as { id: string; parent_id: string | null }[]) {
-    parentById.set(row.id, row.parent_id ?? null);
-  }
-
-  let current: string | null = targetParentId;
-  const visited = new Set<string>();
-
-  while (current) {
-    if (current === folderId) {
-      throw new HTTPException(400, { message: 'Cannot move folder into its own subtree' });
-    }
-    if (visited.has(current)) {
-      throw new HTTPException(400, { message: 'Invalid folder hierarchy detected' });
-    }
-    visited.add(current);
-    current = parentById.get(current) ?? null;
+  if (result.rowCount && result.rowCount > 0) {
+    throw new HTTPException(400, { message: 'Cannot move folder into its own subtree' });
   }
 };
 
-const buildFolderTree = (rows: FolderRow[]) => {
-  type FolderNode = FolderRow & { children: FolderNode[] };
+const buildFolderTree = (rows: (FolderRow & { isLostAccess?: boolean })[]) => {
+  type FolderNode = FolderRow & { children: FolderNode[]; isLostAccess?: boolean };
   const nodes: FolderNode[] = rows.map((folder) => ({
     ...folder,
     children: [],
@@ -93,50 +144,71 @@ const buildFolderTree = (rows: FolderRow[]) => {
 };
 
 foldersRoute.get('/tree', async (c) => {
-  // Return folders the user can access (owned, shared, or workspace)
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `
-      with recursive
-      restricted_roots as (
-        select id from folders where is_access_restricted = true and is_deleted = false
-      ),
-      restricted_tree as (
-        select id from restricted_roots
-        union all
-        select child.id
-        from folders child
-        join restricted_tree parent on child.parent_id = parent.id
-        where child.is_deleted = false
-      ),
+      with
       workspace_owners as (
         select workspace_owner_id from workspace_members where member_id = $1
       ),
-      linked_page_folders as (
-        select p.parent_id from page_access_events pae
-        join pages p on p.id = pae.page_id
-        where pae.user_id = $1 and p.parent_id is not null
-      )
-      select f.*
-      from folders f
-      where f.is_deleted = false
-        and (
-          f.created_by = $1
-          or exists (
+      shared_folder_descendants as (
+        select fc.descendant_id as id
+        from shares s
+        join folder_closure fc on fc.ancestor_id = s.entity_id
+        where s.entity_type = 'folder' and s.recipient_user_id = $1
+      ),
+      restricted_tree as (
+        select fc.descendant_id as id
+        from folders f
+        join folder_closure fc on fc.ancestor_id = f.id
+        where f.is_access_restricted = true and f.is_deleted = false
+      ),
+      accessible_folders as (
+        select f.id, false as is_lost_access
+        from folders f
+        where f.is_deleted = false
+          and (
+            get_root_folder_owner(f.id) = $1
+            or f.id in (select id from shared_folder_descendants)
+            or (get_root_folder_owner(f.id) in (select workspace_owner_id from workspace_owners)
+                and f.id not in (select id from restricted_tree))
+          )
+        union
+        select f.id, true as is_lost_access
+        from folders f
+        where f.is_deleted = false
+          and f.id in (select id from restricted_tree)
+          and get_root_folder_owner(f.id) in (select workspace_owner_id from workspace_owners)
+          and get_root_folder_owner(f.id) != $1
+          and not exists (
             select 1 from shares s
             where s.entity_type = 'folder' and s.entity_id = f.id and s.recipient_user_id = $1
           )
-          or (f.created_by in (select workspace_owner_id from workspace_owners)
-              and f.id not in (select id from restricted_tree))
-          or f.id in (select parent_id from linked_page_folders)
-        )
+      )
+      select f.*, af.is_lost_access,
+        (SELECT permission FROM get_effective_folder_permission(f.id, $1)) as user_permission
+      from folders f
+      join accessible_folders af on af.id = f.id
       order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position asc
     `,
     [user.id],
   );
 
-  return c.json(buildFolderTree((result.rows as RawFolderRow[]).map(normalizeFolderRow)));
+  return c.json(
+    buildFolderTree(
+      (
+        result.rows as (RawFolderRow & {
+          is_lost_access?: boolean;
+          user_permission?: string | null;
+        })[]
+      ).map((row) => ({
+        ...normalizeFolderRow(row),
+        isLostAccess: row.is_lost_access ?? false,
+        userPermission: row.user_permission ?? null,
+      })),
+    ),
+  );
 });
 
 foldersRoute.post('/', async (c) => {
@@ -165,7 +237,7 @@ foldersRoute.post('/', async (c) => {
     await ensureFolderAccess(parent.id, user.id, 'edit');
   }
 
-  const positionResult = await pool.query(
+  const positionResult = await query(
     parentId
       ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
       : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
@@ -173,7 +245,7 @@ foldersRoute.post('/', async (c) => {
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
-  const insertResult = await pool.query(
+  const insertResult = await query(
     'insert into folders (parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5) returning *',
     [
       parentId ?? null,
@@ -228,18 +300,24 @@ foldersRoute.patch(':id', async (c) => {
     isAccessRestricted?: boolean;
   };
 
-  const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === folder.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
-    }
-    const parent = await getFolderById(parentId);
-    if (!parent) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
+  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
+  if (hasRestricted && isAccessRestricted !== folder.isAccessRestricted) {
+    await ensureCanAdminEntity('folder', folder.id, user.id);
+  }
 
-    if (parent.isDeleted) {
-      throw new HTTPException(400, { message: 'Cannot move into a deleted folder' });
+  const hasParentId = Object.hasOwn(body, 'parentId');
+  if (hasParentId) {
+    if (parentId) {
+      if (parentId === folder.id) {
+        throw new HTTPException(400, { message: 'Cannot set parent to self' });
+      }
+      const parent = await getFolderById(parentId);
+      if (!parent) {
+        throw new HTTPException(404, { message: 'Parent folder not found' });
+      }
+      await ensureFolderAccess(parent.id, user.id, 'edit');
+    } else if (folder.parentId !== null) {
+      await ensureCanAdminEntity('folder', folder.id, user.id);
     }
   }
 
@@ -265,10 +343,9 @@ foldersRoute.patch(':id', async (c) => {
         ? String(position)
         : folder.position;
 
-  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
   const nextRestricted = hasRestricted ? isAccessRestricted === true : folder.isAccessRestricted;
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     `update folders set name = $1, icon = $2, parent_id = $3, position = $4,
        is_access_restricted = $5, updated_at = now() where id = $6 returning *`,
     [nextName, nextIcon, nextParent, nextPosition, nextRestricted, folderId],
@@ -276,6 +353,14 @@ foldersRoute.patch(':id', async (c) => {
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to update folder' });
+  }
+
+  if (hasRestricted && nextRestricted !== folder.isAccessRestricted) {
+    if (nextRestricted) {
+      await notifyShareRevoke({ entityType: 'folder', entityId: folderId });
+    } else {
+      await notifyShareUpdate({ entityType: 'folder', entityId: folderId });
+    }
   }
 
   const updated = normalizeFolderRow(updateResult.rows[0] as RawFolderRow);
@@ -309,18 +394,17 @@ foldersRoute.post(':id/copy', async (c) => {
     if (parent.isDeleted) {
       throw new HTTPException(400, { message: 'Cannot move into a deleted folder' });
     }
+    await ensureFolderAccess(parent.id, user.id, 'edit');
   }
 
   await ensureNoFolderCycle(folder.id, parentId, user.id);
 
-  await pool.query('BEGIN');
-
   try {
-    const newFolder = await copyFolderRecursive(folderId, parentId, user.id);
-    await pool.query('COMMIT');
+    const newFolder = await db.transaction((tx) =>
+      copyFolderRecursive(tx, folderId, parentId, user.id),
+    );
     return c.json(newFolder, 201);
   } catch (err) {
-    await pool.query('ROLLBACK');
     throw new HTTPException(500, {
       message: err instanceof Error ? err.message : 'Failed to copy folder',
     });
@@ -328,14 +412,18 @@ foldersRoute.post(':id/copy', async (c) => {
 });
 
 async function copyFolderRecursive(
+  executor: QueryExecutor,
   sourceFolderId: string,
   newParentId: string | null,
   userId: string,
 ): Promise<FolderRow> {
-  const sourceResult = await pool.query('select * from folders where id = $1', [sourceFolderId]);
+  const sourceResult = await executeQuery(executor, 'select * from folders where id = $1', [
+    sourceFolderId,
+  ]);
   const source = normalizeFolderRow(sourceResult.rows[0] as RawFolderRow);
 
-  const positionResult = await pool.query(
+  const positionResult = await executeQuery(
+    executor,
     newParentId
       ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
       : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
@@ -343,7 +431,10 @@ async function copyFolderRecursive(
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
-  const insertResult = await pool.query(
+  // Copies are created by the copier. The root folder owner does not
+  // automatically own copied content — ownership follows the creator.
+  const insertResult = await executeQuery(
+    executor,
     `insert into folders (id, parent_id, name, icon, position, created_by)
      values (gen_random_uuid(), $1, $2, $3, $4, $5)
      returning *`,
@@ -351,7 +442,8 @@ async function copyFolderRecursive(
   );
   const newFolder = normalizeFolderRow(insertResult.rows[0] as RawFolderRow);
 
-  const pagesResult = await pool.query(
+  const pagesResult = await executeQuery(
+    executor,
     'select * from pages where parent_id = $1 and is_deleted = false',
     [sourceFolderId],
   );
@@ -364,7 +456,8 @@ async function copyFolderRecursive(
       position: string;
       ydoc: Buffer | null;
     };
-    await pool.query(
+    await executeQuery(
+      executor,
       `insert into pages (id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
         values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
       [
@@ -380,12 +473,13 @@ async function copyFolderRecursive(
     );
   }
 
-  const subfoldersResult = await pool.query(
+  const subfoldersResult = await executeQuery(
+    executor,
     'select id from folders where parent_id = $1 and is_deleted = false',
     [sourceFolderId],
   );
   for (const subfolderRow of subfoldersResult.rows) {
-    await copyFolderRecursive((subfolderRow as { id: string }).id, newFolder.id, userId);
+    await copyFolderRecursive(executor, (subfolderRow as { id: string }).id, newFolder.id, userId);
   }
 
   return newFolder;
@@ -399,19 +493,18 @@ foldersRoute.delete(':id', async (c) => {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
   const user = c.get('user') as { id: string };
-  await ensureFolderAccess(folder.id, user.id, 'edit');
+  await ensureCanAdminEntity('folder', folder.id, user.id);
 
-  const directChildFolders = await pool.query(
-    'select id from folders where parent_id = $1 and is_deleted = false',
+  const descendantFolders = await query(
+    'SELECT descendant_id AS id FROM folder_closure WHERE ancestor_id = $1 AND descendant_id != $1',
     [folderId],
   );
-  const directChildPages = await pool.query(
-    'select id from pages where parent_id = $1 and is_deleted = false',
+  const descendantPages = await query(
+    'SELECT p.id FROM pages p WHERE p.parent_id IN (SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1) AND p.is_deleted = false',
     [folderId],
   );
 
-  const hasChildren =
-    (directChildFolders.rowCount ?? 0) > 0 || (directChildPages.rowCount ?? 0) > 0;
+  const hasChildren = (descendantFolders.rowCount ?? 0) > 0 || (descendantPages.rowCount ?? 0) > 0;
 
   if (hasChildren) {
     const force = c.req.query('force') === 'true';
@@ -419,30 +512,34 @@ foldersRoute.delete(':id', async (c) => {
     if (!force) {
       return c.json({
         requiresForce: true,
-        childFolders: directChildFolders.rowCount ?? 0,
-        childPages: directChildPages.rowCount ?? 0,
+        childFolders: descendantFolders.rowCount ?? 0,
+        childPages: descendantPages.rowCount ?? 0,
         message: 'Folder is not empty. Add ?force=true to delete contents as well.',
       });
     }
 
-    const childFolderIds = (directChildFolders.rows as { id: string }[]).map((r) => r.id);
+    const childFolderIds = (descendantFolders.rows as { id: string }[]).map((r) => r.id);
     for (const childFolderId of childFolderIds) {
-      await pool.query(
+      await query(
         'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
         [childFolderId],
       );
     }
 
-    const childPageIds = (directChildPages.rows as { id: string }[]).map((r) => r.id);
+    const childPageIds = (descendantPages.rows as { id: string }[]).map((r) => r.id);
     for (const childPageId of childPageIds) {
-      await pool.query(
+      await query(
         'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
         [childPageId],
       );
+      await query('select pg_notify($1, $2)', [
+        'page_deleted',
+        JSON.stringify({ pageId: childPageId }),
+      ]);
     }
   }
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
     [folderId],
   );
@@ -451,7 +548,113 @@ foldersRoute.delete(':id', async (c) => {
     throw new HTTPException(500, { message: 'Failed to delete folder' });
   }
 
+  await query('select pg_notify($1, $2)', ['folder_deleted', JSON.stringify({ folderId })]);
+
+  await notifyShareRevoke({ entityType: 'folder', entityId: folderId });
+
   return c.json({ deleted: true });
 });
 
+foldersRoute.post(':id/leave', async (c) => {
+  const folderId = c.req.param('id');
+  const folder = await getFolderById(folderId);
+
+  if (!folder) {
+    throw new HTTPException(404, { message: 'Folder not found' });
+  }
+
+  const user = c.get('user') as { id: string };
+
+  const rootOwnerResult = await query('SELECT get_root_folder_owner($1) as owner_id', [folderId]);
+  const rootOwnerId = rootOwnerResult.rows[0]?.owner_id as string | undefined;
+  if (rootOwnerId === user.id) {
+    throw new HTTPException(400, { message: 'Cannot leave your own folder' });
+  }
+
+  const shareResult = await query(
+    "delete from shares where entity_type = 'folder' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
+    [folderId, user.id],
+  );
+
+  const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+  if (shareRow?.recipient_user_id) {
+    await notifyShareRevoke({
+      entityType: 'folder',
+      entityId: folderId,
+      targetUserId: shareRow.recipient_user_id,
+    });
+  }
+
+  return c.json({ ok: true });
+});
+
+foldersPublicRoute.get(
+  ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',
+  async (c) => {
+    const folderId = c.req.param('id');
+    const folder = await getFolderById(folderId);
+
+    if (!folder) {
+      throw new HTTPException(404, { message: 'Folder not found' });
+    }
+
+    const linkAccess = await getFolderLinkAccess(folderId);
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    if (session?.user) {
+      const user = session.user as { id: string };
+      if (!linkAccess) {
+        await ensureFolderAccess(folder.id, user.id);
+      }
+    } else if (!linkAccess) {
+      throw new HTTPException(404, { message: 'Folder not found' });
+    }
+
+    // Return folder children when accessed via public link
+    const [pagesResult, foldersResult] = await Promise.all([
+      query(
+        `SELECT id, title, icon, created_by, created_at, updated_at, parent_id
+         FROM pages WHERE parent_id = $1 AND is_deleted = false
+         ORDER BY position ASC`,
+        [folderId],
+      ),
+      query(
+        `SELECT id, parent_id, name, icon, created_by, created_at, updated_at, is_public
+         FROM folders WHERE parent_id = $1 AND is_deleted = false
+         ORDER BY position ASC`,
+        [folderId],
+      ),
+    ]);
+
+    return c.json({
+      ...folder,
+      isPublic: folder.isPublic || !!linkAccess,
+      linkPermission: linkAccess?.permission ?? null,
+      pages: pagesResult.rows,
+      folders: (foldersResult.rows as RawFolderRow[]).map(normalizeFolderRow),
+    });
+  },
+);
+
+foldersPublicRoute.post(':id/access', async (c) => {
+  const folderId = c.req.param('id');
+  const folder = await getFolderById(folderId);
+
+  if (!folder) {
+    throw new HTTPException(404, { message: 'Folder not found' });
+  }
+
+  const linkAccess = await getFolderLinkAccess(folderId);
+  if (!linkAccess) {
+    throw new HTTPException(404, { message: 'Folder not found' });
+  }
+
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  if (!session?.user) {
+    return c.json({ ok: true });
+  }
+
+  return c.json({ ok: true });
+});
+
+export { foldersPublicRoute };
 export default foldersRoute;

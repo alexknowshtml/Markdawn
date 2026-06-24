@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { createTestFolder, createTestPage, createTestUser } from '../test-utils';
 import { ensureFolderAccess, ensurePageAccess } from './share-access';
 
 async function addWorkspaceMember(
   workspaceOwnerId: string,
   memberId: string,
-  role: string = 'member',
+  role: string = 'editor',
 ) {
-  await pool.query(
+  await query(
     `INSERT INTO workspace_members (workspace_owner_id, member_id, role) VALUES ($1, $2, $3)`,
     [workspaceOwnerId, memberId, role],
   );
@@ -19,36 +19,34 @@ async function addShare(
   entityId: string,
   recipientUserId: string,
   permission: string,
-  overrides?: { expiresAt?: Date | null; token?: string | null },
+  overrides?: { token?: string | null },
 ) {
-  await pool.query(
+  await query(
     `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
      VALUES ($1, $2, $3, $4, $5)`,
     [entityType, entityId, recipientUserId, permission, overrides?.token ?? null],
   );
-  if (overrides?.expiresAt) {
-    await pool.query(
-      'UPDATE shares SET expires_at = $1 WHERE recipient_user_id = $2 AND entity_id = $3',
-      [overrides.expiresAt.toISOString(), recipientUserId, entityId],
-    );
-  }
 }
 
 async function addLinkShare(pageId: string, permission: string) {
   const token = crypto.randomUUID();
-  await pool.query(
+  await query(
     `INSERT INTO shares (entity_type, entity_id, permission, token)
      VALUES ('page', $1, $2, $3)`,
     [pageId, permission, token],
   );
-  await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+  await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
     token,
     pageId,
   ]);
 }
 
 async function setAccessRestricted(folderId: string) {
-  await pool.query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folderId]);
+  await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folderId]);
+}
+
+async function setPageAccessRestricted(pageId: string) {
+  await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [pageId]);
 }
 
 describe('ensurePageAccess with workspace membership', () => {
@@ -107,6 +105,30 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
+  it('blocks workspace member access when only the page is restricted', async () => {
+    const owner = await createTestUser();
+    const member = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await addWorkspaceMember(owner.id, member.id);
+    await setPageAccessRestricted(page.id);
+
+    await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
+  });
+
+  it('allows direct page invite access when the page is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await setPageAccessRestricted(page.id);
+    await addShare('page', page.id, recipient.id, 'view');
+
+    const result = await ensurePageAccess(page.id, recipient.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
   it('still grants link share access (regression)', async () => {
     const owner = await createTestUser();
     const page = await createTestPage(owner.id);
@@ -121,7 +143,9 @@ describe('ensurePageAccess with workspace membership', () => {
     const stranger = await createTestUser();
     const page = await createTestPage(owner.id);
 
-    await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow('Forbidden');
+    await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
   });
 
   describe('restricted folders', () => {
@@ -133,7 +157,9 @@ describe('ensurePageAccess with workspace membership', () => {
       const page = await createTestPage(owner.id, { parentId: folder.id });
       await addWorkspaceMember(owner.id, member.id);
 
-      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow('Forbidden');
+      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
+        "You don't have access to this page",
+      );
     });
 
     it('blocks workspace member access to pages nested deep inside restricted folder', async () => {
@@ -145,7 +171,9 @@ describe('ensurePageAccess with workspace membership', () => {
       const page = await createTestPage(owner.id, { parentId: nestedFolder.id });
       await addWorkspaceMember(owner.id, member.id);
 
-      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow('Forbidden');
+      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
+        "You don't have access to this page",
+      );
     });
 
     it('allows owner to still access pages inside restricted folder', async () => {
@@ -173,21 +201,6 @@ describe('ensurePageAccess with workspace membership', () => {
       expect(result.permission).toBe('view');
     });
 
-    it('allows direct invite to bypass restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      await setAccessRestricted(folder.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-      await addWorkspaceMember(owner.id, member.id);
-      // Direct invite on the page inside the restricted folder — bypasses restriction
-      await addShare('page', page.id, member.id, 'view');
-
-      const result = await ensurePageAccess(page.id, member.id);
-      expect(result.hasAccess).toBe(true);
-      expect(result.permission).toBe('view');
-    });
-
     it('does not block workspace member access to pages NOT under restricted folder', async () => {
       const owner = await createTestUser();
       const member = await createTestUser();
@@ -200,38 +213,6 @@ describe('ensurePageAccess with workspace membership', () => {
 
       const result = await ensurePageAccess(page.id, member.id);
       expect(result.hasAccess).toBe(true);
-    });
-  });
-
-  describe('expired shares', () => {
-    it('denies access when direct invite has expired', async () => {
-      const owner = await createTestUser();
-      const recipient = await createTestUser();
-      const page = await createTestPage(owner.id);
-      await addShare('page', page.id, recipient.id, 'edit', {
-        expiresAt: new Date('2020-01-01'),
-      });
-
-      await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow('Forbidden');
-    });
-
-    it('denies access when link share has expired', async () => {
-      const owner = await createTestUser();
-      const page = await createTestPage(owner.id);
-      const token = crypto.randomUUID();
-      await pool.query(
-        `INSERT INTO shares (entity_type, entity_id, permission, token, expires_at)
-         VALUES ('page', $1, 'edit', $2, $3)`,
-        [page.id, token, new Date('2020-01-01')],
-      );
-      await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
-
-      // Anonymous access via link should be denied
-      // (we can't test anonymous directly here since ensurePageAccess requires a userId,
-      //  but the link share won't match any user)
     });
   });
 });
@@ -255,7 +236,9 @@ describe('ensureFolderAccess with workspace membership', () => {
     await setAccessRestricted(folder.id);
     await addWorkspaceMember(owner.id, member.id);
 
-    await expect(ensureFolderAccess(folder.id, member.id)).rejects.toThrow('Forbidden');
+    await expect(ensureFolderAccess(folder.id, member.id)).rejects.toThrow(
+      "You don't have access to this folder",
+    );
   });
 
   it('blocks non-owner, non-member, non-shared users from restricted folder', async () => {
@@ -264,7 +247,9 @@ describe('ensureFolderAccess with workspace membership', () => {
     const folder = await createTestFolder(owner.id);
     await setAccessRestricted(folder.id);
 
-    await expect(ensureFolderAccess(folder.id, stranger.id)).rejects.toThrow('Forbidden');
+    await expect(ensureFolderAccess(folder.id, stranger.id)).rejects.toThrow(
+      "You don't have access to this folder",
+    );
   });
 
   it('still grants owner access to restricted folder', async () => {

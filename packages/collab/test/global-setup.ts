@@ -71,8 +71,24 @@ export default async function setup(): Promise<() => Promise<void>> {
   process.env.GITHUB_CLIENT_ID ??= 'test';
   process.env.GITHUB_CLIENT_SECRET ??= 'test';
 
-  execSync('pnpm exec drizzle-kit push --force', {
-    cwd: resolveApiRoot(),
+  // Create stub tables so migration 0005's data migration doesn't fail on a fresh DB.
+  execSync(`podman exec -i ${CONTAINER_NAME} psql -U markdawn -d markdawn_test`, {
+    input: `
+        CREATE TABLE IF NOT EXISTS page_links (
+          source_page_id uuid, target_page_id uuid, target_title text,
+          link_type text, link_text text, created_at timestamp DEFAULT now()
+        );
+        CREATE TABLE IF NOT EXISTS page_tags (page_id uuid, tag_id uuid);
+        CREATE TABLE IF NOT EXISTS tags (
+          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+          workspace_id uuid, name text NOT NULL, created_at timestamp DEFAULT now()
+        );
+      `,
+    stdio: ['pipe', 'inherit', 'inherit'],
+  });
+
+  // Apply the full migration chain (0000–0016) through drizzle-kit.
+  execSync('pnpm --filter @markdawn/api exec drizzle-kit migrate', {
     env: { ...process.env, DATABASE_URL: testDbUrl },
     stdio: 'inherit',
   });
@@ -84,8 +100,4 @@ export default async function setup(): Promise<() => Promise<void>> {
       void 0;
     }
   };
-}
-
-function resolveApiRoot(): string {
-  return new URL('../../api', import.meta.url).pathname;
 }

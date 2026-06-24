@@ -2,7 +2,6 @@ import type { Page } from '@markdawn/shared';
 import { Share, Star } from 'lucide-react';
 import { useState } from 'react';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
-import { showErrorToast } from '../../utils/toast';
 import { Tooltip } from '../Tooltip';
 import { PublicShareDialog } from './PublicShareDialog';
 
@@ -18,15 +17,11 @@ export function PageActions({ pageId, page }: PageActionsProps) {
 
   const isFavorite = favorites?.some((f) => f.pageId === pageId) ?? false;
 
-  const handleToggleFavorite = async () => {
-    try {
-      await toggleFavoriteMutation.mutateAsync({
-        pageId,
-        isFavorite,
-      });
-    } catch {
-      showErrorToast('Failed to toggle favorite');
-    }
+  const handleToggleFavorite = () => {
+    toggleFavoriteMutation.mutate({
+      pageId,
+      isFavorite,
+    });
   };
 
   return (
@@ -50,6 +45,7 @@ export function PageActions({ pageId, page }: PageActionsProps) {
             <button
               type="button"
               onClick={() => setIsShareDialogOpen(true)}
+              data-testid="page-share-btn"
               className={`p-2 rounded-md transition-colors cursor-pointer ${
                 page.isPublic
                   ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'

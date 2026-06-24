@@ -77,8 +77,8 @@ export default async function setup(): Promise<() => Promise<void>> {
   process.env.GOOGLE_CLIENT_SECRET ??= 'test';
   process.env.DATABASE_URL = testDbUrl;
 
-  execSync('pnpm exec drizzle-kit push --force', {
-    cwd: process.cwd(),
+  // Apply the full migration chain through drizzle-kit.
+  execSync('pnpm --filter @markdawn/api exec drizzle-kit migrate', {
     env: { ...process.env, DATABASE_URL: testDbUrl },
     stdio: 'inherit',
   });

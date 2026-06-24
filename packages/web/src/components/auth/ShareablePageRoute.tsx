@@ -3,21 +3,35 @@ import { useQuery } from '@tanstack/react-query';
 import { ShieldOff } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
-import { ShareProvider } from '../../contexts/ShareContext';
+import { type PublicFolderPayload, ShareProvider } from '../../contexts/ShareContext';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../utils/api';
 
-async function fetchPagePublic(pageId: string) {
-  const res = await fetch(`/api/pages/${pageId}`);
+type EntityType = 'page' | 'folder';
+type PublicEntityPayload = PublicFolderPayload & {
+  title?: string;
+  ydoc?: unknown;
+};
+
+function extractUuid(slugAndId: string): string | null {
+  const match = slugAndId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
+  return match?.[1] ?? null;
+}
+
+async function fetchEntityPublic(
+  entityType: EntityType,
+  entityId: string,
+): Promise<PublicEntityPayload> {
+  const res = await fetch(`/api/${entityType === 'folder' ? 'folders' : 'pages'}/${entityId}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message =
       body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
         ? body.message
-        : 'Failed to fetch page';
+        : `Failed to fetch ${entityType}`;
     throw new ApiError(res.status, message);
   }
-  return res.json();
+  return (await res.json()) as PublicEntityPayload;
 }
 
 type Accessor = {
@@ -38,8 +52,11 @@ type SharesResponse = {
   capabilities: CapabilitySet;
 };
 
-async function fetchPageShares(pageId: string): Promise<SharesResponse> {
-  const res = await fetch(`/api/shares/entity/page/${pageId}`);
+async function fetchEntityShares(
+  entityType: EntityType,
+  entityId: string,
+): Promise<SharesResponse> {
+  const res = await fetch(`/api/shares/entity/${entityType}/${entityId}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message =
@@ -51,57 +68,48 @@ async function fetchPageShares(pageId: string): Promise<SharesResponse> {
   return res.json();
 }
 
-function extractPageId(slugAndId: string): string | null {
-  const match = slugAndId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
-  return match?.[1] ?? null;
-}
-
 type ShareablePageRouteProps = {
+  entityType: EntityType;
   children: ReactNode;
 };
 
-export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
+export function ShareablePageRoute({ entityType, children }: ShareablePageRouteProps) {
   const { data: session, isPending: authPending } = useAuth();
   const location = useLocation();
   const { slugAndId } = useParams<{ slugAndId: string }>();
-  const pageId = slugAndId ? extractPageId(slugAndId) : null;
+  const entityId = slugAndId ? extractUuid(slugAndId) : null;
+  const shouldFetchPublicEntity =
+    !authPending && !!entityId && (!session?.user || entityType === 'folder');
 
   const {
-    data: page,
-    isLoading: pageLoading,
-    error: pageError,
+    data: entity,
+    isLoading: entityLoading,
+    error: entityError,
   } = useQuery({
-    queryKey: ['pages', 'detail', pageId],
+    queryKey: [entityType === 'folder' ? 'folders' : 'pages', 'detail', entityId],
     queryFn: () => {
-      if (!pageId) throw new Error('pageId is required');
-      return fetchPagePublic(pageId);
+      if (!entityId) throw new Error('entityId is required');
+      return fetchEntityPublic(entityType, entityId);
     },
-    enabled: !authPending && !!pageId && !session?.user,
+    enabled: shouldFetchPublicEntity,
     retry: false,
   });
 
-  // For authenticated users, fetch their effective page permission from the
-  // shares API — this reuses the same endpoint the share dialog uses.
-  // We block rendering until it resolves so the initial linkPermission is
-  // correct, avoiding a flash of editable state (same as the anonymous path).
   const {
     data: sharesData,
     isLoading: sharesLoading,
     error: sharesError,
   } = useQuery({
-    queryKey: ['shares', 'entity', 'page', pageId],
+    queryKey: ['shares', 'entity', entityType, entityId],
     queryFn: () => {
-      if (!pageId) throw new Error('pageId is required');
-      return fetchPageShares(pageId);
+      if (!entityId) throw new Error('entityId is required');
+      return fetchEntityShares(entityType, entityId);
     },
-    enabled: !authPending && !!pageId && !!session?.user,
+    enabled: !authPending && !!entityId && !!session?.user,
     retry: false,
   });
 
-  // Wait for auth + the relevant data query before rendering anything.
-  // The anonymous path waits for page data; the authenticated path waits
-  // for shares data (which contains the user's effective permission).
-  const isLoading = authPending || sharesLoading || (!session?.user && pageLoading);
+  const isLoading = authPending || sharesLoading || (shouldFetchPublicEntity && entityLoading);
 
   if (isLoading) {
     return (
@@ -124,7 +132,7 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
             You don&apos;t have access
           </h2>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Your access to this page may have been removed. Contact the page owner to request
+            Your access to this {entityType} may have been removed. Contact the owner to request
             access.
           </p>
         </div>
@@ -132,7 +140,7 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
     );
   }
 
-  if (!session?.user && pageError instanceof ApiError && pageError.status === 403) {
+  if (!session?.user && entityError instanceof ApiError && entityError.status === 403) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
@@ -141,19 +149,30 @@ export function ShareablePageRoute({ children }: ShareablePageRouteProps) {
     const capabilities = sharesData?.capabilities ?? deriveCapabilities(permission);
     const linkPermission = permission === 'admin' ? 'edit' : permission;
     return (
-      <ShareProvider linkPermission={linkPermission} capabilities={capabilities}>
+      <ShareProvider
+        linkPermission={linkPermission}
+        capabilities={capabilities}
+        publicEntity={entityType === 'folder' ? (entity ?? null) : null}
+      >
         {children}
       </ShareProvider>
     );
   }
 
-  if (!pageId) {
+  if (!entityId) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (!page?.isPublic) {
+  if (!entity?.isPublic) {
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  return <ShareProvider linkPermission={page.linkPermission ?? null}>{children}</ShareProvider>;
+  return (
+    <ShareProvider
+      linkPermission={entity.linkPermission ?? null}
+      publicEntity={entityType === 'folder' ? entity : null}
+    >
+      {children}
+    </ShareProvider>
+  );
 }

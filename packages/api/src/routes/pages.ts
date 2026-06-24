@@ -5,7 +5,7 @@ import { marked } from 'marked';
 import * as Y from 'yjs';
 import { auth } from '../auth';
 import type { pages } from '../db';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
@@ -15,8 +15,13 @@ import {
   createYjsDocWithTitle,
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
-import { ensureCanManageEntity, ensureFolderAccess, ensurePageAccess } from '../utils/share-access';
-import { notifyShareRevoke } from '../utils/share-notify';
+import {
+  ensureCanAdminEntity,
+  ensureCanManageEntity,
+  ensureFolderAccess,
+  ensurePageAccess,
+} from '../utils/share-access';
+import { notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -28,6 +33,14 @@ type RawPageRow = PageRow & {
   deleted_at?: Date | null;
   is_public?: boolean | null;
   public_token?: string | null;
+  is_access_restricted?: boolean | null;
+};
+
+type LinkPermission = 'view' | 'edit';
+type PageLinkAccess = {
+  permission: LinkPermission;
+  token: string;
+  source: 'page' | 'folder';
 };
 
 const pagesRoute = new Hono();
@@ -49,7 +62,17 @@ const isValidMarkdown = (markdown: string): boolean => {
 };
 
 const getPageById = async (pageId: string) => {
-  const result = await pool.query('select * from pages where id = $1 limit 1', [pageId]);
+  const result = await query('select * from pages where id = $1 and is_deleted = false limit 1', [
+    pageId,
+  ]);
+  const row = (result.rows[0] as RawPageRow | undefined) ?? null;
+  return row ? normalizePageRow(row) : null;
+};
+
+const getDeletedPageById = async (pageId: string) => {
+  const result = await query('select * from pages where id = $1 and is_deleted = true limit 1', [
+    pageId,
+  ]);
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
   return row ? normalizePageRow(row) : null;
 };
@@ -64,40 +87,105 @@ const normalizePageRow = (row: RawPageRow): PageRow => ({
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
   isPublic: row.isPublic ?? row.is_public ?? false,
   publicToken: row.publicToken ?? row.public_token ?? null,
+  isAccessRestricted: row.isAccessRestricted ?? row.is_access_restricted ?? false,
 });
+
+const normalizeLinkPermission = (permission: string | null | undefined): LinkPermission => {
+  return permission === 'edit' || permission === 'admin' ? 'edit' : 'view';
+};
+
+const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null> => {
+  const result = await query(
+    `
+      with link_access as (
+        select
+          coalesce(s.permission, 'view') as permission,
+          coalesce(s.token, p.public_token, p.id::text) as token,
+          'page' as source,
+          case coalesce(s.permission, 'view')
+            when 'admin' then 3
+            when 'edit' then 2
+            else 1
+          end as rank,
+          0 as priority,
+          0 as depth
+        from pages p
+        left join lateral (
+          select permission, token
+          from shares
+          where entity_type = 'page'
+            and entity_id = p.id
+            and token is not null
+            and (expires_at is null or expires_at > now())
+          order by updated_at desc nulls last
+          limit 1
+        ) s on true
+        where p.id = $1
+          and p.is_deleted = false
+          and p.is_public = true
+
+        union all
+
+        select
+          coalesce(s.permission, 'view') as permission,
+          coalesce(s.token, f.public_token, f.id::text) as token,
+          'folder' as source,
+          case coalesce(s.permission, 'view')
+            when 'admin' then 3
+            when 'edit' then 2
+            else 1
+          end as rank,
+          1 as priority,
+          fc.depth
+        from pages p
+        join folder_closure fc on fc.descendant_id = p.parent_id
+        join folders f on f.id = fc.ancestor_id and f.is_deleted = false
+        left join lateral (
+          select permission, token
+          from shares
+          where entity_type = 'folder'
+            and entity_id = f.id
+            and token is not null
+            and (expires_at is null or expires_at > now())
+          order by updated_at desc nulls last
+          limit 1
+        ) s on true
+        where p.id = $1
+          and p.is_deleted = false
+          and f.is_public = true
+      )
+      select permission, token, source
+      from link_access
+      order by rank desc, priority asc, depth asc
+      limit 1
+    `,
+    [pageId],
+  );
+
+  const row = result.rows[0] as
+    | { permission?: string | null; token?: string | null; source?: string | null }
+    | undefined;
+  if (!row?.token || (row.source !== 'page' && row.source !== 'folder')) {
+    return null;
+  }
+
+  return {
+    permission: normalizeLinkPermission(row.permission),
+    token: row.token,
+    source: row.source,
+  };
+};
 
 pagesRoute.get('/tree', async (c) => {
   // Return pages the user can access (owned or shared)
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `
-      with recursive shared_folders as (
-        select f.id
-        from shares s
-        join folders f on f.id = s.entity_id
-        where s.entity_type = 'folder' and s.recipient_user_id = $1 and f.is_deleted = false
-        union all
-        select child.id
-        from folders child
-        join shared_folders parent on child.parent_id = parent.id
-        where child.is_deleted = false
-      )
       select p.*
       from pages p
       where p.is_deleted = false
-        and (
-          p.created_by = $1
-          or exists (
-            select 1 from shares s
-            where s.entity_type = 'page' and s.entity_id = p.id and s.recipient_user_id = $1
-          )
-          or exists (
-            select 1 from page_access_events pae
-            where pae.page_id = p.id and pae.user_id = $1
-          )
-          or p.parent_id in (select id from shared_folders)
-        )
+        and p.id in (select page_id from get_accessible_page_ids($1))
       order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position asc
     `,
     [user.id],
@@ -128,7 +216,7 @@ pagesRoute.post('/', async (c) => {
   const user = c.get('user') as { id: string };
 
   if (parentId) {
-    const folderResult = await pool.query(
+    const folderResult = await query(
       'select id from folders where id = $1 and is_deleted = false limit 1',
       [parentId],
     );
@@ -139,7 +227,7 @@ pagesRoute.post('/', async (c) => {
     await ensureFolderAccess(parentId, user.id, 'edit');
   }
 
-  const positionResult = await pool.query(
+  const positionResult = await query(
     parentId
       ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
       : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
@@ -152,7 +240,7 @@ pagesRoute.post('/', async (c) => {
 
   const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
 
-  const insertResult = await pool.query(
+  const insertResult = await query(
     "insert into pages (parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
     [
       parentId ?? null,
@@ -175,7 +263,7 @@ pagesRoute.post('/', async (c) => {
 pagesRoute.get('/trash', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     'select * from pages where is_deleted = true and created_by = $1 order by deleted_at desc nulls last, position asc',
     [user.id],
   );
@@ -186,7 +274,7 @@ pagesRoute.get('/trash', async (c) => {
 pagesRoute.delete('/trash/empty-all', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const userPages = await pool.query(
+  const userPages = await query(
     'select id, parent_id, is_deleted from pages where created_by = $1',
     [user.id],
   );
@@ -227,7 +315,7 @@ pagesRoute.delete('/trash/empty-all', async (c) => {
   }
 
   if (toDelete.size > 0) {
-    await pool.query('delete from pages where id = any($1)', [Array.from(toDelete)]);
+    await query('delete from pages where id = any($1)', [Array.from(toDelete)]);
   }
 
   return c.json({ deleted: true, count: toDelete.size });
@@ -242,7 +330,7 @@ pagesRoute.get('/recent', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     'select p.id, p.title, p.icon, pv.visited_at as "visitedAt" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.is_deleted = false order by pv.visited_at desc limit $2',
     [user.id, parsedLimit],
   );
@@ -262,29 +350,27 @@ pagesPublicRoute.get(
       throw new HTTPException(404, { message: 'Page not found' });
     }
 
+    const linkAccess = await getPageLinkAccess(pageId);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (session?.user) {
       const user = session.user as { id: string };
-      if (!page.isPublic) {
+      if (!linkAccess) {
         await ensurePageAccess(page.id, user.id);
       }
-      await pool.query(
+      await query(
         'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
         [user.id, pageId],
       );
-    } else if (!page.isPublic) {
+    } else if (!linkAccess) {
       throw new HTTPException(404, { message: 'Page not found' });
     }
 
-    // Determine if a link share exists and expose its permission to anonymous viewers.
-    const linkResult = await pool.query(
-      "select permission from shares where entity_type = 'page' and entity_id = $1 and token is not null limit 1",
-      [pageId],
-    );
-    const linkRow = linkResult.rows[0] as { permission: string } | undefined;
-    const linkPermission = linkRow ? (linkRow.permission as 'view' | 'edit') : null;
-
-    return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null, linkPermission });
+    return c.json({
+      ...page,
+      isPublic: page.isPublic || !!linkAccess,
+      ydoc: page.ydoc ? Array.from(page.ydoc) : null,
+      linkPermission: linkAccess?.permission ?? null,
+    });
   },
 );
 
@@ -296,28 +382,21 @@ pagesRoute.post(':id/access', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  if (!page.isPublic) {
+  const linkAccess = await getPageLinkAccess(pageId);
+  if (!linkAccess) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
   const user = c.get('user') as { id: string };
 
-  const shareResult = await pool.query(
-    "SELECT token, permission FROM shares WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL LIMIT 1",
-    [pageId],
-  );
-  const shareRow = shareResult.rows[0] as { token: string; permission: string } | undefined;
-  const shareToken = shareRow?.token ?? pageId;
-  const sharePermission = (shareRow?.permission ?? 'view') as 'view' | 'edit';
-
-  await pool.query(
+  await query(
     `
       insert into page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
       values ($1, $2, 'link', $3, $4, now(), now())
       on conflict (page_id, user_id, source, token)
       do update set permission = excluded.permission, last_seen_at = now()
     `,
-    [page.id, user.id, shareToken, sharePermission],
+    [page.id, user.id, linkAccess.token, linkAccess.permission],
   );
 
   return c.json({ ok: true });
@@ -325,7 +404,7 @@ pagesRoute.post(':id/access', async (c) => {
 
 pagesRoute.patch(':id/restore', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
+  const page = await getDeletedPageById(pageId);
 
   if (!page) {
     throw new HTTPException(404, { message: 'Page not found' });
@@ -334,13 +413,13 @@ pagesRoute.patch(':id/restore', async (c) => {
   const user = c.get('user') as { id: string };
   // Direct ownership check — ensurePageAccess filters by is_deleted=false,
   // but restore operates on a soft-deleted page
-  const ownerRes = await pool.query('select created_by from pages where id = $1 limit 1', [pageId]);
+  const ownerRes = await query('select created_by from pages where id = $1 limit 1', [pageId]);
   const ownerRow = ownerRes.rows[0] as { created_by?: string } | undefined;
   if (!ownerRow || ownerRow.created_by !== user.id) {
-    throw new HTTPException(403, { message: 'Forbidden' });
+    throw new HTTPException(403, { message: 'You can only restore pages that you created' });
   }
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
     [pageId],
   );
@@ -369,27 +448,39 @@ pagesRoute.patch(':id', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { title, icon, parentId, position, coverType, coverValue, properties } = body as {
-    title?: string;
-    icon?: string | null;
-    parentId?: string | null;
-    position?: string | number;
-    coverType?: string | null;
-    coverValue?: string | null;
-    properties?: Record<string, unknown> | null;
-  };
+  const { title, icon, parentId, position, coverType, coverValue, properties, isAccessRestricted } =
+    body as {
+      title?: string;
+      icon?: string | null;
+      parentId?: string | null;
+      position?: string | number;
+      coverType?: string | null;
+      coverValue?: string | null;
+      properties?: Record<string, unknown> | null;
+      isAccessRestricted?: boolean;
+    };
+
+  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
+  if (hasRestricted && isAccessRestricted !== page.isAccessRestricted) {
+    await ensureCanAdminEntity('page', page.id, user.id);
+  }
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === page.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
-    }
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and is_deleted = false limit 1',
-      [parentId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+  if (hasParentId) {
+    if (parentId) {
+      if (parentId === page.id) {
+        throw new HTTPException(400, { message: 'Cannot set parent to self' });
+      }
+      const folderResult = await query(
+        'select id from folders where id = $1 and is_deleted = false limit 1',
+        [parentId],
+      );
+      if (folderResult.rowCount === 0) {
+        throw new HTTPException(404, { message: 'Parent folder not found' });
+      }
+      await ensureFolderAccess(parentId, user.id, 'edit');
+    } else if (page.parentId !== null) {
+      await ensureCanAdminEntity('page', page.id, user.id);
     }
   }
 
@@ -432,9 +523,11 @@ pagesRoute.patch(':id', async (c) => {
       : null
     : page.properties;
 
+  const nextRestricted = hasRestricted ? isAccessRestricted === true : page.isAccessRestricted;
+
   const updateResult = hasProperties
-    ? await pool.query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
+    ? await query(
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, is_access_restricted = $8, updated_at = now() where id = $9 returning *",
         [
           nextTitle,
           nextIcon,
@@ -443,12 +536,22 @@ pagesRoute.patch(':id', async (c) => {
           nextCoverType,
           nextCoverValue,
           nextProperties,
+          nextRestricted,
           pageId,
         ],
       )
-    : await pool.query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
-        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
+    : await query(
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, is_access_restricted = $7, updated_at = now() where id = $8 returning *",
+        [
+          nextTitle,
+          nextIcon,
+          nextParent,
+          nextPosition,
+          nextCoverType,
+          nextCoverValue,
+          nextRestricted,
+          pageId,
+        ],
       );
 
   if (updateResult.rowCount === 0) {
@@ -458,10 +561,18 @@ pagesRoute.patch(':id', async (c) => {
   // Notify the collab server so it can update the meta room sidebar and
   // push the new title into any active in-memory Yjs session.
   if (page.title !== nextTitle) {
-    await pool.query('select pg_notify($1, $2)', [
+    await query('select pg_notify($1, $2)', [
       'page_renamed',
       JSON.stringify({ pageId, newTitle: nextTitle }),
     ]);
+  }
+
+  if (hasRestricted && nextRestricted !== page.isAccessRestricted) {
+    if (nextRestricted) {
+      await notifyShareRevoke({ entityType: 'page', entityId: pageId });
+    } else {
+      await notifyShareUpdate({ entityType: 'page', entityId: pageId });
+    }
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -490,16 +601,21 @@ pagesRoute.patch(':id/move', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === page.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
-    }
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and is_deleted = false limit 1',
-      [parentId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+  if (hasParentId) {
+    if (parentId) {
+      if (parentId === page.id) {
+        throw new HTTPException(400, { message: 'Cannot set parent to self' });
+      }
+      const folderResult = await query(
+        'select id from folders where id = $1 and is_deleted = false limit 1',
+        [parentId],
+      );
+      if (folderResult.rowCount === 0) {
+        throw new HTTPException(404, { message: 'Parent folder not found' });
+      }
+      await ensureFolderAccess(parentId, user.id, 'edit');
+    } else if (page.parentId !== null) {
+      await ensureCanAdminEntity('page', page.id, user.id);
     }
   }
 
@@ -513,13 +629,17 @@ pagesRoute.patch(':id/move', async (c) => {
         ? String(position)
         : page.position;
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
     [nextParent, nextPosition, pageId],
   );
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to move page' });
+  }
+
+  if (hasParentId && nextParent !== page.parentId) {
+    await notifyShareUpdate({ entityType: 'page', entityId: pageId });
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -609,10 +729,7 @@ pagesRoute.post(':id/import/markdown', async (c) => {
 
   // Resolve wiki link titles to page UUIDs so backlinks survive renames.
   {
-    const existingPages = await pool.query(
-      'select id, title from pages where is_deleted = false',
-      [],
-    );
+    const existingPages = await query('select id, title from pages where is_deleted = false', []);
     const pageLookup = new Map<string, string>();
     for (const row of existingPages.rows as { id: string; title: string }[]) {
       pageLookup.set(row.title.trim().toLowerCase(), row.id);
@@ -622,7 +739,7 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     }
   }
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
     [ydocBuffer, page.title || 'Untitled', pageId],
   );
@@ -643,9 +760,9 @@ pagesRoute.delete(':id', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
+  await ensureCanAdminEntity('page', page.id, user.id);
 
-  const updateResult = await pool.query(
+  const updateResult = await query(
     'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
     [pageId],
   );
@@ -655,7 +772,7 @@ pagesRoute.delete(':id', async (c) => {
   }
 
   // Notify the collab server so it removes the page from the meta room.
-  await pool.query('select pg_notify($1, $2)', ['page_deleted', JSON.stringify({ pageId })]);
+  await query('select pg_notify($1, $2)', ['page_deleted', JSON.stringify({ pageId })]);
 
   return c.json({ deleted: true });
 });
@@ -670,16 +787,21 @@ pagesRoute.post(':id/leave', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  if (page.createdBy === user.id) {
+  const ownerResult = await query(
+    'SELECT COALESCE(get_root_folder_owner($1), (SELECT created_by FROM pages WHERE id = $2)) as owner_id',
+    [page.parentId, pageId],
+  );
+  const ownerId = ownerResult.rows[0]?.owner_id as string | undefined;
+  if (ownerId === user.id) {
     throw new HTTPException(400, { message: 'Cannot leave your own page' });
   }
 
-  const shareResult = await pool.query(
+  const shareResult = await query(
     "delete from shares where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
     [pageId, user.id],
   );
 
-  await pool.query('delete from page_access_events where page_id = $1 and user_id = $2', [
+  await query('delete from page_access_events where page_id = $1 and user_id = $2', [
     pageId,
     user.id,
   ]);
@@ -714,16 +836,17 @@ pagesRoute.post(':id/copy', async (c) => {
       : null;
 
   if (parentId) {
-    const folderResult = await pool.query(
+    const folderResult = await query(
       'select id from folders where id = $1 and is_deleted = false limit 1',
       [parentId],
     );
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
+    await ensureFolderAccess(parentId, user.id, 'edit');
   }
 
-  const positionResult = await pool.query(
+  const positionResult = await query(
     parentId
       ? 'select max(position) as max_position from pages where parent_id = $1 and is_deleted = false and created_by = $2'
       : 'select max(position) as max_position from pages where parent_id is null and is_deleted = false and created_by = $1',
@@ -731,7 +854,7 @@ pagesRoute.post(':id/copy', async (c) => {
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
-  const insertResult = await pool.query(
+  const insertResult = await query(
     `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
      select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
      from pages where id = $5
@@ -756,7 +879,7 @@ pagesRoute.post(':id/copy', async (c) => {
       }
       titleText.insert(0, `Copy of ${page.title}`);
       const newBinary = Buffer.from(Y.encodeStateAsUpdate(ydoc));
-      await pool.query('update pages set ydoc = $1 where id = $2', [newBinary, newPageId]);
+      await query('update pages set ydoc = $1 where id = $2', [newBinary, newPageId]);
     } catch {
       // If Yjs decode fails, the title column is already set
     }
@@ -767,7 +890,7 @@ pagesRoute.post(':id/copy', async (c) => {
   // panel and tag queries would be empty until a user opens it and
   // triggers a collab persist.
   {
-    const originalConnections = await pool.query(
+    const originalConnections = await query(
       `select id, target_type, target_id, target_slug, target_label, connection_type,
               link_text, link_context, occurrence_count
        from connections
@@ -785,7 +908,7 @@ pagesRoute.post(':id/copy', async (c) => {
       link_context: string | null;
       occurrence_count: number;
     }[]) {
-      const insertResult = await pool.query(
+      const insertResult = await query(
         `insert into connections (
            source_type, source_id, target_type, target_id, target_slug,
            target_label, connection_type, link_text, link_context, occurrence_count, updated_at
@@ -805,7 +928,7 @@ pagesRoute.post(':id/copy', async (c) => {
       );
       const newConnectionId = insertResult.rows[0]?.id;
       if (newConnectionId && conn.link_context) {
-        await pool.query(
+        await query(
           `insert into connection_occurrences (connection_id, context)
            values ($1, $2)`,
           [newConnectionId, conn.link_context],
@@ -829,9 +952,7 @@ pagesRoute.delete(':id/permanent', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureCanManageEntity('page', page.id, user.id);
 
-  const userPages = await pool.query('select id, parent_id from pages where created_by = $1', [
-    user.id,
-  ]);
+  const userPages = await query('select id, parent_id from pages where created_by = $1', [user.id]);
 
   const childMap = new Map<string, string[]>();
   for (const item of userPages.rows as { id: string; parent_id: string | null }[]) {
@@ -859,7 +980,7 @@ pagesRoute.delete(':id/permanent', async (c) => {
     }
   }
 
-  await pool.query('delete from pages where id = any($1)', [Array.from(toDelete)]);
+  await query('delete from pages where id = any($1)', [Array.from(toDelete)]);
 
   return c.json({ deleted: true });
 });

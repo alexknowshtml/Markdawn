@@ -36,16 +36,26 @@ CREATE INDEX "connection_occurrences_connection_idx" ON "connection_occurrences"
 
 -- Migrate existing page_links into connections before dropping the old tables.
 -- This ensures production data is preserved during the migration.
-INSERT INTO connections (id, workspace_id, source_type, source_id, target_type, target_id, target_slug, target_label, connection_type, link_text, occurrence_count, updated_at)
-SELECT gen_random_uuid(), p.workspace_id, 'page', pl.source_page_id, 'page', pl.target_page_id, lower(pl.target_title), pl.target_title, coalesce(pl.link_type, 'wikilink'), pl.link_text, 1, pl.created_at
-FROM page_links pl
-JOIN pages p ON p.id = pl.source_page_id;
+DO $$
+BEGIN
+  IF to_regclass('public.page_links') IS NOT NULL THEN
+    INSERT INTO connections (id, workspace_id, source_type, source_id, target_type, target_id, target_slug, target_label, connection_type, link_text, occurrence_count, updated_at)
+    SELECT gen_random_uuid(), p.workspace_id, 'page', pl.source_page_id, 'page', pl.target_page_id, lower(pl.target_title), pl.target_title, coalesce(pl.link_type, 'wikilink'), pl.link_text, 1, pl.created_at
+    FROM page_links pl
+    JOIN pages p ON p.id = pl.source_page_id;
+  END IF;
+END $$;
 
 -- Migrate existing tags + page_tags into connections
-INSERT INTO connections (id, workspace_id, source_type, source_id, target_type, target_id, target_slug, target_label, connection_type, link_text, occurrence_count, updated_at)
-SELECT gen_random_uuid(), t.workspace_id, 'page', pt.page_id, 'tag', NULL, lower(t.name), t.name, 'tag', t.name, 1, t.created_at
-FROM page_tags pt
-JOIN tags t ON t.id = pt.tag_id;
+DO $$
+BEGIN
+  IF to_regclass('public.page_tags') IS NOT NULL AND to_regclass('public.tags') IS NOT NULL THEN
+    INSERT INTO connections (id, workspace_id, source_type, source_id, target_type, target_id, target_slug, target_label, connection_type, link_text, occurrence_count, updated_at)
+    SELECT gen_random_uuid(), t.workspace_id, 'page', pt.page_id, 'tag', NULL, lower(t.name), t.name, 'tag', t.name, 1, t.created_at
+    FROM page_tags pt
+    JOIN tags t ON t.id = pt.tag_id;
+  END IF;
+END $$;
 
 -- Drop replaced tables
 DROP TABLE IF EXISTS "page_tags" CASCADE;

@@ -1,7 +1,8 @@
 import type { Page, PageTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { useLeaveEntity } from '../utils/entity-actions';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -85,17 +86,8 @@ async function emptyTrash(): Promise<void> {
   }
 }
 
-async function leavePage(pageId: string): Promise<{ ok: boolean }> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}/leave`, {
-    method: 'POST',
-  });
-  if (!res.ok) {
-    const error = await res
-      .json()
-      .catch(() => ({ message: 'Failed to remove page from workspace' }));
-    throw new Error(error.message);
-  }
-  return res.json();
+export function useLeavePage() {
+  return useLeaveEntity('page');
 }
 
 async function movePage(pageId: string, parentId: string | null, position: string): Promise<Page> {
@@ -145,9 +137,6 @@ export function useCreatePage() {
         showSuccessToast('Page created');
       }
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
 }
 
@@ -169,9 +158,7 @@ export function useUpdatePage() {
         showSuccessToast('Page updated');
       }
     },
-    onError: () => {
-      showErrorToast('Failed to update page');
-    },
+    meta: { errorMessage: 'Failed to update page' },
   });
 }
 
@@ -183,24 +170,6 @@ export function useDeletePage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Moved to trash');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
-  });
-}
-
-export function useLeavePage() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (pageId: string) => leavePage(pageId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-      showSuccessToast('Removed from your view');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }
@@ -221,9 +190,7 @@ export function useRestorePage() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Page restored');
     },
-    onError: () => {
-      showErrorToast('Failed to restore page');
-    },
+    meta: { errorMessage: 'Failed to restore page' },
   });
 }
 
@@ -235,9 +202,7 @@ export function usePermanentDeletePage() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Page permanently deleted');
     },
-    onError: () => {
-      showErrorToast('Failed to permanently delete page');
-    },
+    meta: { errorMessage: 'Failed to permanently delete page' },
   });
 }
 
@@ -249,9 +214,7 @@ export function useEmptyTrash() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       showSuccessToast('Trash emptied');
     },
-    onError: () => {
-      showErrorToast('Failed to empty trash');
-    },
+    meta: { errorMessage: 'Failed to empty trash' },
   });
 }
 
@@ -271,9 +234,7 @@ export function useMovePage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Page moved');
     },
-    onError: () => {
-      showErrorToast('Failed to move page');
-    },
+    meta: { errorMessage: 'Failed to move page' },
   });
 }
 
@@ -286,9 +247,6 @@ export function useImportMarkdown() {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'content'] });
       showSuccessToast('Note imported');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }

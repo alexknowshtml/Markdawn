@@ -990,14 +990,14 @@ export function MilkdownEditor({
           return;
         }
 
-        // New unified format: { type: 'share_event', action, permission }
         if (message.type === 'share_event') {
           const action = message.action as string | undefined;
           const permission = message.permission as string | undefined;
+          const toastMessage = (message as { message?: string }).message;
           logger.info`[collab] share event: action=${action} permission=${permission}`;
           if (action === 'revoke') {
             if (!consumeSelfLeave(pageId)) {
-              showInfoToast('Removed from your view');
+              showInfoToast(toastMessage ?? 'Removed from your view');
             }
             queryClient.invalidateQueries({ queryKey: ['pageTree'] });
             queryClient.invalidateQueries({ queryKey: ['folderTree'] });
@@ -1007,19 +1007,43 @@ export function MilkdownEditor({
               setReadOnly(true);
               setLinkPermission('view');
               setCapabilities(deriveCapabilities('view'));
-              showInfoToast('This page is now view-only');
-            } else if (permission === 'edit') {
+              showInfoToast(toastMessage ?? 'This page is now view-only');
+            } else if (permission === 'edit' || permission === 'admin') {
               setReadOnly(false);
               setLinkPermission('edit');
-              setCapabilities(deriveCapabilities('edit'));
-              showInfoToast('You can now edit this page');
-            } else if (permission === 'admin') {
-              setReadOnly(false);
-              setLinkPermission('edit');
-              setCapabilities(deriveCapabilities('admin'));
-              showInfoToast('You are now an admin');
+              setCapabilities(deriveCapabilities(permission));
+              showInfoToast(
+                toastMessage ??
+                  (permission === 'admin' ? 'You are now an admin' : 'You can now edit this page'),
+              );
             }
           }
+          return;
+        }
+
+        if (message.type === 'entity_deleted') {
+          const entityType = message.entityType as string | undefined;
+          const entityId = message.entityId as string | undefined;
+          logger.info`[collab] entity deleted: entityType=${entityType} entityId=${entityId}`;
+          if (!consumeSelfLeave(pageId)) {
+            showInfoToast(entityType === 'folder' ? 'Folder deleted' : 'Page deleted');
+          }
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+          navigate('/');
+          return;
+        }
+
+        if (message.type === 'invite_received') {
+          const sharedByName = message.sharedByName as string | undefined;
+          const entityTitle = message.entityTitle as string | undefined;
+          const toastMessage = (message as { message?: string }).message;
+          logger.info`[collab] invite received: ${sharedByName} shared ${entityTitle}`;
+          showInfoToast(
+            toastMessage ??
+              `${sharedByName ?? 'Someone'} shared ${entityTitle ?? 'something'} with you. Refresh to see it.`,
+          );
+          return;
         }
       } catch {
         // Ignore non-JSON stateless messages

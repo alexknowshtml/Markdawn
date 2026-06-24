@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createTestApp, createTestSession, createTestUser } from '../test-utils';
+import { query } from '../db/query';
+import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 
 describe('uploads API', () => {
   describe('auth guard', () => {
@@ -120,6 +121,40 @@ describe('uploads API', () => {
       expect(res.headers.get('Content-Type')).toBe('image/png');
       const returned = new Uint8Array(await res.arrayBuffer());
       expect(returned).toEqual(binaryData);
+    });
+
+    it('allows recipients to fetch uploads from directly shared root pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const page = await createTestPage(owner.id, { title: 'Shared Root Page' });
+
+      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const formData = new FormData();
+      formData.append('file', new File([binaryData], 'shared-root.png', { type: 'image/png' }));
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      expect(uploadRes.status).toBe(200);
+      const { url } = (await uploadRes.json()) as { url: string };
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, recipient.id],
+      );
+
+      const res = await app.request(url, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toBe('image/png');
     });
   });
 });

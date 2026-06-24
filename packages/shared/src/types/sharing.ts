@@ -15,6 +15,10 @@ export type ShareEventAction = 'grant' | 'update' | 'revoke';
  * `targetUserId` determines which connections are affected:
  * - `undefined` → affects all anonymous connections (link share changes)
  * - a user ID  → affects that specific authenticated connection (email invite changes)
+ *
+ * `message` is a human-readable description of what happened, intended for
+ * display as a toast on the client. The collab server passes it through
+ * to the WebSocket stateless message unchanged.
  */
 export interface ShareEventPayload {
   type: 'share_event';
@@ -23,6 +27,8 @@ export interface ShareEventPayload {
   entityId: string;
   permission?: SharePermission;
   targetUserId?: string;
+  /** Human-readable toast message for the affected user(s). */
+  message?: string;
 }
 
 /**
@@ -38,4 +44,12 @@ export interface StatelessShareMessage {
   type: 'share_event';
   action: ShareEventAction;
   permission?: SharePermission;
+  message?: string;
+}
+
+export interface EntityDeletedMessage {
+  type: 'entity_deleted';
+  entityType: ShareEntityType;
+  entityId: string;
+  pageId?: string;
 }

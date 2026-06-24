@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { query } from '../db/query';
 import {
   createTestApp,
   createTestFolder,
@@ -132,6 +133,58 @@ describe('folders API', () => {
 
       expect(res.status).toBe(404);
     });
+
+    it('returns public folder children without a session', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id, { name: 'Public Folder' });
+      const page = await createTestPage(owner.id, { parentId: folder.id, title: 'Child Page' });
+      const token = crypto.randomUUID();
+
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/folders/${folder.id}`);
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.name).toBe('Public Folder');
+      expect(body.linkPermission).toBe('view');
+      expect(body.pages.some((p: { id: string }) => p.id === page.id)).toBe(true);
+    });
+
+    it('allows anonymous access to descendant folders through an ancestor folder link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const parent = await createTestFolder(owner.id, { name: 'Public Parent' });
+      const child = await createTestFolder(owner.id, { name: 'Public Child', parentId: parent.id });
+      const token = crypto.randomUUID();
+
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        parent.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [parent.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/folders/${child.id}`);
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.name).toBe('Public Child');
+      expect(body.isPublic).toBe(true);
+      expect(body.linkPermission).toBe('view');
+    });
   });
 
   describe('PATCH /api/folders/:id', () => {
@@ -220,7 +273,35 @@ describe('folders API', () => {
         body: JSON.stringify({ parentId: deleted.id }),
       });
 
-      expect(res.status).toBe(400);
+      expect(res.status).toBe(404);
+    });
+
+    it('rejects moving a shared folder into a folder the caller cannot edit', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const collaborator = await createTestUser();
+      const otherOwner = await createTestUser();
+      const session = await createTestSession(collaborator.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared' });
+      const forbiddenParent = await createTestFolder(otherOwner.id, { name: 'Forbidden' });
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('folder', $1, $2, $3, 'edit')`,
+        [folder.id, owner.id, collaborator.id],
+      );
+
+      const res = await app.request(`/api/folders/${folder.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ parentId: forbiddenParent.id }),
+      });
+
+      expect(res.status).toBe(403);
     });
 
     it('returns 404 for non-existent folder', async () => {

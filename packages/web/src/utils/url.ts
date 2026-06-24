@@ -18,6 +18,11 @@ export function buildPagePath(title: string, pageId: string): string {
   return `/app/${slug}-${pageId}`;
 }
 
+export function buildFolderPath(name: string, folderId: string): string {
+  const slug = slugifyTitle(name) || 'folder';
+  return `/app/folder/${slug}-${folderId}`;
+}
+
 export function ensureAbsoluteUrl(url: string): string {
   if (!url) return url;
 

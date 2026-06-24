@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { notifyWorkspaceEvent } from '../utils/share-notify';
 
@@ -15,7 +15,7 @@ workspaceRoute.use('*', requireAuth);
 workspaceRoute.get('/members', async (c) => {
   const user = c.get('user') as { id: string };
 
-  const result = await pool.query(
+  const result = await query(
     `SELECT
        wm.id,
        wm.workspace_owner_id,
@@ -51,10 +51,12 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(400, { message: 'Email is required' });
   }
 
-  const role = rawRole === 'admin' ? 'admin' : 'member';
+  const role = ['viewer', 'editor', 'admin'].includes(rawRole ?? '')
+    ? (rawRole as string)
+    : 'editor';
 
   // Find the user by email
-  const userResult = await pool.query('SELECT id, name FROM users WHERE email = $1 LIMIT 1', [
+  const userResult = await query('SELECT id, name FROM users WHERE email = $1 LIMIT 1', [
     email.trim().toLowerCase(),
   ]);
   const targetUser = userResult.rows[0] as { id: string; name: string } | undefined;
@@ -68,7 +70,7 @@ workspaceRoute.post('/members/invite', async (c) => {
   }
 
   // Check if already a member (either as owner or as member)
-  const existingResult = await pool.query(
+  const existingResult = await query(
     `SELECT id FROM workspace_members
      WHERE (workspace_owner_id = $1 AND member_id = $2)
         OR (workspace_owner_id = $2 AND member_id = $1)
@@ -79,7 +81,7 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(409, { message: 'User is already a member of this workspace' });
   }
 
-  const insertResult = await pool.query(
+  const insertResult = await query(
     `INSERT INTO workspace_members (workspace_owner_id, member_id, role)
      VALUES ($1, $2, $3)
      RETURNING id`,
@@ -90,9 +92,16 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(500, { message: 'Failed to add workspace member' });
   }
 
-  await notifyWorkspaceEvent('member_added', user.id, targetUser.id);
+  const inviteMessage = `Added ${targetUser.name ?? email} as ${role} to workspace`;
 
-  return c.json({ ok: true, memberId: targetUser.id, name: targetUser.name });
+  await notifyWorkspaceEvent('member_added', user.id, targetUser.id, inviteMessage);
+
+  return c.json({
+    ok: true,
+    memberId: targetUser.id,
+    name: targetUser.name,
+    message: inviteMessage,
+  });
 });
 
 /**
@@ -108,22 +117,30 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
   }
 
   const { role: rawRole } = body as { role?: string };
-  const role = rawRole === 'admin' ? 'admin' : 'member';
+  const role = ['viewer', 'editor', 'admin'].includes(rawRole ?? '')
+    ? (rawRole as string)
+    : 'editor';
 
-  const result = await pool.query(
+  const memberResult = await query('SELECT name FROM users WHERE id = $1', [memberId]);
+  const memberName =
+    (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
+
+  const updateResult = await query(
     `UPDATE workspace_members SET role = $1
      WHERE workspace_owner_id = $2 AND member_id = $3
      RETURNING id`,
     [role, user.id, memberId],
   );
 
-  if (!result.rowCount || result.rowCount === 0) {
+  if (!updateResult.rowCount || updateResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Member not found' });
   }
 
-  await notifyWorkspaceEvent('role_changed', user.id, memberId);
+  const roleMessage = `Changed ${memberName}'s role to ${role}`;
 
-  return c.json({ ok: true });
+  await notifyWorkspaceEvent('role_changed', user.id, memberId, roleMessage);
+
+  return c.json({ ok: true, message: roleMessage });
 });
 
 /**
@@ -137,28 +154,34 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
   // Owner can remove anyone; member can remove themselves
   if (user.id !== memberId) {
     // Only owner can remove other members
-    const ownerCheck = await pool.query(
+    const ownerCheck = await query(
       'SELECT id FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 LIMIT 1',
       [user.id, memberId],
     );
     if (!ownerCheck.rowCount || ownerCheck.rowCount === 0) {
-      throw new HTTPException(403, { message: 'Forbidden' });
+      throw new HTTPException(403, { message: 'Only the workspace owner can remove members' });
     }
   }
 
-  const result = await pool.query(
+  const memberResult = await query('SELECT name FROM users WHERE id = $1', [memberId]);
+  const memberName =
+    (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
+
+  const deleteResult = await query(
     'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',
     [user.id, memberId],
   );
 
-  if (!result.rowCount || result.rowCount === 0) {
-    // Also try the reverse (member leaving their own workspace — not possible, but defensive)
+  if (!deleteResult.rowCount || deleteResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Member not found' });
   }
 
-  await notifyWorkspaceEvent('member_removed', user.id, memberId);
+  const removeMessage =
+    user.id === memberId ? `Left the workspace` : `Removed ${memberName} from workspace`;
 
-  return c.json({ ok: true });
+  await notifyWorkspaceEvent('member_removed', user.id, memberId, removeMessage);
+
+  return c.json({ ok: true, message: removeMessage });
 });
 
 export default workspaceRoute;

@@ -2,7 +2,7 @@ import type { Folder, Page } from '@markdawn/shared';
 import { ChevronRight, Home } from 'lucide-react';
 import React, { useMemo } from 'react';
 import { Link } from 'react-router-dom';
-import { buildPagePath } from '../../utils/url';
+import { buildFolderPath, buildPagePath } from '../../utils/url';
 
 interface BreadcrumbsProps {
   pages: Page[];
@@ -83,7 +83,12 @@ export function Breadcrumbs({ pages, folders, currentPageId }: BreadcrumbsProps)
                   {item.title || 'Untitled'}
                 </span>
               ) : item.isFolder ? (
-                <span className="text-zinc-600 dark:text-zinc-400 px-1.5 py-0.5">{item.title}</span>
+                <Link
+                  to={buildFolderPath(item.title, item.id)}
+                  className="hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors px-1.5 py-0.5 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800/50"
+                >
+                  {item.title}
+                </Link>
               ) : (
                 <Link
                   to={buildPagePath(item.title, item.id)}

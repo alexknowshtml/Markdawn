@@ -1,6 +1,6 @@
 import type { Folder, Page } from '@markdawn/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -39,9 +39,6 @@ export function useCopyPage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Page copied');
     },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
-    },
   });
 }
 
@@ -54,9 +51,6 @@ export function useCopyFolder() {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Folder copied');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }

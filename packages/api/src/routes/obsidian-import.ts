@@ -4,7 +4,7 @@ import path from 'node:path';
 import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -158,15 +158,15 @@ obsidianImportRoute.post('/', async (c) => {
     errors: [],
   };
 
-  const hasPropertiesColumn = await pool
-    .query(
-      `SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
-    )
+  const hasPropertiesColumn = await query(
+    `SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
+  )
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
 
-  const hasConnectionsTable = await pool
-    .query(`SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`)
+  const hasConnectionsTable = await query(
+    `SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`,
+  )
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
 
@@ -210,7 +210,7 @@ obsidianImportRoute.post('/', async (c) => {
       const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
       const parentId = parentPath ? (folderPathToId.get(parentPath) ?? null) : null;
 
-      const positionResult = await pool.query(
+      const positionResult = await query(
         parentId
           ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
           : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
@@ -218,7 +218,7 @@ obsidianImportRoute.post('/', async (c) => {
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
-      const insertResult = await pool.query(
+      const insertResult = await query(
         'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
         [parentId, name, nextPosition, user.id],
       );
@@ -245,7 +245,7 @@ obsidianImportRoute.post('/', async (c) => {
       const buffer = Buffer.from(file.data, 'base64');
       await writeFile(filePath, buffer);
 
-      await pool.query(
+      await query(
         `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
          values ($1, $2, $3, $4, $5)`,
         [filename, path.basename(file.path), file.mimeType, buffer.length, user.id],
@@ -287,7 +287,7 @@ obsidianImportRoute.post('/', async (c) => {
       // Store for deferred targetId resolution after all pages are known
       pageYdocs.set(file.path, ydocBuffer);
 
-      const positionResult = await pool.query(
+      const positionResult = await query(
         parentId
           ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
           : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
@@ -296,12 +296,12 @@ obsidianImportRoute.post('/', async (c) => {
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
       const insertResult = hasPropertiesColumn
-        ? await pool.query(
+        ? await query(
             `insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
              values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *`,
             [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)],
           )
-        : await pool.query(
+        : await query(
             `insert into pages (parent_id, title, title_search, position, created_by, ydoc)
              values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *`,
             [parentId, title, nextPosition, user.id, ydocBuffer],
@@ -318,7 +318,7 @@ obsidianImportRoute.post('/', async (c) => {
         ]);
 
         for (const tagSlug of pageTagSlugs) {
-          await pool.query(
+          await query(
             `insert into connections (
                source_type, source_id, target_type, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
@@ -356,7 +356,7 @@ obsidianImportRoute.post('/', async (c) => {
           const targetPageId = pageTitleToId.get(targetTitleLower) ?? null;
           const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
 
-          await pool.query(
+          await query(
             `insert into connections (
                source_type, source_id, target_type, target_id, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
@@ -398,7 +398,7 @@ obsidianImportRoute.post('/', async (c) => {
       const rawYdoc = pageYdocs.get(filePath);
       if (!rawYdoc) continue;
       const resolved = resolveWikilinkTargets(rawYdoc, pageTitleToId);
-      await pool.query('update pages set ydoc = $1 where id = $2', [Buffer.from(resolved), pageId]);
+      await query('update pages set ydoc = $1 where id = $2', [Buffer.from(resolved), pageId]);
     }
   }
 

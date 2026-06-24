@@ -230,6 +230,44 @@ describe('collab server', () => {
       expect(authenticated.user.id).toBe(user.id);
     });
 
+    it('allows anonymous access to pages public through an ancestor folder link', async () => {
+      const owner = await createTestUser(pool);
+      const folderId = crypto.randomUUID();
+      const token = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO folders (id, parent_id, name, position, created_by, is_public, public_token, created_at, updated_at)
+         VALUES ($1, NULL, 'Public Folder', '0', $2, true, $3, NOW(), NOW())`,
+        [folderId, owner.id, token],
+      );
+      const page = await createTestPage(pool, owner.id, 'Folder Public Page');
+      await pool.query('UPDATE pages SET parent_id = $1, is_public = false WHERE id = $2', [
+        folderId,
+        page.id,
+      ]);
+      await pool.query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [folderId, owner.id, token],
+      );
+
+      const connectionConfig = createConnectionConfig();
+      const payload = createAuthenticatePayload(server, {
+        documentName: page.id,
+        token: 'anon:folder-link-user',
+        connectionConfig,
+      });
+
+      const result = await server.hocuspocus.hooks('onAuthenticate', payload);
+      const authenticated = result as {
+        user: { id: string; isAnonymous: boolean };
+        permission: 'view' | 'edit' | 'admin';
+      };
+      expect(authenticated.user.id).toBe('folder-link-user');
+      expect(authenticated.user.isAnonymous).toBe(true);
+      expect(authenticated.permission).toBe('view');
+      expect(connectionConfig.readOnly).toBe(true);
+    });
+
     it('skips page access checks when document name is empty', async () => {
       const user = await createTestUser(pool);
       const session = await createTestSession(pool, user.id);
@@ -363,7 +401,7 @@ describe('collab server', () => {
 
       await expect(server.hocuspocus.hooks('onAuthenticate', payload)).rejects.toThrow('Forbidden');
       expect(logger.debug).toHaveBeenCalledWith(
-        `[auth] user=${intruder.id} denied access to page=${page.id} (no share)`,
+        `[auth] user=${intruder.id} denied access to page=${page.id} (invalid permission)`,
       );
     });
   });
@@ -585,11 +623,14 @@ describe('collab server', () => {
         maxDebounceMs: 100,
       });
 
+      const documentName = crypto.randomUUID();
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: crypto.randomUUID() } },
-        document: new Document(crypto.randomUUID()),
-        documentName: crypto.randomUUID(),
+        // Use an anonymous user with edit permission to bypass the assertPageAccess
+        // check (which runs pool.query on the failing pool and would short-circuit).
+        context: { user: { id: crypto.randomUUID(), isAnonymous: true }, permission: 'edit' },
+        document: new Document(documentName),
+        documentName,
         instance: failingServer.hocuspocus,
         requestHeaders: {},
         requestParameters: new URLSearchParams(),
@@ -600,7 +641,7 @@ describe('collab server', () => {
         'forced db failure',
       );
       expect(failingLogger.error).toHaveBeenCalledWith(
-        expect.stringContaining(`[persist] failed to save "${payload.documentName}"`),
+        expect.stringContaining(`[persist] failed to save "${documentName}"`),
       );
     });
 
@@ -712,11 +753,12 @@ describe('collab server', () => {
 
       await sleep(200);
 
-      // 5 edits within debounce window should produce at most 4 persistence writes
-      // (1 from debounced onStoreDocument + 1 from updatePageMeta's pool.query
-      //  + possibly 1 from onDisconnect force-save + 1 from meta room sync)
+      // 5 edits within debounce window should produce far fewer connects than edits.
+      // Each debounced onStoreDocument now also calls assertPageAccess (2 pool.querys)
+      // before persistDocument (1 pool.connect) + updatePageMeta (1 pool.query),
+      // plus potentially onDisconnect and meta room sync.
       expect(connectSpy.mock.calls.length).toBeGreaterThan(0);
-      expect(connectSpy.mock.calls.length).toBeLessThanOrEqual(4);
+      expect(connectSpy.mock.calls.length).toBeLessThanOrEqual(6);
 
       // Final content in DB should reflect all edits
       const result = await pool.query('SELECT ydoc FROM pages WHERE id = $1', [page.id]);

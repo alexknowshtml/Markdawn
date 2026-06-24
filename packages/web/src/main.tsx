@@ -1,4 +1,4 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import '@fontsource/inter/400.css';
@@ -7,6 +7,7 @@ import '@fontsource/inter/600.css';
 import '@fontsource/inter/700.css';
 import './index.css';
 import App from './App';
+import { createQueryClient } from './lib/query-client';
 import { getLogger, initLogger } from './logger-init';
 import { ToastProvider } from './utils/toast';
 
@@ -18,7 +19,7 @@ initLogger().then(() => {
   logger.debug(`[env] VITE_COLLAB_URL: ${import.meta.env.VITE_COLLAB_URL ?? 'not set'}`);
 });
 
-const queryClient = new QueryClient();
+const queryClient = createQueryClient();
 
 const rootElement = document.getElementById('root');
 if (!rootElement) throw new Error('Root element not found');

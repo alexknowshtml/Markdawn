@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -61,8 +60,6 @@ export function useToggleFavorite() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
     },
-    onError: () => {
-      showErrorToast('Failed to update favorite');
-    },
+    meta: { errorMessage: 'Failed to update favorite' },
   });
 }

@@ -1,6 +1,6 @@
 import type { EntityAccessor } from '@markdawn/shared';
 import clsx from 'clsx';
-import { Check, FileText, Folder } from 'lucide-react';
+import { Check, FileText, Folder, Lock } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { PageContextMenu } from '../ui/PageContextMenu';
@@ -16,7 +16,9 @@ export interface ExplorerItemData {
   updatedAt: string | Date;
   coverType?: string | null;
   coverValue?: string | null;
+  createdBy?: string | null;
   collaborators?: EntityAccessor[];
+  isLostAccess?: boolean;
 }
 
 interface ExplorerItemProps {
@@ -33,7 +35,10 @@ interface ExplorerItemProps {
   onEditSave?: () => void;
   onEditKeyDown?: (e: React.KeyboardEvent) => void;
   collaborators?: EntityAccessor[];
+  canSelect?: boolean;
   showCheckboxes?: boolean;
+  showContextMenu?: boolean;
+  isLostAccess?: boolean;
 }
 
 export function ExplorerItem({
@@ -50,10 +55,14 @@ export function ExplorerItem({
   onEditSave,
   onEditKeyDown,
   collaborators = [],
+  canSelect = true,
   showCheckboxes = false,
+  showContextMenu = true,
+  isLostAccess = false,
 }: ExplorerItemProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isHovered, setIsHovered] = useState(false);
+  const lostAccess = isLostAccess || item.isLostAccess;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -71,6 +80,7 @@ export function ExplorerItem({
   const handleCheckboxClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     e.preventDefault();
+    if (!canSelect) return;
     onSelect(e);
   };
 
@@ -88,6 +98,7 @@ export function ExplorerItem({
           isSelected
             ? 'bg-zinc-100 dark:bg-zinc-800'
             : 'hover:bg-zinc-50 dark:hover:bg-zinc-900/50',
+          lostAccess && 'opacity-50 pointer-events-none cursor-default',
         )}
         onClick={handleClick}
         onMouseEnter={() => setIsHovered(true)}
@@ -108,7 +119,7 @@ export function ExplorerItem({
               : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500 dark:text-zinc-400',
           )}
         >
-          {isSelected || isHovered || showCheckboxes ? (
+          {canSelect && (isSelected || isHovered || showCheckboxes) ? (
             <button
               type="button"
               className={clsx(
@@ -121,6 +132,8 @@ export function ExplorerItem({
             >
               {isSelected && <Check size={12} strokeWidth={3} />}
             </button>
+          ) : lostAccess ? (
+            <Lock size={18} className="text-zinc-400 dark:text-zinc-500" />
           ) : item.type === 'folder' ? (
             <Folder size={18} />
           ) : item.icon ? (
@@ -157,15 +170,16 @@ export function ExplorerItem({
           {formatItemDate(updatedDate)}
         </span>
 
-        <div className="shrink-0">
-          <PageContextMenu
-            item={item}
-            isFavorite={isFavorite}
-            confirmDelete
-            triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-            onRename={onRename}
-          />
-        </div>
+        {showContextMenu && (
+          <div className="shrink-0">
+            <PageContextMenu
+              item={item}
+              isFavorite={isFavorite}
+              triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+              onRename={onRename}
+            />
+          </div>
+        )}
       </div>
       /* biome-ignore-end lint/a11y/useSemanticElements: nested buttons not possible */
     );
@@ -181,6 +195,7 @@ export function ExplorerItem({
         isSelected
           ? 'border-zinc-900 dark:border-zinc-100 ring-2 ring-zinc-900 dark:ring-zinc-100'
           : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 hover:shadow-md hover:scale-[1.02]',
+        lostAccess && 'opacity-50 pointer-events-none cursor-default',
       )}
       onClick={handleClick}
       onKeyDown={(e) => {
@@ -191,30 +206,33 @@ export function ExplorerItem({
         }
       }}
     >
-      <div className="absolute top-3 left-3 z-10">
-        <button
-          type="button"
-          className={clsx(
-            'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
-            isSelected
-              ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
-              : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
-          )}
-          onClick={handleCheckboxClick}
-        >
-          {isSelected && <Check size={12} strokeWidth={3} />}
-        </button>
-      </div>
+      {canSelect && (
+        <div className="absolute top-3 left-3 z-10">
+          <button
+            type="button"
+            className={clsx(
+              'item-action flex items-center justify-center w-5 h-5 rounded border transition-colors cursor-pointer',
+              isSelected
+                ? 'bg-zinc-900 dark:bg-zinc-100 border-zinc-900 dark:border-zinc-100 text-white dark:text-zinc-900'
+                : 'bg-white/80 dark:bg-zinc-900/80 backdrop-blur-sm border-zinc-300 dark:border-zinc-600 opacity-0 group-hover:opacity-100 hover:border-zinc-500 dark:hover:border-zinc-400',
+            )}
+            onClick={handleCheckboxClick}
+          >
+            {isSelected && <Check size={12} strokeWidth={3} />}
+          </button>
+        </div>
+      )}
 
-      <div className="absolute top-3 right-3 z-10">
-        <PageContextMenu
-          item={item}
-          isFavorite={isFavorite}
-          confirmDelete
-          triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
-          onRename={onRename}
-        />
-      </div>
+      {showContextMenu && (
+        <div className="absolute top-3 right-3 z-10">
+          <PageContextMenu
+            item={item}
+            isFavorite={isFavorite}
+            triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+            onRename={onRename}
+          />
+        </div>
+      )}
 
       <div
         className="h-28 bg-zinc-50 dark:bg-zinc-800/50 rounded-lg mb-3 flex items-center justify-center text-zinc-300 dark:text-zinc-600 overflow-hidden"
@@ -229,7 +247,9 @@ export function ExplorerItem({
               : undefined,
         }}
       >
-        {item.type === 'folder' ? (
+        {lostAccess ? (
+          <Lock size={40} className="text-zinc-400 dark:text-zinc-500" />
+        ) : item.type === 'folder' ? (
           <Folder size={40} className="text-zinc-400 dark:text-zinc-500" />
         ) : item.icon ? (
           <span className="text-4xl drop-shadow-sm">{item.icon}</span>

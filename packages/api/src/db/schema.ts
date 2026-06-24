@@ -89,9 +89,7 @@ export const shares = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     entityType: text('entity_type').notNull().$type<'folder' | 'page'>(),
-    entityId: uuid('entity_id')
-      .notNull()
-      .references(() => pages.id, { onDelete: 'cascade' }),
+    entityId: uuid('entity_id').notNull(),
     sharedBy: uuid('shared_by').references(() => users.id, { onDelete: 'set null' }),
     recipientUserId: uuid('recipient_user_id').references(() => users.id, {
       onDelete: 'cascade',
@@ -157,7 +155,29 @@ export const folders = pgTable('folders', {
   deletedAt: timestamp('deleted_at'),
 
   isAccessRestricted: boolean('is_access_restricted').default(false),
+
+  isPublic: boolean('is_public').default(false),
+
+  publicToken: text('public_token'),
 });
+
+export const folderClosure = pgTable(
+  'folder_closure',
+  {
+    ancestorId: uuid('ancestor_id')
+      .notNull()
+      .references(() => folders.id, { onDelete: 'cascade' }),
+    descendantId: uuid('descendant_id')
+      .notNull()
+      .references(() => folders.id, { onDelete: 'cascade' }),
+    depth: integer('depth').notNull(),
+  },
+  (table) => ({
+    pk: unique('folder_closure_pk').on(table.ancestorId, table.descendantId),
+    descendantIdx: index('folder_closure_descendant_idx').on(table.descendantId),
+    ancestorIdx: index('folder_closure_ancestor_idx').on(table.ancestorId),
+  }),
+);
 
 export const workspaceMembers = pgTable(
   'workspace_members',
@@ -169,7 +189,7 @@ export const workspaceMembers = pgTable(
     memberId: uuid('member_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    role: text('role').notNull().default('member').$type<'member' | 'admin'>(),
+    role: text('role').notNull().default('editor').$type<'viewer' | 'editor' | 'admin'>(),
     createdAt: timestamp('created_at').defaultNow(),
   },
   (table) => ({
@@ -203,6 +223,8 @@ export const pages = pgTable(
 
     isPublic: boolean('is_public').default(false),
     publicToken: text('public_token').unique(),
+
+    isAccessRestricted: boolean('is_access_restricted').default(false),
 
     createdAt: timestamp('created_at').defaultNow(),
 

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -114,9 +114,7 @@ export function useCreateComment(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Comment added');
     },
-    onError: () => {
-      showErrorToast('Failed to add comment');
-    },
+    meta: { errorMessage: 'Failed to add comment' },
   });
 }
 
@@ -131,9 +129,7 @@ export function useAddReply(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Reply added');
     },
-    onError: () => {
-      showErrorToast('Failed to add reply');
-    },
+    meta: { errorMessage: 'Failed to add reply' },
   });
 }
 
@@ -153,9 +149,7 @@ export function useUpdateComment(pageId: string | undefined) {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
     },
-    onError: () => {
-      showErrorToast('Failed to update comment');
-    },
+    meta: { errorMessage: 'Failed to update comment' },
   });
 }
 
@@ -170,8 +164,6 @@ export function useDeleteComment(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['comments', pageId] });
       showSuccessToast('Comment deleted');
     },
-    onError: () => {
-      showErrorToast('Failed to delete comment');
-    },
+    meta: { errorMessage: 'Failed to delete comment' },
   });
 }

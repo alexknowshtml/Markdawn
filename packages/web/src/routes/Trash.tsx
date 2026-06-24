@@ -9,7 +9,7 @@ import {
   useRestorePage,
   useTrashPages,
 } from '../hooks/use-pages';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 export default function Trash() {
   const { data: trashPages, isLoading } = useTrashPages();
@@ -20,33 +20,26 @@ export default function Trash() {
   const [pageToDelete, setPageToDelete] = useState<{ id: string; title: string } | null>(null);
   const [showEmptyAllConfirm, setShowEmptyAllConfirm] = useState(false);
 
-  const handleRestore = async (pageId: string) => {
-    try {
-      await restoreMutation.mutateAsync(pageId);
-      showSuccessToast('Page restored');
-    } catch (_error) {
-      showErrorToast('Failed to restore page');
-    }
+  const handleRestore = (pageId: string) => {
+    restoreMutation.mutate(pageId, {
+      onSuccess: () => showSuccessToast('Page restored'),
+    });
   };
 
-  const handlePermanentDelete = async () => {
+  const handlePermanentDelete = () => {
     if (!pageToDelete) return;
-    try {
-      await permanentDeleteMutation.mutateAsync(pageToDelete.id);
-      showSuccessToast('Page permanently deleted');
-      setPageToDelete(null);
-    } catch (_error) {
-      showErrorToast('Failed to permanently delete page');
-    }
+    permanentDeleteMutation.mutate(pageToDelete.id, {
+      onSuccess: () => {
+        showSuccessToast('Page permanently deleted');
+        setPageToDelete(null);
+      },
+    });
   };
 
-  const handleEmptyAll = async () => {
-    try {
-      await emptyTrashMutation.mutateAsync();
-      setShowEmptyAllConfirm(false);
-    } catch (_error) {
-      showErrorToast('Failed to empty trash');
-    }
+  const handleEmptyAll = () => {
+    emptyTrashMutation.mutate(undefined, {
+      onSuccess: () => setShowEmptyAllConfirm(false),
+    });
   };
 
   return (

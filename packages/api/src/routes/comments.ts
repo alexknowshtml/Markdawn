@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensurePageAccess } from '../utils/share-access';
 
@@ -70,7 +70,7 @@ const commentsRoute = new Hono();
 commentsRoute.use('*', requireAuth);
 
 const getUserById = async (userId: string) => {
-  const result = await pool.query(
+  const result = await query(
     'select id, name, email, avatar_url from users where id = $1 limit 1',
     [userId],
   );
@@ -78,7 +78,7 @@ const getUserById = async (userId: string) => {
 };
 
 const ensurePageExists = async (pageId: string) => {
-  const result = await pool.query('select id from pages where id = $1 limit 1', [pageId]);
+  const result = await query('select id from pages where id = $1 limit 1', [pageId]);
   return !!result.rows[0];
 };
 
@@ -91,7 +91,7 @@ commentsRoute.get(':pageId/comments', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  const commentsResult = await pool.query(
+  const commentsResult = await query(
     'select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc',
     [pageId],
   );
@@ -101,7 +101,7 @@ commentsRoute.get(':pageId/comments', async (c) => {
   const repliesByComment = new Map<string, CommentReply[]>();
 
   if (commentIds.length > 0) {
-    const repliesResult = await pool.query(
+    const repliesResult = await query(
       'select r.id, r.comment_id, r.user_id, r.content, r.created_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comment_replies r join users u on u.id = r.user_id where r.comment_id = any($1) order by r.created_at asc',
       [commentIds],
     );
@@ -176,12 +176,15 @@ commentsRoute.post(':pageId/comments', async (c) => {
     throw new HTTPException(400, { message: 'content is required' });
   }
 
-  const result = await pool.query(
+  const result = await query(
     'insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at',
     [pageId, user.id, content, anchorBlockId ?? null],
   );
 
   const row = result.rows[0];
+  if (!row) {
+    throw new HTTPException(500, { message: 'Failed to create comment' });
+  }
 
   return c.json({
     id: row.id,
@@ -219,7 +222,7 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
   }
 
   // Verify comment exists
-  const commentResult = await pool.query('select id from comments where id = $1 and page_id = $2', [
+  const commentResult = await query('select id from comments where id = $1 and page_id = $2', [
     commentId,
     pageId,
   ]);
@@ -232,12 +235,15 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
     throw new HTTPException(400, { message: 'content is required' });
   }
 
-  const result = await pool.query(
+  const result = await query(
     'insert into comment_replies (comment_id, user_id, content) values ($1, $2, $3) returning id, comment_id, user_id, content, created_at',
     [commentId, user.id, content],
   );
 
   const row = result.rows[0];
+  if (!row) {
+    throw new HTTPException(500, { message: 'Failed to create reply' });
+  }
 
   return c.json({
     id: row.id,
@@ -267,10 +273,10 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
 
   const { content, resolved } = await c.req.json();
 
-  const commentResult = await pool.query(
-    'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
-    [commentId, pageId],
-  );
+  const commentResult = await query('SELECT user_id FROM comments WHERE id = $1 AND page_id = $2', [
+    commentId,
+    pageId,
+  ]);
 
   if (commentResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Comment not found' });
@@ -288,7 +294,7 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
       throw new HTTPException(400, { message: 'content must be a string' });
     }
     if (!commentOwnerId || commentOwnerId !== user.id) {
-      throw new HTTPException(403, { message: 'Forbidden' });
+      throw new HTTPException(403, { message: 'You can only edit your own comments' });
     }
     updates.push(`content = $${paramIndex++}`);
     values.push(content);
@@ -308,7 +314,7 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
   updates.push('updated_at = NOW()');
 
   values.push(commentId, pageId);
-  const result = await pool.query(
+  const result = await query(
     `UPDATE comments SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
     values,
   );
@@ -318,6 +324,9 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
   }
 
   const row = result.rows[0];
+  if (!row) {
+    throw new HTTPException(500, { message: 'Failed to update comment' });
+  }
   return c.json({
     id: row.id,
     pageId: row.page_id,
@@ -343,10 +352,10 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
   await ensurePageAccess(pageId, user.id);
 
   // Verify comment belongs to user or user is admin
-  const commentResult = await pool.query(
-    'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
-    [commentId, pageId],
-  );
+  const commentResult = await query('SELECT user_id FROM comments WHERE id = $1 AND page_id = $2', [
+    commentId,
+    pageId,
+  ]);
 
   if (commentResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Comment not found' });
@@ -354,11 +363,11 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
 
   const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
   if (!commentOwnerId || commentOwnerId !== user.id) {
-    throw new HTTPException(403, { message: 'Forbidden' });
+    throw new HTTPException(403, { message: 'You can only delete your own comments' });
   }
 
   // Delete comment (replies will cascade due to foreign key)
-  await pool.query('DELETE FROM comments WHERE id = $1 AND page_id = $2', [commentId, pageId]);
+  await query('DELETE FROM comments WHERE id = $1 AND page_id = $2', [commentId, pageId]);
 
   return c.json({ success: true });
 });

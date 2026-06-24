@@ -15,6 +15,7 @@ export interface Page {
   deletedAt?: Date | string | null;
   isPublic?: boolean;
   publicToken?: string | null;
+  isAccessRestricted?: boolean;
 }
 
 export interface Folder {
@@ -28,10 +29,15 @@ export interface Folder {
   updatedAt: Date;
   isDeleted?: boolean;
   deletedAt?: Date | string | null;
+  isPublic?: boolean;
+  publicToken?: string | null;
+  isAccessRestricted?: boolean;
 }
 
 export interface FolderTreeNode extends Folder {
   children: FolderTreeNode[];
+  isLostAccess?: boolean;
+  userPermission?: string | null;
 }
 
 export interface PageTreeNode extends Page {
@@ -71,22 +77,26 @@ export interface EntityAccessor {
 export interface CapabilitySet {
   canEdit: boolean;
   canComment: boolean;
-  canShare: boolean;
   canDelete: boolean;
   canCopy: boolean;
 }
 
-export function deriveCapabilities(permission: SharePermission | null): CapabilitySet {
+export function deriveCapabilities(
+  permission: SharePermission | null,
+  isOwner = false,
+): CapabilitySet {
+  if (isOwner) {
+    return { canEdit: true, canComment: true, canDelete: true, canCopy: true };
+  }
   switch (permission) {
     case 'admin':
-      return { canEdit: true, canComment: true, canShare: true, canDelete: true, canCopy: true };
+      return { canEdit: true, canComment: true, canDelete: true, canCopy: true };
     case 'edit':
-      return { canEdit: true, canComment: true, canShare: true, canDelete: false, canCopy: true };
+      return { canEdit: true, canComment: true, canDelete: false, canCopy: true };
     case 'view':
       return {
         canEdit: false,
         canComment: false,
-        canShare: false,
         canDelete: false,
         canCopy: true,
       };
@@ -94,7 +104,6 @@ export function deriveCapabilities(permission: SharePermission | null): Capabili
       return {
         canEdit: false,
         canComment: false,
-        canShare: false,
         canDelete: false,
         canCopy: false,
       };
@@ -126,6 +135,7 @@ export interface ShareSummary {
     id: string;
     title: string;
     ownerId: string | null;
+    isAccessRestricted: boolean;
   };
   link: {
     permission: SharePermission | 'private';

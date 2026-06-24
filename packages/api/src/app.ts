@@ -8,7 +8,7 @@ import { authRoutes } from './routes';
 import backlinksRoute from './routes/backlinks';
 import commentsRoute from './routes/comments';
 import favoritesRoute from './routes/favorites';
-import foldersRoute from './routes/folders';
+import foldersRoute, { foldersPublicRoute } from './routes/folders';
 import importRoute from './routes/import';
 import obsidianImportRoute from './routes/obsidian-import';
 import pagesRoute, { pagesPublicRoute } from './routes/pages';
@@ -67,6 +67,7 @@ export async function createApp() {
   app.route('/api/pages', pagesPublicRoute);
   app.route('/api/pages', pagesRoute);
 
+  app.route('/api/folders', foldersPublicRoute);
   app.route('/api/folders', foldersRoute);
 
   // workspaces API removed

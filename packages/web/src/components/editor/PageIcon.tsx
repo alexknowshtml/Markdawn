@@ -2,7 +2,6 @@ import { FileText } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useUpdatePage } from '../../hooks/use-pages';
-import { showErrorToast } from '../../utils/toast';
 import { EmojiPicker } from '../EmojiPicker';
 
 interface PageIconProps {
@@ -28,7 +27,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
         updates: { icon: newIcon },
       });
     } catch {
-      showErrorToast('Failed to update icon');
+      // Error toast handled globally by MutationCache.onError
       setIcon(initialIcon);
     }
   };

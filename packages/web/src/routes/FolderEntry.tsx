@@ -1,6 +1,5 @@
-import type { FolderTreeNode } from '@markdawn/shared';
+import type { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
 import {
-  ChevronDown,
   ChevronRight,
   FilePlus2,
   FileText,
@@ -10,12 +9,17 @@ import {
   List,
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ExplorerItem, type ExplorerItemData } from '../components/workspace/ExplorerItem';
 import { MoveDialog } from '../components/workspace/MoveDialog';
 import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
 import { useClipboard } from '../contexts/ClipboardContext';
 import { useSelection } from '../contexts/SelectionContext';
+import {
+  type PublicFolderPage,
+  type PublicFolderPayload,
+  useShareContext,
+} from '../contexts/ShareContext';
 import {
   useBulkDeleteFolders,
   useBulkDeletePages,
@@ -28,12 +32,70 @@ import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-fo
 import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useAuth } from '../hooks/useAuth';
-import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
+import { getPagesInFolder } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
-import { buildFolderPath, buildPagePath } from '../utils/url';
+import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../utils/url';
 
-export default function HomeView() {
+const toDate = (value: string | Date | null | undefined): Date => {
+  if (value instanceof Date) return value;
+  if (typeof value === 'string') {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+  }
+  return new Date();
+};
+
+const normalizePublicPage = (page: PublicFolderPage, folderId: string): PageTreeNode => ({
+  id: page.id,
+  parentId: page.parentId ?? page.parent_id ?? folderId,
+  title: page.title,
+  icon: page.icon ?? null,
+  coverType: null,
+  coverValue: null,
+  position: '0',
+  ydoc: null,
+  properties: null,
+  createdBy: page.createdBy ?? page.created_by ?? null,
+  createdAt: toDate(page.createdAt ?? page.created_at),
+  updatedAt: toDate(page.updatedAt ?? page.updated_at),
+  children: [],
+});
+
+const normalizePublicFolder = (
+  folder: PublicFolderPayload,
+  fallbackParentId: string | null,
+): FolderTreeNode => ({
+  id: folder.id,
+  parentId: folder.parentId ?? fallbackParentId,
+  name: folder.name,
+  icon: folder.icon ?? null,
+  position: folder.position ?? '0',
+  createdBy: folder.createdBy ?? null,
+  createdAt: toDate(folder.createdAt),
+  updatedAt: toDate(folder.updatedAt),
+  publicToken: null,
+  isAccessRestricted: false,
+  ...(folder.isPublic !== undefined ? { isPublic: folder.isPublic } : {}),
+  children: (folder.folders ?? []).map((child) => normalizePublicFolder(child, folder.id)),
+});
+
+const findFolderById = (
+  nodes: FolderTreeNode[] | undefined,
+  folderId: string | undefined,
+): FolderTreeNode | null => {
+  if (!nodes || !folderId) return null;
+  for (const node of nodes) {
+    if (node.id === folderId) return node;
+    const found = findFolderById(node.children, folderId);
+    if (found) return found;
+  }
+  return null;
+};
+
+export default function FolderEntry() {
   const navigate = useNavigate();
+  const { slugAndId } = useParams<{ slugAndId: string }>();
+  const folderId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
 
   const {
     data: pages,
@@ -44,7 +106,9 @@ export default function HomeView() {
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: favorites } = useFavorites();
   const { data: session } = useAuth();
+  const { capabilities, isAnonymous, publicEntity } = useShareContext();
   const currentUserId = session?.user?.id;
+  const canWrite = !!currentUserId && capabilities.canEdit;
 
   const favoritePageIds = useMemo(
     () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
@@ -101,22 +165,73 @@ export default function HomeView() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const breadcrumbPath = useMemo<FolderTreeNode[]>(() => [], []);
+  const treeFolder = useMemo(() => findFolderById(folders, folderId), [folders, folderId]);
+  const shouldUsePublicPayload =
+    !!folderId && publicEntity?.id === folderId && (isAnonymous || !treeFolder);
 
-  const allFolderIds = useMemo(() => collectAllFolderIds(folders ?? []), [folders]);
-  const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
+  const publicFolder = useMemo(
+    () =>
+      shouldUsePublicPayload && publicEntity
+        ? normalizePublicFolder(publicEntity, publicEntity.parentId ?? null)
+        : null,
+    [publicEntity, shouldUsePublicPayload],
+  );
 
-  const currentFolders = useMemo(() => folders ?? [], [folders]);
+  const breadcrumbPath = useMemo(() => {
+    if (!folderId) return [];
+    if (publicFolder) return [publicFolder];
+    const path: FolderTreeNode[] = [];
+    const find = (nodes: FolderTreeNode[]): boolean => {
+      for (const node of nodes) {
+        if (node.id === folderId) {
+          path.push(node);
+          return true;
+        }
+        if (node.children.length > 0) {
+          if (find(node.children)) {
+            path.unshift(node);
+            return true;
+          }
+        }
+      }
+      return false;
+    };
+    find(folders ?? []);
+    return path;
+  }, [folders, folderId, publicFolder]);
+
+  const currentFolders = useMemo(() => {
+    if (publicFolder) return publicFolder.children;
+    if (!folderId) return folders ?? [];
+    const find = (nodes: FolderTreeNode[]): FolderTreeNode[] => {
+      for (const node of nodes) {
+        if (node.id === folderId) return node.children;
+        const found = find(node.children);
+        if (found.length > 0) return found;
+      }
+      return [];
+    };
+    return find(folders ?? []);
+  }, [folders, folderId, publicFolder]);
 
   const currentPages = useMemo(() => {
-    return getRootPages(pages ?? [], visibleFolderIds);
-  }, [pages, visibleFolderIds]);
+    if (shouldUsePublicPayload && publicEntity?.pages && folderId) {
+      return publicEntity.pages.map((page) => normalizePublicPage(page, folderId));
+    }
+    return getPagesInFolder(pages ?? [], folderId ?? null);
+  }, [pages, folderId, publicEntity, shouldUsePublicPayload]);
 
-  const pageIds = useMemo(() => currentPages.map((p) => p.id), [currentPages]);
+  const pageIds = useMemo(
+    () => (isAnonymous ? [] : currentPages.map((p) => p.id)),
+    [currentPages, isAnonymous],
+  );
   const { data: collaboratorsMap } = usePageCollaborators(pageIds);
 
-  const folderIds = useMemo(() => currentFolders.map((f) => f.id), [currentFolders]);
-  const { data: folderCollaboratorsMap } = useFolderCollaborators(folderIds);
+  const childFolderIds = useMemo(
+    () => (isAnonymous ? [] : currentFolders.map((f) => f.id)),
+    [currentFolders, isAnonymous],
+  );
+  const { data: folderCollaboratorsMap } = useFolderCollaborators(childFolderIds);
 
   const allItems: ExplorerItemData[] = useMemo(() => {
     const folderItems: ExplorerItemData[] = currentFolders.map((f) => ({
@@ -157,7 +272,9 @@ export default function HomeView() {
 
   const handleCreatePage = async () => {
     try {
-      const newPage = await createPageMutation.mutateAsync({});
+      const newPage = await createPageMutation.mutateAsync({
+        ...(folderId ? { parentId: folderId } : {}),
+      });
       navigate(buildPagePath(newPage.title, newPage.id));
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -166,7 +283,9 @@ export default function HomeView() {
 
   const handleCreateFolder = async () => {
     try {
-      const folder = await createFolderMutation.mutateAsync({});
+      const folder = await createFolderMutation.mutateAsync({
+        ...(folderId ? { parentId: folderId } : {}),
+      });
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -278,7 +397,7 @@ export default function HomeView() {
 
   const handlePaste = async () => {
     if (!clipboard.state.action || clipboard.state.items.length === 0) return;
-    const currentParentId = null;
+    const currentParentId = folderId ?? null;
 
     try {
       if (clipboard.state.action === 'copy') {
@@ -317,17 +436,32 @@ export default function HomeView() {
     }
   };
 
-  const isLoading = isPagesLoading || isFoldersLoading;
-  const hasError = pagesError || foldersError;
+  const isLoading = !shouldUsePublicPayload && (isPagesLoading || isFoldersLoading);
+  const hasError = !shouldUsePublicPayload && (pagesError || foldersError);
+
+  if (!folderId) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 text-center">
+        <FileText size={48} className="text-zinc-300 dark:text-zinc-600 mb-4" />
+        <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">Invalid folder</h3>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
+          This folder URL is not valid.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-4">
         <div className="flex items-center gap-1 text-sm text-zinc-500 dark:text-zinc-400 min-w-0">
-          <span className="flex items-center gap-1">
+          <Link
+            to="/app"
+            className="flex items-center gap-1 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors"
+          >
             <HomeIcon size={14} />
             <span className="font-medium">Home</span>
-          </span>
+          </Link>
           {breadcrumbPath.map((folder) => (
             <React.Fragment key={folder.id}>
               <ChevronRight size={14} className="mx-1 shrink-0" />
@@ -366,47 +500,49 @@ export default function HomeView() {
               <List size={16} />
             </button>
           </div>
-          <div className="relative flex items-stretch" ref={newMenuRef}>
-            <button
-              type="button"
-              onClick={handleCreatePage}
-              className="flex items-center gap-1.5 pl-3 pr-2 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-l-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700 border-r-0"
-            >
-              <FilePlus2 size={14} />
-              <span className="hidden sm:inline">New Page</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowNewMenu((prev) => !prev)}
-              className="flex items-center px-1.5 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-r-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
-            >
-              <ChevronDown size={14} />
-            </button>
-            {showNewMenu && (
-              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowNewMenu(false);
-                    void handleCreatePage();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <FilePlus2 size={14} /> New Page
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowNewMenu(false);
-                    void handleCreateFolder();
-                  }}
-                  className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
-                >
-                  <FolderPlus size={14} /> New Folder
-                </button>
-              </div>
-            )}
-          </div>
+          {canWrite && (
+            <div className="relative flex items-stretch" ref={newMenuRef}>
+              <button
+                type="button"
+                onClick={handleCreatePage}
+                className="flex items-center gap-1.5 pl-3 pr-2 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-l-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700 border-r-0"
+              >
+                <FilePlus2 size={14} />
+                <span className="hidden sm:inline">New Page</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowNewMenu((prev) => !prev)}
+                className="flex items-center px-1.5 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-r-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
+              >
+                <ChevronRight size={14} className="rotate-90" />
+              </button>
+              {showNewMenu && (
+                <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewMenu(false);
+                      void handleCreatePage();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <FilePlus2 size={14} /> New Page
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewMenu(false);
+                      void handleCreateFolder();
+                    }}
+                    className="flex items-center gap-2.5 px-2.5 py-2 text-xs font-medium text-zinc-700 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors"
+                  >
+                    <FolderPlus size={14} /> New Folder
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -441,7 +577,7 @@ export default function HomeView() {
           <FileText size={48} className="text-zinc-300 dark:text-zinc-600 mb-4" />
           <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">No items yet</h3>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
-            Create a new page or folder to get started.
+            {canWrite ? 'Create a new page or folder to get started.' : 'No items in this folder.'}
           </p>
         </div>
       ) : viewMode === 'card' ? (
@@ -466,6 +602,8 @@ export default function HomeView() {
                     onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
                     onRename={() => handleRenameItem(item)}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
+                    canSelect={canWrite}
+                    showContextMenu={!isAnonymous}
                   />
                 ))}
               </div>
@@ -497,6 +635,8 @@ export default function HomeView() {
                   onEditSave={handleSaveRename}
                   onEditKeyDown={handleEditKeyDown}
                   collaborators={filterOutSelf(item.collaborators ?? [])}
+                  canSelect={canWrite}
+                  showContextMenu={!isAnonymous}
                 />
               ))}
             </div>
@@ -534,6 +674,8 @@ export default function HomeView() {
                       }
                       onRename={() => handleRenameItem(item)}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
+                      canSelect={canWrite}
+                      showContextMenu={!isAnonymous}
                       showCheckboxes={hasSelection}
                     />
                   ))}
@@ -575,6 +717,8 @@ export default function HomeView() {
                     onEditSave={handleSaveRename}
                     onEditKeyDown={handleEditKeyDown}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
+                    canSelect={canWrite}
+                    showContextMenu={!isAnonymous}
                     showCheckboxes={hasSelection}
                   />
                 ))}
@@ -584,21 +728,23 @@ export default function HomeView() {
         </div>
       )}
 
-      <SelectionToolbar
-        selectedCount={selection.selectedCount}
-        totalCount={allItems.length}
-        clipboardCount={clipboard.state.items.length}
-        onDelete={handleBulkDelete}
-        onCopy={handleBulkCopy}
-        onCut={handleBulkCut}
-        onMove={handleBulkMove}
-        onPaste={() => void handlePaste()}
-        onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
-        onClear={() => {
-          selection.clear();
-          clipboard.clear();
-        }}
-      />
+      {canWrite && (
+        <SelectionToolbar
+          selectedCount={selection.selectedCount}
+          totalCount={allItems.length}
+          clipboardCount={clipboard.state.items.length}
+          onDelete={handleBulkDelete}
+          onCopy={handleBulkCopy}
+          onCut={handleBulkCut}
+          onMove={handleBulkMove}
+          onPaste={() => void handlePaste()}
+          onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
+          onClear={() => {
+            selection.clear();
+            clipboard.clear();
+          }}
+        />
+      )}
 
       <MoveDialog
         isOpen={moveDialogOpen}

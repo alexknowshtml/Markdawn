@@ -3,7 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { pages } from '../db';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -11,6 +11,7 @@ import {
   resolveWikilinkTargets,
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
+import { ensureFolderAccess } from '../utils/share-access';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -172,6 +173,10 @@ importRoute.post('/markdown', async (c) => {
 
   const user = c.get('user') as { id: string };
 
+  if (parentId) {
+    await ensureFolderAccess(parentId, user.id, 'edit');
+  }
+
   let formData: FormData;
   try {
     formData = await c.req.formData();
@@ -200,7 +205,7 @@ importRoute.post('/markdown', async (c) => {
   let ydocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
 
   // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  const existingPages = await pool.query('select id, title from pages where is_deleted = false');
+  const existingPages = await query('select id, title from pages where is_deleted = false');
   const pageLookup = new Map<string, string>();
   for (const row of existingPages.rows as { id: string; title: string }[]) {
     pageLookup.set(row.title.trim().toLowerCase(), row.id);
@@ -209,7 +214,7 @@ importRoute.post('/markdown', async (c) => {
     ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
 
-  const positionResult = await pool.query(
+  const positionResult = await query(
     parentId
       ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
       : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
@@ -219,11 +224,11 @@ importRoute.post('/markdown', async (c) => {
 
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = hasProperties
-    ? await pool.query(
+    ? await query(
         "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
         [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
       )
-    : await pool.query(
+    : await query(
         "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
         [parentId, title, nextPosition, user.id, ydocBuffer],
       );

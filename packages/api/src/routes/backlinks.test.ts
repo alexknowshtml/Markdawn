@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import {
   createTestApp,
   createTestPage,
@@ -135,7 +135,7 @@ describe('backlinks API', () => {
 
       // Connections should NOT be mutated by the REST API; they are rebuilt
       // from Yjs content by the collab server on next save.
-      const connectionsResult = await pool.query(
+      const connectionsResult = await query(
         `select target_slug, target_label from connections
          where source_id = $1 and target_id = $2`,
         [source.id, target.id],

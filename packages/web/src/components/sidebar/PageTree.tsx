@@ -8,29 +8,24 @@ import {
   FilePlus2,
   FolderPlus,
   Home,
+  Share2,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites } from '../../hooks/use-favorites';
-import {
-  useCreateFolder,
-  useDeleteFolder,
-  useFolderTree,
-  useUpdateFolder,
-} from '../../hooks/use-folders';
+import { useCreateFolder, useFolderTree, useUpdateFolder } from '../../hooks/use-folders';
 import {
   useCreatePage,
-  useDeletePage,
   useImportMarkdown,
-  useLeavePage,
   usePageTree,
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { useAuth } from '../../hooks/useAuth';
-import { markSelfLeave } from '../../utils/leave-page';
+import { useEntityDeletion } from '../../utils/entity-actions';
+import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
 import { showErrorToast } from '../../utils/toast';
-import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
+import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../../utils/url';
 import { PageTreeRow } from './PageTreeRow';
 
 type EditingTarget =
@@ -57,12 +52,19 @@ export function PageTree() {
 
   const createPageMutation = useCreatePage();
   const updatePageMutation = useUpdatePage();
-  const deletePageMutation = useDeletePage();
-  const leavePageMutation = useLeavePage();
   const createFolderMutation = useCreateFolder();
   const updateFolderMutation = useUpdateFolder();
-  const deleteFolderMutation = useDeleteFolder();
   const importMarkdownMutation = useImportMarkdown();
+
+  const pageDeletion = useEntityDeletion({
+    entityType: 'page',
+    currentUserId,
+  });
+
+  const folderDeletion = useEntityDeletion({
+    entityType: 'folder',
+    currentUserId,
+  });
 
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [favoritesCollapsed, setFavoritesCollapsed] = useState(false);
@@ -76,7 +78,7 @@ export function PageTree() {
       navigate(buildPagePath(newPage.title, newPage.id));
       setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
     } catch {
-      showErrorToast('Failed to create note');
+      // Error toast handled globally by MutationCache.onError
     }
   }, [navigate, createPageMutation]);
 
@@ -90,7 +92,7 @@ export function PageTree() {
       });
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
-      showErrorToast('Failed to create folder');
+      // Error toast handled globally by MutationCache.onError
     }
   }, [createFolderMutation]);
 
@@ -112,20 +114,17 @@ export function PageTree() {
     };
   }, [handleCreateRootPage, handleCreateRootFolder]);
 
-  const pagesByFolder = useMemo(() => {
-    const map = new Map<string | null, PageTreeNode[]>();
-    for (const page of pages ?? []) {
-      const key = page.parentId ?? null;
-      const list = map.get(key) ?? [];
-      list.push(page);
-      map.set(key, list);
-    }
-    return map;
-  }, [pages]);
+  const allFolderIds = useMemo(() => collectAllFolderIds(folders ?? []), [folders]);
+  const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
 
-  const folderIdsSet = useMemo(
-    () => new Set((folders ?? []).map((folder) => folder.id)),
-    [folders],
+  const pagesByFolder = useMemo(
+    () => buildPagesByFolder(pages ?? [], visibleFolderIds),
+    [pages, visibleFolderIds],
+  );
+
+  const rootPages = useMemo(
+    () => getRootPages(pages ?? [], visibleFolderIds),
+    [pages, visibleFolderIds],
   );
 
   const foldersByParent = useMemo(() => {
@@ -143,20 +142,6 @@ export function PageTree() {
     };
     walk(folders ?? []);
     return map;
-  }, [folders]);
-
-  const allFolderIds = useMemo(() => {
-    const ids: string[] = [];
-    const walk = (nodes: FolderTreeNode[]) => {
-      for (const folder of nodes) {
-        ids.push(folder.id);
-        if (folder.children && folder.children.length > 0) {
-          walk(folder.children);
-        }
-      }
-    };
-    walk(folders ?? []);
-    return ids;
   }, [folders]);
 
   useEffect(() => {
@@ -203,22 +188,19 @@ export function PageTree() {
         return next;
       });
       setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to create note';
-      showErrorToast(message);
+    } catch {
+      // Error toast handled globally by MutationCache.onError
     }
   };
 
   const handleDeletePage = async (pageId: string) => {
     const page = pages?.find((p) => p.id === pageId);
-    const isOwnPage = page?.createdBy === currentUserId;
-    if (isOwnPage) {
-      await deletePageMutation.mutateAsync(pageId);
-    } else {
-      markSelfLeave(pageId);
-      await leavePageMutation.mutateAsync(pageId);
-    }
-    if (activePageId === pageId) {
+    const isViewingDeletedPage = activePageId === pageId;
+    await pageDeletion.handleDelete(
+      { id: pageId, type: 'page', createdBy: page?.createdBy },
+      { force: false },
+    );
+    if (isViewingDeletedPage) {
       navigate('/app');
     }
   };
@@ -237,16 +219,18 @@ export function PageTree() {
       const newPage = await importMarkdownMutation.mutateAsync({ file });
       navigate(buildPagePath(newPage.title, newPage.id));
     } catch {
-      showErrorToast('Failed to import note');
+      // Error toast handled globally by MutationCache.onError
     }
     event.target.value = '';
   };
 
   const handleDeleteFolder = async (folderId: string, childFolders: number, childPages: number) => {
-    await deleteFolderMutation.mutateAsync({
-      folderId,
-      force: childFolders > 0 || childPages > 0,
-    });
+    const folder = folders?.find((f) => f.id === folderId);
+    const hasChildren = childFolders > 0 || childPages > 0;
+    await folderDeletion.handleDelete(
+      { id: folderId, type: 'folder', createdBy: folder?.createdBy },
+      { force: hasChildren },
+    );
   };
 
   const beginRenameFolder = (folder: FolderTreeNode) => {
@@ -257,7 +241,7 @@ export function PageTree() {
     setEditingTarget({ kind: 'page', id: page.id, value: page.title });
   };
 
-  const saveRename = async () => {
+  const saveRename = () => {
     if (!editingTarget) {
       return;
     }
@@ -265,33 +249,23 @@ export function PageTree() {
 
     if (editingTarget.kind === 'folder') {
       const finalName = trimmed.length > 0 ? trimmed : 'New Folder';
-      try {
-        await updateFolderMutation.mutateAsync({
-          folderId: editingTarget.id,
-          updates: { name: finalName },
-        });
-      } catch {
-        showErrorToast('Failed to rename folder');
-      }
-      setEditingTarget(null);
+      updateFolderMutation.mutate(
+        { folderId: editingTarget.id, updates: { name: finalName } },
+        { onSettled: () => setEditingTarget(null) },
+      );
       return;
     }
 
     const finalTitle = trimmed.length > 0 ? trimmed : 'Untitled';
-    try {
-      await updatePageMutation.mutateAsync({
-        pageId: editingTarget.id,
-        updates: { title: finalTitle },
-      });
-    } catch {
-      showErrorToast('Failed to rename note');
-    }
-    setEditingTarget(null);
+    updatePageMutation.mutate(
+      { pageId: editingTarget.id, updates: { title: finalTitle } },
+      { onSettled: () => setEditingTarget(null) },
+    );
   };
 
   const onRenameKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === 'Enter') {
-      void saveRename();
+      saveRename();
       return;
     }
     if (event.key === 'Escape') {
@@ -311,20 +285,24 @@ export function PageTree() {
           id={folder.id}
           title={folder.name}
           icon={folder.icon}
+          createdBy={folder.createdBy}
           depth={depth}
           hasChildren={childFolders.length > 0 || childPages.length > 0}
           isExpanded={isExpanded}
           onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          onCreateChild={() => handleCreatePageInFolder(folder.id)}
+          {...(folder.userPermission === 'edit' || folder.userPermission === 'admin'
+            ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
+            : {})}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
           onRename={() => beginRenameFolder(folder)}
-          onNavigate={() => toggleFolderExpanded(folder.id)}
+          onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
           isEditing={isEditingFolder}
           isFolder={true}
+          isLostAccess={folder.isLostAccess ?? false}
           editTitle={isEditingFolder ? editingTarget.value : folder.name}
           onEditChange={(value) => setEditingTarget({ kind: 'folder', id: folder.id, value })}
           onEditSave={() => {
-            void saveRename();
+            saveRename();
           }}
           onEditKeyDown={onRenameKeyDown}
         />
@@ -339,6 +317,7 @@ export function PageTree() {
                   id={page.id}
                   title={page.title}
                   icon={page.icon}
+                  createdBy={page.createdBy}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
                   isFavorite={favoritePageIds.has(page.id)}
@@ -348,7 +327,7 @@ export function PageTree() {
                   editTitle={isEditingPage ? editingTarget.value : page.title}
                   onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
                   onEditSave={() => {
-                    void saveRename();
+                    saveRename();
                   }}
                   onEditKeyDown={onRenameKeyDown}
                 />
@@ -409,11 +388,7 @@ export function PageTree() {
     );
   }
 
-  const rootFolders = foldersByParent.get(null) ?? [];
-  const rootPages = pagesByFolder.get(null) ?? [];
-  const orphanNestedPages = (pages ?? []).filter(
-    (page) => page.parentId !== null && !folderIdsSet.has(page.parentId),
-  );
+  const rootFolders = folders ?? [];
 
   return (
     <div className="flex flex-col h-full">
@@ -470,6 +445,17 @@ export function PageTree() {
           </button>
         </div>
 
+        <div className="px-2">
+          <button
+            type="button"
+            onClick={() => navigate('/app/shared-with-me')}
+            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+          >
+            <Share2 size={16} />
+            <span>Shared with me</span>
+          </button>
+        </div>
+
         {favorites && favorites.length > 0 && (
           <div className="mb-2">
             <button
@@ -487,20 +473,24 @@ export function PageTree() {
             </button>
             {!favoritesCollapsed && (
               <div className="space-y-0.5">
-                {favorites.map((fav) => (
-                  <PageTreeRow
-                    key={fav.pageId}
-                    id={fav.pageId}
-                    title={fav.title}
-                    icon={fav.icon}
-                    isActive={activePageId === fav.pageId}
-                    isFavorite={true}
-                    onDelete={() => handleDeletePage(fav.pageId)}
-                    onRename={() =>
-                      setEditingTarget({ kind: 'page', id: fav.pageId, value: fav.title })
-                    }
-                  />
-                ))}
+                {favorites.map((fav) => {
+                  const favPage = pages?.find((p) => p.id === fav.pageId);
+                  return (
+                    <PageTreeRow
+                      key={fav.pageId}
+                      id={fav.pageId}
+                      title={fav.title}
+                      icon={fav.icon}
+                      createdBy={favPage?.createdBy ?? null}
+                      isActive={activePageId === fav.pageId}
+                      isFavorite={true}
+                      onDelete={() => handleDeletePage(fav.pageId)}
+                      onRename={() =>
+                        setEditingTarget({ kind: 'page', id: fav.pageId, value: fav.title })
+                      }
+                    />
+                  );
+                })}
               </div>
             )}
           </div>
@@ -532,6 +522,7 @@ export function PageTree() {
                     id={page.id}
                     title={page.title}
                     icon={page.icon}
+                    createdBy={page.createdBy}
                     isActive={activePageId === page.id}
                     isFavorite={favoritePageIds.has(page.id)}
                     onDelete={() => handleDeletePage(page.id)}
@@ -540,30 +531,7 @@ export function PageTree() {
                     editTitle={isEditingPage ? editingTarget.value : page.title}
                     onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
                     onEditSave={() => {
-                      void saveRename();
-                    }}
-                    onEditKeyDown={onRenameKeyDown}
-                  />
-                );
-              })}
-              {orphanNestedPages.map((page) => {
-                const isEditingPage =
-                  editingTarget?.kind === 'page' && editingTarget.id === page.id;
-                return (
-                  <PageTreeRow
-                    key={`orphan-${page.id}`}
-                    id={page.id}
-                    title={page.title}
-                    icon={page.icon}
-                    isActive={activePageId === page.id}
-                    isFavorite={favoritePageIds.has(page.id)}
-                    onDelete={() => handleDeletePage(page.id)}
-                    onRename={() => beginRenamePage(page)}
-                    isEditing={isEditingPage}
-                    editTitle={isEditingPage ? editingTarget.value : page.title}
-                    onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-                    onEditSave={() => {
-                      void saveRename();
+                      saveRename();
                     }}
                     onEditKeyDown={onRenameKeyDown}
                   />
