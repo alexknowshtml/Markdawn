@@ -29,18 +29,24 @@ const tsvector = customType<{ data: string; notNull: false; default: false }>({
 // Better Auth Tables
 // ======================
 
-export const sessions = pgTable('sessions', {
-  id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
-  expiresAt: timestamp('expires_at'),
-  token: text('token').notNull(),
-  createdAt: timestamp('created_at').notNull(),
-  updatedAt: timestamp('updated_at').notNull(),
-  ipAddress: text('ip_address'),
-  userAgent: text('user_agent'),
-  userId: uuid('user_id')
-    .notNull()
-    .references(() => users.id, { onDelete: 'cascade' }),
-});
+export const sessions = pgTable(
+  'sessions',
+  {
+    id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
+    expiresAt: timestamp('expires_at'),
+    token: text('token').notNull(),
+    createdAt: timestamp('created_at').notNull(),
+    updatedAt: timestamp('updated_at').notNull(),
+    ipAddress: text('ip_address'),
+    userAgent: text('user_agent'),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+  },
+  (table) => ({
+    tokenIdx: index('sessions_token_idx').on(table.token),
+  }),
+);
 
 export const accounts = pgTable('accounts', {
   id: text('id').default(sql`gen_random_uuid()::text`).primaryKey(),
