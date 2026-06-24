@@ -1,6 +1,14 @@
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
-import type { Folder, FolderTreeNode, PageTreeNode, Page as PageType } from '@markdawn/shared';
+import {
+  type CapabilitySet,
+  deriveCapabilities,
+  type Folder,
+  type FolderTreeNode,
+  type PageTreeNode,
+  type Page as PageType,
+  type SharePermission,
+} from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { LogIn, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -16,7 +24,11 @@ import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { EditorReadOnlyProvider } from '../contexts/EditorReadOnlyContext';
-import { useShareContext } from '../contexts/ShareContext';
+import {
+  useSetCapabilities,
+  useSetLinkPermission,
+  useShareContext,
+} from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { usePageTree } from '../hooks/use-pages';
 import { ApiError } from '../utils/api';
@@ -24,7 +36,13 @@ import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
 
-async function fetchPage(pageId: string): Promise<PageType> {
+type PageDetail = PageType & {
+  userPermission?: SharePermission | null;
+  capabilities?: CapabilitySet;
+  linkPermission?: 'view' | 'edit' | null;
+};
+
+async function fetchPage(pageId: string): Promise<PageDetail> {
   const res = await fetch(`${API_BASE}/pages/${pageId}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
@@ -37,30 +55,19 @@ async function fetchPage(pageId: string): Promise<PageType> {
   return res.json();
 }
 
-function decodePageContent(ydoc: unknown): string {
-  if (!ydoc || !Array.isArray(ydoc) || ydoc.length === 0) return '';
-  const hasNullByte = ydoc.includes(0);
-  if (!hasNullByte) {
-    return new TextDecoder().decode(new Uint8Array(ydoc as number[]));
-  }
-  return '';
-}
-
-interface PageProps {
-  linkPermission?: 'view' | 'edit' | null;
-}
-
-export default function Page({ linkPermission = null }: PageProps) {
+export default function Page() {
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
-  const readOnly = linkPermission === 'view';
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
   const queryClient = useQueryClient();
+  const { isAnonymous, capabilities, linkPermission } = useShareContext();
+  const setLinkPermission = useSetLinkPermission();
+  const setCapabilities = useSetCapabilities();
 
   // Clear state on page navigation.
   // Skip when pageId transitions from undefined → UUID (initialization, not navigation)
@@ -95,7 +102,22 @@ export default function Page({ linkPermission = null }: PageProps) {
       return fetchPage(pageId);
     },
     enabled: !!pageId,
+    retry: false,
   });
+
+  const pagePermission = page?.userPermission ?? linkPermission;
+  const contextLinkPermission = pagePermission === 'admin' ? 'edit' : pagePermission;
+  const effectiveCapabilities = useMemo(
+    () => page?.capabilities ?? (page ? deriveCapabilities(pagePermission) : capabilities),
+    [page, pagePermission, capabilities],
+  );
+  const readOnly = pagePermission === 'view';
+
+  useEffect(() => {
+    if (!page) return;
+    setLinkPermission(contextLinkPermission);
+    setCapabilities(effectiveCapabilities);
+  }, [page, contextLinkPermission, effectiveCapabilities, setLinkPermission, setCapabilities]);
 
   // Find the .milkdown-editor DOM element for TableOfContents.
   // Re-runs on page change (data load or navigation) to handle the
@@ -190,7 +212,6 @@ export default function Page({ linkPermission = null }: PageProps) {
 
   const { data: pageTree } = usePageTree();
   const { data: folderTree } = useFolderTree();
-  const { isAnonymous, capabilities } = useShareContext();
 
   const flatPages = useMemo(() => {
     if (isAnonymous) return [];
@@ -298,7 +319,7 @@ export default function Page({ linkPermission = null }: PageProps) {
               </div>
             )}
             <div className="flex items-center gap-2">
-              {!capabilities.canEdit && (
+              {!effectiveCapabilities.canEdit && (
                 <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
                   View only
                 </span>
@@ -329,7 +350,6 @@ export default function Page({ linkPermission = null }: PageProps) {
           <MilkdownEditor
             key={pageId}
             pageId={pageId}
-            initialValue={decodePageContent(page.ydoc)}
             onProviderReady={setProvider}
             onStatusChange={handleStatusChange}
             onWikiLinkClick={handleWikiLinkClick}

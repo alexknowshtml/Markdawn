@@ -1,3 +1,4 @@
+import { deriveCapabilities } from '@markdawn/shared';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
@@ -195,7 +196,7 @@ pagesRoute.get('/tree', async (c) => {
   return c.json(
     pagesList.map((page) => ({
       ...page,
-      ydoc: page.ydoc ? Array.from(page.ydoc) : null,
+      ydoc: undefined,
       children: [],
     })),
   );
@@ -351,25 +352,41 @@ pagesPublicRoute.get(
     }
 
     const linkAccess = await getPageLinkAccess(pageId);
+    let userPermission: 'view' | 'edit' | 'admin' | null = null;
+    let userCapabilities = deriveCapabilities(null);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
     if (session?.user) {
       const user = session.user as { id: string };
-      if (!linkAccess) {
-        await ensurePageAccess(page.id, user.id);
+      try {
+        const access = await ensurePageAccess(page.id, user.id);
+        userPermission = access.permission;
+        userCapabilities = deriveCapabilities(access.permission, access.fullAccess);
+      } catch (error) {
+        if (!linkAccess) {
+          throw error;
+        }
+        userPermission = linkAccess.permission;
+        userCapabilities = deriveCapabilities(linkAccess.permission);
       }
       await query(
         'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
         [user.id, pageId],
       );
-    } else if (!linkAccess) {
-      throw new HTTPException(404, { message: 'Page not found' });
+    } else {
+      if (!linkAccess) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+      userPermission = linkAccess.permission;
+      userCapabilities = deriveCapabilities(linkAccess.permission);
     }
 
     return c.json({
       ...page,
       isPublic: page.isPublic || !!linkAccess,
-      ydoc: page.ydoc ? Array.from(page.ydoc) : null,
+      ydoc: undefined,
       linkPermission: linkAccess?.permission ?? null,
+      userPermission,
+      capabilities: userCapabilities,
     });
   },
 );

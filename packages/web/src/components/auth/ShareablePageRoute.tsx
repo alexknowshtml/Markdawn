@@ -13,6 +13,24 @@ type PublicEntityPayload = PublicFolderPayload & {
   ydoc?: unknown;
 };
 
+type Accessor = {
+  shareId: string | null;
+  userId: string;
+  name: string | null;
+  email: string | null;
+  permission: 'view' | 'edit' | 'admin';
+  source: string;
+  isOwner: boolean;
+};
+
+type SharesResponse = {
+  entity: { type: string; id: string; title: string; ownerId: string | null };
+  link: { permission: 'view' | 'edit' | 'private'; token: string | null; url: string | null };
+  accessors: Accessor[];
+  userPermission: 'view' | 'edit' | 'admin' | null;
+  capabilities: CapabilitySet;
+};
+
 function extractUuid(slugAndId: string): string | null {
   const match = slugAndId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
   return match?.[1] ?? null;
@@ -33,24 +51,6 @@ async function fetchEntityPublic(
   }
   return (await res.json()) as PublicEntityPayload;
 }
-
-type Accessor = {
-  shareId: string | null;
-  userId: string;
-  name: string | null;
-  email: string | null;
-  permission: 'view' | 'edit' | 'admin';
-  source: string;
-  isOwner: boolean;
-};
-
-type SharesResponse = {
-  entity: { type: string; id: string; title: string; ownerId: string | null };
-  link: { permission: 'view' | 'edit' | 'private'; token: string | null; url: string | null };
-  accessors: Accessor[];
-  userPermission: 'view' | 'edit' | 'admin' | null;
-  capabilities: CapabilitySet;
-};
 
 async function fetchEntityShares(
   entityType: EntityType,
@@ -105,11 +105,14 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
       if (!entityId) throw new Error('entityId is required');
       return fetchEntityShares(entityType, entityId);
     },
-    enabled: !authPending && !!entityId && !!session?.user,
+    enabled: !authPending && !!entityId && !!session?.user && entityType === 'folder',
     retry: false,
   });
 
-  const isLoading = authPending || sharesLoading || (shouldFetchPublicEntity && entityLoading);
+  const isLoading =
+    authPending ||
+    (entityType === 'folder' && sharesLoading) ||
+    (shouldFetchPublicEntity && entityLoading);
 
   if (isLoading) {
     return (
@@ -123,7 +126,11 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     );
   }
 
-  if (session?.user && sharesError instanceof ApiError && sharesError.status === 403) {
+  if (!session?.user && entityError instanceof ApiError && entityError.status === 403) {
+    return <Navigate to="/login" replace state={{ from: location }} />;
+  }
+
+  if (entityType === 'folder' && sharesError instanceof ApiError && sharesError.status === 403) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
         <div className="flex flex-col items-center gap-4 text-center max-w-md p-8">
@@ -132,31 +139,30 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
             You don&apos;t have access
           </h2>
           <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Your access to this {entityType} may have been removed. Contact the owner to request
-            access.
+            Your access to this folder may have been removed. Contact the owner to request access.
           </p>
         </div>
       </div>
     );
   }
 
-  if (!session?.user && entityError instanceof ApiError && entityError.status === 403) {
-    return <Navigate to="/login" replace state={{ from: location }} />;
-  }
-
   if (session?.user) {
-    const permission = sharesData?.userPermission ?? null;
-    const capabilities = sharesData?.capabilities ?? deriveCapabilities(permission);
-    const linkPermission = permission === 'admin' ? 'edit' : permission;
-    return (
-      <ShareProvider
-        linkPermission={linkPermission}
-        capabilities={capabilities}
-        publicEntity={entityType === 'folder' ? (entity ?? null) : null}
-      >
-        {children}
-      </ShareProvider>
-    );
+    if (entityType === 'folder') {
+      const permission = sharesData?.userPermission ?? null;
+      const capabilities = sharesData?.capabilities ?? deriveCapabilities(permission);
+      const linkPermission = permission === 'admin' ? 'edit' : permission;
+      return (
+        <ShareProvider
+          linkPermission={linkPermission}
+          capabilities={capabilities}
+          publicEntity={entity ?? null}
+        >
+          {children}
+        </ShareProvider>
+      );
+    }
+
+    return <ShareProvider>{children}</ShareProvider>;
   }
 
   if (!entityId) {
