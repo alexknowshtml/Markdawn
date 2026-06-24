@@ -117,5 +117,3 @@ export function useUpdateFolder() {
 export function useLeaveFolder() {
   return useLeaveEntity('folder');
 }
-
-
