@@ -233,6 +233,7 @@ obsidianImportRoute.post('/', async (c) => {
   }
 
   const imagePathToUrl = new Map<string, string>();
+  const urlToUploadId = new Map<string, string>();
   await mkdir(uploadsDir, { recursive: true });
 
   for (const file of imageFiles) {
@@ -245,13 +246,19 @@ obsidianImportRoute.post('/', async (c) => {
       const buffer = Buffer.from(file.data, 'base64');
       await writeFile(filePath, buffer);
 
-      await query(
+      const uploadResult = await query<{ id: string }>(
         `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
-         values ($1, $2, $3, $4, $5)`,
+         values ($1, $2, $3, $4, $5)
+         returning id`,
         [filename, path.basename(file.path), file.mimeType, buffer.length, user.id],
       );
+      const uploadId = uploadResult.rows[0]?.id;
+      if (!uploadId) {
+        throw new Error('Failed to create upload');
+      }
 
       const url = `/api/uploads/${filename}`;
+      urlToUploadId.set(url, uploadId);
       imagePathToUrl.set(file.path, url);
       imagePathToUrl.set(path.basename(file.path), url);
       const parts = file.path.split('/');
@@ -309,8 +316,21 @@ obsidianImportRoute.post('/', async (c) => {
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
         const pageId = insertResult.rows[0]?.id;
+        if (typeof pageId !== 'string') {
+          throw new Error('Failed to create page');
+        }
         pageTitleToId.set(title.toLowerCase(), pageId);
         pagePathToId.set(file.path, pageId);
+
+        for (const [url, uploadId] of urlToUploadId) {
+          if (!processedBody.includes(url)) continue;
+          await query(
+            `insert into upload_page_refs (upload_id, page_id)
+             values ($1, $2)
+             on conflict (upload_id, page_id) do nothing`,
+            [uploadId, pageId],
+          );
+        }
 
         const pageTagSlugs = new Set([
           ...tags.map((tag) => normalizeTagSlug(tag)).filter(Boolean),

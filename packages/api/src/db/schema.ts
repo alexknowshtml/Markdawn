@@ -393,3 +393,25 @@ export const uploads = pgTable('uploads', {
     .notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const uploadPageRefs = pgTable(
+  'upload_page_refs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    uploadId: uuid('upload_id')
+      .references(() => uploads.id, { onDelete: 'cascade' })
+      .notNull(),
+    pageId: uuid('page_id')
+      .references(() => pages.id, { onDelete: 'cascade' })
+      .notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    uploadPageUnique: unique('upload_page_refs_upload_page_unique').on(
+      table.uploadId,
+      table.pageId,
+    ),
+    uploadIdx: index('upload_page_refs_upload_idx').on(table.uploadId),
+    pageIdx: index('upload_page_refs_page_idx').on(table.pageId),
+  }),
+);

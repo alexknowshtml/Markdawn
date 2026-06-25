@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { query } from '../db/query';
-import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
+import {
+  createTestApp,
+  createTestFolder,
+  createTestPage,
+  createTestPublicShare,
+  createTestSession,
+  createTestUser,
+} from '../test-utils';
 
 describe('uploads API', () => {
   describe('auth guard', () => {
@@ -25,9 +32,11 @@ describe('uploads API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
 
       const formData = new FormData();
       formData.append('file', new File(['fake-image-data'], 'test.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
 
       const res = await app.request('/api/uploads', {
         method: 'POST',
@@ -44,9 +53,11 @@ describe('uploads API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
 
       const formData = new FormData();
       formData.append('file', new File(['text'], 'test.txt', { type: 'text/plain' }));
+      formData.append('pageId', page.id);
 
       const res = await app.request('/api/uploads', {
         method: 'POST',
@@ -61,10 +72,16 @@ describe('uploads API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request('/api/uploads', {
         method: 'POST',
         headers: { Cookie: session.Cookie },
+        body: (() => {
+          const formData = new FormData();
+          formData.append('pageId', page.id);
+          return formData;
+        })(),
       });
 
       expect(res.status).toBe(400);
@@ -100,10 +117,12 @@ describe('uploads API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
 
       const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'real.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
 
       const uploadRes = await app.request('/api/uploads', {
         method: 'POST',
@@ -134,6 +153,7 @@ describe('uploads API', () => {
       const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'shared-root.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
 
       const uploadRes = await app.request('/api/uploads', {
         method: 'POST',
@@ -155,6 +175,180 @@ describe('uploads API', () => {
 
       expect(res.status).toBe(200);
       expect(res.headers.get('Content-Type')).toBe('image/png');
+    });
+
+    it('blocks users who only have access to a different page by the upload owner', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const uploadPage = await createTestPage(owner.id, { title: 'Upload Page' });
+      const sharedPage = await createTestPage(owner.id, { title: 'Other Shared Page' });
+
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array([0x89, 0x50])], 'scoped.png', { type: 'image/png' }),
+      );
+      formData.append('pageId', uploadPage.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'view')`,
+        [sharedPage.id, owner.id, recipient.id],
+      );
+
+      const res = await app.request(url, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('blocks anonymous downloads for private page uploads', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id, { title: 'Private Page' });
+
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array([0x89, 0x50])], 'private.png', { type: 'image/png' }),
+      );
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('allows anonymous downloads for public page uploads', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id, { title: 'Public Page' });
+
+      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const formData = new FormData();
+      formData.append('file', new File([binaryData], 'public.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+      await createTestPublicShare(page.id);
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Cache-Control')).toBe('public, max-age=3600');
+      expect(new Uint8Array(await res.arrayBuffer())).toEqual(binaryData);
+    });
+
+    it('allows anonymous downloads for uploads in public folders', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: folder.id });
+
+      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const formData = new FormData();
+      formData.append('file', new File([binaryData], 'folder-public.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        crypto.randomUUID(),
+        folder.id,
+      ]);
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(200);
+    });
+
+    it('blocks anonymous downloads for uploads on restricted public pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id, { title: 'Restricted Public Page' });
+
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array([0x89, 0x50])], 'restricted-public.png', { type: 'image/png' }),
+      );
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+      await createTestPublicShare(page.id);
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(404);
+    });
+
+    it('blocks anonymous downloads for uploads in folders under restricted ancestor', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const rootFolder = await createTestFolder(owner.id);
+      const childFolder = await createTestFolder(owner.id, { parentId: rootFolder.id });
+      const page = await createTestPage(owner.id, { parentId: childFolder.id });
+
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array([0x89, 0x50])], 'restricted-ancestor.png', { type: 'image/png' }),
+      );
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        crypto.randomUUID(),
+        rootFolder.id,
+      ]);
+      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [childFolder.id]);
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(404);
     });
   });
 });

@@ -1,4 +1,4 @@
-import { deriveCapabilities } from '@markdawn/shared';
+import { type CapabilitySet, deriveCapabilities, type SharePermission } from '@markdawn/shared';
 import { useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -492,6 +492,7 @@ export function MilkdownEditor({
   const handleImageUpload = async (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('pageId', pageId);
     try {
       const res = await fetch('/api/uploads', {
         method: 'POST',
@@ -965,6 +966,23 @@ export function MilkdownEditor({
       try {
         const message = JSON.parse(payload) as Record<string, unknown>;
 
+        const syncPagePermission = (permission: SharePermission) => {
+          const capabilities = deriveCapabilities(permission);
+          queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
+            if (!old || typeof old !== 'object') return old;
+            return {
+              ...(old as Record<string, unknown>),
+              userPermission: permission,
+              linkPermission: permission === 'admin' ? 'edit' : permission,
+              capabilities,
+            } satisfies Record<string, unknown> & {
+              userPermission: SharePermission;
+              linkPermission: 'view' | 'edit';
+              capabilities: CapabilitySet;
+            };
+          });
+        };
+
         // Old format (backward compat during rollout): { type: 'permission_changed', permission }
         if (message.type === 'permission_changed') {
           const permission = message.permission as string | undefined;
@@ -973,11 +991,13 @@ export function MilkdownEditor({
             setReadOnly(true);
             setLinkPermission('view');
             setCapabilities(deriveCapabilities('view'));
+            syncPagePermission('view');
             showInfoToast('This page is now view-only');
           } else if (permission === 'edit') {
             setReadOnly(false);
             setLinkPermission('edit');
             setCapabilities(deriveCapabilities('edit'));
+            syncPagePermission('edit');
             showInfoToast('You can now edit this page');
           } else if (permission === 'private') {
             if (!consumeSelfLeave(pageId)) {
@@ -1007,11 +1027,13 @@ export function MilkdownEditor({
               setReadOnly(true);
               setLinkPermission('view');
               setCapabilities(deriveCapabilities('view'));
+              syncPagePermission('view');
               showInfoToast(toastMessage ?? 'This page is now view-only');
             } else if (permission === 'edit' || permission === 'admin') {
               setReadOnly(false);
               setLinkPermission('edit');
               setCapabilities(deriveCapabilities(permission));
+              syncPagePermission(permission);
               showInfoToast(
                 toastMessage ??
                   (permission === 'admin' ? 'You are now an admin' : 'You can now edit this page'),
