@@ -81,6 +81,39 @@ const normalizeShare = (row: ShareRow) => ({
   updatedAt: row.updated_at,
 });
 
+const isEntityRestricted = async (entityType: ShareEntityType, entityId: string) => {
+  if (entityType === 'page') {
+    const result = await query<{ restricted: boolean }>(
+      `
+        SELECT EXISTS(
+          SELECT 1 FROM pages WHERE id = $1 AND is_access_restricted = true AND is_deleted = false
+          UNION ALL
+          SELECT 1 FROM folder_closure fc
+          JOIN folders f ON f.id = fc.ancestor_id
+          JOIN pages p ON p.id = $1
+          WHERE fc.descendant_id = p.parent_id
+            AND f.is_access_restricted = true AND f.is_deleted = false
+        ) as restricted
+      `,
+      [entityId],
+    );
+    return result.rows[0]?.restricted ?? false;
+  }
+
+  const result = await query<{ restricted: boolean }>(
+    `
+      SELECT EXISTS(
+        SELECT 1 FROM folder_closure fc
+        JOIN folders f ON f.id = fc.ancestor_id
+        WHERE fc.descendant_id = $1
+          AND f.is_access_restricted = true AND f.is_deleted = false
+      ) as restricted
+    `,
+    [entityId],
+  );
+  return result.rows[0]?.restricted ?? false;
+};
+
 const getPageAccessors = async (pageId: string) => {
   const rank = (p: SharePermission) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
 
@@ -125,7 +158,19 @@ const getPageAccessors = async (pageId: string) => {
       [pageId, ownerRow?.user_id ?? ''],
     ),
     query(
-      "select permission from shares where entity_type = 'page' and entity_id = $1 and token is not null limit 1",
+      `
+          select permission from shares
+          where entity_type = 'page' and entity_id = $1 and token is not null
+            and exists (select 1 from pages where id = $1 and is_access_restricted is not true and is_deleted = false)
+            and not exists (
+              select 1 from folder_closure fc
+              join folders f on f.id = fc.ancestor_id
+              join pages p on p.id = $1
+              where fc.descendant_id = p.parent_id
+                and f.is_access_restricted = true and f.is_deleted = false
+            )
+          limit 1
+        `,
       [pageId],
     ),
     query(
@@ -148,6 +193,13 @@ const getPageAccessors = async (pageId: string) => {
             AND s.recipient_user_id IS NOT NULL
             AND s.token IS NULL
             AND s.recipient_user_id != $2
+            AND p.is_access_restricted is not true
+            AND NOT EXISTS (
+              SELECT 1 FROM folder_closure fc2
+              JOIN folders f2 ON f2.id = fc2.ancestor_id
+              WHERE fc2.descendant_id = p.parent_id
+                AND f2.is_access_restricted = true AND f2.is_deleted = false
+            )
         `,
       [pageId, ownerRow?.user_id ?? ''],
     ),
@@ -332,7 +384,19 @@ const getFolderAccessors = async (folderId: string) => {
       [folderId, ownerRow?.user_id ?? ''],
     ),
     query(
-      "select permission from shares where entity_type = 'folder' and entity_id = $1 and token is not null limit 1",
+      `
+          select permission from shares
+          where entity_type = 'folder' and entity_id = $1 and token is not null
+            and exists (select 1 from folders where id = $1 and is_access_restricted is not true and is_deleted = false)
+            and not exists (
+              select 1 from folder_closure fc
+              join folders f on f.id = fc.ancestor_id
+              where fc.descendant_id = $1
+                and f.is_access_restricted = true and f.is_deleted = false
+                and fc.ancestor_id != $1
+            )
+          limit 1
+        `,
       [folderId],
     ),
     query(
@@ -351,9 +415,16 @@ const getFolderAccessors = async (folderId: string) => {
           JOIN folders f ON f.id = fc.ancestor_id AND f.is_deleted = false
           WHERE s.entity_type = 'folder'
             AND fc.descendant_id = $1
+            AND fc.depth > 0
             AND s.recipient_user_id IS NOT NULL
             AND s.token IS NULL
             AND s.recipient_user_id != $2
+            AND NOT EXISTS (
+              SELECT 1 FROM folder_closure fc2
+              JOIN folders f2 ON f2.id = fc2.ancestor_id
+              WHERE fc2.descendant_id = $1
+                AND f2.is_access_restricted = true AND f2.is_deleted = false
+            )
         `,
       [folderId, ownerRow?.user_id ?? ''],
     ),
@@ -731,7 +802,8 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   );
 
   const shares = (result.rows as ShareRow[]).map(normalizeShare);
-  const linkShare = shares.find((share) => share.token);
+  const isRestricted = await isEntityRestricted(entityType, entityId);
+  const linkShare = isRestricted ? undefined : shares.find((share) => share.token);
   const accessors =
     entityType === 'page' ? await getPageAccessors(entityId) : await getFolderAccessors(entityId);
 
@@ -787,7 +859,16 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
     const linkRows = await query<{ permission: string }>(
       `SELECT permission FROM shares
        WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL
-         AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)`,
+         AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)
+         AND NOT EXISTS (
+           SELECT 1 FROM pages WHERE id = $1 AND is_access_restricted = true AND is_deleted = false
+           UNION ALL
+           SELECT 1 FROM folder_closure fc
+           JOIN folders f ON f.id = fc.ancestor_id
+           JOIN pages p ON p.id = $1
+           WHERE fc.descendant_id = p.parent_id
+             AND f.is_access_restricted = true AND f.is_deleted = false
+         )`,
       [entityId],
     );
     linkRows.rows.forEach((row: { permission: string }) => {
@@ -830,7 +911,13 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
 
     const linkRows = await query<{ permission: string }>(
       `SELECT permission FROM shares
-       WHERE entity_type = 'folder' AND entity_id = $1 AND token IS NOT NULL`,
+       WHERE entity_type = 'folder' AND entity_id = $1 AND token IS NOT NULL
+         AND NOT EXISTS (
+           SELECT 1 FROM folder_closure fc
+           JOIN folders f ON f.id = fc.ancestor_id
+           WHERE fc.descendant_id = $1
+             AND f.is_access_restricted = true AND f.is_deleted = false
+         )`,
       [entityId],
     );
     linkRows.rows.forEach((row: { permission: string }) => {

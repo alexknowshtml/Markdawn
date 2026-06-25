@@ -129,13 +129,62 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('view');
   });
 
-  it('still grants link share access (regression)', async () => {
+  it('still grants owner access when page has link share', async () => {
     const owner = await createTestUser();
     const page = await createTestPage(owner.id);
     await addLinkShare(page.id, 'edit');
 
     const result = await ensurePageAccess(page.id, owner.id);
     expect(result.hasAccess).toBe(true);
+  });
+
+  it('grants authenticated user access via public link when page is not restricted', async () => {
+    const owner = await createTestUser();
+    const stranger = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await addLinkShare(page.id, 'view');
+
+    const result = await ensurePageAccess(page.id, stranger.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
+  it('blocks authenticated user access via public link when page is restricted', async () => {
+    const owner = await createTestUser();
+    const stranger = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await addLinkShare(page.id, 'view');
+    await setPageAccessRestricted(page.id);
+
+    await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
+  });
+
+  it('blocks folder invite access when page is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await addShare('folder', folder.id, recipient.id, 'view');
+    await setPageAccessRestricted(page.id);
+
+    await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
+  });
+
+  it('blocks folder invite access when ancestor folder is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await addShare('folder', folder.id, recipient.id, 'view');
+    await setAccessRestricted(folder.id);
+
+    await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
   });
 
   it('denies access to non-owner, non-member, non-shared users', async () => {
@@ -259,5 +308,50 @@ describe('ensureFolderAccess with workspace membership', () => {
 
     const result = await ensureFolderAccess(folder.id, owner.id);
     expect(result.hasAccess).toBe(true);
+  });
+
+  it('allows direct folder invite on restricted folder', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    await setAccessRestricted(folder.id);
+    await addShare('folder', folder.id, recipient.id, 'view');
+
+    const result = await ensureFolderAccess(folder.id, recipient.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
+  it('blocks ancestor folder invite when folder is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const parentFolder = await createTestFolder(owner.id);
+    const folder = await createTestFolder(owner.id, { parentId: parentFolder.id });
+    await addShare('folder', parentFolder.id, recipient.id, 'view');
+    await setAccessRestricted(folder.id);
+
+    await expect(ensureFolderAccess(folder.id, recipient.id)).rejects.toThrow(
+      "You don't have access to this folder",
+    );
+  });
+
+  it('blocks public link access when folder is restricted', async () => {
+    const owner = await createTestUser();
+    const stranger = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const token = crypto.randomUUID();
+    await query(
+      `INSERT INTO shares (entity_type, entity_id, permission, token) VALUES ('folder', $1, 'view', $2)`,
+      [folder.id, token],
+    );
+    await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+      token,
+      folder.id,
+    ]);
+    await setAccessRestricted(folder.id);
+
+    await expect(ensureFolderAccess(folder.id, stranger.id)).rejects.toThrow(
+      "You don't have access to this folder",
+    );
   });
 });

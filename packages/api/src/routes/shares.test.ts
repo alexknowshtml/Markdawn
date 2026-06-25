@@ -151,7 +151,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(result.rows[0]).toEqual({ permission: 'edit', full_access: false });
     });
 
-    it('direct page invite overrides parent folder permission', async () => {
+    it('uses the highest permission across direct page and parent folder shares', async () => {
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const folder = await createTestFolder(owner.id);
@@ -171,10 +171,10 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         recipient.id,
       ]);
 
-      expect(result.rows[0]).toEqual({ permission: 'view', full_access: false });
+      expect(result.rows[0]).toEqual({ permission: 'admin', full_access: false });
     });
 
-    it('direct folder invite takes priority over ancestor at same level', async () => {
+    it('uses the highest permission across direct and ancestor folder shares', async () => {
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const grandparent = await createTestFolder(owner.id, { name: 'GP' });
@@ -193,7 +193,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         parent.id,
         recipient.id,
       ]);
-      expect(parentResult.rows[0]).toEqual({ permission: 'view', full_access: false });
+      expect(parentResult.rows[0]).toEqual({ permission: 'admin', full_access: false });
 
       const gpResult = await query('SELECT * FROM get_effective_folder_permission($1, $2)', [
         grandparent.id,
@@ -297,7 +297,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(users).toContain(workspaceUser.id);
     });
 
-    it('excludes folder invites when direct page invite exists', async () => {
+    it('keeps the highest folder invite permission when a lower direct page invite exists', async () => {
       const owner = await createTestUser();
       const user = await createTestUser();
       const folder = await createTestFolder(owner.id);
@@ -321,7 +321,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       if (!userRow) {
         throw new Error('Expected permission row for shared user');
       }
-      expect(userRow.permission).toBe('view');
+      expect(userRow.permission).toBe('admin');
     });
   });
 
@@ -785,7 +785,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(result.rows[0]).toEqual({ permission: 'edit', full_access: false });
     });
 
-    it('direct folder invite overrides ancestor folder access', async () => {
+    it('uses the highest permission across direct folder and ancestor folder access', async () => {
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const grandparent = await createTestFolder(owner.id, { name: 'GP' });
@@ -804,7 +804,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         parent.id,
         recipient.id,
       ]);
-      expect(parentResult.rows[0]).toEqual({ permission: 'view', full_access: false });
+      expect(parentResult.rows[0]).toEqual({ permission: 'admin', full_access: false });
 
       const gpResult = await query('SELECT * FROM get_effective_folder_permission($1, $2)', [
         grandparent.id,
@@ -1349,6 +1349,139 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const found = tree.find((f) => f.name === 'Secret');
       expect(found).toBeDefined();
       expect(found?.isLostAccess).toBe(true);
+    });
+  });
+
+  describe('HTTP API — access restriction lockdown', () => {
+    it('hides inherited folder invites from page share summary when page is restricted', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
+      const page = await createTestPage(owner.id, {
+        parentId: folder.id,
+        title: 'Restricted Page',
+      });
+
+      await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request(`/api/shares/entity/page/${page.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        accessors: Array<{ email: string | null; source: string }>;
+      };
+      const accessorEmails = data.accessors.map((a) => a.email);
+      expect(accessorEmails).not.toContain(recipient.email);
+    });
+
+    it('hides inherited folder invites from folder share summary when folder is restricted', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const parentFolder = await createTestFolder(owner.id, { name: 'Parent' });
+      const folder = await createTestFolder(owner.id, {
+        name: 'Restricted Folder',
+        parentId: parentFolder.id,
+      });
+
+      await app.request(`/api/shares/entity/folder/${parentFolder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
+
+      const res = await app.request(`/api/shares/entity/folder/${folder.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        accessors: Array<{ email: string | null; source: string }>;
+      };
+      const accessorEmails = data.accessors.map((a) => a.email);
+      expect(accessorEmails).not.toContain(recipient.email);
+    });
+
+    it('shows link as private in share summary when page is restricted', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id);
+
+      await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'view' }),
+      });
+
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request(`/api/shares/entity/page/${page.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        link: { permission: string };
+      };
+      expect(data.link.permission).toBe('private');
+    });
+
+    it('blocks public page access when page is restricted', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id);
+
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'view' }),
+      });
+      const linkData = (await linkRes.json()) as { url: string };
+
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request(linkData.url);
+      expect(res.status).toBe(404);
+    });
+
+    it('blocks public page access through restricted ancestor folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: folder.id });
+
+      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+        crypto.randomUUID(),
+        folder.id,
+      ]);
+      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+
+      const res = await app.request(`/api/pages/${page.id}`);
+      expect(res.status).toBe(404);
     });
   });
 

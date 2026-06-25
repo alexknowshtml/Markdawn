@@ -120,6 +120,13 @@
       "when": 1782324108017,
       "tag": "0016_page_scoped_uploads_and_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1782366318189,
+      "tag": "0017_restrict_inheritance",
+      "breakpoints": true
     }
   ]
 }

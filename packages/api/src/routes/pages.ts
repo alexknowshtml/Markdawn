@@ -124,6 +124,7 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
         where p.id = $1
           and p.is_deleted = false
           and p.is_public = true
+          and p.is_access_restricted is not true
 
         union all
 
@@ -154,6 +155,15 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
         where p.id = $1
           and p.is_deleted = false
           and f.is_public = true
+          and p.is_access_restricted is not true
+          and not exists (
+            select 1
+            from folder_closure fc2
+            join folders f2 on f2.id = fc2.ancestor_id
+            where fc2.descendant_id = p.parent_id
+              and f2.is_access_restricted = true
+              and f2.is_deleted = false
+          )
       )
       select permission, token, source
       from link_access
