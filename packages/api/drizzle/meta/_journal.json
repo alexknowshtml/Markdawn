@@ -127,6 +127,13 @@
       "when": 1782366318189,
       "tag": "0017_restrict_inheritance",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1782368859465,
+      "tag": "0018_fix_accessible_page_ids_for_restriction",
+      "breakpoints": true
     }
   ]
 }

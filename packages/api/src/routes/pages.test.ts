@@ -9,6 +9,14 @@ import {
   createTestWorkspaceMember,
 } from '../test-utils';
 
+async function addFolderShare(folderId: string, recipientUserId: string, permission = 'view') {
+  await query(
+    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
+     VALUES ('folder', $1, $2, $3, NULL)`,
+    [folderId, recipientUserId, permission],
+  );
+}
+
 describe('pages API', () => {
   describe('auth guard', () => {
     it('returns 401 without session cookie', async () => {
@@ -138,6 +146,75 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.some((p: { id: string }) => p.id === page.id)).toBe(false);
+    });
+
+    it('excludes pages under restricted folders from folder share recipients', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
+      const page = await createTestPage(owner.id, {
+        title: 'Page in Restricted Folder',
+        parentId: folder.id,
+      });
+      await addFolderShare(folder.id, recipient.id, 'view');
+      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
+
+      const res = await app.request('/api/pages/tree', {
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(false);
+    });
+
+    it('excludes pages under restricted ancestor folders from ancestor share recipients', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(recipient.id);
+      const parentFolder = await createTestFolder(owner.id, { name: 'Shared Parent' });
+      const childFolder = await createTestFolder(owner.id, {
+        name: 'Restricted Child',
+        parentId: parentFolder.id,
+      });
+      const page = await createTestPage(owner.id, {
+        title: 'Page Under Restricted Ancestor',
+        parentId: childFolder.id,
+      });
+      await addFolderShare(parentFolder.id, recipient.id, 'view');
+      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [childFolder.id]);
+
+      const res = await app.request('/api/pages/tree', {
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(false);
+    });
+
+    it('still includes pages directly in a non-restricted shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
+      const page = await createTestPage(owner.id, {
+        title: 'Page in Shared Folder',
+        parentId: folder.id,
+      });
+      await addFolderShare(folder.id, recipient.id, 'view');
+
+      const res = await app.request('/api/pages/tree', {
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
     });
   });
 
