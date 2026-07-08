@@ -406,6 +406,33 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(disabledPublicRes.status).toBe(404);
     });
 
+    it('rejects invalid public link permissions', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id);
+
+      const adminRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+        },
+        body: JSON.stringify({ permission: 'admin' }),
+      });
+      expect(adminRes.status).toBe(400);
+
+      const missingRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+        },
+        body: JSON.stringify({}),
+      });
+      expect(missingRes.status).toBe(400);
+    });
+
     it('merges invite and link access for the same user', async () => {
       const app = await createTestApp();
       const owner = await createTestUser({ name: 'Owner' });
@@ -1060,8 +1087,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         },
         body: JSON.stringify({ email: recipient.email, permission: 'superadmin' }),
       });
-      // parsePermission falls through to 'view', so invite succeeds with view
-      expect(res.status).toBe(200);
+      expect(res.status).toBe(400);
     });
 
     it('allows recipient to self-remove their access', async () => {

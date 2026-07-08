@@ -15,7 +15,14 @@ const hasRequiredPermission = (permission: SharePermission, mode: AccessMode) =>
 export const parsePermission = (value: unknown): SharePermission => {
   if (value === 'admin') return 'admin';
   if (value === 'edit') return 'edit';
-  return 'view';
+  if (value === 'view') return 'view';
+  throw new HTTPException(400, { message: 'Invalid permission' });
+};
+
+export const parseLinkPermission = (value: unknown): AccessMode => {
+  if (value === 'edit') return 'edit';
+  if (value === 'view') return 'view';
+  throw new HTTPException(400, { message: 'Invalid link permission' });
 };
 
 export const parseEntityType = (value: string): ShareEntityType => {

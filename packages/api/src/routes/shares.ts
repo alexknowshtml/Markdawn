@@ -10,6 +10,7 @@ import {
   ensureFolderAccess,
   ensurePageAccess,
   parseEntityType,
+  parseLinkPermission,
   parsePermission,
   type ShareEntityType,
   type SharePermission,
@@ -1549,7 +1550,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
     });
   }
 
-  const nextPermission = parsePermission(permission);
+  const nextPermission = parseLinkPermission(permission);
   let token = '';
   await db.transaction(async (tx) => {
     const existing = await executeQuery(
