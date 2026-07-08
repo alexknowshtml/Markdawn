@@ -6,7 +6,7 @@ import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensureCanAdminEntity, ensureFolderAccess } from '../utils/share-access';
-import { notifyShareRevoke } from '../utils/share-notify';
+import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
 
 type FolderRow = typeof folders.$inferSelect;
 type NormalizedFolderRow = FolderRow & { ownerId?: string | null };
@@ -443,6 +443,10 @@ foldersRoute.patch(':id', async (c) => {
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to update folder' });
+  }
+
+  if (hasParentId && nextParent !== folder.parentId) {
+    await notifyShareRecompute({ entityType: 'folder', entityId: folderId });
   }
 
   const updated = normalizeFolderRow(updateResult.rows[0] as RawFolderRow);

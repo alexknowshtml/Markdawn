@@ -22,7 +22,7 @@ import {
   ensureFolderAccess,
   ensurePageAccess,
 } from '../utils/share-access';
-import { notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
+import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
 
 type PageRow = typeof pages.$inferSelect;
 type NormalizedPageRow = PageRow & { ownerId?: string | null };
@@ -52,6 +52,24 @@ type PageLinkAccess = {
 const pagesRoute = new Hono();
 const pagesPublicRoute = new Hono();
 
+const deletedPageOwnerSql = `coalesce(
+  (
+    select root.created_by
+    from folder_closure fc
+    join folders root on root.id = fc.ancestor_id
+    where fc.descendant_id = p.parent_id
+      and root.parent_id is null
+    order by fc.depth desc
+    limit 1
+  ),
+  (
+    select folder_owner.created_by
+    from folders folder_owner
+    where folder_owner.id = p.parent_id
+  ),
+  p.created_by
+)`;
+
 pagesRoute.use('*', requireAuth);
 
 const _markdownToHtml = (markdown: string): string => {
@@ -78,7 +96,7 @@ const getPageById = async (pageId: string) => {
 
 const getDeletedPageById = async (pageId: string) => {
   const result = await query(
-    'select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = $1 and p.is_deleted = true limit 1',
+    `select p.*, ${deletedPageOwnerSql} as owner_id from pages p where p.id = $1 and p.is_deleted = true limit 1`,
     [pageId],
   );
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
@@ -323,7 +341,11 @@ pagesRoute.get('/trash', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    'select * from pages where is_deleted = true and created_by = $1 order by deleted_at desc nulls last, position asc',
+    `select p.*, ${deletedPageOwnerSql} as owner_id
+     from pages p
+     where p.is_deleted = true
+       and ${deletedPageOwnerSql} = $1
+     order by p.deleted_at desc nulls last, p.position asc`,
     [user.id],
   );
 
@@ -334,7 +356,9 @@ pagesRoute.delete('/trash/empty-all', async (c) => {
   const user = c.get('user') as { id: string };
 
   const userPages = await query(
-    'select id, parent_id, is_deleted from pages where created_by = $1',
+    `select p.id, p.parent_id, p.is_deleted
+     from pages p
+     where ${deletedPageOwnerSql} = $1`,
     [user.id],
   );
 
@@ -539,12 +563,8 @@ pagesRoute.patch(':id/restore', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  // Direct ownership check — ensurePageAccess filters by is_deleted=false,
-  // but restore operates on a soft-deleted page
-  const ownerRes = await query('select created_by from pages where id = $1 limit 1', [pageId]);
-  const ownerRow = ownerRes.rows[0] as { created_by?: string } | undefined;
-  if (!ownerRow || ownerRow.created_by !== user.id) {
-    throw new HTTPException(403, { message: 'You can only restore pages that you created' });
+  if (page.ownerId !== user.id) {
+    throw new HTTPException(403, { message: 'You can only restore pages that you own' });
   }
 
   const updateResult = await query(
@@ -740,7 +760,7 @@ pagesRoute.patch(':id/move', async (c) => {
   }
 
   if (hasParentId && nextParent !== page.parentId) {
-    await notifyShareUpdate({ entityType: 'page', entityId: pageId });
+    await notifyShareRecompute({ entityType: 'page', entityId: pageId });
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
@@ -1044,16 +1064,30 @@ pagesRoute.post(':id/copy', async (c) => {
 
 pagesRoute.delete(':id/permanent', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
+  const deletedPage = await getDeletedPageById(pageId);
+  const page = deletedPage ?? (await getPageById(pageId));
 
   if (!page) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
+  if (deletedPage) {
+    if (page.ownerId !== user.id) {
+      throw new HTTPException(403, {
+        message: 'You can only permanently delete pages that you own',
+      });
+    }
+  } else {
+    await ensureCanManageEntity('page', page.id, user.id);
+  }
 
-  const userPages = await query('select id, parent_id from pages where created_by = $1', [user.id]);
+  const userPages = await query(
+    `select p.id, p.parent_id
+     from pages p
+     where ${deletedPageOwnerSql} = $1`,
+    [user.id],
+  );
 
   const childMap = new Map<string, string[]>();
   for (const item of userPages.rows as { id: string; parent_id: string | null }[]) {
