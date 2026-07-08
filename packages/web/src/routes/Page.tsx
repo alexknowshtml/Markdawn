@@ -332,8 +332,8 @@ export default function Page() {
   return (
     <EditorReadOnlyProvider readOnly={readOnly}>
       <div className="max-w-4xl mx-auto px-6 animate-fade-in">
-        <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/80 dark:bg-zinc-950/80 backdrop-blur-xl">
-          <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400">
+        <div className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-zinc-50 dark:bg-zinc-950 md:-mt-12">
+          <div className="flex items-center justify-between text-sm font-medium text-zinc-500 dark:text-zinc-400 md:pt-5">
             {isAnonymous ? (
               <button
                 type="button"
@@ -362,7 +362,7 @@ export default function Page() {
         </div>
 
         <div className="mb-6">
-          <div className="relative flex-1 flex items-center mt-19">
+          <div className="relative flex-1 flex items-center mt-16">
             <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
               <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
             </div>
