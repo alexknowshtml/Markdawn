@@ -1,4 +1,4 @@
-import type { ShareEntityType, SharePermission } from '@markdawn/shared';
+import type { ShareEntityType, ShareEventAction, SharePermission } from '@markdawn/shared';
 import { query } from '../db/query';
 
 interface ShareEventBase {
@@ -11,7 +11,7 @@ interface ShareEventBase {
   message?: string;
 }
 
-function fireShareEvent(action: 'grant' | 'update' | 'revoke', params: ShareEventBase) {
+function fireShareEvent(action: ShareEventAction, params: ShareEventBase) {
   const payload = {
     type: 'share_event',
     action,
@@ -47,6 +47,10 @@ export function notifyShareUpdate(params: ShareEventBase) {
 
 export function notifyShareRevoke(params: ShareEventBase) {
   return fireShareEvent('revoke', params);
+}
+
+export function notifyShareRecompute(params: ShareEventBase) {
+  return fireShareEvent('recompute', params);
 }
 
 export function notifyWorkspaceEvent(

@@ -25,8 +25,12 @@ import {
 import { notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
 
 type PageRow = typeof pages.$inferSelect;
+type NormalizedPageRow = PageRow & { ownerId?: string | null };
+
 type RawPageRow = PageRow & {
   parent_id?: string | null;
+  ownerId?: string | null;
+  owner_id?: string | null;
   created_by?: string | null;
   created_at?: Date | null;
   updated_at?: Date | null;
@@ -34,7 +38,7 @@ type RawPageRow = PageRow & {
   deleted_at?: Date | null;
   is_public?: boolean | null;
   public_token?: string | null;
-  is_access_restricted?: boolean | null;
+  inheritance_policy?: 'inherit' | 'restricted' | null;
 };
 
 type LinkPermission = 'view' | 'edit';
@@ -42,6 +46,7 @@ type PageLinkAccess = {
   permission: LinkPermission;
   token: string;
   source: 'page' | 'folder';
+  sourceId: string;
 };
 
 const pagesRoute = new Hono();
@@ -63,24 +68,27 @@ const isValidMarkdown = (markdown: string): boolean => {
 };
 
 const getPageById = async (pageId: string) => {
-  const result = await query('select * from pages where id = $1 and is_deleted = false limit 1', [
-    pageId,
-  ]);
+  const result = await query(
+    'select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = $1 and p.is_deleted = false limit 1',
+    [pageId],
+  );
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
   return row ? normalizePageRow(row) : null;
 };
 
 const getDeletedPageById = async (pageId: string) => {
-  const result = await query('select * from pages where id = $1 and is_deleted = true limit 1', [
-    pageId,
-  ]);
+  const result = await query(
+    'select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = $1 and p.is_deleted = true limit 1',
+    [pageId],
+  );
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
   return row ? normalizePageRow(row) : null;
 };
 
-const normalizePageRow = (row: RawPageRow): PageRow => ({
+const normalizePageRow = (row: RawPageRow): NormalizedPageRow => ({
   ...row,
   parentId: row.parentId ?? row.parent_id ?? null,
+  ownerId: row.ownerId ?? row.owner_id ?? null,
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
@@ -88,7 +96,7 @@ const normalizePageRow = (row: RawPageRow): PageRow => ({
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
   isPublic: row.isPublic ?? row.is_public ?? false,
   publicToken: row.publicToken ?? row.public_token ?? null,
-  isAccessRestricted: row.isAccessRestricted ?? row.is_access_restricted ?? false,
+  inheritancePolicy: row.inheritancePolicy ?? row.inheritance_policy ?? 'inherit',
 });
 
 const normalizeLinkPermission = (permission: string | null | undefined): LinkPermission => {
@@ -103,6 +111,7 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
           coalesce(s.permission, 'view') as permission,
           coalesce(s.token, p.public_token, p.id::text) as token,
           'page' as source,
+          p.id as source_id,
           case coalesce(s.permission, 'view')
             when 'admin' then 3
             when 'edit' then 2
@@ -124,7 +133,6 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
         where p.id = $1
           and p.is_deleted = false
           and p.is_public = true
-          and p.is_access_restricted is not true
 
         union all
 
@@ -132,6 +140,7 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
           coalesce(s.permission, 'view') as permission,
           coalesce(s.token, f.public_token, f.id::text) as token,
           'folder' as source,
+          f.id as source_id,
           case coalesce(s.permission, 'view')
             when 'admin' then 3
             when 'edit' then 2
@@ -155,17 +164,9 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
         where p.id = $1
           and p.is_deleted = false
           and f.is_public = true
-          and p.is_access_restricted is not true
-          and not exists (
-            select 1
-            from folder_closure fc2
-            join folders f2 on f2.id = fc2.ancestor_id
-            where fc2.descendant_id = p.parent_id
-              and f2.is_access_restricted = true
-              and f2.is_deleted = false
-          )
+          and not is_page_folder_inheritance_blocked(f.id, p.id)
       )
-      select permission, token, source
+      select permission, token, source, source_id
       from link_access
       order by rank desc, priority asc, depth asc
       limit 1
@@ -174,9 +175,14 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
   );
 
   const row = result.rows[0] as
-    | { permission?: string | null; token?: string | null; source?: string | null }
+    | {
+        permission?: string | null;
+        token?: string | null;
+        source?: string | null;
+        source_id?: string | null;
+      }
     | undefined;
-  if (!row?.token || (row.source !== 'page' && row.source !== 'folder')) {
+  if (!row?.token || !row.source_id || (row.source !== 'page' && row.source !== 'folder')) {
     return null;
   }
 
@@ -184,7 +190,49 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
     permission: normalizeLinkPermission(row.permission),
     token: row.token,
     source: row.source,
+    sourceId: row.source_id,
   };
+};
+
+const hasNonLinkPageAccess = async (pageId: string, userId: string): Promise<boolean> => {
+  const result = await query(
+    `with page_info as (
+       select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+              p.parent_id
+       from pages p
+       where p.id = $1 and p.is_deleted = false
+     )
+     select exists (
+       select 1 from page_info where owner_id = $2
+       union all
+       select 1
+       from shares s
+       where s.entity_type = 'page'
+         and s.entity_id = $1
+         and s.recipient_user_id = $2
+         and s.token is null
+         and (s.expires_at is null or s.expires_at > now())
+       union all
+       select 1
+       from page_info pi
+       join shares s on s.entity_type = 'folder'
+       join folders source_folder on source_folder.id = s.entity_id
+       where s.entity_id in (select ancestor_id from folder_closure where descendant_id = pi.parent_id)
+         and s.recipient_user_id = $2
+         and s.token is null
+         and source_folder.is_deleted = false
+         and (s.expires_at is null or s.expires_at > now())
+         and not is_page_folder_inheritance_blocked(s.entity_id, $1)
+       union all
+       select 1
+       from page_info pi
+       join workspace_members wm on wm.workspace_owner_id = pi.owner_id
+       where wm.member_id = $2
+         and not is_page_path_restricted($1)
+     ) as has_access`,
+    [pageId, userId],
+  );
+  return result.rows[0]?.has_access === true;
 };
 
 pagesRoute.get('/tree', async (c) => {
@@ -193,7 +241,7 @@ pagesRoute.get('/tree', async (c) => {
 
   const result = await query(
     `
-      select p.*
+      select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
       from pages p
       where p.is_deleted = false
         and p.id in (select page_id from get_accessible_page_ids($1))
@@ -342,12 +390,35 @@ pagesRoute.get('/recent', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    'select p.id, p.title, p.icon, pv.visited_at as "visitedAt" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.is_deleted = false order by pv.visited_at desc limit $2',
+    `select
+       p.id,
+       p.title,
+       p.icon,
+       p.created_by as "createdBy",
+       coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId",
+       p.updated_at as "updatedAt",
+       pv.visited_at as "visitedAt"
+     from page_visits pv
+     join pages p on p.id = pv.page_id
+     join lateral get_effective_page_permission(p.id, $1) access on true
+     where pv.user_id = $1
+       and p.is_deleted = false
+       and access.permission is not null
+     order by pv.visited_at desc
+     limit $2`,
     [user.id, parsedLimit],
   );
 
   return c.json(
-    result.rows as { id: string; title: string; icon: string | null; visitedAt: Date }[],
+    result.rows as {
+      id: string;
+      title: string;
+      icon: string | null;
+      createdBy: string | null;
+      ownerId: string | null;
+      updatedAt: Date;
+      visitedAt: Date;
+    }[],
   );
 });
 
@@ -409,24 +480,54 @@ pagesRoute.post(':id/access', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
+  const user = c.get('user') as { id: string };
   const linkAccess = await getPageLinkAccess(pageId);
-  if (!linkAccess) {
+  const hasAccountAccess = await hasNonLinkPageAccess(page.id, user.id);
+
+  if (!hasAccountAccess && !linkAccess) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  const user = c.get('user') as { id: string };
+  let recordedLinkAccess = false;
+  let linkAccessSource: 'page' | 'folder' | null = null;
+
+  if (!hasAccountAccess) {
+    if (!linkAccess) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    recordedLinkAccess = true;
+    linkAccessSource = linkAccess.source;
+
+    if (linkAccess.source === 'page') {
+      await query(
+        `
+          insert into page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
+          values ($1, $2, 'link', $3, $4, now(), now())
+          on conflict (page_id, user_id, source, token)
+          do update set permission = excluded.permission, last_seen_at = now()
+        `,
+        [page.id, user.id, linkAccess.token, linkAccess.permission],
+      );
+    } else {
+      await query(
+        `
+          insert into folder_access_events (folder_id, user_id, source, token, permission, first_seen_at, last_seen_at)
+          values ($1, $2, 'link', $3, $4, now(), now())
+          on conflict (folder_id, user_id, source, token)
+          do update set permission = excluded.permission, last_seen_at = now()
+        `,
+        [linkAccess.sourceId, user.id, linkAccess.token, linkAccess.permission],
+      );
+    }
+  }
 
   await query(
-    `
-      insert into page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
-      values ($1, $2, 'link', $3, $4, now(), now())
-      on conflict (page_id, user_id, source, token)
-      do update set permission = excluded.permission, last_seen_at = now()
-    `,
-    [page.id, user.id, linkAccess.token, linkAccess.permission],
+    'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
+    [user.id, pageId],
   );
 
-  return c.json({ ok: true });
+  return c.json({ ok: true, recordedLinkAccess, linkAccessSource });
 });
 
 pagesRoute.patch(':id/restore', async (c) => {
@@ -475,22 +576,15 @@ pagesRoute.patch(':id', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { title, icon, parentId, position, coverType, coverValue, properties, isAccessRestricted } =
-    body as {
-      title?: string;
-      icon?: string | null;
-      parentId?: string | null;
-      position?: string | number;
-      coverType?: string | null;
-      coverValue?: string | null;
-      properties?: Record<string, unknown> | null;
-      isAccessRestricted?: boolean;
-    };
-
-  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
-  if (hasRestricted && isAccessRestricted !== page.isAccessRestricted) {
-    await ensureCanAdminEntity('page', page.id, user.id);
-  }
+  const { title, icon, parentId, position, coverType, coverValue, properties } = body as {
+    title?: string;
+    icon?: string | null;
+    parentId?: string | null;
+    position?: string | number;
+    coverType?: string | null;
+    coverValue?: string | null;
+    properties?: Record<string, unknown> | null;
+  };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
   if (hasParentId) {
@@ -550,11 +644,9 @@ pagesRoute.patch(':id', async (c) => {
       : null
     : page.properties;
 
-  const nextRestricted = hasRestricted ? isAccessRestricted === true : page.isAccessRestricted;
-
   const updateResult = hasProperties
     ? await query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, is_access_restricted = $8, updated_at = now() where id = $9 returning *",
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
         [
           nextTitle,
           nextIcon,
@@ -563,22 +655,12 @@ pagesRoute.patch(':id', async (c) => {
           nextCoverType,
           nextCoverValue,
           nextProperties,
-          nextRestricted,
           pageId,
         ],
       )
     : await query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, is_access_restricted = $7, updated_at = now() where id = $8 returning *",
-        [
-          nextTitle,
-          nextIcon,
-          nextParent,
-          nextPosition,
-          nextCoverType,
-          nextCoverValue,
-          nextRestricted,
-          pageId,
-        ],
+        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
+        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
       );
 
   if (updateResult.rowCount === 0) {
@@ -592,14 +674,6 @@ pagesRoute.patch(':id', async (c) => {
       'page_renamed',
       JSON.stringify({ pageId, newTitle: nextTitle }),
     ]);
-  }
-
-  if (hasRestricted && nextRestricted !== page.isAccessRestricted) {
-    if (nextRestricted) {
-      await notifyShareRevoke({ entityType: 'page', entityId: pageId });
-    } else {
-      await notifyShareUpdate({ entityType: 'page', entityId: pageId });
-    }
   }
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);

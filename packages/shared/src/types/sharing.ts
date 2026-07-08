@@ -5,16 +5,21 @@ import type { ShareEntityType, SharePermission } from './page.js';
  * - `grant`: a new share was created (email invite)
  * - `update`: an existing share's permission changed (link or email)
  * - `revoke`: a share was deleted or set to private
+ * - `recompute`: permissions changed indirectly and must be reloaded from the DB
  */
-export type ShareEventAction = 'grant' | 'update' | 'revoke';
+export type ShareEventAction = 'grant' | 'update' | 'revoke' | 'recompute';
+export type StatelessShareEventAction = Exclude<ShareEventAction, 'recompute'>;
 
 /**
  * Canonical payload sent over PostgreSQL LISTEN/NOTIFY from the API server
  * to the collab (WebSocket) server.
  *
- * `targetUserId` determines which connections are affected:
+ * `targetUserId` determines which connections are affected for grant/update/revoke events:
  * - `undefined` → affects all anonymous connections (link share changes)
  * - a user ID  → affects that specific authenticated connection (email invite changes)
+ *
+ * `recompute` ignores `targetUserId` and asks the collab server to reload effective
+ * permissions for every active connection on the affected page(s).
  *
  * `message` is a human-readable description of what happened, intended for
  * display as a toast on the client. The collab server passes it through
@@ -42,7 +47,7 @@ export interface ShareEventPayload {
  */
 export interface StatelessShareMessage {
   type: 'share_event';
-  action: ShareEventAction;
+  action: StatelessShareEventAction;
   permission?: SharePermission;
   message?: string;
 }

@@ -56,27 +56,18 @@ const isUploadPublic = async (uploadId: string): Promise<boolean> => {
      FROM upload_page_refs upr
      JOIN pages p ON p.id = upr.page_id AND p.is_deleted = false
      WHERE upr.upload_id = $1
-       AND p.is_access_restricted is not true
-       AND NOT EXISTS (
-         SELECT 1
-         FROM folder_closure fc2
-         JOIN folders f2 ON f2.id = fc2.ancestor_id
-         WHERE fc2.descendant_id = p.parent_id
-           AND f2.is_access_restricted = true
-           AND f2.is_deleted = false
-       )
        AND (
          p.is_public = true
          OR EXISTS (
            SELECT 1
            FROM folder_closure fc
            JOIN folders f ON f.id = fc.ancestor_id
-           WHERE fc.descendant_id = p.parent_id
-             AND f.is_public = true
-             AND f.is_deleted = false
-             AND f.is_access_restricted is not true
-         )
-       )
+            WHERE fc.descendant_id = p.parent_id
+              AND f.is_public = true
+              AND f.is_deleted = false
+              AND NOT is_page_folder_inheritance_blocked(f.id, p.id)
+          )
+        )
      LIMIT 1`,
     [uploadId],
   );

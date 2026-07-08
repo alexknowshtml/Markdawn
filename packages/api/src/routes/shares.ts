@@ -14,13 +14,18 @@ import {
   type ShareEntityType,
   type SharePermission,
 } from '../utils/share-access';
-import { notifyShareGrant, notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
+import {
+  notifyShareGrant,
+  notifyShareRecompute,
+  notifyShareRevoke,
+  notifyShareUpdate,
+} from '../utils/share-notify';
 
 type EntityInfo = {
   id: string;
   ownerId?: string | null;
   title: string;
-  isAccessRestricted?: boolean;
+  inheritancePolicy: 'inherit' | 'restricted';
 };
 
 type ShareRow = {
@@ -47,6 +52,72 @@ type AccessorRow = {
   avatar_url: string | null;
   permission: SharePermission;
   source: string;
+};
+
+type SharedWithMeRow = ShareRow & {
+  entity_title: string | null;
+  entity_icon: string | null;
+  owner_id: string | null;
+  entity_updated_at: Date | null;
+  sort_at: Date | null;
+  source: 'direct' | 'link';
+};
+
+type SharedNavigationPage = {
+  entityType: 'page';
+  id: string;
+  title: string;
+  icon: string | null;
+  parentId: string | null;
+  ownerId: string | null;
+  createdBy: string | null;
+  updatedAt: Date | null;
+  userPermission: SharePermission | null;
+  source?: 'direct' | 'link';
+  sortAt?: Date | null;
+};
+
+type SharedNavigationFolder = {
+  entityType: 'folder';
+  id: string;
+  title: string;
+  icon: string | null;
+  parentId: string | null;
+  ownerId: string | null;
+  createdBy: string | null;
+  updatedAt: Date | null;
+  userPermission: SharePermission | null;
+  source?: 'direct' | 'link';
+  sortAt?: Date | null;
+  children: SharedNavigationItem[];
+};
+
+type SharedNavigationItem = SharedNavigationPage | SharedNavigationFolder;
+
+type SharedNavigationFolderRow = {
+  root_id: string;
+  id: string;
+  parent_id: string | null;
+  name: string | null;
+  icon: string | null;
+  position: string | null;
+  created_by: string | null;
+  updated_at: Date | null;
+  owner_id: string | null;
+  user_permission: SharePermission | null;
+};
+
+type SharedNavigationPageRow = {
+  root_id: string | null;
+  id: string;
+  parent_id: string | null;
+  title: string | null;
+  icon: string | null;
+  position: string | null;
+  created_by: string | null;
+  updated_at: Date | null;
+  owner_id: string | null;
+  user_permission: SharePermission | null;
 };
 
 const slugifyTitle = (title: string) =>
@@ -80,39 +151,6 @@ const normalizeShare = (row: ShareRow) => ({
   createdAt: row.created_at,
   updatedAt: row.updated_at,
 });
-
-const isEntityRestricted = async (entityType: ShareEntityType, entityId: string) => {
-  if (entityType === 'page') {
-    const result = await query<{ restricted: boolean }>(
-      `
-        SELECT EXISTS(
-          SELECT 1 FROM pages WHERE id = $1 AND is_access_restricted = true AND is_deleted = false
-          UNION ALL
-          SELECT 1 FROM folder_closure fc
-          JOIN folders f ON f.id = fc.ancestor_id
-          JOIN pages p ON p.id = $1
-          WHERE fc.descendant_id = p.parent_id
-            AND f.is_access_restricted = true AND f.is_deleted = false
-        ) as restricted
-      `,
-      [entityId],
-    );
-    return result.rows[0]?.restricted ?? false;
-  }
-
-  const result = await query<{ restricted: boolean }>(
-    `
-      SELECT EXISTS(
-        SELECT 1 FROM folder_closure fc
-        JOIN folders f ON f.id = fc.ancestor_id
-        WHERE fc.descendant_id = $1
-          AND f.is_access_restricted = true AND f.is_deleted = false
-      ) as restricted
-    `,
-    [entityId],
-  );
-  return result.rows[0]?.restricted ?? false;
-};
 
 const getPageAccessors = async (pageId: string) => {
   const rank = (p: SharePermission) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
@@ -161,14 +199,7 @@ const getPageAccessors = async (pageId: string) => {
       `
           select permission from shares
           where entity_type = 'page' and entity_id = $1 and token is not null
-            and exists (select 1 from pages where id = $1 and is_access_restricted is not true and is_deleted = false)
-            and not exists (
-              select 1 from folder_closure fc
-              join folders f on f.id = fc.ancestor_id
-              join pages p on p.id = $1
-              where fc.descendant_id = p.parent_id
-                and f.is_access_restricted = true and f.is_deleted = false
-            )
+            and exists (select 1 from pages where id = $1 and is_public = true)
           limit 1
         `,
       [pageId],
@@ -193,13 +224,7 @@ const getPageAccessors = async (pageId: string) => {
             AND s.recipient_user_id IS NOT NULL
             AND s.token IS NULL
             AND s.recipient_user_id != $2
-            AND p.is_access_restricted is not true
-            AND NOT EXISTS (
-              SELECT 1 FROM folder_closure fc2
-              JOIN folders f2 ON f2.id = fc2.ancestor_id
-              WHERE fc2.descendant_id = p.parent_id
-                AND f2.is_access_restricted = true AND f2.is_deleted = false
-            )
+            AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)
         `,
       [pageId, ownerRow?.user_id ?? ''],
     ),
@@ -215,16 +240,7 @@ const getPageAccessors = async (pageId: string) => {
             WHERE p.id = $1
           )
           AND wm.member_id != $2
-          AND NOT EXISTS (
-            SELECT 1 FROM pages WHERE id = $1 AND is_access_restricted = true AND is_deleted = false
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM folder_closure fc
-            JOIN folders f ON f.id = fc.ancestor_id
-            JOIN pages p ON p.id = $1
-            WHERE fc.descendant_id = p.parent_id
-              AND f.is_access_restricted = true AND f.is_deleted = false
-          )
+          AND NOT is_page_path_restricted($1)
         `,
       [pageId, ownerRow?.user_id ?? ''],
     ),
@@ -260,9 +276,18 @@ const getPageAccessors = async (pageId: string) => {
     string,
     { permission: SharePermission; source: string; shareId: string | null }
   >();
+  const userInfo = new Map<
+    string,
+    { name: string | null; email: string | null; avatarUrl: string | null }
+  >();
 
   for (const row of inviteResult.rows) {
     const item = row as AccessorRow & { avatar_url: string | null };
+    userInfo.set(item.user_id, {
+      name: item.name,
+      email: item.email,
+      avatarUrl: item.avatar_url,
+    });
     const effectivePermission =
       linkPermission && rank(linkPermission) > rank(item.permission)
         ? linkPermission
@@ -284,45 +309,16 @@ const getPageAccessors = async (pageId: string) => {
       userPermissions.set(item.user_id, {
         permission: folderPerm,
         source: `via ${item.folder_name}`,
-        shareId: item.share_id,
+        shareId: null,
       });
-    }
-  }
-
-  for (const row of inviteResult.rows) {
-    const item = row as AccessorRow & { avatar_url: string | null };
-    const entry = userPermissions.get(item.user_id);
-    if (entry) {
-      result.push({
-        shareId: entry.shareId,
-        userId: item.user_id,
+      userInfo.set(item.user_id, {
         name: item.name,
         email: item.email,
         avatarUrl: item.avatar_url,
-        permission: entry.permission,
-        source: entry.source,
-        isOwner: false,
       });
     }
   }
 
-  for (const row of folderInviteResult.rows) {
-    const item = row as AccessorRow & { avatar_url: string | null; folder_name: string };
-    if (!(inviteResult.rows as AccessorRow[]).some((r) => r.user_id === item.user_id)) {
-      result.push({
-        shareId: item.share_id,
-        userId: item.user_id,
-        name: item.name,
-        email: item.email,
-        avatarUrl: item.avatar_url,
-        permission: item.permission as SharePermission,
-        source: `via ${item.folder_name}`,
-        isOwner: false,
-      });
-    }
-  }
-
-  // Workspace members — only those not already in the result set
   for (const row of workspaceMemberResult.rows) {
     const item = row as {
       member_id: string;
@@ -331,18 +327,34 @@ const getPageAccessors = async (pageId: string) => {
       avatar_url: string | null;
       permission: string;
     };
-    if (!userPermissions.has(item.member_id)) {
-      result.push({
+    const workspacePerm = item.permission as SharePermission;
+    const existing = userPermissions.get(item.member_id);
+    if (!existing || rank(workspacePerm) > rank(existing.permission)) {
+      userPermissions.set(item.member_id, {
+        permission: workspacePerm,
+        source: 'Workspace Member',
         shareId: null,
-        userId: item.member_id,
+      });
+      userInfo.set(item.member_id, {
         name: item.name,
         email: item.email,
         avatarUrl: item.avatar_url,
-        permission: item.permission as SharePermission,
-        source: 'Workspace Member',
-        isOwner: false,
       });
     }
+  }
+
+  for (const [userId, entry] of userPermissions) {
+    const info = userInfo.get(userId);
+    result.push({
+      shareId: entry.shareId,
+      userId,
+      name: info?.name ?? null,
+      email: info?.email ?? null,
+      avatarUrl: info?.avatarUrl ?? null,
+      permission: entry.permission,
+      source: entry.source,
+      isOwner: false,
+    });
   }
 
   return result;
@@ -387,14 +399,7 @@ const getFolderAccessors = async (folderId: string) => {
       `
           select permission from shares
           where entity_type = 'folder' and entity_id = $1 and token is not null
-            and exists (select 1 from folders where id = $1 and is_access_restricted is not true and is_deleted = false)
-            and not exists (
-              select 1 from folder_closure fc
-              join folders f on f.id = fc.ancestor_id
-              where fc.descendant_id = $1
-                and f.is_access_restricted = true and f.is_deleted = false
-                and fc.ancestor_id != $1
-            )
+            and exists (select 1 from folders where id = $1 and is_public = true and is_deleted = false)
           limit 1
         `,
       [folderId],
@@ -419,12 +424,7 @@ const getFolderAccessors = async (folderId: string) => {
             AND s.recipient_user_id IS NOT NULL
             AND s.token IS NULL
             AND s.recipient_user_id != $2
-            AND NOT EXISTS (
-              SELECT 1 FROM folder_closure fc2
-              JOIN folders f2 ON f2.id = fc2.ancestor_id
-              WHERE fc2.descendant_id = $1
-                AND f2.is_access_restricted = true AND f2.is_deleted = false
-            )
+            AND NOT is_folder_inheritance_blocked(s.entity_id, $1)
         `,
       [folderId, ownerRow?.user_id ?? ''],
     ),
@@ -436,13 +436,7 @@ const getFolderAccessors = async (folderId: string) => {
           JOIN users u ON u.id = wm.member_id
           WHERE wm.workspace_owner_id = get_root_folder_owner($1)
           AND wm.member_id != $2
-          AND NOT EXISTS (
-            SELECT 1 FROM folder_closure fc
-            JOIN folders f ON f.id = fc.ancestor_id
-            WHERE fc.descendant_id = $1
-              AND f.is_access_restricted = true AND f.is_deleted = false
-              AND fc.ancestor_id != $1
-          )
+          AND NOT is_folder_path_restricted($1)
         `,
       [folderId, ownerRow?.user_id ?? ''],
     ),
@@ -479,9 +473,18 @@ const getFolderAccessors = async (folderId: string) => {
     string,
     { permission: SharePermission; source: string; shareId: string | null }
   >();
+  const userInfo = new Map<
+    string,
+    { name: string | null; email: string | null; avatarUrl: string | null }
+  >();
 
   for (const row of inviteResult.rows) {
     const item = row as AccessorRow & { avatar_url: string | null };
+    userInfo.set(item.user_id, {
+      name: item.name,
+      email: item.email,
+      avatarUrl: item.avatar_url,
+    });
     const effectivePermission =
       linkPermission && rank(linkPermission) > rank(item.permission)
         ? linkPermission
@@ -501,45 +504,16 @@ const getFolderAccessors = async (folderId: string) => {
       userPermissions.set(item.user_id, {
         permission: folderPerm,
         source: `via ${item.folder_name}`,
-        shareId: item.share_id,
+        shareId: null,
       });
-    }
-  }
-
-  for (const row of inviteResult.rows) {
-    const item = row as AccessorRow & { avatar_url: string | null };
-    const entry = userPermissions.get(item.user_id);
-    if (entry) {
-      result.push({
-        shareId: entry.shareId,
-        userId: item.user_id,
+      userInfo.set(item.user_id, {
         name: item.name,
         email: item.email,
         avatarUrl: item.avatar_url,
-        permission: entry.permission,
-        source: entry.source,
-        isOwner: false,
       });
     }
   }
 
-  for (const row of folderInviteResult.rows) {
-    const item = row as AccessorRow & { avatar_url: string | null; folder_name: string };
-    if (!(inviteResult.rows as AccessorRow[]).some((r) => r.user_id === item.user_id)) {
-      result.push({
-        shareId: item.share_id,
-        userId: item.user_id,
-        name: item.name,
-        email: item.email,
-        avatarUrl: item.avatar_url,
-        permission: item.permission as SharePermission,
-        source: `via ${item.folder_name}`,
-        isOwner: false,
-      });
-    }
-  }
-
-  // Workspace members — dedup against existing userPermissions
   for (const row of workspaceMemberResult.rows) {
     const item = row as {
       member_id: string;
@@ -548,18 +522,34 @@ const getFolderAccessors = async (folderId: string) => {
       avatar_url: string | null;
       permission: string;
     };
-    if (!userPermissions.has(item.member_id)) {
-      result.push({
+    const workspacePerm = item.permission as SharePermission;
+    const existing = userPermissions.get(item.member_id);
+    if (!existing || rank(workspacePerm) > rank(existing.permission)) {
+      userPermissions.set(item.member_id, {
+        permission: workspacePerm,
+        source: 'Workspace Member',
         shareId: null,
-        userId: item.member_id,
+      });
+      userInfo.set(item.member_id, {
         name: item.name,
         email: item.email,
         avatarUrl: item.avatar_url,
-        permission: item.permission as SharePermission,
-        source: 'Workspace Member',
-        isOwner: false,
       });
     }
+  }
+
+  for (const [userId, entry] of userPermissions) {
+    const info = userInfo.get(userId);
+    result.push({
+      shareId: entry.shareId,
+      userId,
+      name: info?.name ?? null,
+      email: info?.email ?? null,
+      avatarUrl: info?.avatarUrl ?? null,
+      permission: entry.permission,
+      source: entry.source,
+      isOwner: false,
+    });
   }
 
   return result;
@@ -571,11 +561,16 @@ const resolveEntity = async (
 ): Promise<EntityInfo> => {
   if (entityType === 'folder') {
     const result = await query(
-      'select id, get_root_folder_owner(id) as owner_id, name, is_access_restricted from folders where id = $1 and is_deleted = false',
+      'select id, get_root_folder_owner(id) as owner_id, name, inheritance_policy from folders where id = $1 and is_deleted = false',
       [entityId],
     );
     const row = result.rows[0] as
-      | { id: string; owner_id?: string | null; name: string; is_access_restricted?: boolean }
+      | {
+          id: string;
+          owner_id?: string | null;
+          name: string;
+          inheritance_policy?: 'inherit' | 'restricted' | null;
+        }
       | undefined;
     if (!row) {
       throw new HTTPException(404, { message: 'Folder not found' });
@@ -584,19 +579,23 @@ const resolveEntity = async (
       id: row.id,
       ownerId: row.owner_id ?? null,
       title: row.name,
-      isAccessRestricted: row.is_access_restricted ?? false,
+      inheritancePolicy: row.inheritance_policy ?? 'inherit',
     };
   }
 
   const result = await query(
-    `select p.id, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
-            p.title, p.is_access_restricted
+    `select p.id, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id, p.title, p.inheritance_policy
      from pages p
      where p.id = $1 and p.is_deleted = false`,
     [entityId],
   );
   const row = result.rows[0] as
-    | { id: string; owner_id?: string | null; title: string; is_access_restricted?: boolean }
+    | {
+        id: string;
+        owner_id?: string | null;
+        title: string;
+        inheritance_policy?: 'inherit' | 'restricted' | null;
+      }
     | undefined;
   if (!row) {
     throw new HTTPException(404, { message: 'Page not found' });
@@ -605,15 +604,21 @@ const resolveEntity = async (
     id: row.id,
     ownerId: row.owner_id ?? null,
     title: row.title,
-    isAccessRestricted: row.is_access_restricted ?? false,
+    inheritancePolicy: row.inheritance_policy ?? 'inherit',
   };
 };
 
-sharesRoute.get('/with-me', async (c) => {
+sharesRoute.get('/with-me/tree', async (c) => {
   const user = c.get('user') as { id: string };
-  const result = await query(
+  const limitParam = c.req.query('limit');
+  const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : null;
+  if (parsedLimit !== null && (!Number.isFinite(parsedLimit) || parsedLimit <= 0)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+
+  const rootResult = await query(
     `
-      (
+      with shared_items as (
         select
           s.id,
           s.entity_type,
@@ -628,53 +633,491 @@ sharesRoute.get('/with-me', async (c) => {
           owner.email as shared_by_email,
           recipient.name as recipient_name,
           recipient.avatar_url as recipient_avatar_url,
+          case when s.entity_type = 'folder' then f.name else p.title end as entity_title,
+          case when s.entity_type = 'folder' then f.icon else p.icon end as entity_icon,
           case
-            when s.entity_type = 'folder' then f.name
-            else p.title
-          end as entity_title,
-          case
-            when s.entity_type = 'page' then p.icon
-            when s.entity_type = 'folder' then f.icon
-            else null
-          end as entity_icon
+            when s.entity_type = 'folder' then get_root_folder_owner(f.id)
+            else coalesce(get_root_folder_owner(p.parent_id), p.created_by)
+          end as owner_id,
+          case when s.entity_type = 'folder' then f.updated_at else p.updated_at end as entity_updated_at,
+          greatest(
+            coalesce(s.created_at, s.updated_at, to_timestamp(0)),
+            coalesce(pv.visited_at, to_timestamp(0))
+          ) as sort_at,
+          'direct'::text as source
         from shares s
-        left join pages p on p.id = s.entity_id and s.entity_type = 'page'
-        left join folders f on f.id = s.entity_id and s.entity_type = 'folder'
+        left join pages p on p.id = s.entity_id and s.entity_type = 'page' and p.is_deleted = false
+        left join folders f on f.id = s.entity_id and s.entity_type = 'folder' and f.is_deleted = false
         left join users owner on owner.id = s.shared_by
         left join users recipient on recipient.id = s.recipient_user_id
+        left join page_visits pv on pv.page_id = p.id and pv.user_id = $1 and s.entity_type = 'page'
         where s.recipient_user_id = $1
-      )
-      UNION
-      (
+          and s.token is null
+          and (s.expires_at is null or s.expires_at > now())
+          and ((s.entity_type = 'page' and p.id is not null) or (s.entity_type = 'folder' and f.id is not null))
+          and case
+            when s.entity_type = 'folder' then get_root_folder_owner(f.id) <> $1
+            else coalesce(get_root_folder_owner(p.parent_id), p.created_by) <> $1
+          end
+
+        union all
+
         select
           pae.id,
-          'page' as entity_type,
+          'page'::text as entity_type,
           pae.page_id as entity_id,
-          pae.permission,
-          null as token,
+          access.permission,
+          null::text as token,
           pae.user_id as recipient_user_id,
-          null as recipient_email,
+          null::text as recipient_email,
           pae.first_seen_at as created_at,
           pae.last_seen_at as updated_at,
-          null as shared_by_name,
-          null as shared_by_email,
+          null::text as shared_by_name,
+          null::text as shared_by_email,
           u.name as recipient_name,
           u.avatar_url as recipient_avatar_url,
           p.title as entity_title,
-          p.icon as entity_icon
+          p.icon as entity_icon,
+          coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+          p.updated_at as entity_updated_at,
+          pae.last_seen_at as sort_at,
+          'link'::text as source
         from page_access_events pae
-        join pages p on p.id = pae.page_id
+        join pages p on p.id = pae.page_id and p.is_deleted = false
         join users u on u.id = pae.user_id
+        join lateral get_effective_page_permission(pae.page_id, $1) access on true
         where pae.user_id = $1
+          and access.permission is not null
+          and coalesce(get_root_folder_owner(p.parent_id), p.created_by) <> $1
           and not exists (
             select 1 from shares s
             where s.entity_type = 'page' and s.entity_id = pae.page_id
               and s.recipient_user_id = $1 and s.token is null
+              and (s.expires_at is null or s.expires_at > now())
           )
+
+        union all
+
+        select
+          fae.id,
+          'folder'::text as entity_type,
+          fae.folder_id as entity_id,
+          access.permission,
+          null::text as token,
+          fae.user_id as recipient_user_id,
+          null::text as recipient_email,
+          fae.first_seen_at as created_at,
+          fae.last_seen_at as updated_at,
+          null::text as shared_by_name,
+          null::text as shared_by_email,
+          u.name as recipient_name,
+          u.avatar_url as recipient_avatar_url,
+          f.name as entity_title,
+          f.icon as entity_icon,
+          get_root_folder_owner(f.id) as owner_id,
+          f.updated_at as entity_updated_at,
+          fae.last_seen_at as sort_at,
+          'link'::text as source
+        from folder_access_events fae
+        join folders f on f.id = fae.folder_id and f.is_deleted = false
+        join users u on u.id = fae.user_id
+        join lateral get_effective_folder_permission(fae.folder_id, $1) access on true
+        where fae.user_id = $1
+          and access.permission is not null
+          and get_root_folder_owner(f.id) <> $1
+          and not exists (
+            select 1 from shares s
+            where s.entity_type = 'folder' and s.entity_id = fae.folder_id
+              and s.recipient_user_id = $1 and s.token is null
+              and (s.expires_at is null or s.expires_at > now())
+          )
+      ),
+      visible_shared_items as (
+        select si.*
+        from shared_items si
+        where not exists (
+          select 1
+          from shared_items ancestor
+          where ancestor.entity_type = 'folder'
+            and (
+              (
+                si.entity_type = 'page'
+                and exists (
+                  select 1
+                  from pages p
+                  join folder_closure fc on fc.descendant_id = p.parent_id
+                  where p.id = si.entity_id
+                    and p.is_deleted = false
+                    and fc.ancestor_id = ancestor.entity_id
+                    and not is_page_folder_inheritance_blocked(ancestor.entity_id, p.id)
+                )
+              )
+              or
+              (
+                si.entity_type = 'folder'
+                and exists (
+                  select 1
+                  from folder_closure fc
+                  where fc.ancestor_id = ancestor.entity_id
+                    and fc.descendant_id = si.entity_id
+                    and fc.depth > 0
+                    and not is_folder_inheritance_blocked(ancestor.entity_id, si.entity_id)
+                )
+              )
+            )
+        )
       )
-      order by created_at desc nulls last
+      select *
+      from visible_shared_items
+      order by sort_at desc nulls last, entity_updated_at desc nulls last
+      ${parsedLimit === null ? '' : 'limit $2'}
     `,
-    [user.id],
+    parsedLimit === null ? [user.id] : [user.id, parsedLimit],
+  );
+
+  const roots = rootResult.rows as SharedWithMeRow[];
+  const rootFolderIds = roots
+    .filter((row) => row.entity_type === 'folder')
+    .map((row) => row.entity_id);
+  const rootPageIds = roots.filter((row) => row.entity_type === 'page').map((row) => row.entity_id);
+
+  const rootMetaByEntity = new Map(
+    roots.map((row) => [`${row.entity_type}:${row.entity_id}`, row] as const),
+  );
+
+  const folderRows =
+    rootFolderIds.length === 0
+      ? []
+      : ((
+          await query(
+            `
+              with root_ids as (select unnest($2::uuid[]) as root_id)
+              select
+                root_ids.root_id,
+                f.id,
+                f.parent_id,
+                f.name,
+                f.icon,
+                f.position,
+                f.created_by,
+                f.updated_at,
+                get_root_folder_owner(f.id) as owner_id,
+                access.permission as user_permission
+              from root_ids
+              join folder_closure fc on fc.ancestor_id = root_ids.root_id
+              join folders f on f.id = fc.descendant_id and f.is_deleted = false
+              join lateral get_effective_folder_permission(f.id, $1) access on true
+              where access.permission is not null
+                and not is_folder_inheritance_blocked(root_ids.root_id, f.id)
+              order by root_ids.root_id, fc.depth asc, f.parent_id nulls first, f.position asc, f.updated_at desc nulls last
+            `,
+            [user.id, rootFolderIds],
+          )
+        ).rows as SharedNavigationFolderRow[]);
+
+  const descendantPageRows =
+    rootFolderIds.length === 0
+      ? []
+      : ((
+          await query(
+            `
+              with root_ids as (select unnest($2::uuid[]) as root_id)
+              select
+                root_ids.root_id,
+                p.id,
+                p.parent_id,
+                p.title,
+                p.icon,
+                p.position,
+                p.created_by,
+                p.updated_at,
+                coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+                access.permission as user_permission
+              from root_ids
+              join folder_closure fc on fc.ancestor_id = root_ids.root_id
+              join pages p on p.parent_id = fc.descendant_id and p.is_deleted = false
+              join lateral get_effective_page_permission(p.id, $1) access on true
+              where access.permission is not null
+                and not is_page_folder_inheritance_blocked(root_ids.root_id, p.id)
+              order by root_ids.root_id, fc.depth asc, p.parent_id nulls first, p.position asc, p.updated_at desc nulls last
+            `,
+            [user.id, rootFolderIds],
+          )
+        ).rows as SharedNavigationPageRow[]);
+
+  const rootPageRows =
+    rootPageIds.length === 0
+      ? []
+      : ((
+          await query(
+            `
+              select
+                null::uuid as root_id,
+                p.id,
+                p.parent_id,
+                p.title,
+                p.icon,
+                p.position,
+                p.created_by,
+                p.updated_at,
+                coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+                access.permission as user_permission
+              from pages p
+              join lateral get_effective_page_permission(p.id, $1) access on true
+              where p.id = any($2::uuid[])
+                and p.is_deleted = false
+                and access.permission is not null
+            `,
+            [user.id, rootPageIds],
+          )
+        ).rows as SharedNavigationPageRow[]);
+
+  const folderRowsByRoot = new Map<string, SharedNavigationFolderRow[]>();
+  for (const row of folderRows) {
+    const list = folderRowsByRoot.get(row.root_id) ?? [];
+    list.push(row);
+    folderRowsByRoot.set(row.root_id, list);
+  }
+
+  const pagesByRootAndParent = new Map<string, Map<string, SharedNavigationPageRow[]>>();
+  for (const row of descendantPageRows) {
+    if (!row.root_id || !row.parent_id) continue;
+    const parentMap =
+      pagesByRootAndParent.get(row.root_id) ?? new Map<string, SharedNavigationPageRow[]>();
+    const list = parentMap.get(row.parent_id) ?? [];
+    list.push(row);
+    parentMap.set(row.parent_id, list);
+    pagesByRootAndParent.set(row.root_id, parentMap);
+  }
+
+  const rootPageRowsById = new Map(rootPageRows.map((row) => [row.id, row]));
+
+  const createPageNode = (
+    row: SharedNavigationPageRow,
+    rootMeta?: SharedWithMeRow,
+  ): SharedNavigationPage => ({
+    entityType: 'page',
+    id: row.id,
+    title: row.title ?? 'Untitled',
+    icon: row.icon,
+    parentId: row.parent_id,
+    ownerId: row.owner_id,
+    createdBy: row.created_by,
+    updatedAt: row.updated_at,
+    userPermission: row.user_permission,
+    ...(rootMeta ? { source: rootMeta.source, sortAt: rootMeta.sort_at } : {}),
+  });
+
+  const createFolderNode = (
+    rootId: string,
+    row: SharedNavigationFolderRow,
+  ): SharedNavigationFolder => {
+    const rootMeta = rootMetaByEntity.get(`folder:${row.id}`);
+    const childFolders = (folderRowsByRoot.get(rootId) ?? []).filter(
+      (folder) => folder.parent_id === row.id && folder.id !== row.id,
+    );
+    const childPages = pagesByRootAndParent.get(rootId)?.get(row.id) ?? [];
+    return {
+      entityType: 'folder',
+      id: row.id,
+      title: row.name ?? 'Untitled',
+      icon: row.icon,
+      parentId: row.parent_id,
+      ownerId: row.owner_id,
+      createdBy: row.created_by,
+      updatedAt: row.updated_at,
+      userPermission: row.user_permission,
+      ...(rootMeta ? { source: rootMeta.source, sortAt: rootMeta.sort_at } : {}),
+      children: [
+        ...childFolders.map((folder) => createFolderNode(rootId, folder)),
+        ...childPages.map((page) => createPageNode(page)),
+      ],
+    };
+  };
+
+  const folderRowByRootId = new Map(
+    folderRows.filter((row) => row.id === row.root_id).map((row) => [row.root_id, row]),
+  );
+
+  const items: SharedNavigationItem[] = roots
+    .map((root): SharedNavigationItem | null => {
+      if (root.entity_type === 'folder') {
+        const folder = folderRowByRootId.get(root.entity_id);
+        return folder ? createFolderNode(root.entity_id, folder) : null;
+      }
+      const page = rootPageRowsById.get(root.entity_id);
+      return page ? createPageNode(page, root) : null;
+    })
+    .filter((item): item is SharedNavigationItem => item !== null);
+
+  return c.json(items);
+});
+
+sharesRoute.get('/with-me', async (c) => {
+  const user = c.get('user') as { id: string };
+  const limitParam = c.req.query('limit');
+  const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : null;
+  if (parsedLimit !== null && (!Number.isFinite(parsedLimit) || parsedLimit <= 0)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+
+  const result = await query(
+    `
+      with shared_items as (
+        select
+          s.id,
+          s.entity_type,
+          s.entity_id,
+          s.permission,
+          s.token,
+          s.recipient_user_id,
+          s.recipient_email,
+          s.created_at,
+          s.updated_at,
+          owner.name as shared_by_name,
+          owner.email as shared_by_email,
+          recipient.name as recipient_name,
+          recipient.avatar_url as recipient_avatar_url,
+          case when s.entity_type = 'folder' then f.name else p.title end as entity_title,
+          case when s.entity_type = 'folder' then f.icon else p.icon end as entity_icon,
+          case
+            when s.entity_type = 'folder' then get_root_folder_owner(f.id)
+            else coalesce(get_root_folder_owner(p.parent_id), p.created_by)
+          end as owner_id,
+          case when s.entity_type = 'folder' then f.updated_at else p.updated_at end as entity_updated_at,
+          greatest(
+            coalesce(s.created_at, s.updated_at, to_timestamp(0)),
+            coalesce(pv.visited_at, to_timestamp(0))
+          ) as sort_at,
+          'direct'::text as source
+        from shares s
+        left join pages p on p.id = s.entity_id and s.entity_type = 'page' and p.is_deleted = false
+        left join folders f on f.id = s.entity_id and s.entity_type = 'folder' and f.is_deleted = false
+        left join users owner on owner.id = s.shared_by
+        left join users recipient on recipient.id = s.recipient_user_id
+        left join page_visits pv on pv.page_id = p.id and pv.user_id = $1 and s.entity_type = 'page'
+        where s.recipient_user_id = $1
+          and s.token is null
+          and (s.expires_at is null or s.expires_at > now())
+          and ((s.entity_type = 'page' and p.id is not null) or (s.entity_type = 'folder' and f.id is not null))
+          and case
+            when s.entity_type = 'folder' then get_root_folder_owner(f.id) <> $1
+            else coalesce(get_root_folder_owner(p.parent_id), p.created_by) <> $1
+          end
+
+        union all
+
+        select
+          pae.id,
+          'page'::text as entity_type,
+          pae.page_id as entity_id,
+          access.permission,
+          null::text as token,
+          pae.user_id as recipient_user_id,
+          null::text as recipient_email,
+          pae.first_seen_at as created_at,
+          pae.last_seen_at as updated_at,
+          null::text as shared_by_name,
+          null::text as shared_by_email,
+          u.name as recipient_name,
+          u.avatar_url as recipient_avatar_url,
+          p.title as entity_title,
+          p.icon as entity_icon,
+          coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+          p.updated_at as entity_updated_at,
+          pae.last_seen_at as sort_at,
+          'link'::text as source
+        from page_access_events pae
+        join pages p on p.id = pae.page_id and p.is_deleted = false
+        join users u on u.id = pae.user_id
+        join lateral get_effective_page_permission(pae.page_id, $1) access on true
+        where pae.user_id = $1
+          and access.permission is not null
+          and coalesce(get_root_folder_owner(p.parent_id), p.created_by) <> $1
+          and not exists (
+            select 1 from shares s
+            where s.entity_type = 'page' and s.entity_id = pae.page_id
+              and s.recipient_user_id = $1 and s.token is null
+              and (s.expires_at is null or s.expires_at > now())
+          )
+
+        union all
+
+        select
+          fae.id,
+          'folder'::text as entity_type,
+          fae.folder_id as entity_id,
+          access.permission,
+          null::text as token,
+          fae.user_id as recipient_user_id,
+          null::text as recipient_email,
+          fae.first_seen_at as created_at,
+          fae.last_seen_at as updated_at,
+          null::text as shared_by_name,
+          null::text as shared_by_email,
+          u.name as recipient_name,
+          u.avatar_url as recipient_avatar_url,
+          f.name as entity_title,
+          f.icon as entity_icon,
+          get_root_folder_owner(f.id) as owner_id,
+          f.updated_at as entity_updated_at,
+          fae.last_seen_at as sort_at,
+          'link'::text as source
+        from folder_access_events fae
+        join folders f on f.id = fae.folder_id and f.is_deleted = false
+        join users u on u.id = fae.user_id
+        join lateral get_effective_folder_permission(fae.folder_id, $1) access on true
+        where fae.user_id = $1
+          and access.permission is not null
+          and get_root_folder_owner(f.id) <> $1
+          and not exists (
+            select 1 from shares s
+            where s.entity_type = 'folder' and s.entity_id = fae.folder_id
+              and s.recipient_user_id = $1 and s.token is null
+              and (s.expires_at is null or s.expires_at > now())
+          )
+      ),
+      visible_shared_items as (
+        select si.*
+        from shared_items si
+        where not exists (
+          select 1
+          from shared_items ancestor
+          where ancestor.entity_type = 'folder'
+            and (
+              (
+                si.entity_type = 'page'
+                and exists (
+                  select 1
+                  from pages p
+                  join folder_closure fc on fc.descendant_id = p.parent_id
+                  where p.id = si.entity_id
+                    and p.is_deleted = false
+                    and fc.ancestor_id = ancestor.entity_id
+                    and not is_page_folder_inheritance_blocked(ancestor.entity_id, p.id)
+                )
+              )
+              or
+              (
+                si.entity_type = 'folder'
+                and exists (
+                  select 1
+                  from folder_closure fc
+                  where fc.ancestor_id = ancestor.entity_id
+                    and fc.descendant_id = si.entity_id
+                    and fc.depth > 0
+                    and not is_folder_inheritance_blocked(ancestor.entity_id, si.entity_id)
+                )
+              )
+            )
+        )
+      )
+      select *
+      from visible_shared_items
+      order by sort_at desc nulls last, entity_updated_at desc nulls last
+      ${parsedLimit === null ? '' : 'limit $2'}
+    `,
+    parsedLimit === null ? [user.id] : [user.id, parsedLimit],
   );
 
   return c.json(
@@ -682,11 +1125,19 @@ sharesRoute.get('/with-me', async (c) => {
       const item = row as ShareRow & {
         entity_title: string | null;
         entity_icon: string | null;
+        owner_id: string | null;
+        entity_updated_at: Date | null;
+        sort_at: Date | null;
+        source: 'direct' | 'link';
       };
       return {
         ...normalizeShare(item),
         title: item.entity_title ?? 'Untitled',
         icon: item.entity_icon,
+        ownerId: item.owner_id,
+        entityUpdatedAt: item.entity_updated_at,
+        sortAt: item.sort_at,
+        source: item.source,
       };
     }),
   );
@@ -802,8 +1253,7 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   );
 
   const shares = (result.rows as ShareRow[]).map(normalizeShare);
-  const isRestricted = await isEntityRestricted(entityType, entityId);
-  const linkShare = isRestricted ? undefined : shares.find((share) => share.token);
+  const linkShare = shares.find((share) => share.token);
   const accessors =
     entityType === 'page' ? await getPageAccessors(entityId) : await getFolderAccessors(entityId);
 
@@ -841,8 +1291,9 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
        JOIN folder_closure fc ON fc.ancestor_id = s.entity_id
        JOIN folders f ON f.id = fc.ancestor_id
        JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-       LEFT JOIN users u ON u.id = s.shared_by
-       WHERE s.entity_type = 'folder' AND s.recipient_user_id = $2`,
+        LEFT JOIN users u ON u.id = s.shared_by
+        WHERE s.entity_type = 'folder' AND s.recipient_user_id = $2
+          AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)`,
       [entityId, user.id],
     );
     folderRows.rows.forEach((row) => {
@@ -859,16 +1310,7 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
     const linkRows = await query<{ permission: string }>(
       `SELECT permission FROM shares
        WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL
-         AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)
-         AND NOT EXISTS (
-           SELECT 1 FROM pages WHERE id = $1 AND is_access_restricted = true AND is_deleted = false
-           UNION ALL
-           SELECT 1 FROM folder_closure fc
-           JOIN folders f ON f.id = fc.ancestor_id
-           JOIN pages p ON p.id = $1
-           WHERE fc.descendant_id = p.parent_id
-             AND f.is_access_restricted = true AND f.is_deleted = false
-         )`,
+         AND EXISTS (SELECT 1 FROM pages WHERE id = $1 AND is_public = true)`,
       [entityId],
     );
     linkRows.rows.forEach((row: { permission: string }) => {
@@ -882,15 +1324,8 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
          SELECT COALESCE(get_root_folder_owner(p2.parent_id), p2.created_by)
          FROM pages p2
          WHERE p2.id = $1
-       ) AND wm.member_id = $2
-         AND NOT EXISTS (
-           SELECT 1 FROM folder_closure fc
-           JOIN folders f ON f.id = fc.ancestor_id
-           JOIN pages p ON p.id = $1
-           WHERE fc.descendant_id = p.parent_id
-             AND f.is_access_restricted = true
-             AND f.is_deleted = false
-         )`,
+        ) AND wm.member_id = $2
+        AND NOT is_page_path_restricted($1)`,
       [entityId, user.id],
     );
     workspaceRows.rows.forEach((row: { permission: string }) => {
@@ -912,12 +1347,7 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
     const linkRows = await query<{ permission: string }>(
       `SELECT permission FROM shares
        WHERE entity_type = 'folder' AND entity_id = $1 AND token IS NOT NULL
-         AND NOT EXISTS (
-           SELECT 1 FROM folder_closure fc
-           JOIN folders f ON f.id = fc.ancestor_id
-           WHERE fc.descendant_id = $1
-             AND f.is_access_restricted = true AND f.is_deleted = false
-         )`,
+         AND EXISTS (SELECT 1 FROM folders WHERE id = $1 AND is_public = true AND is_deleted = false)`,
       [entityId],
     );
     linkRows.rows.forEach((row: { permission: string }) => {
@@ -927,15 +1357,8 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
     const workspaceRows = await query<{ permission: string }>(
       `SELECT CASE wm.role WHEN 'viewer' THEN 'view' WHEN 'editor' THEN 'edit' WHEN 'admin' THEN 'admin' END AS permission
        FROM workspace_members wm
-       WHERE wm.workspace_owner_id = get_root_folder_owner($1) AND wm.member_id = $2
-         AND NOT EXISTS (
-           SELECT 1 FROM folder_closure fc
-           JOIN folders ancestor ON ancestor.id = fc.ancestor_id
-           WHERE fc.descendant_id = $1
-             AND ancestor.is_access_restricted = true
-             AND ancestor.is_deleted = false
-             AND fc.ancestor_id != $1
-         )`,
+        WHERE wm.workspace_owner_id = get_root_folder_owner($1) AND wm.member_id = $2
+        AND NOT is_folder_path_restricted($1)`,
       [entityId, user.id],
     );
     workspaceRows.rows.forEach((row: { permission: string }) => {
@@ -966,33 +1389,18 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
             entityId,
           ]);
     const ownerId = ownerResult.rows[0]?.owner_id as string | undefined;
-    const restrictedCheck =
-      entityType === 'page'
-        ? `AND NOT EXISTS (
-             SELECT 1 FROM pages
-             WHERE id = $2 AND is_access_restricted = true AND is_deleted = false
-           )
-           AND NOT EXISTS (
-             SELECT 1 FROM folder_closure fc
-             JOIN folders f ON f.id = fc.ancestor_id
-             JOIN pages p ON p.id = $2
-             WHERE fc.descendant_id = p.parent_id
-               AND f.is_access_restricted = true AND f.is_deleted = false
-           )`
-        : `AND NOT EXISTS (
-             SELECT 1 FROM folder_closure fc
-             JOIN folders f ON f.id = fc.ancestor_id
-             WHERE fc.descendant_id = $2
-               AND f.is_access_restricted = true AND f.is_deleted = false
-           )`;
 
     const inheritedResult = await query(
       `SELECT wm.member_id, u.name, u.email,
                CASE wm.role WHEN 'viewer' THEN 'view' WHEN 'editor' THEN 'edit' WHEN 'admin' THEN 'admin' END AS permission
         FROM workspace_members wm
        JOIN users u ON u.id = wm.member_id
-       WHERE wm.workspace_owner_id = $1 ${restrictedCheck}`,
-      [ownerId, entityId],
+       WHERE wm.workspace_owner_id = $1
+         AND (
+           ($2 = 'page' AND NOT is_page_path_restricted($3))
+           OR ($2 = 'folder' AND NOT is_folder_path_restricted($3))
+         )`,
+      [ownerId, entityType, entityId],
     );
     for (const row of inheritedResult.rows) {
       if (!existingUserIds.has(row.member_id)) {
@@ -1013,7 +1421,6 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
       id: entity.id,
       title: entity.title,
       ownerId: entity.ownerId ?? null,
-      isAccessRestricted: entity.isAccessRestricted ?? false,
     },
     link: linkShare
       ? {
@@ -1025,12 +1432,61 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
               : buildFolderPath(entity.title, entity.id),
         }
       : { permission: 'private', token: null, url: null },
+    inheritance: {
+      policy: entity.inheritancePolicy,
+    },
     invites: shares.filter((share) => !share.token),
     accessors,
     userPermission,
     capabilities: deriveCapabilities(userPermission, entity.ownerId === user.id),
     permissionDetails,
     inheritedAccessors,
+  });
+});
+
+sharesRoute.patch('/entity/:entityType/:entityId/inheritance', async (c) => {
+  const entityType = parseEntityType(c.req.param('entityType'));
+  const entityId = c.req.param('entityId');
+  const user = c.get('user') as { id: string };
+  const entity = await resolveEntity(entityType, entityId);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') {
+    throw new HTTPException(400, { message: 'Invalid body' });
+  }
+
+  const policy = (body as { policy?: unknown }).policy;
+  if (policy !== 'inherit' && policy !== 'restricted') {
+    throw new HTTPException(400, { message: 'Invalid inheritance policy' });
+  }
+
+  await ensureCanAdminEntity(entityType, entity.id, user.id);
+
+  await db.transaction(async (tx) => {
+    await executeQuery(
+      tx,
+      entityType === 'page'
+        ? 'update pages set inheritance_policy = $1, updated_at = now() where id = $2'
+        : 'update folders set inheritance_policy = $1, updated_at = now() where id = $2',
+      [policy, entityId],
+    );
+  });
+
+  await notifyShareRecompute({
+    entityType,
+    entityId,
+    message:
+      policy === 'restricted'
+        ? `${entity.title} stopped inheriting access`
+        : `${entity.title} now inherits access`,
+  });
+
+  return c.json({
+    policy,
+    message:
+      policy === 'restricted'
+        ? `${entity.title} stopped inheriting access`
+        : `${entity.title} now inherits access`,
   });
 });
 
@@ -1070,6 +1526,11 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
         await executeQuery(
           tx,
           'update folders set is_public = false, public_token = null where id = $1',
+          [entityId],
+        );
+        await executeQuery(
+          tx,
+          "delete from folder_access_events where folder_id = $1 and source = 'link'",
           [entityId],
         );
       }
@@ -1129,6 +1590,11 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
         tx,
         'update folders set is_public = true, public_token = $1 where id = $2',
         [token, entityId],
+      );
+      await executeQuery(
+        tx,
+        'update folder_access_events set permission = $1 where folder_id = $2 and source = $3',
+        [nextPermission, entityId, 'link'],
       );
     }
   });

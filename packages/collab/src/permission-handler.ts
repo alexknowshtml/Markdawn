@@ -1,6 +1,11 @@
 import type { Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import type { ShareEventPayload, SharePermission, StatelessShareMessage } from '@markdawn/shared';
+import type {
+  ShareEventPayload,
+  SharePermission,
+  StatelessShareEventAction,
+  StatelessShareMessage,
+} from '@markdawn/shared';
 import type { Pool } from 'pg';
 
 /**
@@ -14,6 +19,157 @@ function clientPermission(permission: string | undefined): SharePermission | und
 
 const rank = (p: string) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
 
+type ConnectionContext = {
+  user?: { id: string; isAnonymous?: boolean };
+  permission?: unknown;
+};
+
+async function getAnonymousPagePermission(
+  pool: Pool,
+  pageId: string,
+): Promise<SharePermission | null> {
+  const result = await pool.query(
+    `WITH page_parent AS (
+       SELECT parent_id, is_public
+       FROM pages
+       WHERE id = $1 AND is_deleted = false
+     )
+     SELECT permission FROM (
+       SELECT s.permission, 1 AS src
+       FROM shares s
+       WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.token IS NOT NULL
+         AND (s.expires_at IS NULL OR s.expires_at > now())
+         AND EXISTS (SELECT 1 FROM page_parent WHERE is_public = true)
+       UNION ALL
+       SELECT s.permission, 2 AS src
+       FROM shares s
+       JOIN folders f ON f.id = s.entity_id AND f.is_public = true AND f.is_deleted = false
+       WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
+         AND (s.expires_at IS NULL OR s.expires_at > now())
+         AND s.entity_id IN (
+           SELECT ancestor_id FROM folder_closure fc
+           JOIN page_parent pp ON fc.descendant_id = pp.parent_id
+         )
+         AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)
+     ) perms
+     ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
+              src ASC
+     LIMIT 1`,
+    [pageId],
+  );
+  return clientPermission(result.rows[0]?.permission as string | undefined) ?? null;
+}
+
+async function getAuthenticatedPagePermission(
+  pool: Pool,
+  pageId: string,
+  userId: string,
+): Promise<SharePermission | null> {
+  const result = await pool.query('SELECT permission FROM get_effective_page_permission($1, $2)', [
+    pageId,
+    userId,
+  ]);
+  return clientPermission(result.rows[0]?.permission as string | undefined) ?? null;
+}
+
+/**
+ * Recompute every active connection's effective permission from the database.
+ * Used for inheritance-policy changes where affected users are not known ahead
+ * of time and permissions may be revoked, downgraded, or upgraded indirectly.
+ */
+async function recomputePageConnections(
+  server: Server,
+  pageId: string,
+  pool: Pool | undefined,
+  logger: Logger,
+  message?: string,
+): Promise<number> {
+  const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
+  if (!activeDoc) {
+    logger.debug(`[share] no active document for page ${pageId}, skipping`);
+    return 0;
+  }
+
+  if (!pool) {
+    logger.warn(`[share] cannot recompute permissions for page ${pageId}: no database pool`);
+    return 0;
+  }
+
+  const connections = activeDoc.getConnections();
+  let affectedCount = 0;
+
+  for (const connection of connections) {
+    const ctx = connection.context as ConnectionContext | undefined;
+    if (!ctx?.user) {
+      logger.debug('[share] connection has no user context, skipping');
+      continue;
+    }
+
+    let permission: SharePermission | null;
+    try {
+      permission = ctx.user.isAnonymous
+        ? await getAnonymousPagePermission(pool, pageId)
+        : await getAuthenticatedPagePermission(pool, pageId, ctx.user.id);
+    } catch (err) {
+      logger.error(
+        `[share] failed to recompute permission for user=${ctx.user.id} on page=${pageId}: ${err}`,
+      );
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'share_event',
+          action: 'revoke',
+          ...(message !== undefined && { message }),
+        } satisfies StatelessShareMessage),
+      );
+      connection.close({ code: 4401, reason: 'Access revoked' });
+      affectedCount++;
+      continue;
+    }
+
+    if (!permission) {
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'share_event',
+          action: 'revoke',
+          ...(message !== undefined && { message }),
+        } satisfies StatelessShareMessage),
+      );
+      connection.close({ code: 4401, reason: 'Access revoked' });
+      logger.info(
+        `[share] revoked ${ctx.user.isAnonymous ? 'anonymous' : 'user'}=${ctx.user.id} on page ${pageId} after permission recompute`,
+      );
+      affectedCount++;
+      continue;
+    }
+
+    const isReadOnly = permission === 'view';
+    const previousPermission = typeof ctx.permission === 'string' ? ctx.permission : undefined;
+    if (connection.readOnly === isReadOnly && previousPermission === permission) {
+      logger.debug(
+        `[share] skipping user=${ctx.user.id} on page ${pageId} (recomputed permission unchanged: ${permission})`,
+      );
+      continue;
+    }
+
+    connection.readOnly = isReadOnly;
+    (connection.context as Record<string, unknown>).permission = permission;
+    connection.sendStateless(
+      JSON.stringify({
+        type: 'share_event',
+        action: 'update',
+        permission,
+        ...(message !== undefined && { message }),
+      } satisfies StatelessShareMessage),
+    );
+    logger.info(
+      `[share] recomputed ${ctx.user.isAnonymous ? 'anonymous' : 'user'}=${ctx.user.id} on page ${pageId} to ${permission}`,
+    );
+    affectedCount++;
+  }
+
+  return affectedCount;
+}
+
 /**
  * Apply a share event to all active connections on a single page document.
  * Returns the number of connections affected.
@@ -21,7 +177,7 @@ const rank = (p: string) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
 async function applyShareEventToPage(
   server: Server,
   pageId: string,
-  action: ShareEventPayload['action'],
+  action: StatelessShareEventAction,
   rawPermission: string | undefined,
   targetUserId: string | undefined,
   pool: Pool | undefined,
@@ -281,7 +437,7 @@ export async function handleShareEvent(
     `[share] received event: action=${action} entityType=${entityType} entity=${entityId} permission=${rawPermission ?? 'none'} targetUserId=${targetUserId ?? 'all'}`,
   );
 
-  // For folders, find all pages in the subtree and apply to each
+  // For folders, find all pages in the subtree and apply to each.
   if (entityType === 'folder') {
     let pageIds: string[] = [];
     if (pool) {
@@ -309,20 +465,31 @@ export async function handleShareEvent(
 
     let totalAffected = 0;
     for (const pageId of pageIds) {
-      totalAffected += await applyShareEventToPage(
-        server,
-        pageId,
-        action,
-        rawPermission,
-        targetUserId,
-        pool,
-        logger,
-        message,
-      );
+      totalAffected +=
+        action === 'recompute'
+          ? await recomputePageConnections(server, pageId, pool, logger, message)
+          : await applyShareEventToPage(
+              server,
+              pageId,
+              action,
+              rawPermission,
+              targetUserId,
+              pool,
+              logger,
+              message,
+            );
     }
 
     logger.info(
       `[share] processed ${action} for folder ${entityId}: ${pageIds.length} page(s), ${totalAffected} connection(s) affected`,
+    );
+    return;
+  }
+
+  if (action === 'recompute') {
+    const affectedCount = await recomputePageConnections(server, entityId, pool, logger, message);
+    logger.info(
+      `[share] processed recompute for page ${entityId}: ${affectedCount} connection(s) affected`,
     );
     return;
   }

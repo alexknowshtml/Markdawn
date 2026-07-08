@@ -9,13 +9,14 @@ export interface Page {
   ydoc: Uint8Array | null;
   properties: Record<string, unknown> | null;
   createdBy: string | null;
+  ownerId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   isDeleted?: boolean;
   deletedAt?: Date | string | null;
   isPublic?: boolean;
   publicToken?: string | null;
-  isAccessRestricted?: boolean;
+  inheritancePolicy?: InheritancePolicy;
 }
 
 export interface Folder {
@@ -25,18 +26,18 @@ export interface Folder {
   icon: string | null;
   position: string;
   createdBy: string | null;
+  ownerId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   isDeleted?: boolean;
   deletedAt?: Date | string | null;
   isPublic?: boolean;
   publicToken?: string | null;
-  isAccessRestricted?: boolean;
+  inheritancePolicy?: InheritancePolicy;
 }
 
 export interface FolderTreeNode extends Folder {
   children: FolderTreeNode[];
-  isLostAccess?: boolean;
   userPermission?: string | null;
 }
 
@@ -46,6 +47,7 @@ export interface PageTreeNode extends Page {
 
 export type ShareEntityType = 'folder' | 'page';
 export type SharePermission = 'view' | 'edit' | 'admin';
+export type InheritancePolicy = 'inherit' | 'restricted';
 
 export interface EntityShare {
   id: string;
@@ -135,12 +137,14 @@ export interface ShareSummary {
     id: string;
     title: string;
     ownerId: string | null;
-    isAccessRestricted: boolean;
   };
   link: {
     permission: SharePermission | 'private';
     token: string | null;
     url: string | null;
+  };
+  inheritance: {
+    policy: InheritancePolicy;
   };
   invites: EntityShare[];
   accessors: EntityAccessor[];
@@ -157,4 +161,32 @@ export interface ShareSummary {
 export interface SharedWithMeItem extends EntityShare {
   title: string;
   icon: string | null;
+  ownerId: string | null;
+  entityUpdatedAt: Date | string | null;
+  sortAt: Date | string | null;
+  source: 'direct' | 'link';
 }
+
+interface SharedNavigationBase {
+  id: string;
+  title: string;
+  icon: string | null;
+  parentId: string | null;
+  ownerId: string | null;
+  createdBy: string | null;
+  updatedAt: Date | string | null;
+  userPermission: SharePermission | null;
+  source?: 'direct' | 'link';
+  sortAt?: Date | string | null;
+}
+
+export interface SharedNavigationPage extends SharedNavigationBase {
+  entityType: 'page';
+}
+
+export interface SharedNavigationFolder extends SharedNavigationBase {
+  entityType: 'folder';
+  children: SharedNavigationItem[];
+}
+
+export type SharedNavigationItem = SharedNavigationPage | SharedNavigationFolder;

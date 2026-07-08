@@ -6,11 +6,15 @@ import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { ensureCanAdminEntity, ensureFolderAccess } from '../utils/share-access';
-import { notifyShareRevoke, notifyShareUpdate } from '../utils/share-notify';
+import { notifyShareRevoke } from '../utils/share-notify';
 
 type FolderRow = typeof folders.$inferSelect;
+type NormalizedFolderRow = FolderRow & { ownerId?: string | null };
+
 type RawFolderRow = FolderRow & {
   parent_id?: string | null;
+  ownerId?: string | null;
+  owner_id?: string | null;
   created_by?: string | null;
   created_at?: Date | null;
   updated_at?: Date | null;
@@ -18,13 +22,14 @@ type RawFolderRow = FolderRow & {
   deleted_at?: Date | null;
   is_public?: boolean | null;
   public_token?: string | null;
-  is_access_restricted?: boolean | null;
+  inheritance_policy?: 'inherit' | 'restricted' | null;
 };
 
 type LinkPermission = 'view' | 'edit';
 type FolderLinkAccess = {
   permission: LinkPermission;
   token: string;
+  sourceId: string;
 };
 
 const foldersRoute = new Hono();
@@ -32,9 +37,10 @@ const foldersPublicRoute = new Hono();
 
 foldersRoute.use('*', requireAuth);
 
-const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
+const normalizeFolderRow = (row: RawFolderRow): NormalizedFolderRow => ({
   ...row,
   parentId: row.parentId ?? row.parent_id ?? null,
+  ownerId: row.ownerId ?? row.owner_id ?? null,
   createdBy: row.createdBy ?? row.created_by ?? null,
   createdAt: row.createdAt ?? row.created_at ?? null,
   updatedAt: row.updatedAt ?? row.updated_at ?? null,
@@ -42,7 +48,7 @@ const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
   deletedAt: row.deletedAt ?? row.deleted_at ?? null,
   isPublic: row.isPublic ?? row.is_public ?? false,
   publicToken: row.publicToken ?? row.public_token ?? null,
-  isAccessRestricted: row.isAccessRestricted ?? row.is_access_restricted ?? false,
+  inheritancePolicy: row.inheritancePolicy ?? row.inheritance_policy ?? 'inherit',
 });
 
 const normalizeLinkPermission = (permission: string | null | undefined): LinkPermission => {
@@ -54,7 +60,8 @@ const getFolderLinkAccess = async (folderId: string): Promise<FolderLinkAccess |
     `
       select
         coalesce(s.permission, 'view') as permission,
-        coalesce(s.token, f.public_token, f.id::text) as token
+        coalesce(s.token, f.public_token, f.id::text) as token,
+        f.id as source_id
       from folder_closure fc
       join folders f on f.id = fc.ancestor_id and f.is_deleted = false
       left join lateral (
@@ -69,14 +76,7 @@ const getFolderLinkAccess = async (folderId: string): Promise<FolderLinkAccess |
       ) s on true
       where fc.descendant_id = $1
         and f.is_public = true
-        and not exists (
-          select 1
-          from folder_closure fc2
-          join folders f2 on f2.id = fc2.ancestor_id
-          where fc2.descendant_id = $1
-            and f2.is_access_restricted = true
-            and f2.is_deleted = false
-        )
+        and not is_folder_inheritance_blocked(f.id, $1)
       order by
         case coalesce(s.permission, 'view')
           when 'admin' then 3
@@ -89,21 +89,89 @@ const getFolderLinkAccess = async (folderId: string): Promise<FolderLinkAccess |
     [folderId],
   );
 
-  const row = result.rows[0] as { permission?: string | null; token?: string | null } | undefined;
-  if (!row?.token) {
+  const row = result.rows[0] as
+    | { permission?: string | null; token?: string | null; source_id?: string | null }
+    | undefined;
+  if (!row?.token || !row.source_id) {
     return null;
   }
 
   return {
     permission: normalizeLinkPermission(row.permission),
     token: row.token,
+    sourceId: row.source_id,
   };
 };
 
+const hasNonLinkFolderAccess = async (folderId: string, userId: string): Promise<boolean> => {
+  const result = await query(
+    `with folder_info as (
+       select get_root_folder_owner($1) as owner_id
+       where exists (select 1 from folders where id = $1 and is_deleted = false)
+     )
+     select exists (
+       select 1 from folder_info where owner_id = $2
+       union all
+       select 1
+       from shares s
+       where s.entity_type = 'folder'
+         and s.entity_id = $1
+         and s.recipient_user_id = $2
+         and s.token is null
+         and (s.expires_at is null or s.expires_at > now())
+       union all
+       select 1
+       from shares s
+       join folders source_folder on source_folder.id = s.entity_id
+       where s.entity_type = 'folder'
+         and s.entity_id in (
+           select ancestor_id
+           from folder_closure
+           where descendant_id = $1 and ancestor_id != $1
+         )
+         and s.recipient_user_id = $2
+         and s.token is null
+         and source_folder.is_deleted = false
+         and (s.expires_at is null or s.expires_at > now())
+         and not is_folder_inheritance_blocked(s.entity_id, $1)
+       union all
+       select 1
+       from folder_info fi
+       join workspace_members wm on wm.workspace_owner_id = fi.owner_id
+       where wm.member_id = $2
+         and not is_folder_path_restricted($1)
+     ) as has_access`,
+    [folderId, userId],
+  );
+  return result.rows[0]?.has_access === true;
+};
+
+const recordFolderLinkAccess = async (
+  folderId: string,
+  userId: string,
+  linkAccess: FolderLinkAccess,
+): Promise<void> => {
+  const hasAccountAccess = await hasNonLinkFolderAccess(folderId, userId);
+  if (hasAccountAccess) {
+    return;
+  }
+
+  await query(
+    `
+      insert into folder_access_events (folder_id, user_id, source, token, permission, first_seen_at, last_seen_at)
+      values ($1, $2, 'link', $3, $4, now(), now())
+      on conflict (folder_id, user_id, source, token)
+      do update set permission = excluded.permission, last_seen_at = now()
+    `,
+    [linkAccess.sourceId, userId, linkAccess.token, linkAccess.permission],
+  );
+};
+
 const getFolderById = async (folderId: string) => {
-  const result = await query('select * from folders where id = $1 and is_deleted = false limit 1', [
-    folderId,
-  ]);
+  const result = await query(
+    'select f.*, get_root_folder_owner(f.id) as owner_id from folders f where f.id = $1 and f.is_deleted = false limit 1',
+    [folderId],
+  );
   const row = (result.rows[0] as RawFolderRow | undefined) ?? null;
   return row ? normalizeFolderRow(row) : null;
 };
@@ -128,8 +196,8 @@ const ensureNoFolderCycle = async (
   }
 };
 
-const buildFolderTree = (rows: (FolderRow & { isLostAccess?: boolean })[]) => {
-  type FolderNode = FolderRow & { children: FolderNode[]; isLostAccess?: boolean };
+const buildFolderTree = (rows: FolderRow[]) => {
+  type FolderNode = FolderRow & { children: FolderNode[] };
   const nodes: FolderNode[] = rows.map((folder) => ({
     ...folder,
     children: [],
@@ -156,48 +224,77 @@ foldersRoute.get('/tree', async (c) => {
 
   const result = await query(
     `
-      with
-      workspace_owners as (
-        select workspace_owner_id from workspace_members where member_id = $1
-      ),
-      shared_folder_descendants as (
-        select fc.descendant_id as id
-        from shares s
-        join folder_closure fc on fc.ancestor_id = s.entity_id
-        where s.entity_type = 'folder' and s.recipient_user_id = $1
-      ),
-      restricted_tree as (
-        select fc.descendant_id as id
-        from folders f
-        join folder_closure fc on fc.ancestor_id = f.id
-        where f.is_access_restricted = true and f.is_deleted = false
-      ),
-      accessible_folders as (
-        select f.id, false as is_lost_access
-        from folders f
-        where f.is_deleted = false
-          and (
-            get_root_folder_owner(f.id) = $1
-            or f.id in (select id from shared_folder_descendants)
-            or (get_root_folder_owner(f.id) in (select workspace_owner_id from workspace_owners)
-                and f.id not in (select id from restricted_tree))
-          )
-        union
-        select f.id, true as is_lost_access
-        from folders f
-        where f.is_deleted = false
-          and f.id in (select id from restricted_tree)
-          and get_root_folder_owner(f.id) in (select workspace_owner_id from workspace_owners)
-          and get_root_folder_owner(f.id) != $1
-          and not exists (
-            select 1 from shares s
-            where s.entity_type = 'folder' and s.entity_id = f.id and s.recipient_user_id = $1
-          )
-      )
-      select f.*, af.is_lost_access,
-        (SELECT permission FROM get_effective_folder_permission(f.id, $1)) as user_permission
+      select f.*, get_root_folder_owner(f.id) as owner_id, perm.permission as user_permission
       from folders f
-      join accessible_folders af on af.id = f.id
+      join lateral (
+        select permission
+        from (
+          select 'admin'::text as permission, 1 as src
+          where get_root_folder_owner(f.id) = $1
+
+          union all
+
+          select s.permission, 2 as src
+          from shares s
+          where s.entity_type = 'folder'
+            and s.entity_id = f.id
+            and s.recipient_user_id = $1
+            and s.token is null
+            and (s.expires_at is null or s.expires_at > now())
+
+          union all
+
+          select s.permission, 3 as src
+          from shares s
+          join folders source_folder on source_folder.id = s.entity_id
+          where s.entity_type = 'folder'
+            and s.entity_id in (
+              select ancestor_id
+              from folder_closure
+              where descendant_id = f.id and ancestor_id != f.id
+            )
+            and s.recipient_user_id = $1
+            and s.token is null
+            and source_folder.is_deleted = false
+            and (s.expires_at is null or s.expires_at > now())
+            and not is_folder_inheritance_blocked(s.entity_id, f.id)
+
+          union all
+
+          select s.permission, 4 as src
+          from folder_access_events fae
+          join shares s
+            on s.entity_type = 'folder'
+           and s.entity_id = fae.folder_id
+           and s.token = fae.token
+           and s.token is not null
+          join folders source_folder on source_folder.id = fae.folder_id
+          where fae.user_id = $1
+            and fae.source = 'link'
+            and source_folder.is_public = true
+            and source_folder.is_deleted = false
+            and (s.expires_at is null or s.expires_at > now())
+            and f.id in (
+              select descendant_id
+              from folder_closure
+              where ancestor_id = fae.folder_id
+            )
+            and not is_folder_inheritance_blocked(fae.folder_id, f.id)
+
+          union all
+
+          select case wm.role when 'viewer' then 'view' when 'editor' then 'edit' when 'admin' then 'admin' end, 5 as src
+          from workspace_members wm
+          where wm.workspace_owner_id = get_root_folder_owner(f.id)
+            and wm.member_id = $1
+            and not is_folder_path_restricted(f.id)
+        ) perms
+        order by case perms.permission when 'admin' then 3 when 'edit' then 2 else 1 end desc,
+                 perms.src asc
+        limit 1
+      ) perm on true
+      where f.is_deleted = false
+        and perm.permission is not null
       order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position asc
     `,
     [user.id],
@@ -205,14 +302,8 @@ foldersRoute.get('/tree', async (c) => {
 
   return c.json(
     buildFolderTree(
-      (
-        result.rows as (RawFolderRow & {
-          is_lost_access?: boolean;
-          user_permission?: string | null;
-        })[]
-      ).map((row) => ({
+      (result.rows as (RawFolderRow & { user_permission?: string | null })[]).map((row) => ({
         ...normalizeFolderRow(row),
-        isLostAccess: row.is_lost_access ?? false,
         userPermission: row.user_permission ?? null,
       })),
     ),
@@ -300,18 +391,12 @@ foldersRoute.patch(':id', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { name, icon, parentId, position, isAccessRestricted } = body as {
+  const { name, icon, parentId, position } = body as {
     name?: string;
     icon?: string | null;
     parentId?: string | null;
     position?: string | number;
-    isAccessRestricted?: boolean;
   };
-
-  const hasRestricted = Object.hasOwn(body, 'isAccessRestricted');
-  if (hasRestricted && isAccessRestricted !== folder.isAccessRestricted) {
-    await ensureCanAdminEntity('folder', folder.id, user.id);
-  }
 
   const hasParentId = Object.hasOwn(body, 'parentId');
   if (hasParentId) {
@@ -351,24 +436,13 @@ foldersRoute.patch(':id', async (c) => {
         ? String(position)
         : folder.position;
 
-  const nextRestricted = hasRestricted ? isAccessRestricted === true : folder.isAccessRestricted;
-
   const updateResult = await query(
-    `update folders set name = $1, icon = $2, parent_id = $3, position = $4,
-       is_access_restricted = $5, updated_at = now() where id = $6 returning *`,
-    [nextName, nextIcon, nextParent, nextPosition, nextRestricted, folderId],
+    `update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *`,
+    [nextName, nextIcon, nextParent, nextPosition, folderId],
   );
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to update folder' });
-  }
-
-  if (hasRestricted && nextRestricted !== folder.isAccessRestricted) {
-    if (nextRestricted) {
-      await notifyShareRevoke({ entityType: 'folder', entityId: folderId });
-    } else {
-      await notifyShareUpdate({ entityType: 'folder', entityId: folderId });
-    }
   }
 
   const updated = normalizeFolderRow(updateResult.rows[0] as RawFolderRow);
@@ -584,6 +658,11 @@ foldersRoute.post(':id/leave', async (c) => {
     [folderId, user.id],
   );
 
+  await query('delete from folder_access_events where folder_id = $1 and user_id = $2', [
+    folderId,
+    user.id,
+  ]);
+
   const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
   if (shareRow?.recipient_user_id) {
     await notifyShareRevoke({
@@ -608,28 +687,77 @@ foldersPublicRoute.get(
 
     const linkAccess = await getFolderLinkAccess(folderId);
     const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    let authenticatedUserId: string | null = null;
     if (session?.user) {
       const user = session.user as { id: string };
-      if (!linkAccess) {
+      try {
         await ensureFolderAccess(folder.id, user.id);
+        authenticatedUserId = user.id;
+      } catch (error) {
+        if (!linkAccess) {
+          throw error;
+        }
       }
     } else if (!linkAccess) {
       throw new HTTPException(404, { message: 'Folder not found' });
     }
 
+    if (authenticatedUserId && linkAccess) {
+      await recordFolderLinkAccess(folderId, authenticatedUserId, linkAccess);
+    }
+
     // Return folder children when accessed via public link
     const [pagesResult, foldersResult] = await Promise.all([
       query(
-        `SELECT id, title, icon, created_by, created_at, updated_at, parent_id
-         FROM pages WHERE parent_id = $1 AND is_deleted = false
+        `SELECT id, title, icon, created_by, created_at, updated_at, parent_id,
+                coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+         FROM pages p
+         WHERE parent_id = $1 AND is_deleted = false
+           AND CASE
+             WHEN $2::uuid IS NOT NULL THEN EXISTS (
+               SELECT 1
+               FROM get_effective_page_permission(p.id, $2::uuid) access
+               WHERE access.permission IS NOT NULL
+             )
+             ELSE (
+               p.is_public = true
+               OR EXISTS (
+                 SELECT 1
+                 FROM folder_closure fc
+                 JOIN folders source_folder ON source_folder.id = fc.ancestor_id
+                 WHERE fc.descendant_id = p.parent_id
+                   AND source_folder.is_public = true
+                   AND source_folder.is_deleted = false
+                   AND NOT is_page_folder_inheritance_blocked(source_folder.id, p.id)
+               )
+             )
+           END
          ORDER BY position ASC`,
-        [folderId],
+        [folderId, authenticatedUserId],
       ),
       query(
-        `SELECT id, parent_id, name, icon, created_by, created_at, updated_at, is_public
-         FROM folders WHERE parent_id = $1 AND is_deleted = false
+        `SELECT id, parent_id, name, icon, created_by, created_at, updated_at, is_public,
+                get_root_folder_owner(f.id) as owner_id
+         FROM folders f
+         WHERE parent_id = $1 AND is_deleted = false
+           AND CASE
+             WHEN $2::uuid IS NOT NULL THEN EXISTS (
+               SELECT 1
+               FROM get_effective_folder_permission(f.id, $2::uuid) access
+               WHERE access.permission IS NOT NULL
+             )
+             ELSE EXISTS (
+               SELECT 1
+               FROM folder_closure fc
+               JOIN folders source_folder ON source_folder.id = fc.ancestor_id
+               WHERE fc.descendant_id = f.id
+                 AND source_folder.is_public = true
+                 AND source_folder.is_deleted = false
+                 AND NOT is_folder_inheritance_blocked(source_folder.id, f.id)
+             )
+           END
          ORDER BY position ASC`,
-        [folderId],
+        [folderId, authenticatedUserId],
       ),
     ]);
 

@@ -41,12 +41,17 @@ async function addLinkShare(pageId: string, permission: string) {
   ]);
 }
 
-async function setAccessRestricted(folderId: string) {
-  await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folderId]);
-}
-
-async function setPageAccessRestricted(pageId: string) {
-  await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [pageId]);
+async function addFolderLinkShare(folderId: string, permission: string) {
+  const token = crypto.randomUUID();
+  await query(
+    `INSERT INTO shares (entity_type, entity_id, permission, token)
+     VALUES ('folder', $1, $2, $3)`,
+    [folderId, permission, token],
+  );
+  await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+    token,
+    folderId,
+  ]);
 }
 
 describe('ensurePageAccess with workspace membership', () => {
@@ -105,30 +110,6 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
-  it('blocks workspace member access when only the page is restricted', async () => {
-    const owner = await createTestUser();
-    const member = await createTestUser();
-    const page = await createTestPage(owner.id);
-    await addWorkspaceMember(owner.id, member.id);
-    await setPageAccessRestricted(page.id);
-
-    await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
-      "You don't have access to this page",
-    );
-  });
-
-  it('allows direct page invite access when the page is restricted', async () => {
-    const owner = await createTestUser();
-    const recipient = await createTestUser();
-    const page = await createTestPage(owner.id);
-    await setPageAccessRestricted(page.id);
-    await addShare('page', page.id, recipient.id, 'view');
-
-    const result = await ensurePageAccess(page.id, recipient.id);
-    expect(result.hasAccess).toBe(true);
-    expect(result.permission).toBe('view');
-  });
-
   it('still grants owner access when page has link share', async () => {
     const owner = await createTestUser();
     const page = await createTestPage(owner.id);
@@ -138,7 +119,7 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.hasAccess).toBe(true);
   });
 
-  it('grants authenticated user access via public link when page is not restricted', async () => {
+  it('grants authenticated user access via public link', async () => {
     const owner = await createTestUser();
     const stranger = await createTestUser();
     const page = await createTestPage(owner.id);
@@ -149,42 +130,70 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('view');
   });
 
-  it('blocks authenticated user access via public link when page is restricted', async () => {
+  it('grants inherited folder share access to nested page', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await addShare('folder', folder.id, recipient.id, 'view');
+
+    const result = await ensurePageAccess(page.id, recipient.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
+  it('blocks workspace membership when page inheritance is restricted', async () => {
+    const owner = await createTestUser();
+    const member = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await addWorkspaceMember(owner.id, member.id);
+    await query("UPDATE pages SET inheritance_policy = 'restricted' WHERE id = $1", [page.id]);
+
+    await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
+  });
+
+  it('keeps direct page invites when page inheritance is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const page = await createTestPage(owner.id);
+    await query("UPDATE pages SET inheritance_policy = 'restricted' WHERE id = $1", [page.id]);
+    await addShare('page', page.id, recipient.id, 'view');
+
+    const result = await ensurePageAccess(page.id, recipient.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
+  it('blocks parent folder share inheritance when page inheritance is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await addShare('folder', folder.id, recipient.id, 'view');
+    await query("UPDATE pages SET inheritance_policy = 'restricted' WHERE id = $1", [page.id]);
+
+    await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow(
+      "You don't have access to this page",
+    );
+  });
+
+  it('blocks inherited public folder links when page inheritance is restricted', async () => {
     const owner = await createTestUser();
     const stranger = await createTestUser();
-    const page = await createTestPage(owner.id);
-    await addLinkShare(page.id, 'view');
-    await setPageAccessRestricted(page.id);
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await addFolderLinkShare(folder.id, 'view');
+    await query("UPDATE pages SET inheritance_policy = 'restricted' WHERE id = $1", [page.id]);
 
     await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow(
       "You don't have access to this page",
     );
-  });
 
-  it('blocks folder invite access when page is restricted', async () => {
-    const owner = await createTestUser();
-    const recipient = await createTestUser();
-    const folder = await createTestFolder(owner.id);
-    const page = await createTestPage(owner.id, { parentId: folder.id });
-    await addShare('folder', folder.id, recipient.id, 'view');
-    await setPageAccessRestricted(page.id);
-
-    await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow(
-      "You don't have access to this page",
-    );
-  });
-
-  it('blocks folder invite access when ancestor folder is restricted', async () => {
-    const owner = await createTestUser();
-    const recipient = await createTestUser();
-    const folder = await createTestFolder(owner.id);
-    const page = await createTestPage(owner.id, { parentId: folder.id });
-    await addShare('folder', folder.id, recipient.id, 'view');
-    await setAccessRestricted(folder.id);
-
-    await expect(ensurePageAccess(page.id, recipient.id)).rejects.toThrow(
-      "You don't have access to this page",
-    );
+    await addLinkShare(page.id, 'view');
+    const result = await ensurePageAccess(page.id, stranger.id);
+    expect(result.permission).toBe('view');
   });
 
   it('denies access to non-owner, non-member, non-shared users', async () => {
@@ -195,74 +204,6 @@ describe('ensurePageAccess with workspace membership', () => {
     await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow(
       "You don't have access to this page",
     );
-  });
-
-  describe('restricted folders', () => {
-    it('blocks workspace member access to pages inside a restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      await setAccessRestricted(folder.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-      await addWorkspaceMember(owner.id, member.id);
-
-      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
-        "You don't have access to this page",
-      );
-    });
-
-    it('blocks workspace member access to pages nested deep inside restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const topFolder = await createTestFolder(owner.id);
-      await setAccessRestricted(topFolder.id);
-      const nestedFolder = await createTestFolder(owner.id, { parentId: topFolder.id });
-      const page = await createTestPage(owner.id, { parentId: nestedFolder.id });
-      await addWorkspaceMember(owner.id, member.id);
-
-      await expect(ensurePageAccess(page.id, member.id)).rejects.toThrow(
-        "You don't have access to this page",
-      );
-    });
-
-    it('allows owner to still access pages inside restricted folder', async () => {
-      const owner = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      await setAccessRestricted(folder.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-
-      const result = await ensurePageAccess(page.id, owner.id);
-      expect(result.hasAccess).toBe(true);
-    });
-
-    it('allows direct invite to bypass restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      await setAccessRestricted(folder.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-      await addWorkspaceMember(owner.id, member.id);
-      // Direct invite on the page — should bypass restricted folder
-      await addShare('page', page.id, member.id, 'view');
-
-      const result = await ensurePageAccess(page.id, member.id);
-      expect(result.hasAccess).toBe(true);
-      expect(result.permission).toBe('view');
-    });
-
-    it('does not block workspace member access to pages NOT under restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const restrictedFolder = await createTestFolder(owner.id);
-      await setAccessRestricted(restrictedFolder.id);
-      // Page in a separate folder (not nested under restricted)
-      const otherFolder = await createTestFolder(owner.id);
-      const page = await createTestPage(owner.id, { parentId: otherFolder.id });
-      await addWorkspaceMember(owner.id, member.id);
-
-      const result = await ensurePageAccess(page.id, member.id);
-      expect(result.hasAccess).toBe(true);
-    });
   });
 });
 
@@ -278,43 +219,19 @@ describe('ensureFolderAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
-  it('blocks workspace member access to restricted folder', async () => {
-    const owner = await createTestUser();
-    const member = await createTestUser();
-    const folder = await createTestFolder(owner.id);
-    await setAccessRestricted(folder.id);
-    await addWorkspaceMember(owner.id, member.id);
-
-    await expect(ensureFolderAccess(folder.id, member.id)).rejects.toThrow(
-      "You don't have access to this folder",
-    );
-  });
-
-  it('blocks non-owner, non-member, non-shared users from restricted folder', async () => {
-    const owner = await createTestUser();
-    const stranger = await createTestUser();
-    const folder = await createTestFolder(owner.id);
-    await setAccessRestricted(folder.id);
-
-    await expect(ensureFolderAccess(folder.id, stranger.id)).rejects.toThrow(
-      "You don't have access to this folder",
-    );
-  });
-
-  it('still grants owner access to restricted folder', async () => {
+  it('grants owner access to folder', async () => {
     const owner = await createTestUser();
     const folder = await createTestFolder(owner.id);
-    await setAccessRestricted(folder.id);
 
     const result = await ensureFolderAccess(folder.id, owner.id);
     expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('edit');
   });
 
-  it('allows direct folder invite on restricted folder', async () => {
+  it('grants direct folder invite access', async () => {
     const owner = await createTestUser();
     const recipient = await createTestUser();
     const folder = await createTestFolder(owner.id);
-    await setAccessRestricted(folder.id);
     await addShare('folder', folder.id, recipient.id, 'view');
 
     const result = await ensureFolderAccess(folder.id, recipient.id);
@@ -322,33 +239,49 @@ describe('ensureFolderAccess with workspace membership', () => {
     expect(result.permission).toBe('view');
   });
 
-  it('blocks ancestor folder invite when folder is restricted', async () => {
+  it('grants inherited ancestor folder share access', async () => {
     const owner = await createTestUser();
     const recipient = await createTestUser();
     const parentFolder = await createTestFolder(owner.id);
     const folder = await createTestFolder(owner.id, { parentId: parentFolder.id });
     await addShare('folder', parentFolder.id, recipient.id, 'view');
-    await setAccessRestricted(folder.id);
+
+    const result = await ensureFolderAccess(folder.id, recipient.id);
+    expect(result.hasAccess).toBe(true);
+    expect(result.permission).toBe('view');
+  });
+
+  it('blocks ancestor folder shares when a nested folder is restricted', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const parentFolder = await createTestFolder(owner.id);
+    const folder = await createTestFolder(owner.id, { parentId: parentFolder.id });
+    await addShare('folder', parentFolder.id, recipient.id, 'view');
+    await query("UPDATE folders SET inheritance_policy = 'restricted' WHERE id = $1", [folder.id]);
 
     await expect(ensureFolderAccess(folder.id, recipient.id)).rejects.toThrow(
       "You don't have access to this folder",
     );
   });
 
-  it('blocks public link access when folder is restricted', async () => {
+  it('lets direct shares on a restricted folder flow to descendants', async () => {
+    const owner = await createTestUser();
+    const recipient = await createTestUser();
+    const folder = await createTestFolder(owner.id);
+    const page = await createTestPage(owner.id, { parentId: folder.id });
+    await query("UPDATE folders SET inheritance_policy = 'restricted' WHERE id = $1", [folder.id]);
+    await addShare('folder', folder.id, recipient.id, 'edit');
+
+    const folderResult = await ensureFolderAccess(folder.id, recipient.id);
+    const pageResult = await ensurePageAccess(page.id, recipient.id);
+    expect(folderResult.permission).toBe('edit');
+    expect(pageResult.permission).toBe('edit');
+  });
+
+  it('denies access to non-owner, non-member, non-shared users', async () => {
     const owner = await createTestUser();
     const stranger = await createTestUser();
     const folder = await createTestFolder(owner.id);
-    const token = crypto.randomUUID();
-    await query(
-      `INSERT INTO shares (entity_type, entity_id, permission, token) VALUES ('folder', $1, 'view', $2)`,
-      [folder.id, token],
-    );
-    await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-      token,
-      folder.id,
-    ]);
-    await setAccessRestricted(folder.id);
 
     await expect(ensureFolderAccess(folder.id, stranger.id)).rejects.toThrow(
       "You don't have access to this folder",

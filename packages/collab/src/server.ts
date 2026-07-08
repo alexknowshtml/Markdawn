@@ -545,14 +545,16 @@ export function createCollabServer(config: CollabServerConfig) {
          SELECT s.permission, 2 AS src
          FROM shares s
          JOIN folders f ON f.id = s.entity_id AND f.is_public = true AND f.is_deleted = false
-         WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
-           AND (s.expires_at IS NULL OR s.expires_at > now())
-           AND s.entity_id IN (
-             SELECT ancestor_id FROM folder_closure fc
-             JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-           )
-       ) perms
-       ORDER BY src ASC
+          WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
+            AND (s.expires_at IS NULL OR s.expires_at > now())
+            AND s.entity_id IN (
+              SELECT ancestor_id FROM folder_closure fc
+              JOIN page_parent pp ON fc.descendant_id = pp.parent_id
+            )
+            AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)
+        ) perms
+       ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
+                src ASC
        LIMIT 1`,
       [documentName],
     );

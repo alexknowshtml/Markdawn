@@ -583,4 +583,82 @@ describe('handleShareEvent', () => {
       expect.stringContaining('"permission":"edit"'),
     );
   });
+
+  it('recomputes folder inheritance changes and revokes users who lost access', async () => {
+    const logger = createLogger();
+    const inheritedConn = createConnection({
+      context: { user: { id: 'inherited-user' }, permission: 'edit' },
+      readOnly: false,
+    });
+    const directConn = createConnection({
+      context: { user: { id: 'direct-user' }, permission: 'edit' },
+      readOnly: false,
+    });
+    const doc = createDocument([inheritedConn, directConn]);
+    const server = createServer(doc);
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('SELECT p.id FROM pages p')) {
+        return { rows: [{ id: 'page-1' }] };
+      }
+      if (sql.includes('get_effective_page_permission')) {
+        return { rows: [{ permission: params?.[1] === 'direct-user' ? 'edit' : null }] };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'folder',
+        entityId: 'folder-1',
+        message: 'Restricted child stopped inheriting access',
+      },
+      pool,
+      logger,
+    );
+
+    expect(inheritedConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
+    expect(inheritedConn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"action":"revoke"'),
+    );
+    expect(directConn.close).not.toHaveBeenCalled();
+    expect(directConn.sendStateless).not.toHaveBeenCalled();
+  });
+
+  it('recomputes page permissions and downgrades active editors to read-only', async () => {
+    const logger = createLogger();
+    const conn = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'edit' },
+      readOnly: false,
+    });
+    const doc = createDocument([conn]);
+    const server = createServer(doc);
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('get_effective_page_permission')) {
+        return { rows: [{ permission: 'view' }] };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'page',
+        entityId: 'page-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(conn.readOnly).toBe(true);
+    expect(conn.context.permission).toBe('view');
+    expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"action":"update"'));
+    expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"permission":"view"'));
+  });
 });

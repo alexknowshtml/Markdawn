@@ -247,23 +247,6 @@ describe('shares API — comprehensive sharing infrastructure', () => {
 
       expect(result.rows[0]).toEqual({ permission: 'edit', full_access: false });
     });
-
-    it('blocks workspace access in restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-
-      await createTestWorkspaceMember(owner.id, member.id);
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
-
-      const result = await query('SELECT * FROM get_effective_page_permission($1, $2)', [
-        page.id,
-        member.id,
-      ]);
-
-      expect(result.rows[0]).toEqual({ permission: null, full_access: false });
-    });
   });
 
   describe('get_page_base_permissions SQL function', () => {
@@ -573,6 +556,85 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const recipientAccessor = summary.accessors.find((a) => a.email === recipient.email);
       expect(recipientAccessor?.permission).toBe('admin');
     });
+
+    it('marks inherited folder access as read-only in child page summaries', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
+      const page = await createTestPage(owner.id, { title: 'Nested page', parentId: folder.id });
+
+      await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      const summaryRes = await app.request(`/api/shares/entity/page/${page.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(summaryRes.status).toBe(200);
+      const summary = (await summaryRes.json()) as {
+        accessors: Array<{ email: string | null; source: string; shareId: string | null }>;
+      };
+      const inheritedAccessor = summary.accessors.find((a) => a.email === recipient.email);
+      expect(inheritedAccessor).toEqual(
+        expect.objectContaining({ source: 'via Shared Folder', shareId: null }),
+      );
+    });
+
+    it('stops and restores inheritance for a page', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
+      const page = await createTestPage(owner.id, { parentId: folder.id });
+
+      await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      const restrictRes = await app.request(`/api/shares/entity/page/${page.id}/inheritance`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ policy: 'restricted' }),
+      });
+      expect(restrictRes.status).toBe(200);
+
+      const restrictedPageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(restrictedPageRes.status).toBe(403);
+
+      const restoreRes = await app.request(`/api/shares/entity/page/${page.id}/inheritance`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ policy: 'inherit' }),
+      });
+      expect(restoreRes.status).toBe(200);
+
+      const restoredPageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(restoredPageRes.status).toBe(200);
+    });
   });
 
   describe('HTTP API — workspace membership', () => {
@@ -593,26 +655,6 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(data.title).toBe('Workspace page');
     });
 
-    it('denies workspace member access to page inside restricted folder via HTTP', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const memberSession = await createTestSession(member.id);
-      const folder = await createTestFolder(owner.id, { name: 'Restricted' });
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
-      const page = await createTestPage(owner.id, {
-        title: 'Secret page',
-        parentId: folder.id,
-      });
-      await createTestWorkspaceMember(owner.id, member.id);
-
-      const res = await app.request(`/api/pages/${page.id}`, {
-        headers: { Cookie: memberSession.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
-
     it('allows workspace member to list owners pages in page tree', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -630,34 +672,6 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const pages = (await res.json()) as Array<{ title: string }>;
       expect(pages).toContainEqual(expect.objectContaining({ title: 'Owner page 1' }));
       expect(pages).toContainEqual(expect.objectContaining({ title: 'Owner page 2' }));
-    });
-
-    it('excludes pages inside restricted folder from workspace members page tree', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const memberSession = await createTestSession(member.id);
-      const restrictedFolder = await createTestFolder(owner.id, { name: 'Secret' });
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [
-        restrictedFolder.id,
-      ]);
-      await createTestPage(owner.id, {
-        title: 'Public page',
-      });
-      await createTestPage(owner.id, {
-        title: 'Secret page',
-        parentId: restrictedFolder.id,
-      });
-      await createTestWorkspaceMember(owner.id, member.id);
-
-      const res = await app.request('/api/pages/tree', {
-        headers: { Cookie: memberSession.Cookie },
-      });
-
-      expect(res.status).toBe(200);
-      const pages = (await res.json()) as Array<{ title: string }>;
-      expect(pages).toContainEqual(expect.objectContaining({ title: 'Public page' }));
-      expect(pages).not.toContainEqual(expect.objectContaining({ title: 'Secret page' }));
     });
   });
 
@@ -856,37 +870,6 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       ]);
 
       expect(result.rows[0]).toEqual({ permission: 'edit', full_access: false });
-    });
-
-    it('blocks workspace member access to restricted folder itself', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
-      await createTestWorkspaceMember(owner.id, member.id);
-
-      const result = await query('SELECT * FROM get_effective_folder_permission($1, $2)', [
-        folder.id,
-        member.id,
-      ]);
-
-      expect(result.rows[0]).toEqual({ permission: null, full_access: false });
-    });
-
-    it('blocks workspace member access to descendant of restricted folder', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const restricted = await createTestFolder(owner.id, { name: 'Restricted' });
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [restricted.id]);
-      const child = await createTestFolder(owner.id, { name: 'Child', parentId: restricted.id });
-      await createTestWorkspaceMember(owner.id, member.id);
-
-      const result = await query('SELECT * FROM get_effective_folder_permission($1, $2)', [
-        child.id,
-        member.id,
-      ]);
-
-      expect(result.rows[0]).toEqual({ permission: null, full_access: false });
     });
   });
 
@@ -1330,71 +1313,32 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(tree).toContainEqual(expect.objectContaining({ name: 'Shared Folder' }));
     });
 
-    it('marks restricted folders as lost access for workspace members in tree', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const memberSession = await createTestSession(member.id);
-      const restrictedFolder = await createTestFolder(owner.id, { name: 'Secret' });
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [
-        restrictedFolder.id,
-      ]);
-      await createTestWorkspaceMember(owner.id, member.id);
+    it('hides a restricted child folder and its pages from a parent folder share recipient', async () => {
+      type FolderNode = { id: string; name: string; children?: FolderNode[] };
+      const flattenFolders = (nodes: FolderNode[]): FolderNode[] =>
+        nodes.flatMap((node) => [node, ...flattenFolders(node.children ?? [])]);
 
-      const res = await app.request('/api/folders/tree', {
-        headers: { Cookie: memberSession.Cookie },
-      });
-      expect(res.status).toBe(200);
-      const tree = (await res.json()) as Array<{ name: string; isLostAccess: boolean }>;
-      const found = tree.find((f) => f.name === 'Secret');
-      expect(found).toBeDefined();
-      expect(found?.isLostAccess).toBe(true);
-    });
-  });
-
-  describe('HTTP API — access restriction lockdown', () => {
-    it('hides inherited folder invites from page share summary when page is restricted', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const ownerSession = await createTestSession(owner.id);
-      const folder = await createTestFolder(owner.id, { name: 'Shared Folder' });
-      const page = await createTestPage(owner.id, {
-        parentId: folder.id,
-        title: 'Restricted Page',
-      });
-
-      await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: ownerSession.Cookie,
-        },
-        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
-      });
-
-      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
-
-      const res = await app.request(`/api/shares/entity/page/${page.id}`, {
-        headers: { Cookie: ownerSession.Cookie },
-      });
-      expect(res.status).toBe(200);
-      const data = (await res.json()) as {
-        accessors: Array<{ email: string | null; source: string }>;
-      };
-      const accessorEmails = data.accessors.map((a) => a.email);
-      expect(accessorEmails).not.toContain(recipient.email);
-    });
-
-    it('hides inherited folder invites from folder share summary when folder is restricted', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const recipient = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
       const parentFolder = await createTestFolder(owner.id, { name: 'Parent' });
-      const folder = await createTestFolder(owner.id, {
-        name: 'Restricted Folder',
+      const parentPage = await createTestPage(owner.id, {
+        title: 'Visible parent page',
         parentId: parentFolder.id,
+      });
+      const restrictedDirectPage = await createTestPage(owner.id, {
+        title: 'Hidden direct page',
+        parentId: parentFolder.id,
+      });
+      const childFolder = await createTestFolder(owner.id, {
+        name: 'Restricted child',
+        parentId: parentFolder.id,
+      });
+      const childPage = await createTestPage(owner.id, {
+        title: 'Hidden child page',
+        parentId: childFolder.id,
       });
 
       await app.request(`/api/shares/entity/folder/${parentFolder.id}/invite`, {
@@ -1406,82 +1350,163 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ email: recipient.email, permission: 'view' }),
       });
 
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
-
-      const res = await app.request(`/api/shares/entity/folder/${folder.id}`, {
-        headers: { Cookie: ownerSession.Cookie },
-      });
-      expect(res.status).toBe(200);
-      const data = (await res.json()) as {
-        accessors: Array<{ email: string | null; source: string }>;
-      };
-      const accessorEmails = data.accessors.map((a) => a.email);
-      expect(accessorEmails).not.toContain(recipient.email);
-    });
-
-    it('shows link as private in share summary when page is restricted', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
-      const page = await createTestPage(owner.id);
-
-      await app.request(`/api/shares/entity/page/${page.id}/link`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: ownerSession.Cookie,
+      const restrictRes = await app.request(
+        `/api/shares/entity/folder/${childFolder.id}/inheritance`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: ownerSession.Cookie,
+          },
+          body: JSON.stringify({ policy: 'restricted' }),
         },
-        body: JSON.stringify({ permission: 'view' }),
-      });
+      );
+      expect(restrictRes.status).toBe(200);
 
-      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
-
-      const res = await app.request(`/api/shares/entity/page/${page.id}`, {
-        headers: { Cookie: ownerSession.Cookie },
-      });
-      expect(res.status).toBe(200);
-      const data = (await res.json()) as {
-        link: { permission: string };
-      };
-      expect(data.link.permission).toBe('private');
-    });
-
-    it('blocks public page access when page is restricted', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
-      const page = await createTestPage(owner.id);
-
-      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          Cookie: ownerSession.Cookie,
+      const restrictPageRes = await app.request(
+        `/api/shares/entity/page/${restrictedDirectPage.id}/inheritance`,
+        {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: ownerSession.Cookie,
+          },
+          body: JSON.stringify({ policy: 'restricted' }),
         },
-        body: JSON.stringify({ permission: 'view' }),
+      );
+      expect(restrictPageRes.status).toBe(200);
+
+      const folderTreeRes = await app.request('/api/folders/tree', {
+        headers: { Cookie: recipientSession.Cookie },
       });
-      const linkData = (await linkRes.json()) as { url: string };
+      expect(folderTreeRes.status).toBe(200);
+      const folderTree = flattenFolders((await folderTreeRes.json()) as FolderNode[]);
+      expect(folderTree.map((folder) => folder.id)).toContain(parentFolder.id);
+      expect(folderTree.map((folder) => folder.id)).not.toContain(childFolder.id);
 
-      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+      const pageTreeRes = await app.request('/api/pages/tree', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(pageTreeRes.status).toBe(200);
+      const pages = (await pageTreeRes.json()) as Array<{ id: string }>;
+      expect(pages.map((page) => page.id)).toContain(parentPage.id);
+      expect(pages.map((page) => page.id)).not.toContain(restrictedDirectPage.id);
+      expect(pages.map((page) => page.id)).not.toContain(childPage.id);
 
-      const res = await app.request(linkData.url);
-      expect(res.status).toBe(404);
+      const parentFolderRes = await app.request(`/api/folders/${parentFolder.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(parentFolderRes.status).toBe(200);
+      const parentFolderBody = (await parentFolderRes.json()) as {
+        pages: Array<{ id: string }>;
+        folders: Array<{ id: string }>;
+      };
+      expect(parentFolderBody.pages.map((page) => page.id)).toContain(parentPage.id);
+      expect(parentFolderBody.pages.map((page) => page.id)).not.toContain(restrictedDirectPage.id);
+      expect(parentFolderBody.folders.map((folder) => folder.id)).not.toContain(childFolder.id);
+
+      const childFolderRes = await app.request(`/api/folders/${childFolder.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(childFolderRes.status).toBe(403);
+
+      const childPageRes = await app.request(`/api/pages/${childPage.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(childPageRes.status).toBe(403);
     });
 
-    it('blocks public page access through restricted ancestor folder', async () => {
+    it('does not discover public-link entities in authenticated trees', async () => {
+      type FolderNode = { id: string; children?: FolderNode[] };
+      const flattenFolders = (nodes: FolderNode[]): FolderNode[] =>
+        nodes.flatMap((node) => [node, ...flattenFolders(node.children ?? [])]);
+
       const app = await createTestApp();
       const owner = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
+      const stranger = await createTestUser();
+      const strangerSession = await createTestSession(stranger.id);
+      const publicFolder = await createTestFolder(owner.id, { name: 'Public Link Folder' });
+      const nestedPage = await createTestPage(owner.id, {
+        title: 'Nested Public Link Page',
+        parentId: publicFolder.id,
+      });
+      const publicPage = await createTestPage(owner.id, { title: 'Public Link Page' });
+      const folderToken = crypto.randomUUID();
+      const pageToken = crypto.randomUUID();
 
       await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        crypto.randomUUID(),
-        folder.id,
+        folderToken,
+        publicFolder.id,
       ]);
-      await query('UPDATE pages SET is_access_restricted = true WHERE id = $1', [page.id]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [publicFolder.id, owner.id, folderToken],
+      );
+      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        pageToken,
+        publicPage.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'view', $3)`,
+        [publicPage.id, owner.id, pageToken],
+      );
 
-      const res = await app.request(`/api/pages/${page.id}`);
-      expect(res.status).toBe(404);
+      const folderTreeRes = await app.request('/api/folders/tree', {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(folderTreeRes.status).toBe(200);
+      const folderTree = flattenFolders((await folderTreeRes.json()) as FolderNode[]);
+      expect(folderTree.map((folder) => folder.id)).not.toContain(publicFolder.id);
+
+      const pageTreeRes = await app.request('/api/pages/tree', {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(pageTreeRes.status).toBe(200);
+      const pages = (await pageTreeRes.json()) as Array<{ id: string }>;
+      expect(pages.map((page) => page.id)).not.toContain(publicPage.id);
+      expect(pages.map((page) => page.id)).not.toContain(nestedPage.id);
+
+      const openFolderRes = await app.request(`/api/folders/${publicFolder.id}`, {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(openFolderRes.status).toBe(200);
+
+      const folderTreeAfterOpenRes = await app.request('/api/folders/tree', {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(folderTreeAfterOpenRes.status).toBe(200);
+      const folderTreeAfterOpen = flattenFolders(
+        (await folderTreeAfterOpenRes.json()) as FolderNode[],
+      );
+      expect(folderTreeAfterOpen.map((folder) => folder.id)).toContain(publicFolder.id);
+
+      const pageTreeAfterFolderOpenRes = await app.request('/api/pages/tree', {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(pageTreeAfterFolderOpenRes.status).toBe(200);
+      const pagesAfterFolderOpen = (await pageTreeAfterFolderOpenRes.json()) as Array<{
+        id: string;
+      }>;
+      expect(pagesAfterFolderOpen.map((page) => page.id)).toContain(nestedPage.id);
+
+      const openPageRes = await app.request(`/api/pages/${publicPage.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(openPageRes.status).toBe(200);
+      expect(await openPageRes.json()).toMatchObject({
+        recordedLinkAccess: true,
+        linkAccessSource: 'page',
+      });
+
+      const pageTreeAfterPageOpenRes = await app.request('/api/pages/tree', {
+        headers: { Cookie: strangerSession.Cookie },
+      });
+      expect(pageTreeAfterPageOpenRes.status).toBe(200);
+      const pagesAfterPageOpen = (await pageTreeAfterPageOpenRes.json()) as Array<{ id: string }>;
+      expect(pagesAfterPageOpen.map((page) => page.id)).toContain(publicPage.id);
     });
   });
 
@@ -1561,6 +1586,53 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       );
     });
 
+    it('parent folder summary keeps direct invite permission when child folder has higher permission', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const parentFolder = await createTestFolder(owner.id, { name: 'Parent' });
+      const childFolder = await createTestFolder(owner.id, {
+        name: 'Child',
+        parentId: parentFolder.id,
+      });
+
+      // Share parent as view, child as edit.
+      await app.request(`/api/shares/entity/folder/${parentFolder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+      await app.request(`/api/shares/entity/folder/${childFolder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'edit' }),
+      });
+
+      const res = await app.request(`/api/shares/entity/folder/${parentFolder.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const data = (await res.json()) as {
+        accessors: Array<{
+          userId: string;
+          name: string | null;
+          permission: string;
+          source: string;
+        }>;
+      };
+      const recipientAccessor = data.accessors.find((a) => a.userId === recipient.id);
+      expect(recipientAccessor).toBeDefined();
+      expect(recipientAccessor?.permission).toBe('view');
+      expect(recipientAccessor?.source).toBe('Direct Invite');
+    });
+
     it('with-me returns invited pages and folders', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -1598,6 +1670,406 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       );
       expect(items).toContainEqual(
         expect.objectContaining({ title: 'Shared Folder', entityType: 'folder' }),
+      );
+    });
+
+    it('with-me hides a directly shared page once it is visible through a shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const page = await createTestPage(owner.id, { title: 'Moved Shared Page' });
+      const folder = await createTestFolder(owner.id, { name: 'Shared Destination Folder' });
+
+      await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      const moveRes = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ parentId: folder.id }),
+      });
+      expect(moveRes.status).toBe(200);
+
+      const pageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(pageRes.status).toBe(200);
+
+      const res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const items = (await res.json()) as Array<{ title: string; entityType: string }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ title: 'Shared Destination Folder', entityType: 'folder' }),
+      );
+      expect(items).not.toContainEqual(
+        expect.objectContaining({ title: 'Moved Shared Page', entityType: 'page' }),
+      );
+    });
+
+    it('with-me tree nests a link-opened page under a later shared parent folder without duplicating it', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const parent = await createTestFolder(owner.id, { name: 'Parent Folder' });
+      const child = await createTestFolder(owner.id, { name: 'Child Folder', parentId: parent.id });
+      const page = await createTestPage(owner.id, {
+        title: 'Page in Child Folder',
+        parentId: child.id,
+      });
+
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'edit' }),
+      });
+      expect(linkRes.status).toBe(200);
+
+      const openPageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(openPageRes.status).toBe(200);
+
+      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(accessRes.status).toBe(200);
+
+      const inviteRes = await app.request(`/api/shares/entity/folder/${parent.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+      expect(inviteRes.status).toBe(200);
+
+      const flatRes = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(flatRes.status).toBe(200);
+      const flatItems = (await flatRes.json()) as Array<{ title: string; entityType: string }>;
+      expect(flatItems).toContainEqual(
+        expect.objectContaining({ title: 'Parent Folder', entityType: 'folder' }),
+      );
+      expect(flatItems).not.toContainEqual(
+        expect.objectContaining({ title: 'Page in Child Folder', entityType: 'page' }),
+      );
+
+      const treeRes = await app.request('/api/shares/with-me/tree', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(treeRes.status).toBe(200);
+      const treeItems = (await treeRes.json()) as Array<{
+        entityType: string;
+        title: string;
+        userPermission: string | null;
+        children?: Array<{
+          entityType: string;
+          title: string;
+          children?: Array<{ entityType: string; title: string; userPermission: string | null }>;
+        }>;
+      }>;
+      expect(treeItems).toHaveLength(1);
+      expect(treeItems[0]).toEqual(
+        expect.objectContaining({ title: 'Parent Folder', entityType: 'folder' }),
+      );
+      const nestedPage = treeItems[0]?.children?.[0]?.children?.find(
+        (item) => item.entityType === 'page' && item.title === 'Page in Child Folder',
+      );
+      expect(nestedPage).toEqual(
+        expect.objectContaining({ title: 'Page in Child Folder', userPermission: 'edit' }),
+      );
+    });
+
+    it('with-me tree keeps a link-opened page separate from a shared parent when inheritance is blocked', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const parent = await createTestFolder(owner.id, { name: 'Blocked Parent Folder' });
+      const child = await createTestFolder(owner.id, {
+        name: 'Blocked Child Folder',
+        parentId: parent.id,
+      });
+      const page = await createTestPage(owner.id, {
+        title: 'Blocked Link Page',
+        parentId: child.id,
+      });
+
+      await query("update folders set inheritance_policy = 'restricted' where id = $1", [child.id]);
+
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'edit' }),
+      });
+      expect(linkRes.status).toBe(200);
+
+      const openPageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(openPageRes.status).toBe(200);
+
+      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(accessRes.status).toBe(200);
+
+      const inviteRes = await app.request(`/api/shares/entity/folder/${parent.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+      expect(inviteRes.status).toBe(200);
+
+      const treeRes = await app.request('/api/shares/with-me/tree', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(treeRes.status).toBe(200);
+      const treeItems = (await treeRes.json()) as Array<{
+        entityType: string;
+        title: string;
+        children?: Array<{ entityType: string; title: string }>;
+      }>;
+      expect(treeItems).toContainEqual(
+        expect.objectContaining({ title: 'Blocked Parent Folder', entityType: 'folder' }),
+      );
+      expect(treeItems).toContainEqual(
+        expect.objectContaining({ title: 'Blocked Link Page', entityType: 'page' }),
+      );
+      const parentRoot = treeItems.find((item) => item.title === 'Blocked Parent Folder');
+      expect(parentRoot?.children ?? []).not.toContainEqual(
+        expect.objectContaining({ title: 'Blocked Child Folder' }),
+      );
+    });
+
+    it('with-me keeps a directly shared page visible when a shared ancestor is blocked by inheritance restriction', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const parent = await createTestFolder(owner.id, { name: 'Shared Parent Folder' });
+      const child = await createTestFolder(owner.id, {
+        name: 'Restricted Child Folder',
+        parentId: parent.id,
+      });
+      const page = await createTestPage(owner.id, {
+        title: 'Direct Page Behind Restriction',
+        parentId: child.id,
+      });
+
+      await query("update folders set inheritance_policy = 'restricted' where id = $1", [child.id]);
+
+      await app.request(`/api/shares/entity/folder/${parent.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      const res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const items = (await res.json()) as Array<{ title: string; entityType: string }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ title: 'Shared Parent Folder', entityType: 'folder' }),
+      );
+      expect(items).toContainEqual(
+        expect.objectContaining({ title: 'Direct Page Behind Restriction', entityType: 'page' }),
+      );
+    });
+
+    it('with-me also hides a directly shared page when the containing folder was opened by link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Linked Destination Folder' });
+      const page = await createTestPage(owner.id, {
+        title: 'Direct Page In Linked Folder',
+        parentId: folder.id,
+      });
+
+      await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+      });
+
+      const linkRes = await app.request(`/api/shares/entity/folder/${folder.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'view' }),
+      });
+      expect(linkRes.status).toBe(200);
+
+      const openRes = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(openRes.status).toBe(200);
+
+      const res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const items = (await res.json()) as Array<{
+        title: string;
+        entityType: string;
+        source: string;
+      }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          title: 'Linked Destination Folder',
+          entityType: 'folder',
+          source: 'link',
+        }),
+      );
+      expect(items).not.toContainEqual(
+        expect.objectContaining({ title: 'Direct Page In Linked Folder', entityType: 'page' }),
+      );
+    });
+
+    it('with-me includes a folder link after an authenticated user opens it', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Opened Link Folder' });
+
+      const linkRes = await app.request(`/api/shares/entity/folder/${folder.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'view' }),
+      });
+      expect(linkRes.status).toBe(200);
+
+      const openRes = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(openRes.status).toBe(200);
+
+      const res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const items = (await res.json()) as Array<{
+        title: string;
+        entityType: string;
+        source: string;
+      }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({
+          title: 'Opened Link Folder',
+          entityType: 'folder',
+          source: 'link',
+        }),
+      );
+    });
+
+    it('with-me stores the source folder, not every page opened through a folder link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Linked Parent Folder' });
+      const page = await createTestPage(owner.id, {
+        title: 'Nested Link Page',
+        parentId: folder.id,
+      });
+
+      const linkRes = await app.request(`/api/shares/entity/folder/${folder.id}/link`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: ownerSession.Cookie,
+        },
+        body: JSON.stringify({ permission: 'edit' }),
+      });
+      expect(linkRes.status).toBe(200);
+
+      const pageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(pageRes.status).toBe(200);
+
+      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(accessRes.status).toBe(200);
+
+      const res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const items = (await res.json()) as Array<{ title: string; entityType: string }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ title: 'Linked Parent Folder', entityType: 'folder' }),
+      );
+      expect(items).not.toContainEqual(
+        expect.objectContaining({ title: 'Nested Link Page', entityType: 'page' }),
       );
     });
 
@@ -1677,23 +2149,6 @@ describe('shares API — comprehensive sharing infrastructure', () => {
 
       const users = result.rows.map((r) => r.user_id);
       expect(users).not.toContain(recipient.id);
-      expect(users).toContain(owner.id);
-    });
-
-    it('excludes workspace members in restricted folder from base permissions', async () => {
-      const owner = await createTestUser();
-      const member = await createTestUser();
-      const folder = await createTestFolder(owner.id);
-      const page = await createTestPage(owner.id, { parentId: folder.id });
-      await createTestWorkspaceMember(owner.id, member.id);
-      await query('UPDATE folders SET is_access_restricted = true WHERE id = $1', [folder.id]);
-
-      const result = await query('SELECT user_id, permission FROM get_page_base_permissions($1)', [
-        page.id,
-      ]);
-
-      const users = result.rows.map((r) => r.user_id);
-      expect(users).not.toContain(member.id);
       expect(users).toContain(owner.id);
     });
   });
