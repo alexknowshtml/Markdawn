@@ -215,6 +215,69 @@ describe('pages API', () => {
       expect(Array.isArray(body)).toBe(true);
       expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
     });
+
+    it('uses folder owner, not creator, for child page trash control', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const collaborator = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const collaboratorSession = await createTestSession(collaborator.id);
+      const folder = await createTestFolder(owner.id, { name: 'Owner Folder' });
+      const page = await createTestPage(collaborator.id, {
+        title: 'Collaborator Child',
+        parentId: folder.id,
+      });
+
+      const deleteRes = await app.request(`/api/pages/${page.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(deleteRes.status).toBe(200);
+
+      const ownerTrashRes = await app.request('/api/pages/trash', {
+        headers: { Cookie: ownerSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(ownerTrashRes.status).toBe(200);
+      const ownerTrash = (await ownerTrashRes.json()) as Array<{
+        id: string;
+        ownerId: string | null;
+      }>;
+      expect(ownerTrash).toContainEqual(
+        expect.objectContaining({ id: page.id, ownerId: owner.id }),
+      );
+
+      const collaboratorTrashRes = await app.request('/api/pages/trash', {
+        headers: { Cookie: collaboratorSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(collaboratorTrashRes.status).toBe(200);
+      const collaboratorTrash = (await collaboratorTrashRes.json()) as Array<{ id: string }>;
+      expect(collaboratorTrash).not.toContainEqual(expect.objectContaining({ id: page.id }));
+
+      const collaboratorRestoreRes = await app.request(`/api/pages/${page.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: collaboratorSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(collaboratorRestoreRes.status).toBe(403);
+
+      const ownerRestoreRes = await app.request(`/api/pages/${page.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: ownerSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(ownerRestoreRes.status).toBe(200);
+
+      await app.request(`/api/pages/${page.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      const permanentRes = await app.request(`/api/pages/${page.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(permanentRes.status).toBe(200);
+
+      const pageRows = await query('select id from pages where id = $1', [page.id]);
+      expect(pageRows.rowCount).toBe(0);
+    });
   });
 
   describe('DELETE /api/pages/trash/empty-all', () => {
@@ -236,6 +299,23 @@ describe('pages API', () => {
       const body = await res.json();
       expect(body.deleted).toBe(true);
       expect(body.count).toBeGreaterThanOrEqual(1);
+    });
+  });
+
+  describe('GET /api/pages/export', () => {
+    it('exports accessible pages from the mounted route', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      await createTestPage(user.id, { title: 'Exported Page' });
+
+      const res = await app.request('/api/pages/export', {
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      expect(res.status).toBe(200);
+      expect(res.headers.get('Content-Type')).toContain('application/zip');
+      expect(res.headers.get('Content-Disposition')).toContain('markdawn-export.zip');
     });
   });
 

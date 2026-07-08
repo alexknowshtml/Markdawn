@@ -198,6 +198,26 @@ describe('useCreatePage', () => {
     );
   });
 
+  it('invalidates shared navigation after creating a page', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: 'p-new', title: 'My Page' }),
+    });
+
+    const { result } = renderHook(() => useCreatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ parentId: 'shared-folder', title: 'My Page' });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shared-with-me'] });
+  });
+
   it('suppresses success toast when silent option is set', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -451,6 +471,26 @@ describe('useMovePage', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     queryClient.clear();
+  });
+
+  it('invalidates shared navigation after moving a page', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ id: 'p1', parentId: 'f2' }),
+    });
+
+    const { result } = renderHook(() => useMovePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ pageId: 'p1', parentId: 'f2', position: 'a0' });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shared-with-me'] });
   });
 
   it('moves page to new parent', async () => {

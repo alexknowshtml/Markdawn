@@ -103,6 +103,23 @@ describe('useCreateFolder', () => {
     );
   });
 
+  it('invalidates shared navigation after creating a folder', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'f-new' }) });
+
+    const { result } = renderHook(() => useCreateFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ parentId: 'shared-parent' });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shared-with-me'] });
+  });
+
   it('creates folder with parent', async () => {
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'f-new' }) });
 
@@ -233,6 +250,23 @@ describe('useUpdateFolder', () => {
         body: JSON.stringify({ name: 'Renamed' }),
       }),
     );
+  });
+
+  it('invalidates shared navigation after updating a folder', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'f1' }) });
+
+    const { result } = renderHook(() => useUpdateFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ folderId: 'f1', updates: { name: 'Renamed' } });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shared-with-me'] });
   });
 
   it('updates folder icon and position', async () => {

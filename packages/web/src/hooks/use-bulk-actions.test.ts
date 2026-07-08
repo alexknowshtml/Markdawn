@@ -108,11 +108,11 @@ describe('useBulkDeleteFolders', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/folders/f1',
+      '/api/folders/f1?force=true',
       expect.objectContaining({ method: 'DELETE' }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/folders/f2',
+      '/api/folders/f2?force=true',
       expect.objectContaining({ method: 'DELETE' }),
     );
   });

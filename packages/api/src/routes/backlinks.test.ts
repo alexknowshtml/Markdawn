@@ -8,6 +8,14 @@ import {
   createTestUser,
 } from '../test-utils';
 
+async function addPageShare(pageId: string, recipientUserId: string, permission = 'view') {
+  await query(
+    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
+     VALUES ('page', $1, $2, $3, NULL)`,
+    [pageId, recipientUserId, permission],
+  );
+}
+
 describe('backlinks API', () => {
   describe('auth guard', () => {
     it('returns 401 without session cookie', async () => {
@@ -78,6 +86,32 @@ describe('backlinks API', () => {
       const body = await res.json();
       expect(body.length).toBe(0);
     });
+
+    it('does not expose source page metadata the user cannot access', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const privateSource = await createTestPage(owner.id, { title: 'Private Source' });
+      const sharedTarget = await createTestPage(owner.id, { title: 'Shared Target' });
+      await createTestPageLink(privateSource.id, sharedTarget.id);
+      await addPageShare(sharedTarget.id, recipient.id);
+
+      const ownerRes = await app.request(`/api/backlinks?pageId=${sharedTarget.id}`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(ownerRes.status).toBe(200);
+      expect(await ownerRes.json()).toContainEqual(
+        expect.objectContaining({ sourcePageId: privateSource.id, sourceTitle: 'Private Source' }),
+      );
+
+      const recipientRes = await app.request(`/api/backlinks?pageId=${sharedTarget.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(recipientRes.status).toBe(200);
+      expect(await recipientRes.json()).toEqual([]);
+    });
   });
 
   describe('GET /api/backlinks/outgoing', () => {
@@ -110,6 +144,30 @@ describe('backlinks API', () => {
       });
 
       expect(res.status).toBe(400);
+    });
+
+    it('hides target page metadata when the user cannot access the target', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const recipientSession = await createTestSession(recipient.id);
+      const sharedSource = await createTestPage(owner.id, { title: 'Shared Source' });
+      const privateTarget = await createTestPage(owner.id, { title: 'Private Target' });
+      await createTestPageLink(sharedSource.id, privateTarget.id);
+      await addPageShare(sharedSource.id, recipient.id);
+
+      const res = await app.request(`/api/backlinks/outgoing?pageId=${sharedSource.id}`, {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toContainEqual(
+        expect.objectContaining({
+          targetPageId: null,
+          targetPageTitle: null,
+          targetPageIcon: null,
+        }),
+      );
     });
   });
 
