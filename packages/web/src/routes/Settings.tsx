@@ -14,7 +14,7 @@ export default function Settings() {
   const handleExportAll = async () => {
     setIsExporting(true);
     try {
-      const res = await fetch('/api/pages/export/all');
+      const res = await fetch('/api/pages/export');
       if (!res.ok) throw new Error('Failed to export');
       const blob = await res.blob();
       const disposition = res.headers.get('content-disposition');

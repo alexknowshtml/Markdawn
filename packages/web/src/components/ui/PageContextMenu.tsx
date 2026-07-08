@@ -152,7 +152,7 @@ export function PageContextMenu({
       icon: <Share size={14} />,
       onClick: () => setShowShareDialog(true),
     },
-    {
+    item.type === 'page' && {
       label: 'Export',
       icon: <Download size={14} />,
       onClick: handleExport,
