@@ -160,11 +160,14 @@ export const folders = pgTable('folders', {
 
   deletedAt: timestamp('deleted_at'),
 
-  isAccessRestricted: boolean('is_access_restricted').default(false),
-
   isPublic: boolean('is_public').default(false),
 
   publicToken: text('public_token'),
+
+  inheritancePolicy: text('inheritance_policy')
+    .notNull()
+    .default('inherit')
+    .$type<'inherit' | 'restricted'>(),
 });
 
 export const folderClosure = pgTable(
@@ -230,7 +233,10 @@ export const pages = pgTable(
     isPublic: boolean('is_public').default(false),
     publicToken: text('public_token').unique(),
 
-    isAccessRestricted: boolean('is_access_restricted').default(false),
+    inheritancePolicy: text('inheritance_policy')
+      .notNull()
+      .default('inherit')
+      .$type<'inherit' | 'restricted'>(),
 
     createdAt: timestamp('created_at').defaultNow(),
 
@@ -263,11 +269,13 @@ export const userFavorites = pgTable(
   {
     id: uuid('id').defaultRandom().primaryKey(),
     userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-    pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    entityType: text('entity_type').notNull().default('page').$type<'folder' | 'page'>(),
+    entityId: uuid('entity_id').notNull(),
     createdAt: timestamp('created_at').defaultNow(),
   },
   (table) => ({
-    userPageUnique: unique().on(table.userId, table.pageId),
+    userEntityUnique: unique().on(table.userId, table.entityType, table.entityId),
+    entityIdx: index('user_favorites_entity_idx').on(table.entityType, table.entityId),
   }),
 );
 
@@ -281,6 +289,29 @@ export const pageVisits = pgTable(
   },
   (table) => ({
     userPageUnique: unique().on(table.userId, table.pageId),
+  }),
+);
+
+export const folderAccessEvents = pgTable(
+  'folder_access_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    folderId: uuid('folder_id')
+      .references(() => folders.id, { onDelete: 'cascade' })
+      .notNull(),
+    userId: uuid('user_id')
+      .references(() => users.id, { onDelete: 'cascade' })
+      .notNull(),
+    source: text('source').notNull().default('link').$type<'link'>(),
+    token: text('token').notNull(),
+    permission: text('permission').notNull().$type<'view' | 'edit' | 'admin'>(),
+    firstSeenAt: timestamp('first_seen_at').defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').defaultNow(),
+  },
+  (table) => ({
+    folderUserSourceUnique: unique().on(table.folderId, table.userId, table.source, table.token),
+    folderUserIdx: index('folder_access_events_folder_user_idx').on(table.folderId, table.userId),
+    tokenIdx: index('folder_access_events_token_idx').on(table.token),
   }),
 );
 
