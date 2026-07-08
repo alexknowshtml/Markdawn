@@ -813,11 +813,17 @@ export function createCollabServer(config: CollabServerConfig) {
             );
             return;
           }
-        } catch {
-          logger.warn(
-            `[persist] access revoked for user=${context.user.id} on page=${documentName}, skipping persist`,
+        } catch (err) {
+          if (err instanceof Error && err.message === 'Forbidden') {
+            logger.warn(
+              `[persist] access revoked for user=${context.user.id} on page=${documentName}, skipping persist`,
+            );
+            return;
+          }
+          logger.error(
+            `[persist] failed to verify access for user=${context.user.id} on page=${documentName}: ${err}`,
           );
-          return;
+          throw err;
         }
       }
 
