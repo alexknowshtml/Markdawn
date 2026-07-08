@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
+import {
+  createTestApp,
+  createTestFolder,
+  createTestPage,
+  createTestSession,
+  createTestUser,
+} from '../test-utils';
 
 describe('favorites API', () => {
   describe('auth guard', () => {
@@ -63,6 +69,38 @@ describe('favorites API', () => {
       });
 
       expect(res.status).toBe(201);
+    });
+
+    it('adds a folder to favorites', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const folder = await createTestFolder(user.id, { name: 'Favorite Folder' });
+
+      const res = await app.request('/api/favorites', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: session.Cookie,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ entityType: 'folder', entityId: folder.id }),
+      });
+
+      expect(res.status).toBe(201);
+
+      const listRes = await app.request('/api/favorites', {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(listRes.status).toBe(200);
+      const body = await listRes.json();
+      expect(body.favorites).toContainEqual(
+        expect.objectContaining({
+          entityType: 'folder',
+          entityId: folder.id,
+          title: 'Favorite Folder',
+        }),
+      );
     });
 
     it('is idempotent (second favorite returns 200)', async () => {

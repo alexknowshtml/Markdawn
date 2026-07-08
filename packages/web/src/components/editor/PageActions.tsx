@@ -20,6 +20,9 @@ export function PageActions({ pageId, page }: PageActionsProps) {
   const handleToggleFavorite = () => {
     toggleFavoriteMutation.mutate({
       pageId,
+      ...(page?.title !== undefined ? { title: page.title } : {}),
+      icon: page?.icon ?? null,
+      ownerId: page?.ownerId ?? null,
       isFavorite,
     });
   };
