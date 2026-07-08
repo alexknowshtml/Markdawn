@@ -152,6 +152,28 @@ export function PublicShareDialog({
   const infoRole = useRole(infoContext, { role: 'tooltip' });
   const infoInteractions = useInteractions([infoHover, infoFocus, infoDismiss, infoRole]);
 
+  const [linkHelpOpen, setLinkHelpOpen] = useState(false);
+  const {
+    refs: linkHelpRefs,
+    floatingStyles: linkHelpFloatingStyles,
+    context: linkHelpContext,
+  } = useFloating({
+    open: linkHelpOpen,
+    onOpenChange: setLinkHelpOpen,
+    placement: 'top',
+    middleware: [offset(4), flip(), shift({ padding: 8 })],
+  });
+  const linkHelpHover = useHover(linkHelpContext, { move: false });
+  const linkHelpFocus = useFocus(linkHelpContext);
+  const linkHelpDismiss = useDismiss(linkHelpContext);
+  const linkHelpRole = useRole(linkHelpContext, { role: 'tooltip' });
+  const linkHelpInteractions = useInteractions([
+    linkHelpHover,
+    linkHelpFocus,
+    linkHelpDismiss,
+    linkHelpRole,
+  ]);
+
   const formatSource = (source: string, entry: AccessEntry) => {
     if (entry.isOwner) return 'Owner';
     if (source === 'Direct Invite' || source === 'Email') return 'Direct Invite';
@@ -166,7 +188,12 @@ export function PublicShareDialog({
     <div className="space-y-0">
       {canInvite && (
         <>
-          <form onSubmit={handleInvite} className="space-y-2">
+          <form
+            onSubmit={handleInvite}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+            className="space-y-2"
+          >
             <div className="flex min-w-0 items-center gap-2">
               <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
                 <Mail size={16} />
@@ -271,7 +298,11 @@ export function PublicShareDialog({
             <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Link access</p>
           </div>
         </div>
-        <div data-testid="share-link-permissions">
+        <div
+          ref={!canInvite && !isLoading ? linkHelpRefs.setReference : undefined}
+          {...(!canInvite && !isLoading ? linkHelpInteractions.getReferenceProps() : {})}
+          data-testid="share-link-permissions"
+        >
           <ChoiceGroup
             value={summary?.link.permission ?? 'private'}
             options={permissionOptions}
@@ -285,6 +316,18 @@ export function PublicShareDialog({
             }
             className="w-full justify-between"
           />
+          {linkHelpOpen && !canInvite && !isLoading && (
+            <FloatingPortal>
+              <div
+                ref={linkHelpRefs.setFloating}
+                style={linkHelpFloatingStyles}
+                {...linkHelpInteractions.getFloatingProps()}
+                className="z-[9999] max-w-[280px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
+              >
+                You can see this link access, but you can't change it because you don't have access.
+              </div>
+            </FloatingPortal>
+          )}
         </div>
         {linkUrl && (
           <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-950/40">
@@ -437,7 +480,7 @@ export function PublicShareDialog({
             ref={refs.setFloating}
             {...getFloatingProps()}
             onClick={(e) => e.stopPropagation()}
-            onKeyDown={() => {}}
+            onKeyDown={(e) => e.stopPropagation()}
             role="dialog"
             data-testid="share-dialog"
             className="w-full max-w-lg flex max-h-[min(620px,calc(100vh-96px))] flex-col rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950 animate-scale-in"

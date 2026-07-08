@@ -44,16 +44,12 @@ export function PageActions({ pageId, page }: PageActionsProps) {
       </Tooltip>
       {page && (
         <>
-          <Tooltip label="Share to web" position="bottom">
+          <Tooltip label="Share" position="bottom">
             <button
               type="button"
               onClick={() => setIsShareDialogOpen(true)}
               data-testid="page-share-btn"
-              className={`p-2 rounded-md transition-colors cursor-pointer ${
-                page.isPublic
-                  ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
-                  : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800'
-              }`}
+              className="p-2 rounded-md transition-colors cursor-pointer text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <Share size={20} />
             </button>
