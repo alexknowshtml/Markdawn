@@ -16,12 +16,11 @@ import type { ShareEntityType, SharePermission } from '@markdawn/shared';
 import { Check, Copy, Globe2, Info, Lock, Mail, Shield, UserRound, X } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
-import { useUpdatePage } from '../../hooks/use-pages';
 import {
   useInviteToEntity,
   useRemoveShare,
   useShareSummary,
-  useToggleFolderRestriction,
+  useUpdateInheritancePolicy,
   useUpdateLinkPermission,
   useUpdateSharePermission,
 } from '../../hooks/use-share';
@@ -70,16 +69,14 @@ export function PublicShareDialog({
 
   const { data: summary, isLoading } = useShareSummary(entityType, entityId);
   const updateLinkMutation = useUpdateLinkPermission();
+  const updateInheritanceMutation = useUpdateInheritancePolicy();
   const inviteMutation = useInviteToEntity();
   const removeShareMutation = useRemoveShare();
   const updatePermissionMutation = useUpdateSharePermission();
-  const toggleRestrictionMutation = useToggleFolderRestriction();
-  const updatePageMutation = useUpdatePage();
 
   const isOwner = summary?.entity.ownerId === currentUserId;
   const isAdmin = summary?.userPermission === 'admin';
   const canInvite = isOwner || isAdmin;
-  const isRestricted = summary?.entity.isAccessRestricted ?? false;
 
   const accessEntries: AccessEntry[] = (summary?.accessors ?? []).map((accessor) => ({
     shareId: accessor.shareId,
@@ -92,6 +89,7 @@ export function PublicShareDialog({
   }));
 
   const linkUrl = summary?.link.url ? `${window.location.origin}${summary.link.url}` : '';
+  const isRestricted = (summary?.inheritance?.policy ?? 'inherit') === 'restricted';
 
   const handleCopy = async () => {
     if (!linkUrl) return;
@@ -120,19 +118,12 @@ export function PublicShareDialog({
   };
 
   const handleToggleRestriction = () => {
-    if (!isOwner) return;
-    if (entityType === 'folder') {
-      toggleRestrictionMutation.mutate({
-        folderId: entityId,
-        isRestricted: !isRestricted,
-      });
-    } else {
-      updatePageMutation.mutate({
-        pageId: entityId,
-        updates: { isAccessRestricted: !isRestricted },
-        silent: true,
-      });
-    }
+    if (!canInvite) return;
+    updateInheritanceMutation.mutate({
+      entityType,
+      entityId,
+      policy: isRestricted ? 'inherit' : 'restricted',
+    });
   };
 
   const { refs, context } = useFloating({
@@ -163,7 +154,6 @@ export function PublicShareDialog({
 
   const formatSource = (source: string, entry: AccessEntry) => {
     if (entry.isOwner) return 'Owner';
-    if (source === 'Direct Invite' || source === 'Email') return 'Direct Invite';
     if (source === 'Direct Invite' || source === 'Email') return 'Direct Invite';
     if (source === 'Workspace Member' || source === 'workspace') return 'Workspace Member';
     if (source === 'Link') return 'Link Share';
@@ -254,7 +244,7 @@ export function PublicShareDialog({
               role="switch"
               aria-checked={isRestricted}
               onClick={handleToggleRestriction}
-              disabled={toggleRestrictionMutation.isPending || updatePageMutation.isPending}
+              disabled={updateInheritanceMutation.isPending}
               data-testid="share-restrict-toggle"
               className={`relative h-[22px] w-[40px] rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
                 isRestricted ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-600'

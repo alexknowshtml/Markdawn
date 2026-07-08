@@ -13,6 +13,8 @@ export type PublicFolderPage = {
   icon?: string | null;
   created_by?: string | null;
   createdBy?: string | null;
+  owner_id?: string | null;
+  ownerId?: string | null;
   created_at?: string | Date | null;
   createdAt?: string | Date | null;
   updated_at?: string | Date | null;
@@ -26,6 +28,8 @@ export type PublicFolderPayload = {
   icon?: string | null;
   position?: string | null;
   createdBy?: string | null;
+  owner_id?: string | null;
+  ownerId?: string | null;
   createdAt?: string | Date | null;
   updatedAt?: string | Date | null;
   isPublic?: boolean;

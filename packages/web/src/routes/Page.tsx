@@ -30,7 +30,7 @@ import {
   useShareContext,
 } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
-import { usePageTree } from '../hooks/use-pages';
+import { type RecentPage, usePageTree } from '../hooks/use-pages';
 import { ApiError } from '../utils/api';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
@@ -146,24 +146,51 @@ export default function Page() {
   }, [page]);
 
   useEffect(() => {
-    if (!page?.isPublic || !pageId) {
+    if (!page || !pageId || isAnonymous) {
       return;
     }
     if (accessRecordedRef.current === pageId) {
       return;
     }
     accessRecordedRef.current = pageId;
+
+    const visitedAt = new Date().toISOString();
+    queryClient.setQueriesData<RecentPage[]>({ queryKey: ['pages', 'recent'] }, (old) => {
+      if (!old) return old;
+      const next: RecentPage[] = [
+        {
+          id: page.id,
+          title: page.title,
+          icon: page.icon,
+          createdBy: page.createdBy,
+          ownerId: page.ownerId ?? null,
+          updatedAt: page.updatedAt,
+          visitedAt,
+        },
+        ...old.filter((recentPage) => recentPage.id !== page.id),
+      ];
+      return next.slice(0, old.length);
+    });
+
     fetch(`/api/pages/${pageId}/access`, {
       method: 'POST',
     })
-      .then(() => {
-        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      .then(async (res) => {
+        if (!res.ok) {
+          throw new Error('Failed to record page access');
+        }
+        const access = (await res.json()) as { recordedLinkAccess?: boolean };
+        if (access.recordedLinkAccess) {
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+        }
+        queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       })
       .catch(() => {
         void 0;
       });
-  }, [page?.isPublic, pageId, queryClient]);
+  }, [page, pageId, isAnonymous, queryClient]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
@@ -226,8 +253,11 @@ export default function Page() {
       }
     };
     visit(pageTree as PageTreeNode[] | undefined);
+    if (page && !result.some((item) => item.id === page.id)) {
+      result.push(page);
+    }
     return result;
-  }, [pageTree, isAnonymous]);
+  }, [pageTree, page, isAnonymous]);
 
   const flatFolders = useMemo(() => {
     if (isAnonymous) return [];

@@ -1,4 +1,9 @@
-import type { ShareEntityType, SharePermission, ShareSummary } from '@markdawn/shared';
+import type {
+  InheritancePolicy,
+  ShareEntityType,
+  SharePermission,
+  ShareSummary,
+} from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { showSuccessToast } from '../utils/toast';
 
@@ -33,6 +38,27 @@ async function updateLinkPermission({
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ message: 'Failed to update link' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
+async function updateInheritancePolicy({
+  entityType,
+  entityId,
+  policy,
+}: {
+  entityType: ShareEntityType;
+  entityId: string;
+  policy: InheritancePolicy;
+}): Promise<{ policy: InheritancePolicy; message?: string }> {
+  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/inheritance`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ policy }),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to update inheritance' }));
     throw new Error(error.message);
   }
   return res.json();
@@ -91,12 +117,31 @@ export function useUpdateLinkPermission() {
     mutationFn: updateLinkPermission,
     onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
       queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
       queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
       if (data?.message) showSuccessToast(data.message);
     },
     meta: { errorMessage: 'Failed to update link' },
+  });
+}
+
+export function useUpdateInheritancePolicy() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateInheritancePolicy,
+    onSuccess: (data, { entityType, entityId }) => {
+      queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
+      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+      if (data?.message) showSuccessToast(data.message);
+    },
+    meta: { errorMessage: 'Failed to update inheritance' },
   });
 }
 
@@ -107,6 +152,8 @@ export function useInviteToEntity() {
     onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
       queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
       if (data?.message) showSuccessToast(data.message);
@@ -163,39 +210,5 @@ export function useRemoveShare() {
       if (data?.message) showSuccessToast(data.message);
     },
     meta: { errorMessage: 'Failed to remove access' },
-  });
-}
-
-async function toggleFolderRestriction({
-  folderId,
-  isRestricted,
-}: {
-  folderId: string;
-  isRestricted: boolean;
-}): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/folders/${folderId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ isAccessRestricted: isRestricted }),
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to update folder access' }));
-    throw new Error(error.message);
-  }
-  return res.json();
-}
-
-export function useToggleFolderRestriction() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: toggleFolderRestriction,
-    onSuccess: (data, { folderId }) => {
-      queryClient.invalidateQueries({ queryKey: ['shares', 'folder', folderId] });
-      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-      queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
-      queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
-      if (data?.message) showSuccessToast(data.message);
-    },
-    meta: { errorMessage: 'Failed to update folder access' },
   });
 }

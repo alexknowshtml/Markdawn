@@ -67,7 +67,7 @@ export function useFolderTree() {
   return useQuery({
     queryKey: ['folderTree'],
     queryFn: () => fetchFolderTree(),
-    staleTime: 1000 * 30,
+    staleTime: 0,
     refetchOnWindowFocus: false,
   });
 }

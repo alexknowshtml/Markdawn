@@ -57,8 +57,8 @@ export default function Settings() {
             Workspace members
           </h2>
           <p className="text-xs text-zinc-500 dark:text-zinc-400">
-            Invite people to collaborate on your workspace. Members can view and edit all pages
-            unless access is restricted.
+            Invite people to collaborate on your workspace. Restricted pages and folders can opt out
+            of inherited workspace access.
           </p>
         </div>
 

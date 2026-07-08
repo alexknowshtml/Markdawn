@@ -50,6 +50,24 @@ async function deletePage(pageId: string): Promise<{ deleted: boolean }> {
   return res.json();
 }
 
+export interface RecentPage {
+  id: string;
+  title: string;
+  icon: string | null;
+  createdBy: string | null;
+  ownerId: string | null;
+  updatedAt: string | Date;
+  visitedAt: string | Date;
+}
+
+async function fetchRecentPages(limit: number): Promise<RecentPage[]> {
+  const res = await fetch(`${API_BASE}/pages/recent?limit=${limit}`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch recent pages');
+  }
+  return res.json();
+}
+
 async function fetchTrashPages(): Promise<Page[]> {
   const res = await fetch(`${API_BASE}/pages/trash`);
   if (!res.ok) {
@@ -121,7 +139,16 @@ export function usePageTree() {
   return useQuery({
     queryKey: ['pageTree'],
     queryFn: () => fetchPageTree(),
-    staleTime: 1000 * 30,
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useRecentPages(limit = 8) {
+  return useQuery({
+    queryKey: ['pages', 'recent', limit],
+    queryFn: () => fetchRecentPages(limit),
+    staleTime: 0,
     refetchOnWindowFocus: false,
   });
 }
@@ -169,6 +196,9 @@ export function useDeletePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Moved to trash');
     },
   });
@@ -188,6 +218,7 @@ export function useRestorePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       showSuccessToast('Page restored');
     },
     meta: { errorMessage: 'Failed to restore page' },
@@ -200,6 +231,8 @@ export function usePermanentDeletePage() {
     mutationFn: (pageId: string) => permanentDeletePage(pageId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Page permanently deleted');
     },
     meta: { errorMessage: 'Failed to permanently delete page' },
@@ -212,6 +245,8 @@ export function useEmptyTrash() {
     mutationFn: () => emptyTrash(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Trash emptied');
     },
     meta: { errorMessage: 'Failed to empty trash' },

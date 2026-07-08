@@ -1019,10 +1019,14 @@ export function MilkdownEditor({
             if (!consumeSelfLeave(pageId)) {
               showInfoToast(toastMessage ?? 'Removed from your view');
             }
+            queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
             queryClient.invalidateQueries({ queryKey: ['pageTree'] });
             queryClient.invalidateQueries({ queryKey: ['folderTree'] });
             navigate('/');
           } else if (action === 'grant' || action === 'update') {
+            queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
             if (permission === 'view') {
               setReadOnly(true);
               setLinkPermission('view');
@@ -1061,6 +1065,9 @@ export function MilkdownEditor({
           const entityTitle = message.entityTitle as string | undefined;
           const toastMessage = (message as { message?: string }).message;
           logger.info`[collab] invite received: ${sharedByName} shared ${entityTitle}`;
+          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
           showInfoToast(
             toastMessage ??
               `${sharedByName ?? 'Someone'} shared ${entityTitle ?? 'something'} with you. Refresh to see it.`,

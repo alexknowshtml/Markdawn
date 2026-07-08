@@ -1,7 +1,7 @@
 import { type CapabilitySet, deriveCapabilities } from '@markdawn/shared';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { ShieldOff } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { type ReactNode, useEffect } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { type PublicFolderPayload, ShareProvider } from '../../contexts/ShareContext';
 import { useAuth } from '../../hooks/useAuth';
@@ -75,6 +75,7 @@ type ShareablePageRouteProps = {
 
 export function ShareablePageRoute({ entityType, children }: ShareablePageRouteProps) {
   const { data: session, isPending: authPending } = useAuth();
+  const queryClient = useQueryClient();
   const location = useLocation();
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const entityId = slugAndId ? extractUuid(slugAndId) : null;
@@ -113,6 +114,14 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     authPending ||
     (entityType === 'folder' && sharesLoading) ||
     (shouldFetchPublicEntity && entityLoading);
+
+  useEffect(() => {
+    if (entityType !== 'folder' || !session?.user || !entity?.isPublic) {
+      return;
+    }
+    queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+    queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+  }, [entityType, session?.user, entity?.isPublic, queryClient]);
 
   if (isLoading) {
     return (

@@ -1,19 +1,44 @@
-import type { SharedWithMeItem } from '@markdawn/shared';
+import type { SharedNavigationItem, SharedWithMeItem } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
 
 const API_BASE = '/api';
 
-async function fetchSharedWithMe(): Promise<SharedWithMeItem[]> {
-  const res = await fetch(`${API_BASE}/shares/with-me`);
+async function fetchSharedWithMe(limit?: number): Promise<SharedWithMeItem[]> {
+  const searchParams = new URLSearchParams();
+  if (limit !== undefined) {
+    searchParams.set('limit', String(limit));
+  }
+  const query = searchParams.toString();
+  const res = await fetch(`${API_BASE}/shares/with-me${query ? `?${query}` : ''}`);
   if (!res.ok) {
     throw new Error('Failed to fetch shared content');
   }
   return res.json();
 }
 
-export function useSharedWithMe() {
+async function fetchSharedWithMeTree(limit?: number): Promise<SharedNavigationItem[]> {
+  const searchParams = new URLSearchParams();
+  if (limit !== undefined) {
+    searchParams.set('limit', String(limit));
+  }
+  const query = searchParams.toString();
+  const res = await fetch(`${API_BASE}/shares/with-me/tree${query ? `?${query}` : ''}`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch shared navigation');
+  }
+  return res.json();
+}
+
+export function useSharedWithMe(limit?: number) {
   return useQuery({
-    queryKey: ['shared-with-me'],
-    queryFn: fetchSharedWithMe,
+    queryKey: limit === undefined ? ['shared-with-me'] : ['shared-with-me', limit],
+    queryFn: () => fetchSharedWithMe(limit),
+  });
+}
+
+export function useSharedWithMeTree(limit?: number) {
+  return useQuery({
+    queryKey: limit === undefined ? ['shared-with-me', 'tree'] : ['shared-with-me', 'tree', limit],
+    queryFn: () => fetchSharedWithMeTree(limit),
   });
 }
