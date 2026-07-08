@@ -26,8 +26,9 @@ backlinksRoute.get('/', async (c) => {
        and c.target_id = $1
        and c.connection_type in ('wikilink', 'heading', 'embed')
        and p.is_deleted = false
+       and p.id in (select page_id from get_accessible_page_ids($2))
      order by c.updated_at desc`,
-    [pageId],
+    [pageId, user.id],
   );
 
   return c.json(result.rows);
@@ -43,16 +44,18 @@ backlinksRoute.get('/outgoing', async (c) => {
   await ensurePageAccess(pageId, user.id);
 
   const result = await query(
-    `select c.id, c.target_id as "targetPageId", c.target_label as "targetTitle",
+    `select c.id, p.id as "targetPageId", c.target_label as "targetTitle",
             c.link_text as "linkText", c.connection_type as "linkType",
             p.title as "targetPageTitle", p.icon as "targetPageIcon"
      from connections c
      left join pages p on p.id = c.target_id
+       and p.is_deleted = false
+       and p.id in (select page_id from get_accessible_page_ids($2))
      where c.source_id = $1
        and c.target_type = 'page'
        and c.connection_type in ('wikilink', 'heading', 'embed')
      order by c.updated_at desc`,
-    [pageId],
+    [pageId, user.id],
   );
 
   return c.json(result.rows);
