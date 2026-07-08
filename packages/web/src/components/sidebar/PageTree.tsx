@@ -535,8 +535,8 @@ export function PageTree() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
-        <div className="flex items-center justify-center gap-1 mb-2">
+      <div className="shrink-0 px-2 pt-2 pb-1">
+        <div className="flex items-center justify-center gap-1">
           <button
             type="button"
             onClick={() => {
@@ -587,7 +587,9 @@ export function PageTree() {
             {isAllExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
           </button>
         </div>
+      </div>
 
+      <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
         {favorites && favorites.length > 0 && (
           <div className="mb-2">
             <button
