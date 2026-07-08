@@ -55,10 +55,26 @@ function createServer(doc: ReturnType<typeof createDocument> | undefined) {
   } as unknown as Server;
 }
 
-function createPool(entries: Array<{ user_id: string; permission: string }> = []) {
+function createPool(
+  entries: Array<{ user_id: string; permission: string }> = [],
+  options?: { anonymousPermission?: string | null; defaultPermission?: string | null },
+) {
   return {
-    query: vi.fn().mockResolvedValue({
-      rows: entries,
+    query: vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('get_page_base_permissions')) {
+        return { rows: entries };
+      }
+      if (sql.includes('get_effective_page_permission')) {
+        const userId = params?.[1];
+        const entry = entries.find((item) => item.user_id === userId);
+        return { rows: [{ permission: entry?.permission ?? options?.defaultPermission ?? null }] };
+      }
+      if (sql.includes('WITH page_parent')) {
+        return {
+          rows: options?.anonymousPermission ? [{ permission: options.anonymousPermission }] : [],
+        };
+      }
+      return { rows: entries };
     }),
   } as unknown as Pool;
 }
@@ -192,7 +208,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
-    const pool = createPool();
+    const pool = createPool([], { anonymousPermission: 'view' });
 
     await handleShareEvent(
       server,
@@ -219,7 +235,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
-    const pool = createPool();
+    const pool = createPool([], { anonymousPermission: 'edit' });
 
     await handleShareEvent(
       server,
@@ -245,7 +261,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
-    const pool = createPool();
+    const pool = createPool([], { anonymousPermission: 'admin' });
 
     await handleShareEvent(
       server,
@@ -316,14 +332,13 @@ describe('handleShareEvent', () => {
     expect(conn.close).not.toHaveBeenCalled();
   });
 
-  it('skips unknown permission values', async () => {
+  it('skips unknown permission values when no database pool is available', async () => {
     const logger = createLogger();
     const conn = createConnection({
       context: { user: { id: 'anon-1', isAnonymous: true } },
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
-    const pool = createPool();
 
     await handleShareEvent(
       server,
@@ -334,7 +349,7 @@ describe('handleShareEvent', () => {
         entityId: 'page-1',
         permission: 'invalid' as never,
       },
-      pool,
+      undefined,
       logger,
     );
 
@@ -356,7 +371,10 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([linkUserConn, invitedConn]);
     const server = createServer(doc);
-    const pool = createPool([privilegedEntry('invited-user', 'view')]);
+    const pool = createPool([
+      privilegedEntry('link-user', 'view'),
+      privilegedEntry('invited-user', 'view'),
+    ]);
 
     await handleShareEvent(
       server,
@@ -472,7 +490,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
-    const pool = createPool();
+    const pool = createPool([], { anonymousPermission: 'edit' });
 
     await handleShareEvent(
       server,
@@ -529,7 +547,7 @@ describe('handleShareEvent', () => {
   it('computes effective permission as max of base and link permission', async () => {
     const logger = createLogger();
     const invitedConn = createConnection({
-      context: { user: { id: 'invited-user' } },
+      context: { user: { id: 'invited-user' }, permission: 'edit' },
       readOnly: false,
     });
     const doc = createDocument([invitedConn]);
@@ -562,7 +580,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([invitedConn]);
     const server = createServer(doc);
-    const pool = createPool([privilegedEntry('invited-user', 'view')]);
+    const pool = createPool([privilegedEntry('invited-user', 'edit')]);
 
     await handleShareEvent(
       server,
@@ -582,6 +600,44 @@ describe('handleShareEvent', () => {
     expect(invitedConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"permission":"edit"'),
     );
+  });
+
+  it('recomputes folder share grants instead of downgrading stronger direct page access', async () => {
+    const logger = createLogger();
+    const conn = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'edit' },
+      readOnly: false,
+    });
+    const doc = createDocument([conn]);
+    const server = createServer(doc);
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('SELECT p.id FROM pages p')) {
+        return { rows: [{ id: 'page-1' }] };
+      }
+      if (sql.includes('get_effective_page_permission')) {
+        return { rows: [{ permission: 'edit' }] };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'grant',
+        entityType: 'folder',
+        entityId: 'folder-1',
+        permission: 'view',
+        targetUserId: 'user-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(conn.readOnly).toBe(false);
+    expect(conn.context.permission).toBe('edit');
+    expect(conn.sendStateless).not.toHaveBeenCalled();
   });
 
   it('recomputes folder inheritance changes and revokes users who lost access', async () => {

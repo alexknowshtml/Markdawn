@@ -466,18 +466,20 @@ export async function handleShareEvent(
     let totalAffected = 0;
     for (const pageId of pageIds) {
       totalAffected +=
-        action === 'recompute'
+        pool !== undefined
           ? await recomputePageConnections(server, pageId, pool, logger, message)
-          : await applyShareEventToPage(
-              server,
-              pageId,
-              action,
-              rawPermission,
-              targetUserId,
-              pool,
-              logger,
-              message,
-            );
+          : action === 'recompute'
+            ? await recomputePageConnections(server, pageId, pool, logger, message)
+            : await applyShareEventToPage(
+                server,
+                pageId,
+                action,
+                rawPermission,
+                targetUserId,
+                pool,
+                logger,
+                message,
+              );
     }
 
     logger.info(
@@ -486,7 +488,7 @@ export async function handleShareEvent(
     return;
   }
 
-  if (action === 'recompute') {
+  if (pool !== undefined || action === 'recompute') {
     const affectedCount = await recomputePageConnections(server, entityId, pool, logger, message);
     logger.info(
       `[share] processed recompute for page ${entityId}: ${affectedCount} connection(s) affected`,
@@ -494,7 +496,7 @@ export async function handleShareEvent(
     return;
   }
 
-  // For pages, apply directly
+  // Fallback for tests/dev callers without a database pool.
   const affectedCount = await applyShareEventToPage(
     server,
     entityId,

@@ -174,6 +174,59 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(result.rows[0]).toEqual({ permission: 'admin', full_access: false });
     });
 
+    it.each([
+      ['page email + folder email', 'email', 'email'],
+      ['page email + folder link', 'email', 'link'],
+      ['page link + folder email', 'link', 'email'],
+      ['page link + folder link', 'link', 'link'],
+    ] as const)('keeps direct page edit above inherited folder view (%s)', async (_label, pageShareKind, folderShareKind) => {
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: folder.id });
+
+      if (pageShareKind === 'email') {
+        await query(
+          'INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission) VALUES ($1, $2, $3, $4, $5)',
+          ['page', page.id, owner.id, recipient.id, 'edit'],
+        );
+      } else {
+        const token = crypto.randomUUID();
+        await query(
+          'INSERT INTO shares (entity_type, entity_id, shared_by, permission, token) VALUES ($1, $2, $3, $4, $5)',
+          ['page', page.id, owner.id, 'edit', token],
+        );
+        await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+          token,
+          page.id,
+        ]);
+      }
+
+      if (folderShareKind === 'email') {
+        await query(
+          'INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission) VALUES ($1, $2, $3, $4, $5)',
+          ['folder', folder.id, owner.id, recipient.id, 'view'],
+        );
+      } else {
+        const token = crypto.randomUUID();
+        await query(
+          'INSERT INTO shares (entity_type, entity_id, shared_by, permission, token) VALUES ($1, $2, $3, $4, $5)',
+          ['folder', folder.id, owner.id, 'view', token],
+        );
+        await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
+          token,
+          folder.id,
+        ]);
+      }
+
+      const result = await query('SELECT * FROM get_effective_page_permission($1, $2)', [
+        page.id,
+        recipient.id,
+      ]);
+
+      expect(result.rows[0]).toEqual({ permission: 'edit', full_access: false });
+    });
+
     it('uses the highest permission across direct and ancestor folder shares', async () => {
       const owner = await createTestUser();
       const recipient = await createTestUser();
