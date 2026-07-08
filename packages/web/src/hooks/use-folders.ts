@@ -79,6 +79,7 @@ export function useCreateFolder() {
       createFolder(parentId, name),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Folder created');
     },
   });
@@ -109,6 +110,7 @@ export function useUpdateFolder() {
     }) => updateFolder(folderId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Folder updated');
     },
   });

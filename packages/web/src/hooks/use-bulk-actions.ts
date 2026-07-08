@@ -74,6 +74,7 @@ export function useBulkMovePages() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Pages moved');
     },
   });
@@ -94,6 +95,7 @@ export function useBulkMoveFolders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Folders moved');
     },
   });

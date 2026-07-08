@@ -408,7 +408,7 @@ export function PageTree() {
   const renderSharedNavigationItem = (item: SharedNavigationItem, depth = 0): ReactNode => {
     if (item.entityType === 'folder') {
       const isExpanded = expandedFolderIds.has(item.id);
-      const sourceFolder = folderById.get(item.id);
+      const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === item.id;
       const canCreateChild = item.userPermission === 'edit' || item.userPermission === 'admin';
       return (
         <div key={`shared-folder-${item.id}`}>
@@ -432,16 +432,23 @@ export function PageTree() {
                 createdBy: item.createdBy,
               });
             }}
-            onRename={sourceFolder ? () => beginRenameFolder(sourceFolder) : undefined}
+            onRename={() => setEditingTarget({ kind: 'folder', id: item.id, value: item.title })}
             onNavigate={() => navigate(buildFolderPath(item.title, item.id))}
+            isEditing={isEditingFolder}
             isFolder={true}
+            editTitle={isEditingFolder ? editingTarget.value : item.title}
+            onEditChange={(value) => setEditingTarget({ kind: 'folder', id: item.id, value })}
+            onEditSave={() => {
+              saveRename();
+            }}
+            onEditKeyDown={onRenameKeyDown}
           />
           {isExpanded && item.children.map((child) => renderSharedNavigationItem(child, depth + 1))}
         </div>
       );
     }
 
-    const sourcePage = pageById.get(item.id);
+    const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === item.id;
     return (
       <PageTreeRow
         key={`shared-page-${item.id}`}
@@ -461,7 +468,14 @@ export function PageTree() {
             createdBy: item.createdBy,
           });
         }}
-        onRename={sourcePage ? () => beginRenamePage(sourcePage) : undefined}
+        onRename={() => setEditingTarget({ kind: 'page', id: item.id, value: item.title })}
+        isEditing={isEditingPage}
+        editTitle={isEditingPage ? editingTarget.value : item.title}
+        onEditChange={(value) => setEditingTarget({ kind: 'page', id: item.id, value })}
+        onEditSave={() => {
+          saveRename();
+        }}
+        onEditKeyDown={onRenameKeyDown}
       />
     );
   };

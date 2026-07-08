@@ -160,6 +160,7 @@ export function useCreatePage() {
       createPage(parentId, title),
     onSuccess: (_newPage, { silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       if (!silent) {
         showSuccessToast('Page created');
       }
@@ -180,6 +181,7 @@ export function useUpdatePage() {
     }) => updatePage(pageId, updates),
     onSuccess: (_, { pageId, silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
       if (!silent) {
         showSuccessToast('Page updated');
@@ -267,6 +269,7 @@ export function useMovePage() {
     }) => movePage(pageId, parentId, position),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Page moved');
     },
     meta: { errorMessage: 'Failed to move page' },
