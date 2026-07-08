@@ -8,6 +8,7 @@ const API_BASE = '/api';
 type EntityBase = {
   id: string;
   type: ShareEntityType;
+  ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
 };
 
@@ -47,11 +48,12 @@ async function bulkLeaveEntities(entityType: ShareEntityType, entityIds: string[
 }
 
 export interface OwnedEntity {
+  ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
 }
 
 export function isOwnedByUser(entity: OwnedEntity, userId: string): boolean {
-  return entity.createdBy === userId;
+  return (entity.ownerId ?? entity.createdBy) === userId;
 }
 
 export function useLeaveEntity(entityType: ShareEntityType) {
@@ -67,6 +69,9 @@ export function useLeaveEntity(entityType: ShareEntityType) {
       queryClient.invalidateQueries({ queryKey: queryKeyMap[entityType] });
       const otherKey = entityType === 'page' ? 'folderTree' : 'pageTree';
       queryClient.invalidateQueries({ queryKey: [otherKey] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Removed from your view');
     },
   });
@@ -86,6 +91,9 @@ export function useBulkLeaveEntities(entityType: ShareEntityType) {
       queryClient.invalidateQueries({ queryKey: queryKeyMap[entityType] });
       const otherKey = entityType === 'page' ? 'folderTree' : 'pageTree';
       queryClient.invalidateQueries({ queryKey: [otherKey] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Removed from your view');
     },
   });
@@ -122,6 +130,9 @@ export function useEntityDeletion({
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       if (entityType === 'page') {
         queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       }

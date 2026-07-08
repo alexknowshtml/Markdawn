@@ -41,6 +41,9 @@ export function useBulkDeletePages() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Pages moved to trash');
     },
   });
@@ -55,6 +58,9 @@ export function useBulkDeleteFolders() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Folders moved to trash');
     },
   });

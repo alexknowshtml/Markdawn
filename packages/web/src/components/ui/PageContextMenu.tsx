@@ -19,7 +19,8 @@ type PageContextMenuProps = {
     type: 'page' | 'folder';
     title: string;
     icon?: string | null;
-    createdBy?: string | null;
+    ownerId?: string | null | undefined;
+    createdBy?: string | null | undefined;
   };
   isFavorite?: boolean;
   triggerClassName?: string;
@@ -104,7 +105,14 @@ export function PageContextMenu({
 
   const handleToggleFavorite = () => {
     toggleFavoriteMutation.mutate(
-      { pageId: item.id, isFavorite: !isFavorite },
+      {
+        entityType: item.type,
+        entityId: item.id,
+        title: item.title,
+        icon: item.icon ?? null,
+        ownerId: item.ownerId ?? null,
+        isFavorite,
+      },
       { onSuccess: () => onMutated?.() },
     );
   };
@@ -120,7 +128,7 @@ export function PageContextMenu({
   const performDelete = async () => {
     try {
       await handleDelete(
-        { id: item.id, type: item.type, createdBy: item.createdBy },
+        { id: item.id, type: item.type, ownerId: item.ownerId, createdBy: item.createdBy },
         { force: item.type === 'folder' },
       );
     } catch {
@@ -191,6 +199,7 @@ export function PageContextMenu({
       <MoveDialog
         isOpen={moveDialogOpen}
         folders={folders ?? []}
+        movingFolderIds={item.type === 'folder' ? [item.id] : []}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
       />

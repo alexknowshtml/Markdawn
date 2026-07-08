@@ -23,6 +23,8 @@ import {
 import {
   useBulkDeleteFolders,
   useBulkDeletePages,
+  useBulkLeaveFolders,
+  useBulkLeavePages,
   useBulkMoveFolders,
   useBulkMovePages,
 } from '../hooks/use-bulk-actions';
@@ -56,6 +58,7 @@ const normalizePublicPage = (page: PublicFolderPage, folderId: string): PageTree
   ydoc: null,
   properties: null,
   createdBy: page.createdBy ?? page.created_by ?? null,
+  ownerId: page.ownerId ?? page.owner_id ?? null,
   createdAt: toDate(page.createdAt ?? page.created_at),
   updatedAt: toDate(page.updatedAt ?? page.updated_at),
   children: [],
@@ -74,7 +77,7 @@ const normalizePublicFolder = (
   createdAt: toDate(folder.createdAt),
   updatedAt: toDate(folder.updatedAt),
   publicToken: null,
-  isAccessRestricted: false,
+  ownerId: folder.ownerId ?? folder.owner_id ?? null,
   ...(folder.isPublic !== undefined ? { isPublic: folder.isPublic } : {}),
   children: (folder.folders ?? []).map((child) => normalizePublicFolder(child, folder.id)),
 });
@@ -110,10 +113,11 @@ export default function FolderEntry() {
   const currentUserId = session?.user?.id;
   const canWrite = !!currentUserId && capabilities.canEdit;
 
-  const favoritePageIds = useMemo(
-    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+  const favoriteKeys = useMemo(
+    () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
   );
+  const isFavoriteItem = (item: ExplorerItemData) => favoriteKeys.has(`${item.type}:${item.id}`);
 
   const createPageMutation = useCreatePage();
   const createFolderMutation = useCreateFolder();
@@ -123,6 +127,8 @@ export default function FolderEntry() {
   const copyFolderMutation = useCopyFolder();
   const bulkDeletePagesMutation = useBulkDeletePages();
   const bulkDeleteFoldersMutation = useBulkDeleteFolders();
+  const bulkLeavePagesMutation = useBulkLeavePages();
+  const bulkLeaveFoldersMutation = useBulkLeaveFolders();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
 
@@ -240,8 +246,8 @@ export default function FolderEntry() {
       title: f.name,
       icon: f.icon,
       updatedAt: f.updatedAt,
+      ownerId: f.ownerId,
       createdBy: f.createdBy,
-      isLostAccess: f.isLostAccess ?? false,
       ...(folderCollaboratorsMap?.[f.id] ? { collaborators: folderCollaboratorsMap[f.id] } : {}),
     }));
     const pageItems: ExplorerItemData[] = currentPages.map((p) => ({
@@ -252,6 +258,7 @@ export default function FolderEntry() {
       updatedAt: p.updatedAt,
       coverType: p.coverType,
       coverValue: p.coverValue,
+      ownerId: p.ownerId,
       createdBy: p.createdBy,
       ...(collaboratorsMap?.[p.id] ? { collaborators: collaboratorsMap[p.id] } : {}),
     }));
@@ -259,8 +266,8 @@ export default function FolderEntry() {
   }, [currentFolders, currentPages, collaboratorsMap, folderCollaboratorsMap]);
 
   const favoriteItems = useMemo(
-    () => allItems.filter((item) => item.type === 'page' && favoritePageIds.has(item.id)),
-    [allItems, favoritePageIds],
+    () => allItems.filter((item) => favoriteKeys.has(`${item.type}:${item.id}`)),
+    [allItems, favoriteKeys],
   );
 
   const allItemIndexMap = useMemo(
@@ -346,13 +353,40 @@ export default function FolderEntry() {
     }
   };
 
+  const selectedItems = useMemo(
+    () =>
+      selection.selectedItems.map((selected) => {
+        const item = allItems.find(
+          (candidate) => candidate.id === selected.id && candidate.type === selected.type,
+        );
+        return { ...selected, ownerId: item?.ownerId ?? null };
+      }),
+    [selection.selectedItems, allItems],
+  );
+
   const handleBulkDelete = async () => {
-    const pageIds = selection.selectedItems.filter((i) => i.type === 'page').map((i) => i.id);
-    const folderIds = selection.selectedItems.filter((i) => i.type === 'folder').map((i) => i.id);
+    const ownedPageIds = selectedItems
+      .filter((item) => item.type === 'page' && item.ownerId === currentUserId)
+      .map((item) => item.id);
+    const sharedPageIds = selectedItems
+      .filter((item) => item.type === 'page' && item.ownerId !== currentUserId)
+      .map((item) => item.id);
+    const ownedFolderIds = selectedItems
+      .filter((item) => item.type === 'folder' && item.ownerId === currentUserId)
+      .map((item) => item.id);
+    const sharedFolderIds = selectedItems
+      .filter((item) => item.type === 'folder' && item.ownerId !== currentUserId)
+      .map((item) => item.id);
 
     try {
-      if (pageIds.length > 0) await bulkDeletePagesMutation.mutateAsync({ pageIds });
-      if (folderIds.length > 0) await bulkDeleteFoldersMutation.mutateAsync({ folderIds });
+      if (ownedPageIds.length > 0)
+        await bulkDeletePagesMutation.mutateAsync({ pageIds: ownedPageIds });
+      if (ownedFolderIds.length > 0)
+        await bulkDeleteFoldersMutation.mutateAsync({ folderIds: ownedFolderIds });
+      if (sharedPageIds.length > 0)
+        await bulkLeavePagesMutation.mutateAsync({ entityIds: sharedPageIds });
+      if (sharedFolderIds.length > 0)
+        await bulkLeaveFoldersMutation.mutateAsync({ entityIds: sharedFolderIds });
       selection.clear();
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -594,7 +628,7 @@ export default function FolderEntry() {
                     item={item}
                     viewMode="card"
                     isSelected={selection.isSelected(item.id)}
-                    isFavorite={favoritePageIds.has(item.id)}
+                    isFavorite={isFavoriteItem(item)}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
@@ -620,7 +654,7 @@ export default function FolderEntry() {
                   item={item}
                   viewMode="card"
                   isSelected={selection.isSelected(item.id)}
-                  isFavorite={favoritePageIds.has(item.id)}
+                  isFavorite={isFavoriteItem(item)}
                   onSelect={(e) => {
                     e.stopPropagation();
                     selection.toggle({ id: item.id, type: item.type });
@@ -664,7 +698,7 @@ export default function FolderEntry() {
                       item={item}
                       viewMode="list"
                       isSelected={selection.isSelected(item.id)}
-                      isFavorite={favoritePageIds.has(item.id)}
+                      isFavorite={isFavoriteItem(item)}
                       onSelect={(e) => {
                         e.stopPropagation();
                         selection.toggle({ id: item.id, type: item.type });
@@ -702,7 +736,7 @@ export default function FolderEntry() {
                     item={item}
                     viewMode="list"
                     isSelected={selection.isSelected(item.id)}
-                    isFavorite={favoritePageIds.has(item.id)}
+                    isFavorite={isFavoriteItem(item)}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
@@ -749,6 +783,9 @@ export default function FolderEntry() {
       <MoveDialog
         isOpen={moveDialogOpen}
         folders={folders ?? []}
+        movingFolderIds={selection.selectedItems
+          .filter((item) => item.type === 'folder')
+          .map((item) => item.id)}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
       />

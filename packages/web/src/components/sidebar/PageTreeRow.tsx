@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { ChevronDown, ChevronRight, FileText, Lock, Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
@@ -10,32 +10,33 @@ interface PageTreeRowProps {
   id: string;
   title: string;
   icon?: string | null;
-  createdBy?: string | null;
+  ownerId?: string | null | undefined;
+  createdBy?: string | null | undefined;
   isActive?: boolean;
   depth?: number;
   hasChildren?: boolean;
   isExpanded?: boolean;
   isFavorite?: boolean;
   showDragHandle?: boolean;
-  onToggleExpand?: () => void;
-  onCreateChild?: () => void;
-  onNavigate?: () => void;
-  onRename?: () => void;
-  onDelete?: () => void;
+  onToggleExpand?: (() => void) | undefined;
+  onCreateChild?: (() => void) | undefined;
+  onNavigate?: (() => void) | undefined;
+  onRename?: (() => void) | undefined;
+  onDelete?: (() => void) | undefined;
   isEditing?: boolean;
   editTitle?: string;
-  onEditChange?: (value: string) => void;
-  onEditSave?: () => void;
-  onEditKeyDown?: (e: React.KeyboardEvent) => void;
+  onEditChange?: ((value: string) => void) | undefined;
+  onEditSave?: (() => void) | undefined;
+  onEditKeyDown?: ((e: React.KeyboardEvent) => void) | undefined;
   isDragTarget?: boolean;
   isFolder?: boolean;
-  isLostAccess?: boolean;
 }
 
 export function PageTreeRow({
   id,
   title,
   icon,
+  ownerId,
   createdBy,
   isActive = false,
   depth = 0,
@@ -55,7 +56,6 @@ export function PageTreeRow({
   onEditKeyDown,
   isDragTarget = false,
   isFolder = false,
-  isLostAccess = false,
 }: PageTreeRowProps) {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -96,7 +96,6 @@ export function PageTreeRow({
           ? 'bg-black/5 dark:bg-white/10 text-zinc-900 dark:text-zinc-100 font-medium shadow-[0_1px_2px_rgba(0,0,0,0.02)]'
           : 'text-zinc-600 dark:text-zinc-400 hover:bg-black/5 dark:hover:bg-white/10 hover:text-zinc-900 dark:hover:text-zinc-100',
         isDragTarget && 'opacity-60',
-        isLostAccess && 'opacity-50 pointer-events-none cursor-default',
       )}
       style={{ paddingLeft: `${depth * 12 + 12}px`, marginLeft: '8px', marginRight: '8px' }}
       onClick={handleNavigate}
@@ -127,8 +126,6 @@ export function PageTreeRow({
           ) : (
             <ChevronRight size={14} />
           )
-        ) : isLostAccess ? (
-          <Lock size={14} className="text-zinc-400 dark:text-zinc-500" />
         ) : isFolder ? (
           <span className="text-sm leading-none">📁</span>
         ) : icon ? (
@@ -191,6 +188,7 @@ export function PageTreeRow({
               type: isFolder ? 'folder' : 'page',
               title,
               icon: icon ?? null,
+              ...(ownerId != null ? { ownerId } : {}),
               ...(createdBy != null ? { createdBy } : {}),
             }}
             isFavorite={isFavorite}

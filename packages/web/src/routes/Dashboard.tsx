@@ -1,4 +1,4 @@
-import type { FolderTreeNode } from '@markdawn/shared';
+import type { FolderTreeNode, SharedWithMeItem } from '@markdawn/shared';
 import {
   ChevronDown,
   ChevronRight,
@@ -10,7 +10,7 @@ import {
   List,
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { ExplorerItem, type ExplorerItemData } from '../components/workspace/ExplorerItem';
 import { MoveDialog } from '../components/workspace/MoveDialog';
 import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
@@ -27,13 +27,57 @@ import { useFavorites } from '../hooks/use-favorites';
 import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-folders';
 import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { useSharedWithMe } from '../hooks/use-shared-with-me';
 import { useAuth } from '../hooks/useAuth';
+import { useBulkLeaveEntities } from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
 import { buildFolderPath, buildPagePath } from '../utils/url';
 
+type DashboardFilter = 'all' | 'owned-by-me' | 'shared-with-me';
+
+type DashboardItem = ExplorerItemData & {
+  activityAt?: string | Date;
+};
+
+const FILTERS: { value: DashboardFilter; label: string }[] = [
+  { value: 'all', label: 'All' },
+  { value: 'owned-by-me', label: 'Owned By Me' },
+  { value: 'shared-with-me', label: 'Shared With Me' },
+];
+
+const normalizeFilter = (value: string | null): DashboardFilter => {
+  if (value === 'owned-by-me' || value === 'shared-with-me') return value;
+  return 'all';
+};
+
+const dateMs = (value: string | Date | null | undefined): number => {
+  if (!value) return 0;
+  const date = value instanceof Date ? value : new Date(value);
+  const time = date.getTime();
+  return Number.isNaN(time) ? 0 : time;
+};
+
+const sortByActivityDesc = (a: DashboardItem, b: DashboardItem): number => {
+  const aTime = Math.max(dateMs(a.activityAt), dateMs(a.updatedAt));
+  const bTime = Math.max(dateMs(b.activityAt), dateMs(b.updatedAt));
+  return bTime - aTime;
+};
+
+const sharedItemToExplorerItem = (item: SharedWithMeItem): DashboardItem => ({
+  id: item.entityId,
+  type: item.entityType,
+  title: item.title,
+  icon: item.icon,
+  ownerId: item.ownerId,
+  updatedAt: item.entityUpdatedAt ?? item.updatedAt ?? item.createdAt ?? item.sortAt ?? new Date(),
+  activityAt: item.sortAt ?? item.updatedAt ?? item.createdAt ?? item.entityUpdatedAt ?? new Date(),
+});
+
 export default function HomeView() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeFilter = normalizeFilter(searchParams.get('filter'));
 
   const {
     data: pages,
@@ -42,14 +86,16 @@ export default function HomeView() {
     refetch: refetchPages,
   } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
+  const { data: sharedWithMe, isLoading: isSharedLoading, error: sharedError } = useSharedWithMe();
   const { data: favorites } = useFavorites();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
 
-  const favoritePageIds = useMemo(
-    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+  const favoriteKeys = useMemo(
+    () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
   );
+  const isFavorite = (item: ExplorerItemData) => favoriteKeys.has(`${item.type}:${item.id}`);
 
   const createPageMutation = useCreatePage();
   const createFolderMutation = useCreateFolder();
@@ -61,6 +107,8 @@ export default function HomeView() {
   const bulkDeleteFoldersMutation = useBulkDeleteFolders();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
+  const bulkLeavePagesMutation = useBulkLeaveEntities('page');
+  const bulkLeaveFoldersMutation = useBulkLeaveEntities('folder');
 
   const clipboard = useClipboard();
   const selection = useSelection();
@@ -83,17 +131,24 @@ export default function HomeView() {
     value: string;
   } | null>(null);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showNewMenu, setShowNewMenu] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
   const newMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    void activeFilter;
     selection.clear();
     setLastSelectedIndex(null);
-  }, [selection.clear]);
+  }, [selection.clear, activeFilter]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
-      if (newMenuRef.current && !newMenuRef.current.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (filterMenuRef.current && !filterMenuRef.current.contains(target)) {
+        setShowFilterMenu(false);
+      }
+      if (newMenuRef.current && !newMenuRef.current.contains(target)) {
         setShowNewMenu(false);
       }
     };
@@ -103,57 +158,98 @@ export default function HomeView() {
 
   const breadcrumbPath = useMemo<FolderTreeNode[]>(() => [], []);
 
-  const allFolderIds = useMemo(() => collectAllFolderIds(folders ?? []), [folders]);
-  const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
-
-  const currentFolders = useMemo(() => folders ?? [], [folders]);
-
-  const currentPages = useMemo(() => {
-    return getRootPages(pages ?? [], visibleFolderIds);
-  }, [pages, visibleFolderIds]);
-
-  const pageIds = useMemo(() => currentPages.map((p) => p.id), [currentPages]);
-  const { data: collaboratorsMap } = usePageCollaborators(pageIds);
-
-  const folderIds = useMemo(() => currentFolders.map((f) => f.id), [currentFolders]);
-  const { data: folderCollaboratorsMap } = useFolderCollaborators(folderIds);
-
-  const allItems: ExplorerItemData[] = useMemo(() => {
-    const folderItems: ExplorerItemData[] = currentFolders.map((f) => ({
-      id: f.id,
-      type: 'folder',
-      title: f.name,
-      icon: f.icon,
-      updatedAt: f.updatedAt,
-      createdBy: f.createdBy,
-      isLostAccess: f.isLostAccess ?? false,
-      ...(folderCollaboratorsMap?.[f.id] ? { collaborators: folderCollaboratorsMap[f.id] } : {}),
-    }));
-    const pageItems: ExplorerItemData[] = currentPages.map((p) => ({
-      id: p.id,
-      type: 'page',
-      title: p.title,
-      icon: p.icon,
-      updatedAt: p.updatedAt,
-      coverType: p.coverType,
-      coverValue: p.coverValue,
-      createdBy: p.createdBy,
-      ...(collaboratorsMap?.[p.id] ? { collaborators: collaboratorsMap[p.id] } : {}),
-    }));
-    return [...folderItems, ...pageItems];
-  }, [currentFolders, currentPages, collaboratorsMap, folderCollaboratorsMap]);
-
-  const favoriteItems = useMemo(
-    () => allItems.filter((item) => item.type === 'page' && favoritePageIds.has(item.id)),
-    [allItems, favoritePageIds],
+  const ownedFolders = useMemo(
+    () => (folders ?? []).filter((folder) => folder.ownerId === currentUserId),
+    [folders, currentUserId],
+  );
+  const ownedFolderIds = useMemo(() => new Set(collectAllFolderIds(ownedFolders)), [ownedFolders]);
+  const ownedPages = useMemo(
+    () => (pages ?? []).filter((page) => page.ownerId === currentUserId),
+    [pages, currentUserId],
+  );
+  const ownedRootPages = useMemo(
+    () => getRootPages(ownedPages, ownedFolderIds),
+    [ownedPages, ownedFolderIds],
   );
 
-  const allItemIndexMap = useMemo(
-    () => new Map(allItems.map((item, index) => [item.id, index])),
-    [allItems],
+  const ownedBaseItems: DashboardItem[] = useMemo(() => {
+    const folderItems: DashboardItem[] = ownedFolders.map((folder) => ({
+      id: folder.id,
+      type: 'folder',
+      title: folder.name,
+      icon: folder.icon,
+      updatedAt: folder.updatedAt,
+      activityAt: folder.updatedAt,
+      ownerId: folder.ownerId,
+      createdBy: folder.createdBy,
+    }));
+    const pageItems: DashboardItem[] = ownedRootPages.map((page) => ({
+      id: page.id,
+      type: 'page',
+      title: page.title,
+      icon: page.icon,
+      updatedAt: page.updatedAt,
+      activityAt: page.updatedAt,
+      coverType: page.coverType,
+      coverValue: page.coverValue,
+      ownerId: page.ownerId,
+      createdBy: page.createdBy,
+    }));
+    return [...folderItems, ...pageItems];
+  }, [ownedFolders, ownedRootPages]);
+
+  const sharedBaseItems = useMemo(
+    () => (sharedWithMe ?? []).map(sharedItemToExplorerItem),
+    [sharedWithMe],
+  );
+
+  const filteredBaseItems = useMemo(() => {
+    const items =
+      activeFilter === 'owned-by-me'
+        ? ownedBaseItems
+        : activeFilter === 'shared-with-me'
+          ? sharedBaseItems
+          : [...ownedBaseItems, ...sharedBaseItems];
+
+    const uniqueItems = Array.from(
+      new Map(items.map((item) => [`${item.type}:${item.id}`, item])).values(),
+    );
+
+    return uniqueItems.sort(sortByActivityDesc);
+  }, [activeFilter, ownedBaseItems, sharedBaseItems]);
+
+  const pageIds = useMemo(
+    () => filteredBaseItems.filter((item) => item.type === 'page').map((item) => item.id),
+    [filteredBaseItems],
+  );
+  const { data: collaboratorsMap } = usePageCollaborators(pageIds);
+
+  const folderIds = useMemo(
+    () => filteredBaseItems.filter((item) => item.type === 'folder').map((item) => item.id),
+    [filteredBaseItems],
+  );
+  const { data: folderCollaboratorsMap } = useFolderCollaborators(folderIds);
+
+  const allItems: DashboardItem[] = useMemo(
+    () =>
+      filteredBaseItems.map((item) => ({
+        ...item,
+        ...(item.type === 'page' && collaboratorsMap?.[item.id]
+          ? { collaborators: collaboratorsMap[item.id] }
+          : {}),
+        ...(item.type === 'folder' && folderCollaboratorsMap?.[item.id]
+          ? { collaborators: folderCollaboratorsMap[item.id] }
+          : {}),
+      })),
+    [filteredBaseItems, collaboratorsMap, folderCollaboratorsMap],
   );
 
   const hasSelection = selection.selectedCount > 0;
+
+  const setFilter = (filter: DashboardFilter) => {
+    setSearchParams(filter === 'all' ? {} : { filter });
+    setShowFilterMenu(false);
+  };
 
   const handleCreatePage = async () => {
     try {
@@ -227,13 +323,40 @@ export default function HomeView() {
     }
   };
 
+  const selectedItems = useMemo(
+    () =>
+      selection.selectedItems.map((selected) => {
+        const item = allItems.find(
+          (candidate) => candidate.id === selected.id && candidate.type === selected.type,
+        );
+        return { ...selected, ownerId: item?.ownerId ?? null };
+      }),
+    [selection.selectedItems, allItems],
+  );
+
   const handleBulkDelete = async () => {
-    const pageIds = selection.selectedItems.filter((i) => i.type === 'page').map((i) => i.id);
-    const folderIds = selection.selectedItems.filter((i) => i.type === 'folder').map((i) => i.id);
+    const ownedPageIds = selectedItems
+      .filter((item) => item.type === 'page' && item.ownerId === currentUserId)
+      .map((item) => item.id);
+    const sharedPageIds = selectedItems
+      .filter((item) => item.type === 'page' && item.ownerId !== currentUserId)
+      .map((item) => item.id);
+    const ownedFolderIdsForDelete = selectedItems
+      .filter((item) => item.type === 'folder' && item.ownerId === currentUserId)
+      .map((item) => item.id);
+    const sharedFolderIds = selectedItems
+      .filter((item) => item.type === 'folder' && item.ownerId !== currentUserId)
+      .map((item) => item.id);
 
     try {
-      if (pageIds.length > 0) await bulkDeletePagesMutation.mutateAsync({ pageIds });
-      if (folderIds.length > 0) await bulkDeleteFoldersMutation.mutateAsync({ folderIds });
+      if (ownedPageIds.length > 0)
+        await bulkDeletePagesMutation.mutateAsync({ pageIds: ownedPageIds });
+      if (ownedFolderIdsForDelete.length > 0)
+        await bulkDeleteFoldersMutation.mutateAsync({ folderIds: ownedFolderIdsForDelete });
+      if (sharedPageIds.length > 0)
+        await bulkLeavePagesMutation.mutateAsync({ entityIds: sharedPageIds });
+      if (sharedFolderIds.length > 0)
+        await bulkLeaveFoldersMutation.mutateAsync({ entityIds: sharedFolderIds });
       selection.clear();
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -255,18 +378,20 @@ export default function HomeView() {
   };
 
   const handleConfirmMove = async (targetFolderId: string | null) => {
-    const pageIds = selection.selectedItems.filter((i) => i.type === 'page').map((i) => i.id);
-    const folderIds = selection.selectedItems.filter((i) => i.type === 'folder').map((i) => i.id);
+    const pageIdsToMove = selection.selectedItems.filter((i) => i.type === 'page').map((i) => i.id);
+    const folderIdsToMove = selection.selectedItems
+      .filter((i) => i.type === 'folder')
+      .map((i) => i.id);
 
     try {
-      if (pageIds.length > 0)
+      if (pageIdsToMove.length > 0)
         await bulkMovePagesMutation.mutateAsync({
-          pageIds,
+          pageIds: pageIdsToMove,
           parentId: targetFolderId,
         });
-      if (folderIds.length > 0)
+      if (folderIdsToMove.length > 0)
         await bulkMoveFoldersMutation.mutateAsync({
-          folderIds,
+          folderIds: folderIdsToMove,
           parentId: targetFolderId,
         });
       selection.clear();
@@ -297,16 +422,20 @@ export default function HomeView() {
         }
         showSuccessToast('Pasted');
       } else if (clipboard.state.action === 'cut') {
-        const pageIds = clipboard.state.items.filter((i) => i.type === 'page').map((i) => i.id);
-        const folderIds = clipboard.state.items.filter((i) => i.type === 'folder').map((i) => i.id);
-        if (pageIds.length > 0)
+        const pageIdsToMove = clipboard.state.items
+          .filter((i) => i.type === 'page')
+          .map((i) => i.id);
+        const folderIdsToMove = clipboard.state.items
+          .filter((i) => i.type === 'folder')
+          .map((i) => i.id);
+        if (pageIdsToMove.length > 0)
           await bulkMovePagesMutation.mutateAsync({
-            pageIds,
+            pageIds: pageIdsToMove,
             parentId: currentParentId,
           });
-        if (folderIds.length > 0)
+        if (folderIdsToMove.length > 0)
           await bulkMoveFoldersMutation.mutateAsync({
-            folderIds,
+            folderIds: folderIdsToMove,
             parentId: currentParentId,
           });
         clipboard.clear();
@@ -317,8 +446,15 @@ export default function HomeView() {
     }
   };
 
-  const isLoading = isPagesLoading || isFoldersLoading;
-  const hasError = pagesError || foldersError;
+  const isLoading = isPagesLoading || isFoldersLoading || isSharedLoading;
+  const hasError = pagesError || foldersError || sharedError;
+  const heading = FILTERS.find((filter) => filter.value === activeFilter)?.label ?? 'All';
+  const emptyMessage =
+    activeFilter === 'shared-with-me'
+      ? 'Nothing has been shared with you yet.'
+      : activeFilter === 'owned-by-me'
+        ? 'Create a new page or folder to get started.'
+        : 'Create or open a page to get started.';
 
   return (
     <div className="space-y-4">
@@ -342,6 +478,34 @@ export default function HomeView() {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
+          <div className="relative" ref={filterMenuRef}>
+            <button
+              type="button"
+              onClick={() => setShowFilterMenu((prev) => !prev)}
+              className="flex items-center gap-1.5 h-7 px-3 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
+            >
+              <span>{heading}</span>
+              <ChevronDown size={14} />
+            </button>
+            {showFilterMenu && (
+              <div className="absolute right-0 top-full mt-1 w-44 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-xl z-50 p-1.5 flex flex-col animate-scale-in origin-top-right">
+                {FILTERS.map((filter) => (
+                  <button
+                    key={filter.value}
+                    type="button"
+                    onClick={() => setFilter(filter.value)}
+                    className={`flex items-center justify-between gap-2 px-2.5 py-2 text-xs font-medium hover:bg-black/5 dark:hover:bg-white/10 w-full text-left cursor-pointer rounded-xl transition-colors ${
+                      activeFilter === filter.value
+                        ? 'text-zinc-900 dark:text-zinc-100 bg-black/5 dark:bg-white/10'
+                        : 'text-zinc-700 dark:text-zinc-300'
+                    }`}
+                  >
+                    <span>{filter.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex items-center bg-zinc-100 dark:bg-zinc-800 rounded-lg p-0.5">
             <button
               type="button"
@@ -440,41 +604,11 @@ export default function HomeView() {
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <FileText size={48} className="text-zinc-300 dark:text-zinc-600 mb-4" />
           <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">No items yet</h3>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
-            Create a new page or folder to get started.
-          </p>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">{emptyMessage}</p>
         </div>
       ) : viewMode === 'card' ? (
         <div className="space-y-8 animate-fade-in">
-          {favoriteItems.length > 0 && (
-            <div>
-              <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
-                Favorites
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {favoriteItems.map((item) => (
-                  <ExplorerItem
-                    key={`${item.type}-${item.id}`}
-                    item={item}
-                    viewMode="card"
-                    isSelected={selection.isSelected(item.id)}
-                    isFavorite={favoritePageIds.has(item.id)}
-                    onSelect={(e) => {
-                      e.stopPropagation();
-                      selection.toggle({ id: item.id, type: item.type });
-                    }}
-                    onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
-                    onRename={() => handleRenameItem(item)}
-                    collaborators={filterOutSelf(item.collaborators ?? [])}
-                  />
-                ))}
-              </div>
-            </div>
-          )}
           <div>
-            <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
-              All Pages
-            </h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {allItems.map((item, index) => (
                 <ExplorerItem
@@ -482,7 +616,7 @@ export default function HomeView() {
                   item={item}
                   viewMode="card"
                   isSelected={selection.isSelected(item.id)}
-                  isFavorite={favoritePageIds.has(item.id)}
+                  isFavorite={isFavorite(item)}
                   onSelect={(e) => {
                     e.stopPropagation();
                     selection.toggle({ id: item.id, type: item.type });
@@ -504,47 +638,7 @@ export default function HomeView() {
         </div>
       ) : (
         <div className="space-y-8">
-          {favoriteItems.length > 0 && (
-            <div>
-              <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
-                Favorites
-              </h2>
-              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-clip">
-                <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
-                  <span className="w-8" />
-                  <span className="-ml-10">Name</span>
-                  <span className="hidden md:block w-28">Shared with</span>
-                  <span className="hidden md:block w-36">Last edited</span>
-                  <span className="w-8" />
-                </div>
-                <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
-                  {favoriteItems.map((item) => (
-                    <ExplorerItem
-                      key={`${item.type}-${item.id}`}
-                      item={item}
-                      viewMode="list"
-                      isSelected={selection.isSelected(item.id)}
-                      isFavorite={favoritePageIds.has(item.id)}
-                      onSelect={(e) => {
-                        e.stopPropagation();
-                        selection.toggle({ id: item.id, type: item.type });
-                      }}
-                      onNavigate={(e) =>
-                        handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)
-                      }
-                      onRename={() => handleRenameItem(item)}
-                      collaborators={filterOutSelf(item.collaborators ?? [])}
-                      showCheckboxes={hasSelection}
-                    />
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
           <div>
-            <h2 className="text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider mb-3 px-1">
-              All Pages
-            </h2>
             <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl overflow-clip">
               <div className="grid grid-cols-[auto_1fr_auto_auto_auto] gap-3 px-4 py-2 text-xs font-medium text-zinc-400 dark:text-zinc-500 uppercase tracking-wider border-b border-zinc-200 dark:border-zinc-800">
                 <span className="w-8" />
@@ -560,7 +654,7 @@ export default function HomeView() {
                     item={item}
                     viewMode="list"
                     isSelected={selection.isSelected(item.id)}
-                    isFavorite={favoritePageIds.has(item.id)}
+                    isFavorite={isFavorite(item)}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
@@ -603,6 +697,9 @@ export default function HomeView() {
       <MoveDialog
         isOpen={moveDialogOpen}
         folders={folders ?? []}
+        movingFolderIds={selection.selectedItems
+          .filter((item) => item.type === 'folder')
+          .map((item) => item.id)}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
       />

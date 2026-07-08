@@ -1,4 +1,4 @@
-import type { FolderTreeNode, PageTreeNode } from '@markdawn/shared';
+import type { FolderTreeNode, PageTreeNode, SharedNavigationItem } from '@markdawn/shared';
 import {
   ChevronDown,
   ChevronRight,
@@ -8,9 +8,8 @@ import {
   FilePlus2,
   FolderPlus,
   Home,
-  Share2,
 } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites } from '../../hooks/use-favorites';
@@ -19,8 +18,10 @@ import {
   useCreatePage,
   useImportMarkdown,
   usePageTree,
+  useRecentPages,
   useUpdatePage,
 } from '../../hooks/use-pages';
+import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
 import { useAuth } from '../../hooks/useAuth';
 import { useEntityDeletion } from '../../utils/entity-actions';
 import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
@@ -33,6 +34,21 @@ type EditingTarget =
   | { kind: 'folder'; id: string; value: string }
   | null;
 
+const SIDEBAR_PREVIEW_LIMIT = 8;
+
+const collectSharedNavigationFolderIds = (items: SharedNavigationItem[]): string[] => {
+  const ids: string[] = [];
+  const walk = (nodes: SharedNavigationItem[]) => {
+    for (const item of nodes) {
+      if (item.entityType !== 'folder') continue;
+      ids.push(item.id);
+      walk(item.children);
+    }
+  };
+  walk(items);
+  return ids;
+};
+
 export function PageTree() {
   const navigate = useNavigate();
   const params = useParams();
@@ -44,10 +60,17 @@ export function PageTree() {
   const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: favorites } = useFavorites();
+  const { data: recentPages } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
+  const { data: sharedNavigation } = useSharedWithMeTree(SIDEBAR_PREVIEW_LIMIT + 1);
 
-  const favoritePageIds = useMemo(
-    () => new Set(favorites?.map((fav) => fav.pageId) ?? []),
+  const favoriteKeys = useMemo(
+    () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
+  );
+  const isFavoriteEntity = useCallback(
+    (entityType: 'folder' | 'page', entityId: string) =>
+      favoriteKeys.has(`${entityType}:${entityId}`),
+    [favoriteKeys],
   );
 
   const createPageMutation = useCreatePage();
@@ -68,7 +91,9 @@ export function PageTree() {
 
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [favoritesCollapsed, setFavoritesCollapsed] = useState(false);
-  const [allPagesCollapsed, setAllPagesCollapsed] = useState(false);
+  const [recentsCollapsed, setRecentsCollapsed] = useState(false);
+  const [sharedCollapsed, setSharedCollapsed] = useState(false);
+  const [ownedByMeCollapsed, setOwnedByMeCollapsed] = useState(false);
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
 
@@ -114,23 +139,62 @@ export function PageTree() {
     };
   }, [handleCreateRootPage, handleCreateRootFolder]);
 
-  const allFolderIds = useMemo(() => collectAllFolderIds(folders ?? []), [folders]);
+  const pageById = useMemo(() => new Map((pages ?? []).map((page) => [page.id, page])), [pages]);
+
+  const folderById = useMemo(() => {
+    const map = new Map<string, FolderTreeNode>();
+    const walk = (nodes: FolderTreeNode[] | undefined) => {
+      for (const folder of nodes ?? []) {
+        map.set(folder.id, folder);
+        walk(folder.children);
+      }
+    };
+    walk(folders);
+    return map;
+  }, [folders]);
+
+  const ownedFolders = useMemo(() => {
+    const filterOwned = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
+      nodes
+        .filter((folder) => folder.ownerId === currentUserId)
+        .map((folder) => ({ ...folder, children: filterOwned(folder.children ?? []) }));
+    return filterOwned(folders ?? []);
+  }, [folders, currentUserId]);
+
+  const ownedPages = useMemo(
+    () => (pages ?? []).filter((page) => page.ownerId === currentUserId),
+    [pages, currentUserId],
+  );
+
+  const allFolderIds = useMemo(() => collectAllFolderIds(ownedFolders), [ownedFolders]);
+  const sharedNavigationFolderIds = useMemo(
+    () => collectSharedNavigationFolderIds(sharedNavigation ?? []),
+    [sharedNavigation],
+  );
+  const sidebarFolderIds = useMemo(
+    () => Array.from(new Set([...allFolderIds, ...sharedNavigationFolderIds])),
+    [allFolderIds, sharedNavigationFolderIds],
+  );
   const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
 
   const pagesByFolder = useMemo(
-    () => buildPagesByFolder(pages ?? [], visibleFolderIds),
-    [pages, visibleFolderIds],
+    () => buildPagesByFolder(ownedPages, visibleFolderIds),
+    [ownedPages, visibleFolderIds],
   );
 
   const rootPages = useMemo(
-    () => getRootPages(pages ?? [], visibleFolderIds),
-    [pages, visibleFolderIds],
+    () => getRootPages(ownedPages, visibleFolderIds),
+    [ownedPages, visibleFolderIds],
+  );
+  const visibleRecentPages = useMemo(
+    () => (recentPages ?? []).filter((page) => pageById.has(page.id)),
+    [recentPages, pageById],
   );
 
-  const foldersByParent = useMemo(() => {
+  const buildFoldersByParentMap = useCallback((nodes: FolderTreeNode[]) => {
     const map = new Map<string | null, FolderTreeNode[]>();
-    const walk = (nodes: FolderTreeNode[]) => {
-      for (const folder of nodes) {
+    const walk = (folderNodes: FolderTreeNode[]) => {
+      for (const folder of folderNodes) {
         const key = folder.parentId ?? null;
         const list = map.get(key) ?? [];
         list.push(folder);
@@ -140,16 +204,21 @@ export function PageTree() {
         }
       }
     };
-    walk(folders ?? []);
+    walk(nodes);
     return map;
-  }, [folders]);
+  }, []);
+
+  const foldersByParent = useMemo(
+    () => buildFoldersByParentMap(ownedFolders),
+    [buildFoldersByParentMap, ownedFolders],
+  );
 
   useEffect(() => {
-    if (!hasInitializedExpansion && (folders?.length ?? 0) > 0) {
-      setExpandedFolderIds(new Set(allFolderIds));
+    if (!hasInitializedExpansion && sidebarFolderIds.length > 0) {
+      setExpandedFolderIds(new Set(sidebarFolderIds));
       setHasInitializedExpansion(true);
     }
-  }, [folders, allFolderIds, hasInitializedExpansion]);
+  }, [sidebarFolderIds, hasInitializedExpansion]);
 
   const toggleFolderExpanded = (folderId: string) => {
     setExpandedFolderIds((prev) => {
@@ -164,17 +233,13 @@ export function PageTree() {
   };
 
   const isAllExpanded =
-    allFolderIds.length > 0 && allFolderIds.every((id) => expandedFolderIds.has(id));
+    sidebarFolderIds.length > 0 && sidebarFolderIds.every((id) => expandedFolderIds.has(id));
 
   const toggleExpandAll = () => {
     if (isAllExpanded) {
       setExpandedFolderIds(new Set());
-      setFavoritesCollapsed(true);
-      setAllPagesCollapsed(true);
     } else {
-      setExpandedFolderIds(new Set(allFolderIds));
-      setFavoritesCollapsed(false);
-      setAllPagesCollapsed(false);
+      setExpandedFolderIds(new Set(sidebarFolderIds));
     }
   };
 
@@ -194,10 +259,10 @@ export function PageTree() {
   };
 
   const handleDeletePage = async (pageId: string) => {
-    const page = pages?.find((p) => p.id === pageId);
+    const page = pageById.get(pageId);
     const isViewingDeletedPage = activePageId === pageId;
     await pageDeletion.handleDelete(
-      { id: pageId, type: 'page', createdBy: page?.createdBy },
+      { id: pageId, type: 'page', ownerId: page?.ownerId, createdBy: page?.createdBy },
       { force: false },
     );
     if (isViewingDeletedPage) {
@@ -225,10 +290,10 @@ export function PageTree() {
   };
 
   const handleDeleteFolder = async (folderId: string, childFolders: number, childPages: number) => {
-    const folder = folders?.find((f) => f.id === folderId);
+    const folder = folderById.get(folderId);
     const hasChildren = childFolders > 0 || childPages > 0;
     await folderDeletion.handleDelete(
-      { id: folderId, type: 'folder', createdBy: folder?.createdBy },
+      { id: folderId, type: 'folder', ownerId: folder?.ownerId, createdBy: folder?.createdBy },
       { force: hasChildren },
     );
   };
@@ -285,6 +350,7 @@ export function PageTree() {
           id={folder.id}
           title={folder.name}
           icon={folder.icon}
+          ownerId={folder.ownerId}
           createdBy={folder.createdBy}
           depth={depth}
           hasChildren={childFolders.length > 0 || childPages.length > 0}
@@ -298,7 +364,6 @@ export function PageTree() {
           onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
           isEditing={isEditingFolder}
           isFolder={true}
-          isLostAccess={folder.isLostAccess ?? false}
           editTitle={isEditingFolder ? editingTarget.value : folder.name}
           onEditChange={(value) => setEditingTarget({ kind: 'folder', id: folder.id, value })}
           onEditSave={() => {
@@ -317,10 +382,11 @@ export function PageTree() {
                   id={page.id}
                   title={page.title}
                   icon={page.icon}
+                  ownerId={page.ownerId}
                   createdBy={page.createdBy}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
-                  isFavorite={favoritePageIds.has(page.id)}
+                  isFavorite={isFavoriteEntity('page', page.id)}
                   onDelete={() => handleDeletePage(page.id)}
                   onRename={() => beginRenamePage(page)}
                   isEditing={isEditingPage}
@@ -336,6 +402,67 @@ export function PageTree() {
           </>
         )}
       </div>
+    );
+  };
+
+  const renderSharedNavigationItem = (item: SharedNavigationItem, depth = 0): ReactNode => {
+    if (item.entityType === 'folder') {
+      const isExpanded = expandedFolderIds.has(item.id);
+      const sourceFolder = folderById.get(item.id);
+      const canCreateChild = item.userPermission === 'edit' || item.userPermission === 'admin';
+      return (
+        <div key={`shared-folder-${item.id}`}>
+          <PageTreeRow
+            id={item.id}
+            title={item.title}
+            icon={item.icon}
+            ownerId={item.ownerId}
+            createdBy={item.createdBy}
+            depth={depth}
+            hasChildren={item.children.length > 0}
+            isExpanded={isExpanded}
+            isFavorite={isFavoriteEntity('folder', item.id)}
+            onToggleExpand={() => toggleFolderExpanded(item.id)}
+            {...(canCreateChild ? { onCreateChild: () => handleCreatePageInFolder(item.id) } : {})}
+            onDelete={() => {
+              void folderDeletion.handleDelete({
+                id: item.id,
+                type: 'folder',
+                ownerId: item.ownerId,
+                createdBy: item.createdBy,
+              });
+            }}
+            onRename={sourceFolder ? () => beginRenameFolder(sourceFolder) : undefined}
+            onNavigate={() => navigate(buildFolderPath(item.title, item.id))}
+            isFolder={true}
+          />
+          {isExpanded && item.children.map((child) => renderSharedNavigationItem(child, depth + 1))}
+        </div>
+      );
+    }
+
+    const sourcePage = pageById.get(item.id);
+    return (
+      <PageTreeRow
+        key={`shared-page-${item.id}`}
+        id={item.id}
+        title={item.title}
+        icon={item.icon}
+        ownerId={item.ownerId}
+        createdBy={item.createdBy}
+        depth={depth}
+        isActive={activePageId === item.id}
+        isFavorite={isFavoriteEntity('page', item.id)}
+        onDelete={() => {
+          void pageDeletion.handleDelete({
+            id: item.id,
+            type: 'page',
+            ownerId: item.ownerId,
+            createdBy: item.createdBy,
+          });
+        }}
+        onRename={sourcePage ? () => beginRenamePage(sourcePage) : undefined}
+      />
     );
   };
 
@@ -388,7 +515,9 @@ export function PageTree() {
     );
   }
 
-  const rootFolders = folders ?? [];
+  const rootFolders = ownedFolders;
+  const sharedPreview = sharedNavigation?.slice(0, SIDEBAR_PREVIEW_LIMIT) ?? [];
+  const hasMoreShared = (sharedNavigation?.length ?? 0) > SIDEBAR_PREVIEW_LIMIT;
 
   return (
     <div className="flex flex-col h-full">
@@ -445,24 +574,13 @@ export function PageTree() {
           </button>
         </div>
 
-        <div className="px-2">
-          <button
-            type="button"
-            onClick={() => navigate('/app/shared-with-me')}
-            className="flex items-center gap-2 w-full px-3 py-2 text-sm text-zinc-600 dark:text-zinc-300 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
-          >
-            <Share2 size={16} />
-            <span>Shared with me</span>
-          </button>
-        </div>
-
         {favorites && favorites.length > 0 && (
           <div className="mb-2">
             <button
               type="button"
               onClick={() => setFavoritesCollapsed((prev) => !prev)}
               aria-expanded={!favoritesCollapsed}
-              className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
             >
               {favoritesCollapsed ? (
                 <ChevronRight size={14} className="mr-1 shrink-0" />
@@ -474,19 +592,40 @@ export function PageTree() {
             {!favoritesCollapsed && (
               <div className="space-y-0.5">
                 {favorites.map((fav) => {
-                  const favPage = pages?.find((p) => p.id === fav.pageId);
+                  const isFolder = fav.entityType === 'folder';
+                  const favPage = isFolder ? undefined : pageById.get(fav.entityId);
+                  const favFolder = isFolder ? folderById.get(fav.entityId) : undefined;
+                  const childFolders = favFolder?.children.length ?? 0;
+                  const childPages = pagesByFolder.get(fav.entityId)?.length ?? 0;
                   return (
                     <PageTreeRow
-                      key={fav.pageId}
-                      id={fav.pageId}
+                      key={`${fav.entityType}-${fav.entityId}`}
+                      id={fav.entityId}
                       title={fav.title}
                       icon={fav.icon}
-                      createdBy={favPage?.createdBy ?? null}
-                      isActive={activePageId === fav.pageId}
+                      ownerId={fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId ?? null}
+                      createdBy={favPage?.createdBy ?? favFolder?.createdBy ?? null}
+                      isFolder={isFolder}
+                      isActive={!isFolder && activePageId === fav.entityId}
                       isFavorite={true}
-                      onDelete={() => handleDeletePage(fav.pageId)}
-                      onRename={() =>
-                        setEditingTarget({ kind: 'page', id: fav.pageId, value: fav.title })
+                      onNavigate={
+                        isFolder
+                          ? () => navigate(buildFolderPath(fav.title, fav.entityId))
+                          : undefined
+                      }
+                      onDelete={() => {
+                        if (isFolder) {
+                          void handleDeleteFolder(fav.entityId, childFolders, childPages);
+                        } else {
+                          void handleDeletePage(fav.entityId);
+                        }
+                      }}
+                      onRename={
+                        favPage
+                          ? () => beginRenamePage(favPage)
+                          : favFolder
+                            ? () => beginRenameFolder(favFolder)
+                            : undefined
                       }
                     />
                   );
@@ -496,21 +635,92 @@ export function PageTree() {
           </div>
         )}
 
+        {visibleRecentPages.length > 0 && (
+          <div className="mb-2">
+            <button
+              type="button"
+              onClick={() => setRecentsCollapsed((prev) => !prev)}
+              aria-expanded={!recentsCollapsed}
+              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+            >
+              {recentsCollapsed ? (
+                <ChevronRight size={14} className="mr-1 shrink-0" />
+              ) : (
+                <ChevronDown size={14} className="mr-1 shrink-0" />
+              )}
+              <span>Recents</span>
+            </button>
+            {!recentsCollapsed && (
+              <div className="space-y-0.5">
+                {visibleRecentPages.map((page) => {
+                  const treePage = pageById.get(page.id);
+                  return (
+                    <PageTreeRow
+                      key={page.id}
+                      id={page.id}
+                      title={page.title}
+                      icon={page.icon}
+                      ownerId={page.ownerId}
+                      createdBy={page.createdBy}
+                      isActive={activePageId === page.id}
+                      isFavorite={isFavoriteEntity('page', page.id)}
+                      onDelete={() => handleDeletePage(page.id)}
+                      onRename={treePage ? () => beginRenamePage(treePage) : undefined}
+                    />
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {sharedPreview.length > 0 && (
+          <div className="mb-2">
+            <button
+              type="button"
+              onClick={() => setSharedCollapsed((prev) => !prev)}
+              aria-expanded={!sharedCollapsed}
+              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+            >
+              {sharedCollapsed ? (
+                <ChevronRight size={14} className="mr-1 shrink-0" />
+              ) : (
+                <ChevronDown size={14} className="mr-1 shrink-0" />
+              )}
+              <span>Shared With Me</span>
+            </button>
+            {!sharedCollapsed && (
+              <div className="space-y-0.5">
+                {sharedPreview.map((item) => renderSharedNavigationItem(item))}
+                {hasMoreShared && (
+                  <button
+                    type="button"
+                    onClick={() => navigate('/app?filter=shared-with-me')}
+                    className="w-full px-4 py-1.5 text-left text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+                  >
+                    View more
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
         <div>
           <button
             type="button"
-            onClick={() => setAllPagesCollapsed((prev) => !prev)}
-            aria-expanded={!allPagesCollapsed}
-            className="flex items-center px-4 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+            onClick={() => setOwnedByMeCollapsed((prev) => !prev)}
+            aria-expanded={!ownedByMeCollapsed}
+            className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
           >
-            {allPagesCollapsed ? (
+            {ownedByMeCollapsed ? (
               <ChevronRight size={14} className="mr-1 shrink-0" />
             ) : (
               <ChevronDown size={14} className="mr-1 shrink-0" />
             )}
-            <span>All Pages</span>
+            <span>Owned By Me</span>
           </button>
-          {!allPagesCollapsed && (
+          {!ownedByMeCollapsed && (
             <div className="space-y-0.5">
               {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
               {rootPages.map((page) => {
@@ -522,9 +732,10 @@ export function PageTree() {
                     id={page.id}
                     title={page.title}
                     icon={page.icon}
+                    ownerId={page.ownerId}
                     createdBy={page.createdBy}
                     isActive={activePageId === page.id}
-                    isFavorite={favoritePageIds.has(page.id)}
+                    isFavorite={isFavoriteEntity('page', page.id)}
                     onDelete={() => handleDeletePage(page.id)}
                     onRename={() => beginRenamePage(page)}
                     isEditing={isEditingPage}
@@ -538,7 +749,7 @@ export function PageTree() {
                 );
               })}
               {rootFolders.length === 0 && rootPages.length === 0 && (
-                <div className="px-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                <div className="pl-10 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
                   No notes yet
                 </div>
               )}
