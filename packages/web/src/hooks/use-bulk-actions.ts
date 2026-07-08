@@ -10,7 +10,7 @@ async function deletePage(pageId: string): Promise<void> {
 }
 
 async function deleteFolder(folderId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/folders/${folderId}`, { method: 'DELETE' });
+  const res = await fetch(`${API_BASE}/folders/${folderId}?force=true`, { method: 'DELETE' });
   if (!res.ok) throw new Error('Failed to delete folder');
 }
 
