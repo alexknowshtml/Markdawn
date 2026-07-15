@@ -3,13 +3,13 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
 import { marked } from 'marked';
-import * as Y from 'yjs';
 import { auth } from '../auth';
 import type { pages } from '../db';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import { ensureDocumentInputSize, ensureYdocSize, prepareCopiedYdoc } from '../utils/documentSize';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 import { slugifyFilename } from '../utils/filename';
 import {
@@ -903,12 +903,14 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     }
     const bodyMarkdown = (body as { markdown?: string }).markdown;
     markdown = typeof bodyMarkdown === 'string' ? bodyMarkdown : '';
+    ensureDocumentInputSize(markdown);
   } else if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData().catch(() => null);
     const file = formData?.get('file');
     if (!(file instanceof File)) {
       throw new HTTPException(400, { message: 'File is required' });
     }
+    ensureDocumentInputSize(file);
     markdown = await file.text();
   } else {
     throw new HTTPException(415, { message: 'Unsupported content type' });
@@ -935,6 +937,7 @@ pagesRoute.post(':id/import/markdown', async (c) => {
   if (pageLookup.size > 0) {
     ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
+  ensureYdocSize(ydocBuffer);
 
   const updateResult = await query(
     "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
@@ -1062,14 +1065,15 @@ pagesRoute.post(':id/copy', async (c) => {
     await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
+  const copiedYdoc = prepareCopiedYdoc(page.ydoc, `Copy of ${page.title}`);
   const nextPosition = await getNextPosition('pages', parentId ?? null, user.id);
 
   const insertResult = await query(
     `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, properties, created_by)
-     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, properties, $4
-     from pages where id = $5
+     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, $4, properties, $5
+     from pages where id = $6
      returning id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
-    [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
+    [parentId ?? null, `Copy of ${page.title}`, nextPosition, copiedYdoc, user.id, pageId],
   );
 
   if (insertResult.rowCount === 0) {
@@ -1085,22 +1089,6 @@ pagesRoute.post(':id/copy', async (c) => {
      on conflict (upload_id, page_id) do nothing`,
     [newPageId, pageId],
   );
-
-  if (page.ydoc && page.ydoc.length > 0) {
-    try {
-      const ydoc = new Y.Doc();
-      Y.applyUpdate(ydoc, new Uint8Array(page.ydoc));
-      const titleText = ydoc.getText('title');
-      if (titleText.length > 0) {
-        titleText.delete(0, titleText.length);
-      }
-      titleText.insert(0, `Copy of ${page.title}`);
-      const newBinary = Buffer.from(Y.encodeStateAsUpdate(ydoc));
-      await query('update pages set ydoc = $1 where id = $2', [newBinary, newPageId]);
-    } catch {
-      // If Yjs decode fails, the title column is already set
-    }
-  }
 
   // Copy connections from the original page so wiki links and tags
   // appear immediately — without this, the copied page's backlinks

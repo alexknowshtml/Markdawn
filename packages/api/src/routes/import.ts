@@ -6,6 +6,7 @@ import type { pages } from '../db';
 import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
 import {
   createYjsDocWithTitle,
   resolveWikilinkTargets,
@@ -205,6 +206,7 @@ importRoute.post('/markdown', async (c) => {
     throw new HTTPException(400, { message: 'File must be a markdown file' });
   }
 
+  ensureDocumentInputSize(file);
   const content = await file.text();
 
   const { title: frontmatterTitle, body, properties } = parseFrontmatter(content);
@@ -222,6 +224,7 @@ importRoute.post('/markdown', async (c) => {
   if (pageLookup.size > 0) {
     ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
+  ensureYdocSize(ydocBuffer);
 
   const nextPosition = await getNextPosition('pages', parentId, user.id);
 

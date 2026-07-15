@@ -7,6 +7,7 @@ import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
 import {
   hasValidImageSignature,
   MAX_IMAGE_SIZE_BYTES,
@@ -300,6 +301,7 @@ obsidianImportRoute.post('/', async (c) => {
   for (const file of markdownFiles) {
     try {
       if (!file.content) continue;
+      ensureDocumentInputSize(file.content);
 
       const { frontmatter, body, tags, title: frontmatterTitle } = parseFrontmatter(file.content);
       const fileName = path.basename(file.path, '.md');
@@ -312,6 +314,7 @@ obsidianImportRoute.post('/', async (c) => {
       const processedBody = processMarkdownContent(body, imagePathToUrl);
       const contentForEditor = stripLeadingH1(processedBody, title);
       const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
+      ensureYdocSize(ydocBuffer);
       // Store for deferred targetId resolution after all pages are known
       pageYdocs.set(file.path, ydocBuffer);
 
@@ -432,8 +435,14 @@ obsidianImportRoute.post('/', async (c) => {
     for (const [filePath, pageId] of pagePathToId) {
       const rawYdoc = pageYdocs.get(filePath);
       if (!rawYdoc) continue;
-      const resolved = resolveWikilinkTargets(rawYdoc, workspacePageLookup);
-      await query('update pages set ydoc = $1 where id = $2', [Buffer.from(resolved), pageId]);
+      try {
+        const resolved = Buffer.from(resolveWikilinkTargets(rawYdoc, workspacePageLookup));
+        ensureYdocSize(resolved);
+        await query('update pages set ydoc = $1 where id = $2', [resolved, pageId]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        result.errors.push(`Failed to resolve links for "${filePath}": ${message}`);
+      }
     }
   }
 

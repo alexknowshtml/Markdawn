@@ -5,6 +5,7 @@ import type { folders } from '../db';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
+import { prepareCopiedYdoc } from '../utils/documentSize';
 import { getNextPosition, normalizePosition } from '../utils/position';
 import {
   ensureCanAdminEntity,
@@ -591,6 +592,8 @@ async function copyFolderRecursive(
       continue;
     }
 
+    const copiedYdoc = prepareCopiedYdoc(pr.ydoc, `Copy of ${pr.title}`);
+
     const copiedPage = await executeQuery(
       executor,
       `insert into pages (
@@ -607,7 +610,7 @@ async function copyFolderRecursive(
         pr.cover_type,
         pr.cover_value,
         pr.position,
-        pr.ydoc,
+        copiedYdoc,
         pr.properties,
         userId,
       ],

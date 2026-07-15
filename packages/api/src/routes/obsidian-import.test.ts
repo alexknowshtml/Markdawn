@@ -1,3 +1,4 @@
+import { MAX_YDOC_BYTES } from '@markdawn/shared';
 import { describe, expect, it } from 'vitest';
 import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
@@ -50,6 +51,26 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.pagesCreated).toBeGreaterThanOrEqual(1);
+    });
+
+    it('reports oversized markdown without creating an inaccessible page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const res = await app.request('/api/import/obsidian', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: [{ path: 'oversized.md', content: 'x'.repeat(MAX_YDOC_BYTES + 1) }],
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({
+        pagesCreated: 0,
+        errors: [expect.stringContaining('Document must be')],
+      });
     });
 
     it('imports nested folders', async () => {

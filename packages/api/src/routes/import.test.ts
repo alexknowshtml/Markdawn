@@ -1,3 +1,4 @@
+import { MAX_YDOC_BYTES } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
 import { query } from '../db/query';
@@ -144,6 +145,33 @@ Body text`;
       );
       const ambiguous = connections.find((connection) => connection.targetSlug === 'roadmap');
       expect(ambiguous?.targetId).toBeUndefined();
+    });
+
+    it('rejects oversized markdown before creating a page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array(MAX_YDOC_BYTES + 1)], 'oversized.md', {
+          type: 'text/markdown',
+        }),
+      );
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(413);
+      expect(await res.json()).toMatchObject({ code: 'DOCUMENT_TOO_LARGE' });
+      const pages = await query<{ count: string }>(
+        'select count(*)::text as count from pages where created_by = $1',
+        [user.id],
+      );
+      expect(pages.rows[0]?.count).toBe('0');
     });
 
     it('returns 400 when file is missing', async () => {
