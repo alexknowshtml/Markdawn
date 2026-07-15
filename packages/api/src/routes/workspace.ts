@@ -3,6 +3,7 @@ import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
+import { lockWorkspaceAccessMutation } from '../utils/share-access';
 import { notifyWorkspaceEvent } from '../utils/share-notify';
 
 const workspaceRoute = new Hono();
@@ -110,6 +111,7 @@ workspaceRoute.post('/members/invite', async (c) => {
   const inviteMessage = `Added ${targetUser.name ?? email} as ${role} to workspace`;
 
   await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
     const insertResult = await executeQuery(
       tx,
       `INSERT INTO workspace_members (workspace_owner_id, member_id, role)
@@ -155,6 +157,7 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
   const roleMessage = `Changed ${memberName}'s role to ${role}`;
 
   await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
     const updateResult = await executeQuery(
       tx,
       `UPDATE workspace_members SET role = $1
@@ -209,6 +212,7 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
     : `Removed ${memberName} from workspace`;
 
   await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, workspaceOwnerId);
     const deleteResult = await executeQuery(
       tx,
       'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',

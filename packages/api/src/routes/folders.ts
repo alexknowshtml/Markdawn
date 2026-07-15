@@ -10,6 +10,7 @@ import {
   ensureCanAdminEntity,
   ensureFolderAccess,
   ensureWorkspaceAdmin,
+  lockEntityAccessMutation,
 } from '../utils/share-access';
 import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
 
@@ -840,6 +841,7 @@ foldersRoute.post(':id/leave', async (c) => {
   }
 
   await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'folder', folderId);
     const shareResult = await executeQuery(
       tx,
       "delete from shares where entity_type = 'folder' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",

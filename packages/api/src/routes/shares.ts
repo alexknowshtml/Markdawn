@@ -9,6 +9,7 @@ import {
   ensureCanAdminEntity,
   ensureFolderAccess,
   ensurePageAccess,
+  lockEntityAccessMutation,
   parseEntityType,
   parseLinkPermission,
   parsePermission,
@@ -140,9 +141,7 @@ async function lockShareMutation(
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<void> {
-  await executeQuery(executor, 'select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-    `${entityType}:${entityId}`,
-  ]);
+  await lockEntityAccessMutation(executor, entityType, entityId);
 }
 
 const parseShareExpiration = (value: unknown): string | null => {

@@ -101,6 +101,43 @@ export const ensureFolderAccess = async (
   return { hasAccess: true, fullAccess: false, permission };
 };
 
+export const lockWorkspaceAccessMutation = async (
+  executor: QueryExecutor,
+  workspaceOwnerId: string,
+): Promise<void> => {
+  await executeQuery(executor, 'select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `workspace-access:${workspaceOwnerId}`,
+  ]);
+};
+
+export const lockEntityAccessMutation = async (
+  executor: QueryExecutor,
+  entityType: ShareEntityType,
+  entityId: string,
+): Promise<string> => {
+  const statement =
+    entityType === 'page'
+      ? `select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+         from pages p
+         where p.id = $1 and p.is_deleted = false`
+      : `select get_root_folder_owner(f.id) as owner_id
+         from folders f
+         where f.id = $1 and f.is_deleted = false`;
+  const result = await executeQuery(executor, statement, [entityId]);
+  const row = result.rows[0] as { owner_id: string | null } | undefined;
+  if (!row) {
+    throw new HTTPException(404, {
+      message: entityType === 'page' ? 'Page not found' : 'Folder not found',
+    });
+  }
+  if (!row.owner_id) {
+    throw new HTTPException(409, { message: 'Entity owner could not be determined' });
+  }
+
+  await lockWorkspaceAccessMutation(executor, row.owner_id);
+  return row.owner_id;
+};
+
 export const ensureCanAdminEntity = async (
   entityType: 'page' | 'folder',
   entityId: string,

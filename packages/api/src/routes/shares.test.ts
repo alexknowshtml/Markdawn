@@ -1413,7 +1413,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(updateRes.status).toBe(200);
     });
 
-    it('rejects an admin mutation that acquires the entity lock after demotion', async () => {
+    it('rejects an admin mutation that acquires the workspace access lock after demotion', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const admin = await createTestUser();
@@ -1444,13 +1444,147 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         await blocker.query('begin');
         transactionOpen = true;
         await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `page:${page.id}`,
+          `workspace-access:${owner.id}`,
         ]);
 
         const demotion = app.request(`/api/shares/${adminShareId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
           body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 1);
+
+        const staleAdminMutation = app.request(`/api/shares/${viewerShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: adminSession.Cookie },
+          body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 2);
+
+        await blocker.query('commit');
+        transactionOpen = false;
+
+        const [demotionResponse, staleMutationResponse] = await Promise.all([
+          demotion,
+          staleAdminMutation,
+        ]);
+        expect(demotionResponse.status).toBe(200);
+        expect(staleMutationResponse.status).toBe(403);
+
+        const viewerShare = await query<{ permission: string }>(
+          'select permission from shares where id = $1',
+          [viewerShareId],
+        );
+        expect(viewerShare.rows[0]?.permission).toBe('view');
+      } finally {
+        if (transactionOpen) await blocker.query('rollback');
+        await blocker.end();
+      }
+    });
+
+    it('serializes child mutations with inherited admin demotion', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const admin = await createTestUser();
+      const viewer = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const adminSession = await createTestSession(admin.id);
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: folder.id });
+
+      for (const [entityType, entityId, email, permission] of [
+        ['folder', folder.id, admin.email, 'admin'],
+        ['page', page.id, viewer.email, 'view'],
+      ] as const) {
+        const response = await app.request(`/api/shares/entity/${entityType}/${entityId}/invite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ email, permission }),
+        });
+        expect(response.status).toBe(200);
+      }
+
+      const adminShareId = await getShareIdForRecipient(admin.id);
+      const viewerShareId = await getShareIdForRecipient(viewer.id);
+      const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+      await blocker.connect();
+      let transactionOpen = false;
+
+      try {
+        await blocker.query('begin');
+        transactionOpen = true;
+        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `workspace-access:${owner.id}`,
+        ]);
+
+        const demotion = app.request(`/api/shares/${adminShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 1);
+
+        const staleAdminMutation = app.request(`/api/shares/${viewerShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: adminSession.Cookie },
+          body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 2);
+
+        await blocker.query('commit');
+        transactionOpen = false;
+
+        const [demotionResponse, staleMutationResponse] = await Promise.all([
+          demotion,
+          staleAdminMutation,
+        ]);
+        expect(demotionResponse.status).toBe(200);
+        expect(staleMutationResponse.status).toBe(403);
+
+        const viewerShare = await query<{ permission: string }>(
+          'select permission from shares where id = $1',
+          [viewerShareId],
+        );
+        expect(viewerShare.rows[0]?.permission).toBe('view');
+      } finally {
+        if (transactionOpen) await blocker.query('rollback');
+        await blocker.end();
+      }
+    });
+
+    it('serializes child mutations with workspace admin demotion', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const admin = await createTestUser();
+      const viewer = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const adminSession = await createTestSession(admin.id);
+      const page = await createTestPage(owner.id);
+      await createTestWorkspaceMember(owner.id, admin.id, 'admin');
+
+      const inviteResponse = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+        body: JSON.stringify({ email: viewer.email, permission: 'view' }),
+      });
+      expect(inviteResponse.status).toBe(200);
+
+      const viewerShareId = await getShareIdForRecipient(viewer.id);
+      const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+      await blocker.connect();
+      let transactionOpen = false;
+
+      try {
+        await blocker.query('begin');
+        transactionOpen = true;
+        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `workspace-access:${owner.id}`,
+        ]);
+
+        const demotion = app.request(`/api/workspace/members/${admin.id}/role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ role: 'editor' }),
         });
         await waitForAdvisoryWaiters(blocker, 1);
 
