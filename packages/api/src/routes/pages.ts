@@ -802,9 +802,17 @@ pagesRoute.get(':id/export/markdown', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(page.id, user.id);
 
+  const uploadResult = await query<{ filename: string }>(
+    `select u.filename
+     from uploads u
+     join upload_page_refs upr on upr.upload_id = u.id
+     where upr.page_id = $1`,
+    [pageId],
+  );
+  const authorizedUploadFilenames = new Set(uploadResult.rows.map((row) => row.filename));
   const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
   const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
-  const extracted = await extractImages(markdown, uploadsDir);
+  const extracted = await extractImages(markdown, uploadsDir, authorizedUploadFilenames);
 
   if (extracted.assets.size === 0) {
     c.header('Content-Type', 'text/markdown');

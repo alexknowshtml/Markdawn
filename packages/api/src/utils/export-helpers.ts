@@ -101,6 +101,7 @@ export interface ExtractedImages {
 export async function extractImages(
   markdown: string,
   uploadsDir: string,
+  authorizedUploadFilenames: ReadonlySet<string>,
 ): Promise<ExtractedImages> {
   const { masked, blocks } = maskCodeBlocks(markdown);
 
@@ -155,7 +156,7 @@ export async function extractImages(
       const filename = src.startsWith('/api/uploads/')
         ? src.replace('/api/uploads/', '')
         : src.replace('/uploads/', '');
-      if (!isValidUploadFilename(filename)) continue;
+      if (!isValidUploadFilename(filename) || !authorizedUploadFilenames.has(filename)) continue;
 
       const filePath = path.join(uploadsDir, filename);
       try {

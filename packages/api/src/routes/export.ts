@@ -12,6 +12,7 @@ type PageExportRow = {
   ydoc: Buffer | null;
   properties: Record<string, unknown> | null;
   icon: string | null;
+  uploadFilenames: string[];
 };
 
 const exportRoute = new Hono();
@@ -23,11 +24,20 @@ exportRoute.get('/export', async (c) => {
 
   const result = await query(
     `
-      select id, title, ydoc, properties, icon
-      from pages
-      where is_deleted = false
-        and id in (select page_id from get_accessible_page_ids($1))
-      order by parent_id nulls first, position::numeric asc
+      select p.id, p.title, p.ydoc, p.properties, p.icon,
+        coalesce(
+          (
+            select array_agg(u.filename)
+            from upload_page_refs upr
+            join uploads u on u.id = upr.upload_id
+            where upr.page_id = p.id
+          ),
+          '{}'::text[]
+        ) as "uploadFilenames"
+      from pages p
+      where p.is_deleted = false
+        and p.id in (select page_id from get_accessible_page_ids($1))
+      order by p.parent_id nulls first, p.position::numeric asc
     `,
     [user.id],
   );
@@ -51,7 +61,7 @@ exportRoute.get('/export', async (c) => {
     const filename = seenCount > 0 ? `${baseName}-${seenCount + 1}.md` : `${baseName}.md`;
 
     let content = pageToMarkdown(page.ydoc, page.properties, page.icon, title);
-    const extracted = await extractImages(content, uploadsDir);
+    const extracted = await extractImages(content, uploadsDir, new Set(page.uploadFilenames));
     content = extracted.markdown;
 
     for (const [assetName, assetBuffer] of extracted.assets) {
