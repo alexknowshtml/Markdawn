@@ -140,14 +140,10 @@ async function recomputePageConnections(
       logger.error(
         `[share] failed to recompute permission for user=${user.id} on page=${pageId}: ${permissionResult.reason}`,
       );
-      connection.sendStateless(
-        JSON.stringify({
-          type: 'share_event',
-          action: 'revoke',
-          ...(message !== undefined && { message }),
-        } satisfies StatelessShareMessage),
-      );
-      connection.close({ code: 4401, reason: 'Access revoked' });
+      // Fail closed without claiming access was revoked. The client can
+      // reconnect and distinguish a verification outage from a real revoke by
+      // the close code.
+      connection.close({ code: 4500, reason: 'Permission verification failed' });
       affectedCount++;
       continue;
     }
@@ -340,9 +336,6 @@ export async function revalidateActivePageConnections(
       logger.error(
         `[expiry] failed to revalidate ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}: ${result.reason}`,
       );
-      connection.sendStateless(
-        JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
-      );
       connection.close({ code: 4500, reason: 'Permission verification failed' });
       affectedCount++;
       continue;
@@ -435,13 +428,6 @@ async function applyShareEventToPage(
       `[share] base permissions unavailable for page ${pageId}, closing active connections`,
     );
     for (const connection of connections) {
-      connection.sendStateless(
-        JSON.stringify({
-          type: 'share_event',
-          action: 'revoke',
-          ...(message !== undefined && { message }),
-        } satisfies StatelessShareMessage),
-      );
       connection.close({ code: 4500, reason: 'Permission verification failed' });
     }
     return connections.length;
@@ -821,19 +807,22 @@ export async function handleWorkspaceEvent(
       if (ctx?.user?.id !== memberId) continue;
 
       if (!permission) {
-        connection.sendStateless(
-          JSON.stringify({
-            type: 'share_event',
-            action: 'revoke',
-            ...(message !== undefined && { message }),
-          } satisfies StatelessShareMessage),
-        );
-        connection.close(
-          permissionQueryFailed
-            ? { code: 4500, reason: 'Permission verification failed' }
-            : { code: 4401, reason: 'Access revoked' },
-        );
-        logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
+        if (permissionQueryFailed) {
+          connection.close({ code: 4500, reason: 'Permission verification failed' });
+          logger.warn(
+            `[workspace] could not verify user=${memberId} on page ${pageId} (${action})`,
+          );
+        } else {
+          connection.sendStateless(
+            JSON.stringify({
+              type: 'share_event',
+              action: 'revoke',
+              ...(message !== undefined && { message }),
+            } satisfies StatelessShareMessage),
+          );
+          connection.close({ code: 4401, reason: 'Access revoked' });
+          logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
+        }
         continue;
       }
 

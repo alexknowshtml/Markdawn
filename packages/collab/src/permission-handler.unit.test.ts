@@ -947,6 +947,37 @@ describe('handleShareEvent', () => {
     ).toHaveLength(1);
   });
 
+  it('does not report a recomputation query failure as an access revoke', async () => {
+    const logger = createLogger();
+    const connection = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'edit' },
+    });
+    const server = createServer(createDocument([connection]));
+    const pool = {
+      query: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'page',
+        entityId: 'page-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(connection.close).toHaveBeenCalledWith({
+      code: 4500,
+      reason: 'Permission verification failed',
+    });
+    expect(connection.sendStateless).not.toHaveBeenCalled();
+  });
+
   it('recomputes page permissions and downgrades active editors to read-only', async () => {
     const logger = createLogger();
     const conn = createConnection({
@@ -1042,5 +1073,6 @@ describe('revalidateActivePageConnections', () => {
       code: 4500,
       reason: 'Permission verification failed',
     });
+    expect(connection.sendStateless).not.toHaveBeenCalled();
   });
 });
