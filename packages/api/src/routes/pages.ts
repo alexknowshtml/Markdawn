@@ -523,7 +523,7 @@ pagesPublicRoute.get(
         userPermission = access.permission;
         userCapabilities = deriveCapabilities(access.permission, access.fullAccess);
       } catch (error) {
-        if (!linkAccess) {
+        if (!(error instanceof HTTPException) || error.status !== 403 || !linkAccess) {
           throw error;
         }
         userPermission = linkAccess.permission;

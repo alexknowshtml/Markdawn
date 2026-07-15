@@ -2,7 +2,7 @@ import { deriveCapabilities, getApiLogger } from '@markdawn/shared';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { sendShareInviteEmail } from '../utils/email';
 import {
@@ -134,6 +134,17 @@ const buildFolderPath = (name: string, folderId: string) =>
   `/app/folder/${slugifyTitle(name) || 'folder'}-${folderId}`;
 
 const sharesRoute = new Hono();
+
+async function lockShareMutation(
+  executor: QueryExecutor,
+  entityType: ShareEntityType,
+  entityId: string,
+  recipientKey: string,
+): Promise<void> {
+  await executeQuery(executor, 'select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `${entityType}:${entityId}:${recipientKey}`,
+  ]);
+}
 
 const parseShareExpiration = (value: unknown): string | null => {
   if (value === undefined || value === null) return null;
@@ -1742,9 +1753,17 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
   await ensureCanAdminEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
 
   await db.transaction(async (tx) => {
+    await lockShareMutation(tx, entityType, entityId, recipient.id);
     const existing = await executeQuery(
       tx,
-      'select id, permission from shares where entity_type = $1 and entity_id = $2 and recipient_user_id = $3 and token is null limit 1',
+      `select id, permission
+       from shares
+       where entity_type = $1
+         and entity_id = $2
+         and recipient_user_id = $3
+         and token is null
+       limit 1
+       for update`,
       [entityType, entityId, recipient.id],
     );
     const existingRow = existing.rows[0] as { id: string; permission: SharePermission } | undefined;
@@ -1846,7 +1865,11 @@ sharesRoute.patch('/:shareId', async (c) => {
     [shareId],
   );
   const row = result.rows[0] as
-    | { entity_type?: ShareEntityType; entity_id?: string; recipient_user_id?: string }
+    | {
+        entity_type?: ShareEntityType;
+        entity_id?: string;
+        recipient_user_id?: string | null;
+      }
     | undefined;
   if (!row?.entity_type || !row.entity_id) {
     throw new HTTPException(404, { message: 'Share not found' });
@@ -1863,23 +1886,40 @@ sharesRoute.patch('/:shareId', async (c) => {
 
   await ensureCanAdminEntity(row.entity_type, row.entity_id, user.id);
 
-  const targetResult = await query('select permission from shares where id = $1 limit 1', [
-    shareId,
-  ]);
-  const targetRow = targetResult.rows[0] as { permission?: SharePermission } | undefined;
-  if (targetRow?.permission === 'admin' || nextPermission === 'admin') {
-    const adminEntity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
-    if (adminEntity.ownerId !== user.id) {
+  const entity = await resolveEntity(row.entity_type, row.entity_id);
+  const updateMessage = `Updated ${entity.title} to ${nextPermission}`;
+
+  await db.transaction(async (tx) => {
+    await lockShareMutation(
+      tx,
+      shareEntityType,
+      shareEntityId,
+      row.recipient_user_id ?? `share:${shareId}`,
+    );
+    const targetResult = await executeQuery(
+      tx,
+      `select permission, recipient_user_id
+       from shares
+       where id = $1
+       limit 1
+       for update`,
+      [shareId],
+    );
+    const targetRow = targetResult.rows[0] as
+      | { permission: SharePermission; recipient_user_id: string | null }
+      | undefined;
+    if (!targetRow) {
+      throw new HTTPException(404, { message: 'Share not found' });
+    }
+    if (
+      (targetRow.permission === 'admin' || nextPermission === 'admin') &&
+      entity.ownerId !== user.id
+    ) {
       throw new HTTPException(403, {
         message: 'Only the owner can grant or change admin access',
       });
     }
-  }
 
-  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
-  const updateMessage = `Updated ${entity.title} to ${nextPermission}`;
-
-  await db.transaction(async (tx) => {
     await executeQuery(tx, 'update shares set permission = $1, updated_at = now() where id = $2', [
       nextPermission,
       shareId,
@@ -1889,7 +1929,7 @@ sharesRoute.patch('/:shareId', async (c) => {
         entityType: shareEntityType,
         entityId: shareEntityId,
         permission: nextPermission,
-        ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
+        ...(targetRow.recipient_user_id ? { targetUserId: targetRow.recipient_user_id } : {}),
         message: updateMessage,
       },
       tx,
@@ -1910,7 +1950,7 @@ sharesRoute.delete('/:shareId', async (c) => {
     | {
         entity_type?: ShareEntityType;
         entity_id?: string;
-        recipient_user_id?: string;
+        recipient_user_id?: string | null;
         permission?: SharePermission;
       }
     | undefined;
@@ -1924,31 +1964,50 @@ sharesRoute.delete('/:shareId', async (c) => {
 
   if (!isSelfRemoval) {
     await ensureCanAdminEntity(row.entity_type, row.entity_id, user.id);
-    if (row.permission === 'admin') {
-      const entity = await resolveEntity(row.entity_type, row.entity_id);
-      if (entity.ownerId !== user.id) {
-        throw new HTTPException(403, { message: 'Only the owner can remove an admin' });
-      }
-    }
   }
 
-  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
+  const entity = await resolveEntity(row.entity_type, row.entity_id);
   const revokeMessage = isSelfRemoval ? `Left ${entity.title}` : `Removed from ${entity.title}`;
 
   await db.transaction(async (tx) => {
+    await lockShareMutation(
+      tx,
+      shareEntityType,
+      shareEntityId,
+      row.recipient_user_id ?? `share:${shareId}`,
+    );
+    const targetResult = await executeQuery(
+      tx,
+      `select permission, recipient_user_id
+       from shares
+       where id = $1
+       limit 1
+       for update`,
+      [shareId],
+    );
+    const targetRow = targetResult.rows[0] as
+      | { permission: SharePermission; recipient_user_id: string | null }
+      | undefined;
+    if (!targetRow) {
+      throw new HTTPException(404, { message: 'Share not found' });
+    }
+    if (!isSelfRemoval && targetRow.permission === 'admin' && entity.ownerId !== user.id) {
+      throw new HTTPException(403, { message: 'Only the owner can remove an admin' });
+    }
+
     await executeQuery(tx, 'delete from shares where id = $1', [shareId]);
 
-    if (row.entity_type === 'page') {
+    if (shareEntityType === 'page' && targetRow.recipient_user_id) {
       await executeQuery(tx, 'delete from page_access_events where page_id = $1 and user_id = $2', [
-        row.entity_id,
-        row.recipient_user_id,
+        shareEntityId,
+        targetRow.recipient_user_id,
       ]);
     }
     await notifyShareRevoke(
       {
         entityType: shareEntityType,
         entityId: shareEntityId,
-        ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
+        ...(targetRow.recipient_user_id ? { targetUserId: targetRow.recipient_user_id } : {}),
         message: revokeMessage,
       },
       tx,

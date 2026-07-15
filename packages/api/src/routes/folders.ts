@@ -892,7 +892,7 @@ foldersPublicRoute.get(
         await ensureFolderAccess(folder.id, user.id);
         authenticatedUserId = user.id;
       } catch (error) {
-        if (!linkAccess) {
+        if (!(error instanceof HTTPException) || error.status !== 403 || !linkAccess) {
           throw error;
         }
       }
