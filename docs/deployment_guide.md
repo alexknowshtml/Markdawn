@@ -138,12 +138,27 @@ cd /var/www/markdawn
 ```
 
 The script will:
-1. Pull latest code
-2. Install dependencies
-3. Build all packages
-4. Rebuild container images
-5. Restart Podman services
-6. Push any database schema updates
+1. Verify that the existing database uses the current migration baseline
+2. Pull latest code
+3. Install dependencies
+4. Build all packages and container images
+5. Update Podman Quadlet units
+6. Restart Podman services and apply database migrations
+
+The current Drizzle v1 baseline is not compatible with databases created from the removed legacy migration history. `deploy.sh` detects those databases before pulling code or replacing deployment artifacts and exits without resetting them.
+
+### Resetting a Legacy Database
+
+This procedure permanently deletes the existing PostgreSQL data. Run it only when a clean reset is intended:
+
+```bash
+cd /var/www/markdawn
+systemctl --user stop markdawn-api.service markdawn-collab.service markdawn-postgres.service markdawn-pod.service
+podman volume rm postgres-data
+./deploy/setup.sh
+```
+
+`setup.sh` creates a fresh `postgres-data` volume and applies the current migrations. Running `setup.sh` without removing the incompatible volume does not reset the database.
 
 ## Managing Services
 

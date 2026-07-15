@@ -30,12 +30,14 @@ pnpm db:start
 
 ### 2. Database Schema
 
-Push the schema if not already applied:
+Apply pending migrations if the schema is not initialized:
 
 ```bash
-cd packages/api
-DATABASE_URL=postgresql://markdawn:password@localhost:5432/markdawn pnpm exec drizzle-kit push --force
+# From project root
+DATABASE_URL=postgresql://markdawn:password@localhost:5432/markdawn pnpm --filter @markdawn/api db:migrate
 ```
+
+`db:push` is disabled in this repository. Tests must run against the checked-in migration history.
 
 ### 3. Dev Servers
 
@@ -56,7 +58,7 @@ The `.env` file at the project root is loaded automatically by `packages/api/src
 | `PORT` | `3001` |
 | `NODE_ENV` | `development` |
 
-`TEST_SETUP_TOKEN` is optional — if absent, the token check is skipped.
+`TEST_SETUP_TOKEN` is required and must match the value configured on the API process.
 
 ### 4. Playwright Browsers
 
@@ -69,33 +71,17 @@ npx playwright install chromium firefox
 
 ### How Auth Works
 
-The setup test (`auth.setup.ts`) calls `POST /api/test/setup` which:
-1. Creates a test user + personal workspace in the database
-2. Updates the workspace slug to `e2e-test-workspace`
-3. Creates a signed session cookie
-4. Navigates to `/app/e2e-test-workspace/`
-5. Saves browser storage state to `e2e/playwright/.auth/user.json`
+The setup test (`auth.setup.ts`) calls `POST /api/test/setup` with `TEST_SETUP_TOKEN`, which:
+1. Creates a uniquely identified test user
+2. Creates a signed session cookie
+3. Navigates to `/app`
+4. Saves browser storage state to `e2e/playwright/.auth/user.json`
 
-Subsequent tests load this storage state to be authenticated.
+Subsequent tests load this storage state to be authenticated. Each setup call uses a unique email address, so repeated runs do not collide with a fixed workspace slug.
 
-### Stale Test Data
+### Stale Authentication State
 
-**This is the most common failure.** The test setup endpoint always sets the workspace slug to `e2e-test-workspace`, which is a fixed value. If a previous test run left this slug in the database, new setup requests will fail with a `unique constraint violation` on `workspaces_slug_unique`.
-
-**Fix** — clean stale test data from the dev database:
-
-```bash
-podman exec -i markdawn-postgres-dev psql -U markdawn -d markdawn <<'SQL'
-BEGIN;
-DELETE FROM sessions WHERE user_id IN (SELECT owner_id FROM workspaces WHERE slug = 'e2e-test-workspace');
-DELETE FROM workspace_members WHERE workspace_id IN (SELECT id FROM workspaces WHERE slug = 'e2e-test-workspace');
-DELETE FROM workspaces WHERE slug = 'e2e-test-workspace';
-DELETE FROM users WHERE id NOT IN (SELECT owner_id FROM workspaces);
-COMMIT;
-SQL
-```
-
-Then delete the cached auth state:
+Delete the cached auth state when switching databases or after clearing local test data:
 
 ```bash
 rm -f e2e/playwright/.auth/user.json
@@ -112,9 +98,9 @@ If you see `ENOENT: no such file or directory, open './playwright/.auth/user.jso
 | Aspect | CI | Local |
 |---|---|---|
 | PostgreSQL container | `markdawn-postgres-e2e` (fresh each run) | `markdawn-postgres-dev` (persistent) |
-| Database state | Empty — schema pushed fresh | Has leftover test data |
+| Database state | Empty — migrations applied fresh | Has leftover test data |
 | Working directory | `e2e/` | Must be `e2e/` |
-| TEST_SETUP_TOKEN | Set to `e2e-test-setup-secret` | Not needed (check skipped) |
+| TEST_SETUP_TOKEN | Set to `e2e-test-setup-secret` | Required; must match the API process |
 
 ## Writing Tests
 

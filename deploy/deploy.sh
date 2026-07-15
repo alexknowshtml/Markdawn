@@ -13,6 +13,38 @@ NC='\033[0m'
 
 cd "$REPO_DIR"
 
+MIGRATION_BASELINE="20260708053035_init"
+if podman container exists markdawn-postgres; then
+    echo -e "${YELLOW}[CHECK] Verifying database migration compatibility...${NC}"
+    if ! podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+        echo -e "${RED}[ERROR] PostgreSQL is unavailable; refusing to modify deployment artifacts.${NC}"
+        exit 1
+    fi
+
+    HAS_APPLICATION_TABLES=$(podman exec markdawn-postgres psql -U markdawn -d markdawn -Atqc \
+        "select (to_regclass('public.users') is not null)::text")
+    if [ "$HAS_APPLICATION_TABLES" = "true" ]; then
+        HAS_MIGRATION_TABLE=$(podman exec markdawn-postgres psql -U markdawn -d markdawn -Atqc \
+            "select (to_regclass('drizzle.__drizzle_migrations') is not null)::text")
+        HAS_MIGRATION_NAME_COLUMN=$(podman exec markdawn-postgres psql -U markdawn -d markdawn -Atqc \
+            "select exists (select 1 from information_schema.columns where table_schema = 'drizzle' and table_name = '__drizzle_migrations' and column_name = 'name')::text")
+        if [ "$HAS_MIGRATION_TABLE" != "true" ] || [ "$HAS_MIGRATION_NAME_COLUMN" != "true" ]; then
+            echo -e "${RED}[ERROR] This database predates the current migration baseline.${NC}"
+            echo "This release requires a clean database. Follow the legacy reset procedure in docs/deployment_guide.md."
+            exit 1
+        fi
+
+        HAS_BASELINE=$(podman exec markdawn-postgres psql -U markdawn -d markdawn -Atqc \
+            "select exists (select 1 from drizzle.__drizzle_migrations where name = '$MIGRATION_BASELINE')::text")
+        if [ "$HAS_BASELINE" != "true" ]; then
+            echo -e "${RED}[ERROR] This database does not contain migration baseline $MIGRATION_BASELINE.${NC}"
+            echo "This release requires a clean database. Follow the legacy reset procedure in docs/deployment_guide.md."
+            exit 1
+        fi
+    fi
+fi
+
+# Validate compatibility before pulling code, replacing Quadlet units, or overwriting image tags.
 echo -e "${YELLOW}[STEP 1/6] Pulling latest code...${NC}"
 git pull origin master
 

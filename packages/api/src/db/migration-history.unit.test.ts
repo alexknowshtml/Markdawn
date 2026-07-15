@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = resolve(currentDir, '../../drizzle');
+const deployScriptPath = resolve(currentDir, '../../../../deploy/deploy.sh');
 const migrationDirPattern = /^\d{14}_[A-Za-z0-9_-]+$/;
 
 function listMigrationDirs(): string[] {
@@ -55,6 +56,22 @@ describe('Drizzle v1 migration history', () => {
       );
       previousTimestamp = timestamp;
     }
+  });
+
+  it('checks migration compatibility before modifying deployment artifacts', () => {
+    const deployScript = readFileSync(deployScriptPath, 'utf8');
+    const compatibilityCheck = deployScript.indexOf('MIGRATION_BASELINE');
+    const codePull = deployScript.indexOf('git pull origin master');
+    const quadletUpdate = deployScript.indexOf('cp "$REPO_DIR/deploy/quadlet/markdawn.pod"');
+    const imageBuild = deployScript.indexOf('podman build -t localhost/markdawn-api:latest');
+    const serviceStop = deployScript.indexOf('systemctl --user stop');
+
+    expect(compatibilityCheck).toBeGreaterThan(-1);
+    expect(codePull).toBeGreaterThan(compatibilityCheck);
+    expect(quadletUpdate).toBeGreaterThan(compatibilityCheck);
+    expect(imageBuild).toBeGreaterThan(compatibilityCheck);
+    expect(serviceStop).toBeGreaterThan(compatibilityCheck);
+    expect(deployScript).toContain('20260708053035_init');
   });
 
   it('enforces one link share and numeric page ordering values', () => {
