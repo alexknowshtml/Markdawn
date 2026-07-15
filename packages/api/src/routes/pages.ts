@@ -624,20 +624,52 @@ pagesRoute.patch(':id/restore', async (c) => {
   }
 
   const updateResult = await db.transaction(async (tx) => {
-    const nextPosition = await getNextPosition('pages', null, user.id, tx);
+    const lockedPageResult = await executeQuery<{
+      parent_id: string | null;
+      created_by: string | null;
+    }>(
+      tx,
+      `select parent_id, created_by
+       from pages
+       where id = $1 and is_deleted = true
+       for update`,
+      [pageId],
+    );
+    const lockedPage = lockedPageResult.rows[0];
+    if (!lockedPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    let restoreParentId: string | null = null;
+    if (lockedPage.parent_id) {
+      const parentResult = await executeQuery<{ id: string }>(
+        tx,
+        `select id
+         from folders
+         where id = $1 and is_deleted = false
+         for share`,
+        [lockedPage.parent_id],
+      );
+      if (parentResult.rowCount && parentResult.rowCount > 0) {
+        restoreParentId = lockedPage.parent_id;
+      }
+    }
+
+    const restoreCreatorId = restoreParentId ? lockedPage.created_by : user.id;
+    const nextPosition = await getNextPosition('pages', restoreParentId, user.id, tx);
     return executeQuery(
       tx,
       `update pages
        set is_deleted = false,
            deleted_at = null,
-           parent_id = null,
-           created_by = $1,
-           position = $2,
+           parent_id = $1,
+           created_by = $2,
+           position = $3,
            title_search = to_tsvector('english', title),
            updated_at = now()
-       where id = $3
+       where id = $4 and is_deleted = true
        returning *`,
-      [user.id, nextPosition, pageId],
+      [restoreParentId, restoreCreatorId, nextPosition, pageId],
     );
   });
 

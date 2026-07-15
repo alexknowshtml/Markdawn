@@ -445,6 +445,38 @@ describe('pages API', () => {
       expect(tree.some((p: { id: string }) => p.id === page.id)).toBe(true);
     });
 
+    it('preserves an active parent and the original creator', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const creator = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(creator.id, { parentId: folder.id });
+
+      const deleteResponse = await app.request(`/api/pages/${page.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(deleteResponse.status).toBe(200);
+
+      const restoreResponse = await app.request(`/api/pages/${page.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(restoreResponse.status).toBe(200);
+
+      const restored = await query<{
+        parent_id: string | null;
+        created_by: string | null;
+        is_deleted: boolean;
+      }>('SELECT parent_id, created_by, is_deleted FROM pages WHERE id = $1', [page.id]);
+      expect(restored.rows[0]).toEqual({
+        parent_id: folder.id,
+        created_by: creator.id,
+        is_deleted: false,
+      });
+    });
+
     it('restores a page from a deleted folder to the workspace root', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
