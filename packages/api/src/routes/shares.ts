@@ -1539,6 +1539,10 @@ sharesRoute.patch('/entity/:entityType/:entityId/inheritance', async (c) => {
 
   await ensureCanAdminEntity(entityType, entity.id, user.id);
 
+  const policyMessage =
+    policy === 'restricted'
+      ? `${entity.title} stopped inheriting access`
+      : `${entity.title} now inherits access`;
   await db.transaction(async (tx) => {
     await executeQuery(
       tx,
@@ -1547,15 +1551,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/inheritance', async (c) => {
         : 'update folders set inheritance_policy = $1, updated_at = now() where id = $2',
       [policy, entityId],
     );
-  });
-
-  await notifyShareRecompute({
-    entityType,
-    entityId,
-    message:
-      policy === 'restricted'
-        ? `${entity.title} stopped inheriting access`
-        : `${entity.title} now inherits access`,
+    await notifyShareRecompute({ entityType, entityId, message: policyMessage }, tx);
   });
 
   return c.json({
@@ -1611,12 +1607,14 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
           [entityId],
         );
       }
-    });
-
-    await notifyShareRevoke({
-      entityType,
-      entityId,
-      message: `Link access removed for ${entity.title}`,
+      await notifyShareRevoke(
+        {
+          entityType,
+          entityId,
+          message: `Link access removed for ${entity.title}`,
+        },
+        tx,
+      );
     });
     return c.json({
       permission: 'private',
@@ -1627,6 +1625,10 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
   }
 
   const nextPermission = parseLinkPermission(permission);
+  const linkMessage =
+    nextPermission === 'view'
+      ? `${entity.title} is now view only with link`
+      : `${entity.title} is now editable with link`;
   let token = '';
   await db.transaction(async (tx) => {
     const linkResult = await executeQuery<{ token: string }>(
@@ -1667,18 +1669,15 @@ sharesRoute.patch('/entity/:entityType/:entityId/link', async (c) => {
         [nextPermission, entityId, 'link'],
       );
     }
-  });
-
-  const linkMessage =
-    nextPermission === 'view'
-      ? `${entity.title} is now view only with link`
-      : `${entity.title} is now editable with link`;
-
-  await notifyShareUpdate({
-    entityType,
-    entityId,
-    permission: nextPermission,
-    message: linkMessage,
+    await notifyShareUpdate(
+      {
+        entityType,
+        entityId,
+        permission: nextPermission,
+        message: linkMessage,
+      },
+      tx,
+    );
   });
 
   return c.json({
@@ -1738,6 +1737,7 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
     (sharerResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Someone';
 
   let isNewInvite = false;
+  let inviteMessage = '';
 
   await ensureCanAdminEntity(entityType === 'page' ? 'page' : 'folder', entity.id, user.id);
 
@@ -1787,20 +1787,21 @@ sharesRoute.post('/entity/:entityType/:entityId/invite', async (c) => {
         ],
       );
     }
-  });
-
-  const inviteMessage = isNewInvite
-    ? `Invited ${recipient.email} as ${nextPermission} to ${entity.title}`
-    : `Updated ${recipient.email}'s access to ${nextPermission} on ${entity.title}`;
-
-  await notifyShareGrant({
-    entityType,
-    entityId,
-    permission: nextPermission,
-    targetUserId: recipient.id,
-    entityTitle: entity.title,
-    sharedByName,
-    message: inviteMessage,
+    inviteMessage = isNewInvite
+      ? `Invited ${recipient.email} as ${nextPermission} to ${entity.title}`
+      : `Updated ${recipient.email}'s access to ${nextPermission} on ${entity.title}`;
+    await notifyShareGrant(
+      {
+        entityType,
+        entityId,
+        permission: nextPermission,
+        targetUserId: recipient.id,
+        entityTitle: entity.title,
+        sharedByName,
+        message: inviteMessage,
+      },
+      tx,
+    );
   });
 
   const entityUrl =
@@ -1850,6 +1851,8 @@ sharesRoute.patch('/:shareId', async (c) => {
   if (!row?.entity_type || !row.entity_id) {
     throw new HTTPException(404, { message: 'Share not found' });
   }
+  const shareEntityType = row.entity_type;
+  const shareEntityId = row.entity_id;
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -1873,23 +1876,24 @@ sharesRoute.patch('/:shareId', async (c) => {
     }
   }
 
+  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
+  const updateMessage = `Updated ${entity.title} to ${nextPermission}`;
+
   await db.transaction(async (tx) => {
     await executeQuery(tx, 'update shares set permission = $1, updated_at = now() where id = $2', [
       nextPermission,
       shareId,
     ]);
-  });
-
-  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
-
-  const updateMessage = `Updated ${entity.title} to ${nextPermission}`;
-
-  await notifyShareUpdate({
-    entityType: row.entity_type as ShareEntityType,
-    entityId: row.entity_id,
-    permission: nextPermission,
-    ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
-    message: updateMessage,
+    await notifyShareUpdate(
+      {
+        entityType: shareEntityType,
+        entityId: shareEntityId,
+        permission: nextPermission,
+        ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
+        message: updateMessage,
+      },
+      tx,
+    );
   });
 
   return c.json({ ok: true, message: updateMessage });
@@ -1913,6 +1917,8 @@ sharesRoute.delete('/:shareId', async (c) => {
   if (!row?.entity_type || !row.entity_id) {
     throw new HTTPException(404, { message: 'Share not found' });
   }
+  const shareEntityType = row.entity_type;
+  const shareEntityId = row.entity_id;
 
   const isSelfRemoval = row.recipient_user_id === user.id;
 
@@ -1926,6 +1932,9 @@ sharesRoute.delete('/:shareId', async (c) => {
     }
   }
 
+  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
+  const revokeMessage = isSelfRemoval ? `Left ${entity.title}` : `Removed from ${entity.title}`;
+
   await db.transaction(async (tx) => {
     await executeQuery(tx, 'delete from shares where id = $1', [shareId]);
 
@@ -1935,25 +1944,16 @@ sharesRoute.delete('/:shareId', async (c) => {
         row.recipient_user_id,
       ]);
     }
+    await notifyShareRevoke(
+      {
+        entityType: shareEntityType,
+        entityId: shareEntityId,
+        ...(row.recipient_user_id ? { targetUserId: row.recipient_user_id } : {}),
+        message: revokeMessage,
+      },
+      tx,
+    );
   });
-
-  const entity = await resolveEntity(row.entity_type as ShareEntityType, row.entity_id);
-  const revokeMessage = isSelfRemoval ? `Left ${entity.title}` : `Removed from ${entity.title}`;
-
-  if (row.recipient_user_id) {
-    await notifyShareRevoke({
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      targetUserId: row.recipient_user_id,
-      message: revokeMessage,
-    });
-  } else {
-    await notifyShareRevoke({
-      entityType: row.entity_type,
-      entityId: row.entity_id,
-      message: revokeMessage,
-    });
-  }
 
   return c.json({ ok: true, message: revokeMessage });
 });

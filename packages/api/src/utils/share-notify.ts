@@ -1,5 +1,6 @@
 import type { ShareEntityType, ShareEventAction, SharePermission } from '@markdawn/shared';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, type QueryExecutor } from '../db/query';
 
 interface ShareEventBase {
   entityType: ShareEntityType;
@@ -11,7 +12,11 @@ interface ShareEventBase {
   message?: string;
 }
 
-function fireShareEvent(action: ShareEventAction, params: ShareEventBase) {
+function fireShareEvent(
+  action: ShareEventAction,
+  params: ShareEventBase,
+  executor: QueryExecutor = db,
+) {
   const payload = {
     type: 'share_event',
     action,
@@ -21,11 +26,14 @@ function fireShareEvent(action: ShareEventAction, params: ShareEventBase) {
     ...(params.targetUserId !== undefined && { targetUserId: params.targetUserId }),
     ...(params.message !== undefined && { message: params.message }),
   };
-  return query("SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
+  return executeQuery(executor, "SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
 }
 
-export function notifyShareGrant(params: ShareEventBase) {
-  const events: Promise<unknown>[] = [fireShareEvent('grant', params)];
+export async function notifyShareGrant(
+  params: ShareEventBase,
+  executor: QueryExecutor = db,
+): Promise<void> {
+  await fireShareEvent('grant', params, executor);
   if (params.targetUserId && params.entityTitle && params.sharedByName) {
     const invitePayload = {
       type: 'invite_received',
@@ -36,21 +44,22 @@ export function notifyShareGrant(params: ShareEventBase) {
       targetUserId: params.targetUserId,
       message: params.message,
     };
-    events.push(query("SELECT pg_notify('share_event', $1)", [JSON.stringify(invitePayload)]));
+    await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [
+      JSON.stringify(invitePayload),
+    ]);
   }
-  return Promise.all(events);
 }
 
-export function notifyShareUpdate(params: ShareEventBase) {
-  return fireShareEvent('update', params);
+export function notifyShareUpdate(params: ShareEventBase, executor: QueryExecutor = db) {
+  return fireShareEvent('update', params, executor);
 }
 
-export function notifyShareRevoke(params: ShareEventBase) {
-  return fireShareEvent('revoke', params);
+export function notifyShareRevoke(params: ShareEventBase, executor: QueryExecutor = db) {
+  return fireShareEvent('revoke', params, executor);
 }
 
-export function notifyShareRecompute(params: ShareEventBase) {
-  return fireShareEvent('recompute', params);
+export function notifyShareRecompute(params: ShareEventBase, executor: QueryExecutor = db) {
+  return fireShareEvent('recompute', params, executor);
 }
 
 export function notifyWorkspaceEvent(
@@ -58,6 +67,7 @@ export function notifyWorkspaceEvent(
   ownerId: string,
   memberId: string,
   message?: string,
+  executor: QueryExecutor = db,
 ) {
   const payload = {
     type: 'workspace_event',
@@ -66,5 +76,7 @@ export function notifyWorkspaceEvent(
     memberId,
     ...(message !== undefined && { message }),
   };
-  return query("SELECT pg_notify('workspace_event', $1)", [JSON.stringify(payload)]);
+  return executeQuery(executor, "SELECT pg_notify('workspace_event', $1)", [
+    JSON.stringify(payload),
+  ]);
 }
