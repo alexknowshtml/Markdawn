@@ -1,6 +1,7 @@
 import { HocuspocusProvider } from '@hocuspocus/provider';
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import * as Y from 'yjs';
 import { authClient } from '../lib/auth-client';
 import { getLogger } from '../logger-init';
@@ -37,6 +38,29 @@ type FolderDeletionEvent = {
 };
 
 type PageMetaStatelessMessage = WorkspaceMembershipEvent | FolderDeletionEvent;
+
+export function applyPageMetaStatelessMessage(
+  message: PageMetaStatelessMessage,
+  queryClient: QueryClient,
+  pathname: string,
+): boolean {
+  if (message.type === 'entity_deleted') {
+    queryClient.removeQueries({
+      queryKey: ['folders', 'detail', message.entityId],
+      exact: true,
+    });
+    queryClient.removeQueries({
+      queryKey: ['shares', 'entity', 'folder', message.entityId],
+      exact: true,
+    });
+  }
+  invalidateWorkspaceAccessQueries(queryClient);
+  return (
+    message.type === 'entity_deleted' &&
+    pathname.startsWith('/app/folder/') &&
+    pathname.endsWith(message.entityId)
+  );
+}
 
 export function parsePageMetaStatelessMessage(payload: string): PageMetaStatelessMessage | null {
   const trimmed = payload.trim();
@@ -83,6 +107,7 @@ export function parsePageMetaStatelessMessage(payload: string): PageMetaStateles
  */
 export function usePageMeta() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { data: session } = authClient.useSession();
   const userId = session?.user?.id;
 
@@ -134,8 +159,11 @@ export function usePageMeta() {
 
     const handleStateless = ({ payload }: { payload: string }) => {
       try {
-        if (parsePageMetaStatelessMessage(payload)) {
-          invalidateWorkspaceAccessQueries(queryClient);
+        const message = parsePageMetaStatelessMessage(payload);
+        if (!message) return;
+
+        if (applyPageMetaStatelessMessage(message, queryClient, window.location.pathname)) {
+          navigate('/app', { replace: true });
         }
       } catch (error) {
         getLogger().warn('Ignored malformed page metadata message', { error: String(error) });
@@ -162,5 +190,5 @@ export function usePageMeta() {
       provider.destroy();
       doc.destroy();
     };
-  }, [userId, queryClient]);
+  }, [userId, queryClient, navigate]);
 }

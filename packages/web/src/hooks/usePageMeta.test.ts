@@ -1,5 +1,6 @@
+import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { parsePageMetaStatelessMessage } from './usePageMeta';
+import { applyPageMetaStatelessMessage, parsePageMetaStatelessMessage } from './usePageMeta';
 
 describe('parsePageMetaStatelessMessage', () => {
   it('accepts valid workspace membership events', () => {
@@ -28,6 +29,22 @@ describe('parsePageMetaStatelessMessage', () => {
         }),
       ),
     ).toEqual({ type: 'entity_deleted', entityType: 'folder', entityId: 'folder-1' });
+  });
+
+  it('removes deleted folder details and redirects the active folder route', () => {
+    const queryClient = new QueryClient();
+    queryClient.setQueryData(['folders', 'detail', 'folder-1'], { id: 'folder-1' });
+    queryClient.setQueryData(['shares', 'entity', 'folder', 'folder-1'], { id: 'folder-1' });
+
+    const shouldRedirect = applyPageMetaStatelessMessage(
+      { type: 'entity_deleted', entityType: 'folder', entityId: 'folder-1' },
+      queryClient,
+      '/app/folder/deleted-folder-folder-1',
+    );
+
+    expect(shouldRedirect).toBe(true);
+    expect(queryClient.getQueryData(['folders', 'detail', 'folder-1'])).toBeUndefined();
+    expect(queryClient.getQueryData(['shares', 'entity', 'folder', 'folder-1'])).toBeUndefined();
   });
 
   it('ignores unrelated non-JSON provider messages', () => {
