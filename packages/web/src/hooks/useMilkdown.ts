@@ -27,6 +27,7 @@ import {
   remarkMathPlugin,
   toggleLatexCommand,
 } from '../editor/plugins/math';
+import { createSafeLinkView } from '../editor/plugins/safeLinkView';
 import { tag } from '../editor/plugins/tag';
 import { wikiLinkView } from '../editor/plugins/wikiLinkView';
 import { wikiLink } from '../editor/plugins/wikilink';
@@ -429,6 +430,10 @@ export function useMilkdown({
             attributes: {
               class: 'milkdown-editor-view',
               spellcheck: 'false',
+            },
+            markViews: {
+              ...prev.markViews,
+              link: createSafeLinkView,
             },
             handlePaste: (_view, event) => {
               const text = event.clipboardData?.getData('text/plain') ?? '';
