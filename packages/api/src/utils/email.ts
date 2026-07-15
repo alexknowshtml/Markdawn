@@ -35,12 +35,14 @@ type EmailPayload = {
   html?: string;
 };
 
-export async function sendEmail(payload: EmailPayload): Promise<void> {
+export type EmailDeliveryResult = 'sent' | 'disabled';
+
+export async function sendEmail(payload: EmailPayload): Promise<EmailDeliveryResult> {
   const mailer = getTransporter();
   const from = process.env.SMTP_FROM;
 
   if (!mailer || !from) {
-    return;
+    return 'disabled';
   }
 
   await mailer.sendMail({
@@ -50,6 +52,7 @@ export async function sendEmail(payload: EmailPayload): Promise<void> {
     text: payload.text,
     html: payload.html,
   });
+  return 'sent';
 }
 
 export async function sendShareInviteEmail({
@@ -66,9 +69,9 @@ export async function sendShareInviteEmail({
   sharedByName: string;
   permission: string;
   entityUrl: string;
-}): Promise<void> {
+}): Promise<EmailDeliveryResult> {
   const subject = `${sharedByName} shared a ${entityType} with you on Markdawn`;
   const text = `${sharedByName} shared "${entityTitle}" with you. You have ${permission} access.\n\nView it here: ${entityUrl}`;
 
-  await sendEmail({ to, subject, text });
+  return sendEmail({ to, subject, text });
 }

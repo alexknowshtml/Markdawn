@@ -1,7 +1,14 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
+
+export type WorkspaceMembership = {
+  ownerId: string;
+  ownerName: string | null;
+  role: 'viewer' | 'editor' | 'admin';
+  joinedAt: string;
+};
 
 export type WorkspaceMember = {
   id: string;
@@ -26,6 +33,29 @@ export function useWorkspaceMembers() {
     queryFn: fetchWorkspaceMembers,
     staleTime: 1000 * 60,
   });
+}
+
+async function fetchWorkspaceMemberships(): Promise<WorkspaceMembership[]> {
+  const res = await fetch(`${API_BASE}/workspace/memberships`);
+  if (!res.ok) throw new Error('Failed to fetch joined workspaces');
+  return res.json();
+}
+
+export function useWorkspaceMemberships() {
+  return useQuery({
+    queryKey: ['workspace-memberships'],
+    queryFn: fetchWorkspaceMemberships,
+    staleTime: 1000 * 60,
+  });
+}
+
+export function invalidateWorkspaceAccessQueries(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['workspace-memberships'] });
+  queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+  queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+  queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+  queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+  queryClient.invalidateQueries({ queryKey: ['favorites'] });
 }
 
 async function inviteToWorkspace({
@@ -116,5 +146,35 @@ export function useRemoveWorkspaceMember() {
       if (data?.message) showSuccessToast(data.message);
     },
     meta: { errorMessage: 'Failed to remove member' },
+  });
+}
+
+async function leaveWorkspace({
+  ownerId,
+  memberId,
+}: {
+  ownerId: string;
+  memberId: string;
+}): Promise<{ message?: string }> {
+  const res = await fetch(
+    `${API_BASE}/workspace/members/${memberId}?workspaceOwnerId=${encodeURIComponent(ownerId)}`,
+    { method: 'DELETE' },
+  );
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to leave workspace' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
+export function useLeaveWorkspace() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: leaveWorkspace,
+    onSuccess: (data) => {
+      invalidateWorkspaceAccessQueries(queryClient);
+      if (data?.message) showSuccessToast(data.message);
+    },
+    meta: { errorMessage: 'Failed to leave workspace' },
   });
 }

@@ -2,7 +2,7 @@ import type { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { handleShareEvent } from './permission-handler';
+import { handleShareEvent, handleWorkspaceEvent } from './permission-handler';
 
 function createLogger() {
   const fn = () => vi.fn();
@@ -55,6 +55,19 @@ function createServer(doc: ReturnType<typeof createDocument> | undefined) {
   } as unknown as Server;
 }
 
+function createServerWithDocuments(
+  documents: Map<string, ReturnType<typeof createDocument>>,
+): Server {
+  return {
+    hocuspocus: {
+      documents,
+    },
+    configure: vi.fn(),
+    destroy: vi.fn(),
+    listen: vi.fn(),
+  } as unknown as Server;
+}
+
 function createPool(
   entries: Array<{ user_id: string; permission: string }> = [],
   options?: { anonymousPermission?: string | null; defaultPermission?: string | null },
@@ -65,8 +78,19 @@ function createPool(
         return { rows: entries };
       }
       if (sql.includes('get_effective_page_permission')) {
-        const userId = params?.[1];
-        const entry = entries.find((item) => item.user_id === userId);
+        const requestedUsers = params?.[1];
+        if (Array.isArray(requestedUsers)) {
+          return {
+            rows: requestedUsers.map((userId) => {
+              const entry = entries.find((item) => item.user_id === userId);
+              return {
+                user_id: userId,
+                permission: entry?.permission ?? options?.defaultPermission ?? null,
+              };
+            }),
+          };
+        }
+        const entry = entries.find((item) => item.user_id === requestedUsers);
         return { rows: [{ permission: entry?.permission ?? options?.defaultPermission ?? null }] };
       }
       if (sql.includes('WITH page_parent')) {
@@ -615,7 +639,7 @@ describe('handleShareEvent', () => {
         return { rows: [{ id: 'page-1' }] };
       }
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ permission: 'edit' }] };
+        return { rows: [{ user_id: 'user-1', permission: 'edit' }] };
       }
       return { rows: [] };
     });
@@ -657,7 +681,13 @@ describe('handleShareEvent', () => {
         return { rows: [{ id: 'page-1' }] };
       }
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ permission: params?.[1] === 'direct-user' ? 'edit' : null }] };
+        const userIds = params?.[1] as string[];
+        return {
+          rows: userIds.map((userId) => ({
+            user_id: userId,
+            permission: userId === 'direct-user' ? 'edit' : null,
+          })),
+        };
       }
       return { rows: [] };
     });
@@ -684,6 +714,235 @@ describe('handleShareEvent', () => {
     expect(directConn.sendStateless).not.toHaveBeenCalled();
   });
 
+  it('fails closed only for affected user connections when a folder lookup fails', async () => {
+    const logger = createLogger();
+    const affectedConn = createConnection({
+      context: { user: { id: 'target-user' }, permission: 'edit' },
+    });
+    const unrelatedConn = createConnection({
+      context: { user: { id: 'target-user' }, permission: 'edit' },
+    });
+    const otherUserConn = createConnection({
+      context: { user: { id: 'other-user' }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(
+      new Map([
+        ['affected-page', createDocument([affectedConn, otherUserConn])],
+        ['unrelated-page', createDocument([unrelatedConn])],
+      ]),
+    );
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('SELECT p.id FROM pages p')) {
+        throw new Error('folder lookup failed');
+      }
+      if (sql.includes('get_effective_page_permission')) {
+        const userIds = params?.[1] as string[];
+        return {
+          rows: userIds.map((userId) => ({
+            user_id: userId,
+            permission: params?.[0] === 'affected-page' ? null : 'edit',
+          })),
+        };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'folder',
+        entityId: 'folder-1',
+        targetUserId: 'target-user',
+      },
+      pool,
+      logger,
+    );
+
+    expect(affectedConn.close).toHaveBeenCalled();
+    expect(unrelatedConn.close).not.toHaveBeenCalled();
+    expect(otherUserConn.close).not.toHaveBeenCalled();
+  });
+
+  it('notifies the active meta room when workspace membership changes', async () => {
+    const logger = createLogger();
+    const metaConnection = createConnection({
+      context: { user: { id: 'member-1' }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(
+      new Map([['page-meta:member-1', createDocument([metaConnection])]]),
+    );
+    const pool = {
+      query: vi.fn(async () => ({ rows: [] })),
+    } as unknown as Pool;
+
+    await handleWorkspaceEvent(
+      server,
+      {
+        type: 'workspace_event',
+        action: 'role_changed',
+        ownerId: 'workspace-owner',
+        memberId: 'member-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(metaConnection.sendStateless).toHaveBeenCalledWith(
+      JSON.stringify({
+        type: 'workspace_membership_event',
+        action: 'role_changed',
+        ownerId: 'workspace-owner',
+      }),
+    );
+  });
+
+  it('batches workspace permission checks across active pages', async () => {
+    const logger = createLogger();
+    const firstConnection = createConnection({
+      context: { user: { id: 'member-1' }, permission: 'edit' },
+    });
+    const secondConnection = createConnection({
+      context: { user: { id: 'member-1' }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(
+      new Map([
+        ['page-1', createDocument([firstConnection])],
+        ['page-2', createDocument([secondConnection])],
+      ]),
+    );
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('p.id = ANY($2::uuid[])')) {
+        return { rows: [{ id: 'page-1' }, { id: 'page-2' }] };
+      }
+      if (sql.includes('WITH requested_pages AS')) {
+        return {
+          rows: [
+            { page_id: 'page-1', permission: 'view' },
+            { page_id: 'page-2', permission: 'edit' },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleWorkspaceEvent(
+      server,
+      {
+        type: 'workspace_event',
+        action: 'role_changed',
+        ownerId: 'workspace-owner',
+        memberId: 'member-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(firstConnection.readOnly).toBe(true);
+    expect(secondConnection.readOnly).toBe(false);
+  });
+
+  it('fails closed only for affected workspace connections when owner lookup fails', async () => {
+    const logger = createLogger();
+    const affectedConn = createConnection({
+      context: { user: { id: 'member-1' }, permission: 'edit' },
+    });
+    const unrelatedConn = createConnection({
+      context: { user: { id: 'member-1' }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(
+      new Map([
+        ['affected-page', createDocument([affectedConn])],
+        ['unrelated-page', createDocument([unrelatedConn])],
+      ]),
+    );
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('COALESCE(get_root_folder_owner(p.parent_id), p.created_by) = $1')) {
+        throw new Error('workspace lookup failed');
+      }
+      if (sql.includes('get_effective_page_permission')) {
+        const userIds = params?.[1] as string[];
+        return {
+          rows: userIds.map((userId) => ({
+            user_id: userId,
+            permission: params?.[0] === 'affected-page' ? null : 'edit',
+          })),
+        };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleWorkspaceEvent(
+      server,
+      {
+        type: 'workspace_event',
+        action: 'member_removed',
+        ownerId: 'workspace-owner',
+        memberId: 'member-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(affectedConn.close).toHaveBeenCalled();
+    expect(unrelatedConn.close).not.toHaveBeenCalled();
+  });
+
+  it('batches permission recomputation for all active page connections', async () => {
+    const logger = createLogger();
+    const connections = [
+      createConnection({ context: { user: { id: 'user-1' }, permission: 'edit' } }),
+      createConnection({ context: { user: { id: 'user-2' }, permission: 'view' }, readOnly: true }),
+      createConnection({ context: { user: { id: 'user-1' }, permission: 'edit' } }),
+      createConnection({
+        context: { user: { id: 'anon-1', isAnonymous: true }, permission: 'edit' },
+      }),
+      createConnection({
+        context: { user: { id: 'anon-2', isAnonymous: true }, permission: 'edit' },
+      }),
+    ];
+    const server = createServer(createDocument(connections));
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('requested_users')) {
+        return {
+          rows: [
+            { user_id: 'user-1', permission: 'edit' },
+            { user_id: 'user-2', permission: 'view' },
+          ],
+        };
+      }
+      if (sql.includes('WITH page_parent')) {
+        return { rows: [{ permission: 'edit' }] };
+      }
+      return { rows: [] };
+    });
+    const pool = { query } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'page',
+        entityId: 'page-1',
+      },
+      pool,
+      logger,
+    );
+
+    expect(
+      query.mock.calls.filter(([sql]) => String(sql).includes('requested_users')),
+    ).toHaveLength(1);
+    expect(
+      query.mock.calls.filter(([sql]) => String(sql).includes('WITH page_parent')),
+    ).toHaveLength(1);
+  });
+
   it('recomputes page permissions and downgrades active editors to read-only', async () => {
     const logger = createLogger();
     const conn = createConnection({
@@ -694,7 +953,7 @@ describe('handleShareEvent', () => {
     const server = createServer(doc);
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ permission: 'view' }] };
+        return { rows: [{ user_id: 'user-1', permission: 'view' }] };
       }
       return { rows: [] };
     });

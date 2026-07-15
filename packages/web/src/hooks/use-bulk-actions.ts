@@ -39,12 +39,14 @@ export function useBulkDeletePages() {
       await Promise.all(pageIds.map((id) => deletePage(id)));
     },
     onSuccess: () => {
+      showSuccessToast('Pages moved to trash');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      showSuccessToast('Pages moved to trash');
     },
   });
 }
@@ -56,12 +58,14 @@ export function useBulkDeleteFolders() {
       await Promise.all(folderIds.map((id) => deleteFolder(id)));
     },
     onSuccess: () => {
+      showSuccessToast('Folders moved to trash');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      showSuccessToast('Folders moved to trash');
     },
   });
 }
@@ -73,9 +77,11 @@ export function useBulkMovePages() {
       await Promise.all(pageIds.map((id) => movePage(id, parentId)));
     },
     onSuccess: () => {
+      showSuccessToast('Pages moved');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      showSuccessToast('Pages moved');
     },
   });
 }
@@ -93,10 +99,12 @@ export function useBulkMoveFolders() {
       await Promise.all(folderIds.map((id) => moveFolder(id, parentId)));
     },
     onSuccess: () => {
+      showSuccessToast('Folders moved');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      showSuccessToast('Folders moved');
     },
   });
 }

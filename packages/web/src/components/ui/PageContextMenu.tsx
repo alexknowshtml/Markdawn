@@ -2,13 +2,22 @@ import { Copy, Download, Edit2, FolderInput, Share, Star, Trash2 } from 'lucide-
 import type React from 'react';
 import { useState } from 'react';
 import { useClipboard } from '../../contexts/ClipboardContext';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useBulkMoveFolders, useBulkMovePages } from '../../hooks/use-bulk-actions';
 import { useToggleFavorite } from '../../hooks/use-favorites';
 import { useFolderTree } from '../../hooks/use-folders';
+import { useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
-import { useEntityDeletion } from '../../utils/entity-actions';
+import {
+  isOwnedByUser,
+  preservesEffectiveOwnerAtRoot,
+  useEntityDeletion,
+  useLeaveEntity,
+} from '../../utils/entity-actions';
+import { consumeSelfLeave, markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 // showErrorToast kept for non-mutation use in handleExport
+import { ConfirmDialog } from '../ConfirmDialog';
 import { PublicShareDialog } from '../editor/PublicShareDialog';
 import { MoveDialog } from '../workspace/MoveDialog';
 import { KebabMenu } from './KebabMenu';
@@ -21,6 +30,9 @@ type PageContextMenuProps = {
     icon?: string | null;
     ownerId?: string | null | undefined;
     createdBy?: string | null | undefined;
+    userPermission?: 'view' | 'edit' | 'admin' | null | undefined;
+    shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+    canMove?: boolean | undefined;
   };
   isFavorite?: boolean;
   triggerClassName?: string;
@@ -42,20 +54,40 @@ export function PageContextMenu({
   onMutated,
 }: PageContextMenuProps) {
   const clipboard = useClipboard();
+  const { isAnonymous } = useShareContext();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const toggleFavoriteMutation = useToggleFavorite();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
   const { data: folders } = useFolderTree();
-  const { handleDelete } = useEntityDeletion({
+  const { data: workspaceMemberships } = useWorkspaceMemberships();
+  const { handleDelete, isPending: isDeletePending } = useEntityDeletion({
     entityType: item.type,
     currentUserId,
     onSuccess: onMutated,
   });
+  const leaveMutation = useLeaveEntity(item.type);
 
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
+  const [folderDeleteSummary, setFolderDeleteSummary] = useState<{
+    childFolders: number;
+    childPages: number;
+  } | null>(null);
+
+  const isOwned = currentUserId ? isOwnedByUser(item, currentUserId) : false;
+  const isAdmin = isOwned || item.userPermission === 'admin';
+  const canEditContent = isAdmin || item.userPermission === 'edit';
+  const canRename = item.type === 'page' ? canEditContent : isAdmin;
+  const canLeave = !isOwned && (item.shareSource === 'direct' || item.shareSource === 'link');
+  const canMove = item.canMove ?? isAdmin;
+  const hasWorkspaceRootAccess =
+    isOwned ||
+    workspaceMemberships?.some(
+      (membership) => membership.ownerId === item.ownerId && membership.role === 'admin',
+    ) === true;
+  const allowMoveToRoot = hasWorkspaceRootAccess && preservesEffectiveOwnerAtRoot(item);
 
   const handleCopy = () => {
     clipboard.copy([{ id: item.id, type: item.type }]);
@@ -118,21 +150,61 @@ export function PageContextMenu({
   };
 
   const handleDeleteClick = () => {
+    if (item.type === 'folder') {
+      void requestFolderDelete();
+      return;
+    }
     if (onDelete) {
       onDelete();
       return;
     }
-    performDelete();
+    void performDelete(false);
   };
 
-  const performDelete = async () => {
+  const handleLeaveClick = async () => {
+    if (item.type === 'page') markSelfLeave(item.id);
     try {
-      await handleDelete(
-        { id: item.id, type: item.type, ownerId: item.ownerId, createdBy: item.createdBy },
-        { force: item.type === 'folder' },
+      await leaveMutation.mutateAsync(item.id);
+      onMutated?.();
+    } catch {
+      if (item.type === 'page') consumeSelfLeave(item.id);
+      // Error toast handled globally by MutationCache.onError
+    }
+  };
+
+  const performDelete = async (force: boolean) => {
+    try {
+      return await handleDelete(
+        {
+          id: item.id,
+          type: item.type,
+          ownerId: item.ownerId,
+          createdBy: item.createdBy,
+          userPermission: item.userPermission,
+          shareSource: item.shareSource,
+        },
+        { force },
       );
     } catch {
       // Error toast handled globally by MutationCache.onError
+      return undefined;
+    }
+  };
+
+  const requestFolderDelete = async () => {
+    const result = await performDelete(false);
+    if (result && 'requiresForce' in result) {
+      setFolderDeleteSummary({
+        childFolders: result.childFolders,
+        childPages: result.childPages,
+      });
+    }
+  };
+
+  const confirmFolderDelete = async () => {
+    const result = await performDelete(true);
+    if (result && 'deleted' in result) {
+      setFolderDeleteSummary(null);
     }
   };
 
@@ -142,33 +214,41 @@ export function PageContextMenu({
       icon: <Star size={14} className={isFavorite ? 'text-yellow-500 fill-yellow-500' : ''} />,
       onClick: handleToggleFavorite,
     },
-    onRename && {
-      label: 'Rename',
-      icon: <Edit2 size={14} />,
-      onClick: onRename,
-    },
+    onRename &&
+      canRename && {
+        label: 'Rename',
+        icon: <Edit2 size={14} />,
+        onClick: onRename,
+      },
     {
       label: 'Share',
       icon: <Share size={14} />,
       onClick: () => setShowShareDialog(true),
     },
-    item.type === 'page' && {
-      label: 'Export',
-      icon: <Download size={14} />,
-      onClick: handleExport,
-    },
-    {
+    item.type === 'page' &&
+      !isAnonymous && {
+        label: 'Export',
+        icon: <Download size={14} />,
+        onClick: handleExport,
+      },
+    isAdmin && {
       label: 'Delete',
       icon: <Trash2 size={14} className="text-red-600 dark:text-red-400" />,
       className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
       onClick: handleDeleteClick,
     },
-    {
+    canLeave && {
+      label: 'Leave',
+      icon: <Trash2 size={14} className="text-red-600 dark:text-red-400" />,
+      className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
+      onClick: () => void handleLeaveClick(),
+    },
+    canMove && {
       label: 'Move',
       icon: <FolderInput size={14} />,
       onClick: handleMove,
     },
-    {
+    !isAnonymous && {
       label: 'Copy',
       icon: <Copy size={14} />,
       onClick: handleCopy,
@@ -200,8 +280,23 @@ export function PageContextMenu({
         isOpen={moveDialogOpen}
         folders={folders ?? []}
         movingFolderIds={item.type === 'folder' ? [item.id] : []}
+        {...(item.ownerId !== undefined ? { movingOwnerId: item.ownerId } : {})}
+        allowRoot={allowMoveToRoot}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
+      />
+      <ConfirmDialog
+        isOpen={folderDeleteSummary !== null}
+        title="Delete folder and contents"
+        message={
+          folderDeleteSummary
+            ? `This folder contains ${folderDeleteSummary.childFolders} nested folder${folderDeleteSummary.childFolders === 1 ? '' : 's'} and ${folderDeleteSummary.childPages} page${folderDeleteSummary.childPages === 1 ? '' : 's'}. Move all of them to trash?`
+            : ''
+        }
+        confirmText="Move to trash"
+        onConfirm={() => void confirmFolderDelete()}
+        onCancel={() => setFolderDeleteSummary(null)}
+        loading={isDeletePending}
       />
     </>
   );

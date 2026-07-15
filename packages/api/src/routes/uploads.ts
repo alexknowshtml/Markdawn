@@ -7,15 +7,13 @@ import { auth } from '../auth';
 import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import {
+  hasValidImageSignature,
+  IMAGE_EXTENSION_BY_MIME,
+  isSafeImageMime,
+  MAX_IMAGE_SIZE_BYTES,
+} from '../utils/image-upload';
 import { ensurePageAccess } from '../utils/share-access';
-
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
-const ALLOWED_IMAGE_TYPES = new Map<string, string>([
-  ['image/jpeg', 'jpg'],
-  ['image/png', 'png'],
-  ['image/gif', 'gif'],
-  ['image/webp', 'webp'],
-]);
 
 const uploadsRoute = new Hono();
 
@@ -57,17 +55,31 @@ const isUploadPublic = async (uploadId: string): Promise<boolean> => {
      JOIN pages p ON p.id = upr.page_id AND p.is_deleted = false
      WHERE upr.upload_id = $1
        AND (
-         p.is_public = true
+         (
+           p.is_public = true
+           AND EXISTS (
+             SELECT 1
+             FROM shares s
+             WHERE s.entity_type = 'page'
+               AND s.entity_id = p.id
+               AND s.token IS NOT NULL
+               AND (s.expires_at IS NULL OR s.expires_at > now())
+           )
+         )
          OR EXISTS (
            SELECT 1
            FROM folder_closure fc
            JOIN folders f ON f.id = fc.ancestor_id
-            WHERE fc.descendant_id = p.parent_id
-              AND f.is_public = true
-              AND f.is_deleted = false
-              AND NOT is_page_folder_inheritance_blocked(f.id, p.id)
-          )
-        )
+           JOIN shares s ON s.entity_type = 'folder'
+             AND s.entity_id = f.id
+             AND s.token IS NOT NULL
+             AND (s.expires_at IS NULL OR s.expires_at > now())
+           WHERE fc.descendant_id = p.parent_id
+             AND f.is_public = true
+             AND f.is_deleted = false
+             AND NOT is_page_folder_inheritance_blocked(f.id, p.id)
+         )
+       )
      LIMIT 1`,
     [uploadId],
   );
@@ -94,20 +106,27 @@ uploadsRoute.post('/', requireAuth, async (c) => {
     throw new HTTPException(400, { message: 'File is required' });
   }
 
-  const extension = ALLOWED_IMAGE_TYPES.get(file.type);
-  if (!extension) {
-    throw new HTTPException(400, { message: 'Only image files are allowed' });
+  if (!isSafeImageMime(file.type)) {
+    throw new HTTPException(400, { message: 'Only JPEG, PNG, GIF, and WebP images are allowed' });
   }
 
-  if (file.size > MAX_FILE_SIZE_BYTES) {
+  if (file.size > MAX_IMAGE_SIZE_BYTES) {
     throw new HTTPException(400, { message: 'File must be 10MB or less' });
+  }
+
+  const buffer = Buffer.from(await file.arrayBuffer());
+  if (!hasValidImageSignature(buffer, file.type)) {
+    throw new HTTPException(400, { message: 'File contents do not match the selected image type' });
   }
 
   await mkdir(uploadsDir, { recursive: true });
 
+  const extension = IMAGE_EXTENSION_BY_MIME.get(file.type);
+  if (!extension) {
+    throw new HTTPException(400, { message: 'Unsupported image type' });
+  }
   const filename = `${randomUUID()}.${extension}`;
   const filePath = path.join(uploadsDir, filename);
-  const buffer = Buffer.from(await file.arrayBuffer());
   await writeFile(filePath, buffer);
 
   // Save upload record to database
@@ -168,6 +187,9 @@ uploadsRoute.get('/:filename', async (c) => {
       'Content-Type': upload.mime_type,
       'Content-Length': upload.size.toString(),
       'Cache-Control': cacheControl,
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+      'X-Content-Type-Options': 'nosniff',
+      'Cross-Origin-Resource-Policy': 'same-origin',
     });
   } catch {
     throw new HTTPException(404, { message: 'File not found' });

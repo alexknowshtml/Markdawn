@@ -89,8 +89,9 @@ export function MilkdownEditor({
     handleWikiLinkSuggest,
     handleWikiLinkSelect,
     handleAddPage,
+    canAddPage,
     closeSuggestions,
-  } = useWikiLinkSuggestions(editorRef);
+  } = useWikiLinkSuggestions(editorRef, pageId);
 
   const [activeStates, setActiveStates] = useState({
     isBoldActive: false,
@@ -490,6 +491,11 @@ export function MilkdownEditor({
   };
 
   const handleImageUpload = async (file: File) => {
+    if (isAnonymous) {
+      showInfoToast('Sign in to upload images');
+      return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
     formData.append('pageId', pageId);
@@ -529,6 +535,11 @@ export function MilkdownEditor({
   };
 
   const handleImageUploadFromSlash = () => {
+    if (isAnonymous) {
+      showInfoToast('Sign in to upload images');
+      return;
+    }
+
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'image/*';
@@ -1158,7 +1169,7 @@ export function MilkdownEditor({
             position={suggestions.position}
             onSelect={handleWikiLinkSelect}
             onClose={closeSuggestions}
-            onAddPage={handleAddPage}
+            {...(canAddPage ? { onAddPage: handleAddPage } : {})}
           />
           <SlashMenu
             isOpen={slashMenuState.isOpen}

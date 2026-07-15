@@ -12,6 +12,7 @@ import {
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
 import { ensureFolderAccess } from '../utils/share-access';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -21,7 +22,7 @@ type RawPageRow = PageRow & {
   updated_at?: Date | null;
 };
 
-const ALLOWED_IMAGE_TYPES = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp', 'svg']);
+const ALLOWED_IMAGE_TYPES = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp']);
 
 const importRoute = new Hono();
 
@@ -173,8 +174,18 @@ importRoute.post('/markdown', async (c) => {
 
   const user = c.get('user') as { id: string };
 
+  let destinationOwnerId = user.id;
   if (parentId) {
-    await ensureFolderAccess(parentId, user.id, 'edit');
+    await ensureFolderAccess(parentId, user.id, 'admin');
+    const ownerResult = await query<{ owner_id: string }>(
+      'select get_root_folder_owner($1) as owner_id',
+      [parentId],
+    );
+    const ownerId = ownerResult.rows[0]?.owner_id;
+    if (!ownerId) {
+      throw new HTTPException(404, { message: 'Parent folder not found' });
+    }
+    destinationOwnerId = ownerId;
   }
 
   let formData: FormData;
@@ -204,21 +215,18 @@ importRoute.post('/markdown', async (c) => {
   const contentForEditor = stripLeadingH1(processedContent, title);
   let ydocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
 
-  // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  const existingPages = await query('select id, title from pages where is_deleted = false');
-  const pageLookup = new Map<string, string>();
-  for (const row of existingPages.rows as { id: string; title: string }[]) {
-    pageLookup.set(row.title.trim().toLowerCase(), row.id);
-  }
+  // Resolve only unique titles in the destination workspace. This prevents
+  // imported links from binding to similarly named pages owned by other users.
+  const pageLookup = await getUniqueWorkspacePageLookup(destinationOwnerId);
   if (pageLookup.size > 0) {
     ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
 
   const positionResult = await query(
     parentId
-      ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
-      : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
-    parentId ? [parentId, user.id] : [user.id],
+      ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
+      : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
+    parentId ? [parentId] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 

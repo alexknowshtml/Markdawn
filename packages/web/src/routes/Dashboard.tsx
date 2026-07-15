@@ -28,8 +28,9 @@ import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-fo
 import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useSharedWithMe } from '../hooks/use-shared-with-me';
+import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
-import { useBulkLeaveEntities } from '../utils/entity-actions';
+import { preservesEffectiveOwnerAtRoot, useBulkLeaveEntities } from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
 import { buildFolderPath, buildPagePath } from '../utils/url';
@@ -70,6 +71,9 @@ const sharedItemToExplorerItem = (item: SharedWithMeItem): DashboardItem => ({
   title: item.title,
   icon: item.icon,
   ownerId: item.ownerId,
+  userPermission: item.permission,
+  shareSource: item.source,
+  canMove: false,
   updatedAt: item.entityUpdatedAt ?? item.updatedAt ?? item.createdAt ?? item.sortAt ?? new Date(),
   activityAt: item.sortAt ?? item.updatedAt ?? item.createdAt ?? item.entityUpdatedAt ?? new Date(),
 });
@@ -87,6 +91,7 @@ export default function HomeView() {
   } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: sharedWithMe, isLoading: isSharedLoading, error: sharedError } = useSharedWithMe();
+  const { data: workspaceMemberships } = useWorkspaceMemberships();
   const { data: favorites } = useFavorites();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
@@ -182,6 +187,7 @@ export default function HomeView() {
       activityAt: folder.updatedAt,
       ownerId: folder.ownerId,
       createdBy: folder.createdBy,
+      canMove: true,
     }));
     const pageItems: DashboardItem[] = ownedRootPages.map((page) => ({
       id: page.id,
@@ -194,13 +200,80 @@ export default function HomeView() {
       coverValue: page.coverValue,
       ownerId: page.ownerId,
       createdBy: page.createdBy,
+      canMove: true,
     }));
     return [...folderItems, ...pageItems];
   }, [ownedFolders, ownedRootPages]);
 
+  const workspaceOwnerIds = useMemo(
+    () => new Set((workspaceMemberships ?? []).map((membership) => membership.ownerId)),
+    [workspaceMemberships],
+  );
+  const workspaceAdminOwnerIds = useMemo(
+    () =>
+      new Set(
+        (workspaceMemberships ?? [])
+          .filter((membership) => membership.role === 'admin')
+          .map((membership) => membership.ownerId),
+      ),
+    [workspaceMemberships],
+  );
+  const workspaceBaseItems = useMemo<DashboardItem[]>(() => {
+    const folderItems = (folders ?? [])
+      .filter(
+        (folder) =>
+          folder.workspaceAccess === true &&
+          !!folder.ownerId &&
+          workspaceOwnerIds.has(folder.ownerId),
+      )
+      .map((folder) => ({
+        id: folder.id,
+        type: 'folder' as const,
+        title: folder.name,
+        icon: folder.icon,
+        updatedAt: folder.updatedAt,
+        activityAt: folder.updatedAt,
+        ownerId: folder.ownerId,
+        createdBy: folder.createdBy,
+        userPermission: folder.userPermission,
+        shareSource: 'workspace' as const,
+        canMove:
+          folder.userPermission === 'admin' &&
+          !!folder.ownerId &&
+          workspaceAdminOwnerIds.has(folder.ownerId),
+      }));
+    const pageItems = (pages ?? [])
+      .filter(
+        (page) =>
+          page.parentId === null &&
+          page.workspaceAccess === true &&
+          !!page.ownerId &&
+          workspaceOwnerIds.has(page.ownerId),
+      )
+      .map((page) => ({
+        id: page.id,
+        type: 'page' as const,
+        title: page.title,
+        icon: page.icon,
+        updatedAt: page.updatedAt,
+        activityAt: page.updatedAt,
+        coverType: page.coverType,
+        coverValue: page.coverValue,
+        ownerId: page.ownerId,
+        createdBy: page.createdBy,
+        userPermission: page.userPermission,
+        shareSource: 'workspace' as const,
+        canMove:
+          page.userPermission === 'admin' &&
+          !!page.ownerId &&
+          workspaceAdminOwnerIds.has(page.ownerId),
+      }));
+    return [...folderItems, ...pageItems];
+  }, [folders, pages, workspaceOwnerIds, workspaceAdminOwnerIds]);
+
   const sharedBaseItems = useMemo(
-    () => (sharedWithMe ?? []).map(sharedItemToExplorerItem),
-    [sharedWithMe],
+    () => [...(sharedWithMe ?? []).map(sharedItemToExplorerItem), ...workspaceBaseItems],
+    [workspaceBaseItems, sharedWithMe],
   );
 
   const filteredBaseItems = useMemo(() => {
@@ -329,23 +402,51 @@ export default function HomeView() {
         const item = allItems.find(
           (candidate) => candidate.id === selected.id && candidate.type === selected.type,
         );
-        return { ...selected, ownerId: item?.ownerId ?? null };
+        return {
+          ...selected,
+          ownerId: item?.ownerId ?? null,
+          createdBy: item?.createdBy ?? null,
+          userPermission: item?.userPermission ?? null,
+          shareSource: item?.shareSource,
+          canMove: item?.canMove ?? false,
+        };
       }),
     [selection.selectedItems, allItems],
   );
 
+  const canAdminItem = (item: (typeof selectedItems)[number]) =>
+    item.ownerId === currentUserId || item.userPermission === 'admin';
+  const canLeaveItem = (item: (typeof selectedItems)[number]) =>
+    !canAdminItem(item) && (item.shareSource === 'direct' || item.shareSource === 'link');
+  const selectedOwnerIds = new Set(selectedItems.map((item) => item.ownerId));
+  const selectedOwnerId = selectedOwnerIds.size === 1 ? selectedItems[0]?.ownerId : undefined;
+  const canMoveSelection =
+    selectedItems.length > 0 &&
+    selectedOwnerIds.size === 1 &&
+    selectedItems.every((item) => item.canMove);
+  const hasWorkspaceRootAccess =
+    selectedOwnerId === currentUserId ||
+    workspaceMemberships?.some(
+      (membership) => membership.ownerId === selectedOwnerId && membership.role === 'admin',
+    ) === true;
+  const canMoveSelectionToRoot =
+    hasWorkspaceRootAccess && selectedItems.every(preservesEffectiveOwnerAtRoot);
+  const canRemoveSelection =
+    selectedItems.length > 0 &&
+    selectedItems.every((item) => canAdminItem(item) || canLeaveItem(item));
+
   const handleBulkDelete = async () => {
     const ownedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && item.ownerId === currentUserId)
+      .filter((item) => item.type === 'page' && canAdminItem(item))
       .map((item) => item.id);
     const sharedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && item.ownerId !== currentUserId)
+      .filter((item) => item.type === 'page' && canLeaveItem(item))
       .map((item) => item.id);
     const ownedFolderIdsForDelete = selectedItems
-      .filter((item) => item.type === 'folder' && item.ownerId === currentUserId)
+      .filter((item) => item.type === 'folder' && canAdminItem(item))
       .map((item) => item.id);
     const sharedFolderIds = selectedItems
-      .filter((item) => item.type === 'folder' && item.ownerId !== currentUserId)
+      .filter((item) => item.type === 'folder' && canLeaveItem(item))
       .map((item) => item.id);
 
     try {
@@ -686,6 +787,8 @@ export default function HomeView() {
         onCopy={handleBulkCopy}
         onCut={handleBulkCut}
         onMove={handleBulkMove}
+        canDelete={canRemoveSelection}
+        canMove={canMoveSelection}
         onPaste={() => void handlePaste()}
         onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
         onClear={() => {
@@ -700,6 +803,8 @@ export default function HomeView() {
         movingFolderIds={selection.selectedItems
           .filter((item) => item.type === 'folder')
           .map((item) => item.id)}
+        {...(selectedOwnerId !== undefined ? { movingOwnerId: selectedOwnerId } : {})}
+        allowRoot={canMoveSelectionToRoot}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
       />

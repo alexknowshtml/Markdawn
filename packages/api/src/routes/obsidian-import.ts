@@ -8,7 +8,13 @@ import { query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
+  hasValidImageSignature,
+  MAX_IMAGE_SIZE_BYTES,
+  safeImageMimeForExtension,
+} from '../utils/image-upload';
+import {
   markdownToYjsState,
+  normalizeWikilinkLookupKey,
   resolveWikilinkTargets,
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
@@ -18,6 +24,7 @@ import {
   isMarkdownFile,
   parseFrontmatter,
 } from '../utils/obsidian-parsers';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 const obsidianImportRoute = new Hono();
 obsidianImportRoute.use('*', requireAuth);
@@ -178,6 +185,14 @@ obsidianImportRoute.post('/', async (c) => {
     if (isMarkdownFile(fileName)) {
       markdownFiles.push(file);
     } else if (isImageFile(fileName) && file.data) {
+      const extension = getExtension(fileName);
+      const expectedMime = safeImageMimeForExtension(extension);
+      if (!expectedMime || file.mimeType !== expectedMime) {
+        result.errors.push(
+          `Skipped unsupported image "${file.path}". Only JPEG, PNG, GIF, and WebP are allowed.`,
+        );
+        continue;
+      }
       imageFiles.push(file);
     }
   }
@@ -212,9 +227,9 @@ obsidianImportRoute.post('/', async (c) => {
 
       const positionResult = await query(
         parentId
-          ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
-          : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
-        parentId ? [parentId, user.id] : [user.id],
+          ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
+          : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
+        parentId ? [parentId] : [user.id],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -241,16 +256,28 @@ obsidianImportRoute.post('/', async (c) => {
       if (!file.data || !file.mimeType) continue;
 
       const ext = getExtension(file.path);
-      const filename = `${randomUUID()}.${ext}`;
-      const filePath = path.join(uploadsDir, filename);
+      const expectedMime = safeImageMimeForExtension(ext);
+      if (!expectedMime || file.mimeType !== expectedMime) {
+        throw new Error('Unsupported image type');
+      }
+
       const buffer = Buffer.from(file.data, 'base64');
+      if (buffer.length > MAX_IMAGE_SIZE_BYTES) {
+        throw new Error('Image must be 10MB or less');
+      }
+      if (!hasValidImageSignature(buffer, expectedMime)) {
+        throw new Error('File contents do not match the image type');
+      }
+
+      const filename = `${randomUUID()}.${ext === 'jpeg' ? 'jpg' : ext}`;
+      const filePath = path.join(uploadsDir, filename);
       await writeFile(filePath, buffer);
 
       const uploadResult = await query<{ id: string }>(
         `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
          values ($1, $2, $3, $4, $5)
          returning id`,
-        [filename, path.basename(file.path), file.mimeType, buffer.length, user.id],
+        [filename, path.basename(file.path), expectedMime, buffer.length, user.id],
       );
       const uploadId = uploadResult.rows[0]?.id;
       if (!uploadId) {
@@ -272,7 +299,6 @@ obsidianImportRoute.post('/', async (c) => {
     }
   }
 
-  const pageTitleToId = new Map<string, string>();
   const pagePathToId = new Map<string, string>();
   const pageYdocs = new Map<string, Buffer>();
 
@@ -296,9 +322,9 @@ obsidianImportRoute.post('/', async (c) => {
 
       const positionResult = await query(
         parentId
-          ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
-          : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
-        parentId ? [parentId, user.id] : [user.id],
+          ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
+          : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
+        parentId ? [parentId] : [user.id],
       );
       const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -319,7 +345,6 @@ obsidianImportRoute.post('/', async (c) => {
         if (typeof pageId !== 'string') {
           throw new Error('Failed to create page');
         }
-        pageTitleToId.set(title.toLowerCase(), pageId);
         pagePathToId.set(file.path, pageId);
 
         for (const [url, uploadId] of urlToUploadId) {
@@ -357,6 +382,8 @@ obsidianImportRoute.post('/', async (c) => {
     }
   }
 
+  const workspacePageLookup = await getUniqueWorkspacePageLookup(user.id);
+
   if (hasConnectionsTable) {
     for (const file of markdownFiles) {
       try {
@@ -372,8 +399,8 @@ obsidianImportRoute.post('/', async (c) => {
         for (const link of allLinks) {
           if (link.isEmbed && isImageFile(link.page)) continue;
 
-          const targetTitleLower = link.page.toLowerCase();
-          const targetPageId = pageTitleToId.get(targetTitleLower) ?? null;
+          const targetTitleLower = normalizeWikilinkLookupKey(link.page);
+          const targetPageId = workspacePageLookup.get(targetTitleLower) ?? null;
           const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
 
           await query(
@@ -411,13 +438,12 @@ obsidianImportRoute.post('/', async (c) => {
     }
   }
 
-  // Resolve wiki link targetId in Yjs binaries now that pageTitleToId
-  // contains every page created during the import.
-  if (pageTitleToId.size > 0) {
+  // Resolve links only when a title or explicit path is unique in this workspace.
+  if (workspacePageLookup.size > 0) {
     for (const [filePath, pageId] of pagePathToId) {
       const rawYdoc = pageYdocs.get(filePath);
       if (!rawYdoc) continue;
-      const resolved = resolveWikilinkTargets(rawYdoc, pageTitleToId);
+      const resolved = resolveWikilinkTargets(rawYdoc, workspacePageLookup);
       await query('update pages set ydoc = $1 where id = $2', [Buffer.from(resolved), pageId]);
     }
   }

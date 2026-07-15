@@ -1,4 +1,4 @@
-import type { EntityAccessor } from '@markdawn/shared';
+import type { EntityAccessor, SharePermission } from '@markdawn/shared';
 import clsx from 'clsx';
 import { Check, FileText, Folder } from 'lucide-react';
 import type React from 'react';
@@ -18,6 +18,9 @@ export interface ExplorerItemData {
   coverValue?: string | null;
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
+  userPermission?: SharePermission | null | undefined;
+  shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+  canMove?: boolean | undefined;
   activityAt?: string | Date | undefined;
   collaborators?: EntityAccessor[];
 }

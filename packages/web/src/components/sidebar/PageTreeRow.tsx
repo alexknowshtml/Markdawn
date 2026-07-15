@@ -1,3 +1,4 @@
+import type { SharePermission } from '@markdawn/shared';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
@@ -12,6 +13,9 @@ interface PageTreeRowProps {
   icon?: string | null;
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
+  userPermission?: SharePermission | null | undefined;
+  shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+  canMove?: boolean | undefined;
   isActive?: boolean;
   depth?: number;
   hasChildren?: boolean;
@@ -38,6 +42,9 @@ export function PageTreeRow({
   icon,
   ownerId,
   createdBy,
+  userPermission,
+  shareSource,
+  canMove,
   isActive = false,
   depth = 0,
   hasChildren = false,
@@ -190,6 +197,9 @@ export function PageTreeRow({
               icon: icon ?? null,
               ...(ownerId != null ? { ownerId } : {}),
               ...(createdBy != null ? { createdBy } : {}),
+              ...(userPermission !== undefined ? { userPermission } : {}),
+              ...(shareSource !== undefined ? { shareSource } : {}),
+              ...(canMove !== undefined ? { canMove } : {}),
             }}
             isFavorite={isFavorite}
             triggerClassName="p-1 rounded-lg hover:bg-black/10 dark:hover:bg-white/10 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer transition-colors"

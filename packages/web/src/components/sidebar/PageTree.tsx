@@ -8,6 +8,7 @@ import {
   FilePlus2,
   FolderPlus,
   Home,
+  LogOut,
 } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
@@ -22,6 +23,7 @@ import {
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
+import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { useEntityDeletion } from '../../utils/entity-actions';
 import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
@@ -61,7 +63,9 @@ export function PageTree() {
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: favorites } = useFavorites();
   const { data: recentPages } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
-  const { data: sharedNavigation } = useSharedWithMeTree(SIDEBAR_PREVIEW_LIMIT + 1);
+  const { data: sharedNavigation } = useSharedWithMeTree();
+  const { data: workspaceMemberships } = useWorkspaceMemberships();
+  const leaveWorkspaceMutation = useLeaveWorkspace();
 
   const favoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
@@ -93,6 +97,7 @@ export function PageTree() {
   const [favoritesCollapsed, setFavoritesCollapsed] = useState(false);
   const [recentsCollapsed, setRecentsCollapsed] = useState(false);
   const [sharedCollapsed, setSharedCollapsed] = useState(false);
+  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<Set<string>>(new Set());
   const [ownedByMeCollapsed, setOwnedByMeCollapsed] = useState(false);
   const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
   const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
@@ -171,10 +176,6 @@ export function PageTree() {
     () => collectSharedNavigationFolderIds(sharedNavigation ?? []),
     [sharedNavigation],
   );
-  const sidebarFolderIds = useMemo(
-    () => Array.from(new Set([...allFolderIds, ...sharedNavigationFolderIds])),
-    [allFolderIds, sharedNavigationFolderIds],
-  );
   const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
 
   const pagesByFolder = useMemo(
@@ -211,6 +212,37 @@ export function PageTree() {
   const foldersByParent = useMemo(
     () => buildFoldersByParentMap(ownedFolders),
     [buildFoldersByParentMap, ownedFolders],
+  );
+
+  const allFolderIdsSet = useMemo(() => new Set(folderById.keys()), [folderById]);
+  const allPagesByFolder = useMemo(
+    () => buildPagesByFolder(pages ?? [], allFolderIdsSet),
+    [pages, allFolderIdsSet],
+  );
+  const workspaceGroups = useMemo(
+    () =>
+      (workspaceMemberships ?? []).map((membership) => ({
+        ...membership,
+        folders: (folders ?? []).filter(
+          (folder) => folder.ownerId === membership.ownerId && folder.workspaceAccess === true,
+        ),
+        pages: (pages ?? []).filter(
+          (page) =>
+            page.ownerId === membership.ownerId &&
+            page.workspaceAccess === true &&
+            page.parentId === null,
+        ),
+      })),
+    [workspaceMemberships, folders, pages],
+  );
+  const workspaceFolderIds = useMemo(
+    () => workspaceGroups.flatMap((group) => collectAllFolderIds(group.folders)),
+    [workspaceGroups],
+  );
+  const sidebarFolderIds = useMemo(
+    () =>
+      Array.from(new Set([...allFolderIds, ...sharedNavigationFolderIds, ...workspaceFolderIds])),
+    [allFolderIds, sharedNavigationFolderIds, workspaceFolderIds],
   );
 
   useEffect(() => {
@@ -262,7 +294,13 @@ export function PageTree() {
     const page = pageById.get(pageId);
     const isViewingDeletedPage = activePageId === pageId;
     await pageDeletion.handleDelete(
-      { id: pageId, type: 'page', ownerId: page?.ownerId, createdBy: page?.createdBy },
+      {
+        id: pageId,
+        type: 'page',
+        ownerId: page?.ownerId,
+        createdBy: page?.createdBy,
+        userPermission: page?.userPermission,
+      },
       { force: false },
     );
     if (isViewingDeletedPage) {
@@ -293,7 +331,13 @@ export function PageTree() {
     const folder = folderById.get(folderId);
     const hasChildren = childFolders > 0 || childPages > 0;
     await folderDeletion.handleDelete(
-      { id: folderId, type: 'folder', ownerId: folder?.ownerId, createdBy: folder?.createdBy },
+      {
+        id: folderId,
+        type: 'folder',
+        ownerId: folder?.ownerId,
+        createdBy: folder?.createdBy,
+        userPermission: folder?.userPermission,
+      },
       { force: hasChildren },
     );
   };
@@ -352,15 +396,19 @@ export function PageTree() {
           icon={folder.icon}
           ownerId={folder.ownerId}
           createdBy={folder.createdBy}
+          userPermission={folder.userPermission}
+          canMove={true}
           depth={depth}
           hasChildren={childFolders.length > 0 || childPages.length > 0}
           isExpanded={isExpanded}
           onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          {...(folder.userPermission === 'edit' || folder.userPermission === 'admin'
+          {...(folder.userPermission === 'admin'
             ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
             : {})}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
-          onRename={() => beginRenameFolder(folder)}
+          {...(folder.userPermission === 'admin'
+            ? { onRename: () => beginRenameFolder(folder) }
+            : {})}
           onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
           isEditing={isEditingFolder}
           isFolder={true}
@@ -384,6 +432,8 @@ export function PageTree() {
                   icon={page.icon}
                   ownerId={page.ownerId}
                   createdBy={page.createdBy}
+                  userPermission={page.userPermission}
+                  canMove={true}
                   depth={depth + 1}
                   isActive={activePageId === page.id}
                   isFavorite={isFavoriteEntity('page', page.id)}
@@ -405,11 +455,102 @@ export function PageTree() {
     );
   };
 
-  const renderSharedNavigationItem = (item: SharedNavigationItem, depth = 0): ReactNode => {
+  const renderWorkspacePage = (page: PageTreeNode, depth = 0, sourceIsAdmin = false): ReactNode => {
+    const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === page.id;
+    const canRename = page.userPermission === 'edit' || page.userPermission === 'admin';
+    return (
+      <PageTreeRow
+        key={`workspace-page-${page.id}`}
+        id={page.id}
+        title={page.title}
+        icon={page.icon}
+        ownerId={page.ownerId}
+        createdBy={page.createdBy}
+        userPermission={page.userPermission}
+        shareSource="workspace"
+        canMove={page.userPermission === 'admin' && sourceIsAdmin}
+        depth={depth}
+        isActive={activePageId === page.id}
+        isFavorite={isFavoriteEntity('page', page.id)}
+        onDelete={() => handleDeletePage(page.id)}
+        {...(canRename ? { onRename: () => beginRenamePage(page) } : {})}
+        isEditing={isEditingPage}
+        editTitle={isEditingPage ? editingTarget.value : page.title}
+        onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
+        onEditSave={() => {
+          saveRename();
+        }}
+        onEditKeyDown={onRenameKeyDown}
+      />
+    );
+  };
+
+  const renderWorkspaceFolder = (
+    folder: FolderTreeNode,
+    workspaceOwnerId: string,
+    depth = 0,
+    sourceIsAdmin = false,
+  ): ReactNode => {
+    const childFolders = (folder.children ?? []).filter(
+      (child) => child.ownerId === workspaceOwnerId && child.workspaceAccess === true,
+    );
+    const childPages = (allPagesByFolder.get(folder.id) ?? []).filter(
+      (page) => page.ownerId === workspaceOwnerId && page.workspaceAccess === true,
+    );
+    const isExpanded = expandedFolderIds.has(folder.id);
+    const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === folder.id;
+    const isAdmin = folder.userPermission === 'admin';
+
+    return (
+      <div key={`workspace-folder-${folder.id}`}>
+        <PageTreeRow
+          id={folder.id}
+          title={folder.name}
+          icon={folder.icon}
+          ownerId={folder.ownerId}
+          createdBy={folder.createdBy}
+          userPermission={folder.userPermission}
+          shareSource="workspace"
+          canMove={isAdmin && sourceIsAdmin}
+          depth={depth}
+          hasChildren={childFolders.length > 0 || childPages.length > 0}
+          isExpanded={isExpanded}
+          isFavorite={isFavoriteEntity('folder', folder.id)}
+          onToggleExpand={() => toggleFolderExpanded(folder.id)}
+          {...(isAdmin ? { onCreateChild: () => handleCreatePageInFolder(folder.id) } : {})}
+          onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
+          {...(isAdmin ? { onRename: () => beginRenameFolder(folder) } : {})}
+          onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
+          isEditing={isEditingFolder}
+          isFolder={true}
+          editTitle={isEditingFolder ? editingTarget.value : folder.name}
+          onEditChange={(value) => setEditingTarget({ kind: 'folder', id: folder.id, value })}
+          onEditSave={() => {
+            saveRename();
+          }}
+          onEditKeyDown={onRenameKeyDown}
+        />
+        {isExpanded && (
+          <>
+            {childFolders.map((child) =>
+              renderWorkspaceFolder(child, workspaceOwnerId, depth + 1, isAdmin),
+            )}
+            {childPages.map((page) => renderWorkspacePage(page, depth + 1, isAdmin))}
+          </>
+        )}
+      </div>
+    );
+  };
+
+  const renderSharedNavigationItem = (
+    item: SharedNavigationItem,
+    depth = 0,
+    sourceIsAdmin = false,
+  ): ReactNode => {
     if (item.entityType === 'folder') {
       const isExpanded = expandedFolderIds.has(item.id);
       const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === item.id;
-      const canCreateChild = item.userPermission === 'edit' || item.userPermission === 'admin';
+      const canCreateChild = item.userPermission === 'admin';
       return (
         <div key={`shared-folder-${item.id}`}>
           <PageTreeRow
@@ -418,6 +559,9 @@ export function PageTree() {
             icon={item.icon}
             ownerId={item.ownerId}
             createdBy={item.createdBy}
+            userPermission={item.userPermission}
+            shareSource={item.source}
+            canMove={item.userPermission === 'admin' && sourceIsAdmin}
             depth={depth}
             hasChildren={item.children.length > 0}
             isExpanded={isExpanded}
@@ -430,9 +574,16 @@ export function PageTree() {
                 type: 'folder',
                 ownerId: item.ownerId,
                 createdBy: item.createdBy,
+                userPermission: item.userPermission,
+                shareSource: item.source,
               });
             }}
-            onRename={() => setEditingTarget({ kind: 'folder', id: item.id, value: item.title })}
+            {...(item.userPermission === 'admin'
+              ? {
+                  onRename: () =>
+                    setEditingTarget({ kind: 'folder', id: item.id, value: item.title }),
+                }
+              : {})}
             onNavigate={() => navigate(buildFolderPath(item.title, item.id))}
             isEditing={isEditingFolder}
             isFolder={true}
@@ -443,7 +594,10 @@ export function PageTree() {
             }}
             onEditKeyDown={onRenameKeyDown}
           />
-          {isExpanded && item.children.map((child) => renderSharedNavigationItem(child, depth + 1))}
+          {isExpanded &&
+            item.children.map((child) =>
+              renderSharedNavigationItem(child, depth + 1, item.userPermission === 'admin'),
+            )}
         </div>
       );
     }
@@ -457,6 +611,9 @@ export function PageTree() {
         icon={item.icon}
         ownerId={item.ownerId}
         createdBy={item.createdBy}
+        userPermission={item.userPermission}
+        shareSource={item.source}
+        canMove={item.userPermission === 'admin' && sourceIsAdmin}
         depth={depth}
         isActive={activePageId === item.id}
         isFavorite={isFavoriteEntity('page', item.id)}
@@ -466,6 +623,8 @@ export function PageTree() {
             type: 'page',
             ownerId: item.ownerId,
             createdBy: item.createdBy,
+            userPermission: item.userPermission,
+            shareSource: item.source,
           });
         }}
         onRename={() => setEditingTarget({ kind: 'page', id: item.id, value: item.title })}
@@ -530,8 +689,17 @@ export function PageTree() {
   }
 
   const rootFolders = ownedFolders;
-  const sharedPreview = sharedNavigation?.slice(0, SIDEBAR_PREVIEW_LIMIT) ?? [];
-  const hasMoreShared = (sharedNavigation?.length ?? 0) > SIDEBAR_PREVIEW_LIMIT;
+  const directSharedNavigation = (sharedNavigation ?? []).filter((item) => {
+    const workspaceAccess =
+      item.entityType === 'folder'
+        ? folderById.get(item.id)?.workspaceAccess
+        : pageById.get(item.id)?.workspaceAccess;
+    return workspaceAccess !== true;
+  });
+  const sharedPreview = directSharedNavigation.slice(0, SIDEBAR_PREVIEW_LIMIT);
+  const hasMoreShared = directSharedNavigation.length > SIDEBAR_PREVIEW_LIMIT;
+  const visibleWorkspaceGroups = workspaceGroups;
+  const hasSharedContent = sharedPreview.length > 0 || visibleWorkspaceGroups.length > 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -621,6 +789,10 @@ export function PageTree() {
                       icon={fav.icon}
                       ownerId={fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId ?? null}
                       createdBy={favPage?.createdBy ?? favFolder?.createdBy ?? null}
+                      userPermission={favPage?.userPermission ?? favFolder?.userPermission ?? null}
+                      canMove={
+                        (fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId) === currentUserId
+                      }
                       isFolder={isFolder}
                       isActive={!isFolder && activePageId === fav.entityId}
                       isFavorite={true}
@@ -678,6 +850,8 @@ export function PageTree() {
                       icon={page.icon}
                       ownerId={page.ownerId}
                       createdBy={page.createdBy}
+                      userPermission={treePage?.userPermission ?? null}
+                      canMove={page.ownerId === currentUserId}
                       isActive={activePageId === page.id}
                       isFavorite={isFavoriteEntity('page', page.id)}
                       onDelete={() => handleDeletePage(page.id)}
@@ -690,7 +864,7 @@ export function PageTree() {
           </div>
         )}
 
-        {sharedPreview.length > 0 && (
+        {hasSharedContent && (
           <div className="mb-2">
             <button
               type="button"
@@ -706,7 +880,65 @@ export function PageTree() {
               <span>Shared With Me</span>
             </button>
             {!sharedCollapsed && (
-              <div className="space-y-0.5">
+              <div className="space-y-1">
+                {visibleWorkspaceGroups.map((group) => {
+                  const isCollapsed = collapsedWorkspaceIds.has(group.ownerId);
+                  return (
+                    <div key={`workspace-${group.ownerId}`}>
+                      <div className="flex items-center gap-1 px-3 py-1">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCollapsedWorkspaceIds((previous) => {
+                              const next = new Set(previous);
+                              if (next.has(group.ownerId)) next.delete(group.ownerId);
+                              else next.add(group.ownerId);
+                              return next;
+                            })
+                          }
+                          className="flex min-w-0 flex-1 items-center text-left text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+                        >
+                          {isCollapsed ? (
+                            <ChevronRight size={13} className="mr-1 shrink-0" />
+                          ) : (
+                            <ChevronDown size={13} className="mr-1 shrink-0" />
+                          )}
+                          <span className="truncate">
+                            {group.ownerName
+                              ? `${group.ownerName}'s Workspace`
+                              : 'Shared Workspace'}
+                          </span>
+                        </button>
+                        <button
+                          type="button"
+                          title="Leave workspace"
+                          aria-label={`Leave ${group.ownerName ?? 'workspace'}`}
+                          disabled={leaveWorkspaceMutation.isPending || !currentUserId}
+                          onClick={() => {
+                            if (!currentUserId) return;
+                            leaveWorkspaceMutation.mutate({
+                              ownerId: group.ownerId,
+                              memberId: currentUserId,
+                            });
+                          }}
+                          className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer"
+                        >
+                          <LogOut size={12} />
+                        </button>
+                      </div>
+                      {!isCollapsed && (
+                        <div className="space-y-0.5">
+                          {group.folders.map((folder) =>
+                            renderWorkspaceFolder(folder, group.ownerId, 0, group.role === 'admin'),
+                          )}
+                          {group.pages.map((page) =>
+                            renderWorkspacePage(page, 0, group.role === 'admin'),
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
                 {sharedPreview.map((item) => renderSharedNavigationItem(item))}
                 {hasMoreShared && (
                   <button
@@ -750,6 +982,8 @@ export function PageTree() {
                     icon={page.icon}
                     ownerId={page.ownerId}
                     createdBy={page.createdBy}
+                    userPermission={page.userPermission}
+                    canMove={true}
                     isActive={activePageId === page.id}
                     isFavorite={isFavoriteEntity('page', page.id)}
                     onDelete={() => handleDeletePage(page.id)}

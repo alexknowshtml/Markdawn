@@ -57,6 +57,22 @@ describe('Drizzle v1 migration history', () => {
     }
   });
 
+  it('enforces one link share and numeric page ordering values', () => {
+    const integrityMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enforce_share_and_position_integrity'),
+    );
+    expect(integrityMigration, 'integrity migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(integrityMigration ?? '');
+    expect(migrationSql).toContain('shares_link_unique');
+    expect(migrationSql).toContain('folders_position_numeric_check');
+    expect(migrationSql).toContain('pages_position_numeric_check');
+    expect(migrationSql).toContain('char_length("position") <= 128');
+    expect(migrationSql.indexOf('DELETE FROM shares')).toBeLessThan(
+      migrationSql.indexOf('CREATE UNIQUE INDEX "shares_link_unique"'),
+    );
+  });
+
   it('does not reintroduce the legacy access restriction column', () => {
     const migrationDirs = listMigrationDirs();
     const migrationText = migrationDirs.map(readMigrationSql).join('\n');

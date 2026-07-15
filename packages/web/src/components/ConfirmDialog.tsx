@@ -31,7 +31,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onCancel}
-            className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50"
+            className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 cursor-pointer disabled:cursor-not-allowed"
             disabled={loading}
           >
             {cancelText}
@@ -39,7 +39,7 @@ export function ConfirmDialog({
           <button
             type="button"
             onClick={onConfirm}
-            className="px-4 py-2 text-sm font-medium text-white bg-red-600 dark:bg-red-700 rounded-md hover:bg-red-700 dark:hover:bg-red-800 transition-colors disabled:opacity-60"
+            className="px-4 py-2 text-sm font-medium text-white bg-red-600 dark:bg-red-700 rounded-md hover:bg-red-700 dark:hover:bg-red-800 transition-colors disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed"
             disabled={loading}
           >
             {loading ? 'Deleting...' : confirmText}

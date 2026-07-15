@@ -1,5 +1,13 @@
+import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
-import { createTestApp, createTestSession, createTestUser } from '../test-utils';
+import { query } from '../db/query';
+import {
+  createTestApp,
+  createTestFolder,
+  createTestPage,
+  createTestSession,
+  createTestUser,
+} from '../test-utils';
 
 describe('markdown import API', () => {
   describe('auth guard', () => {
@@ -63,6 +71,79 @@ Body text`;
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.title).toBe('Frontmatter Title');
+    });
+
+    it('resolves wiki links only within the importing user workspace', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const otherOwner = await createTestUser();
+      const session = await createTestSession(user.id);
+      const ownTarget = await createTestPage(user.id, { title: 'Roadmap' });
+      await createTestPage(otherOwner.id, { title: 'Roadmap' });
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File(['# Imported\n\nSee [[Roadmap]]'], 'imported.md', { type: 'text/markdown' }),
+      );
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(201);
+      const imported = (await res.json()) as { id: string };
+      const ydocResult = await query<{ ydoc: Buffer }>('SELECT ydoc FROM pages WHERE id = $1', [
+        imported.id,
+      ]);
+      const connections = extractConnectionsFromYDoc(
+        new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
+      );
+      expect(connections).toContainEqual(
+        expect.objectContaining({ targetId: ownTarget.id, targetSlug: 'roadmap' }),
+      );
+    });
+
+    it('prefers exact workspace paths and leaves ambiguous titles unresolved', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      await createTestPage(user.id, { title: 'Roadmap' });
+      const plans = await createTestFolder(user.id, { name: 'Plans' });
+      const pathTarget = await createTestPage(user.id, {
+        title: 'Roadmap',
+        parentId: plans.id,
+      });
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File(
+          ['# Imported\n\nExact [[Plans/Roadmap]] and ambiguous [[Roadmap]]'],
+          'imported.md',
+          { type: 'text/markdown' },
+        ),
+      );
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(201);
+      const imported = (await res.json()) as { id: string };
+      const ydocResult = await query<{ ydoc: Buffer }>('SELECT ydoc FROM pages WHERE id = $1', [
+        imported.id,
+      ]);
+      const connections = extractConnectionsFromYDoc(
+        new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
+      );
+      expect(connections).toContainEqual(
+        expect.objectContaining({ targetSlug: 'plans/roadmap', targetId: pathTarget.id }),
+      );
+      const ambiguous = connections.find((connection) => connection.targetSlug === 'roadmap');
+      expect(ambiguous?.targetId).toBeUndefined();
     });
 
     it('returns 400 when file is missing', async () => {

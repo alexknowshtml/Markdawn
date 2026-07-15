@@ -3,6 +3,7 @@ import {
   type ConnectionConfiguration,
   Document,
   type onAuthenticatePayload,
+  type onChangePayload,
   type onDisconnectPayload,
   type onLoadDocumentPayload,
   type onStoreDocumentPayload,
@@ -11,7 +12,12 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import * as Y from 'yjs';
-import { createCollabServer } from './server';
+import {
+  createCollabServer,
+  publishFolderDeletion,
+  publishPageDeletion,
+  publishPageRename,
+} from './server';
 import {
   createCorruptedYjsDoc,
   createTestPage,
@@ -55,6 +61,19 @@ function createConnectionConfig(): ConnectionConfiguration {
   };
 }
 
+function appendWikiLink(
+  document: Y.Doc,
+  { path, label, targetId }: { path: string; label: string; targetId?: string | undefined },
+): void {
+  const paragraph = new Y.XmlElement('paragraph');
+  const link = new Y.XmlElement('wikiLink');
+  link.setAttribute('path', path);
+  link.setAttribute('label', label);
+  if (targetId) link.setAttribute('targetId', targetId);
+  paragraph.push([link]);
+  document.getXmlFragment('prosemirror').push([paragraph]);
+}
+
 function createAuthenticatePayload(
   server: Server,
   overrides: Partial<onAuthenticatePayload> = {},
@@ -87,9 +106,7 @@ describe('collab server', () => {
   });
 
   afterAll(async () => {
-    server.hocuspocus.closeConnections();
-    server.httpServer.closeAllConnections();
-    await new Promise<void>((resolve) => server.httpServer.close(() => resolve()));
+    await server.destroy();
     await pool.end();
   });
 
@@ -623,12 +640,12 @@ describe('collab server', () => {
         maxDebounceMs: 100,
       });
 
-      const documentName = crypto.randomUUID();
+      const user = await createTestUser(pool);
+      const page = await createTestPage(pool, user.id);
+      const documentName = page.id;
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        // Use an anonymous user with edit permission to bypass the assertPageAccess
-        // check (which runs pool.query on the failing pool and would short-circuit).
-        context: { user: { id: crypto.randomUUID(), isAnonymous: true }, permission: 'edit' },
+        context: { user: { id: user.id }, permission: 'edit' },
         document: new Document(documentName),
         documentName,
         instance: failingServer.hocuspocus,
@@ -643,6 +660,254 @@ describe('collab server', () => {
       expect(failingLogger.error).toHaveBeenCalledWith(
         expect.stringContaining(`[persist] failed to save "${documentName}"`),
       );
+    });
+
+    it('does not persist anonymous edits after link access is revoked', async () => {
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const token = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'edit', $3)`,
+        [page.id, owner.id, token],
+      );
+      await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        page.id,
+      ]);
+
+      const document = new Document(page.id);
+      document.getText('content').insert(0, 'Revoked anonymous edit');
+      const connection = {
+        context: { user: { id: 'anonymous-user', isAnonymous: true }, permission: 'edit' },
+        sendStateless: vi.fn(),
+        close: vi.fn(),
+      };
+      const activeDocument = {
+        getConnections: () => [connection],
+      } as unknown as Document;
+      server.hocuspocus.documents.set(page.id, activeDocument);
+      await pool.query("DELETE FROM shares WHERE entity_type = 'page' AND entity_id = $1", [
+        page.id,
+      ]);
+      await pool.query('UPDATE pages SET is_public = false, public_token = null WHERE id = $1', [
+        page.id,
+      ]);
+
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: 'anonymous-user', isAnonymous: true }, permission: 'edit' },
+        document,
+        documentName: page.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await server.hocuspocus.hooks('onStoreDocument', payload);
+      } finally {
+        server.hocuspocus.documents.delete(page.id);
+      }
+
+      const stored = await pool.query<{ ydoc: Buffer | null }>(
+        'SELECT ydoc FROM pages WHERE id = $1',
+        [page.id],
+      );
+      expect(stored.rows[0]?.ydoc).toBeNull();
+      expect(connection.close).toHaveBeenCalledWith({ code: 4401, reason: 'Access revoked' });
+    });
+
+    it('rejects a debounced document containing an update from a revoked writer', async () => {
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const token = crypto.randomUUID();
+      await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        page.id,
+      ]);
+      await pool.query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'edit', $3)`,
+        [page.id, owner.id, token],
+      );
+      const document = new Document(page.id);
+      document.getText('content').insert(0, 'mixed update');
+      const changeBase = {
+        clientsCount: 2,
+        document,
+        documentName: page.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+        transactionOrigin: null,
+        update: new Uint8Array([1]),
+      } satisfies Omit<onChangePayload, 'context'>;
+
+      await server.hocuspocus.hooks('onChange', {
+        ...changeBase,
+        context: { user: { id: 'anonymous-writer', isAnonymous: true }, permission: 'edit' },
+      });
+      await server.hocuspocus.hooks('onChange', {
+        ...changeBase,
+        context: { user: { id: owner.id }, permission: 'edit' },
+      });
+      await pool.query("DELETE FROM shares WHERE entity_type = 'page' AND entity_id = $1", [
+        page.id,
+      ]);
+      await pool.query('UPDATE pages SET is_public = false, public_token = null WHERE id = $1', [
+        page.id,
+      ]);
+
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'edit' },
+        document,
+        documentName: page.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+      await server.hocuspocus.hooks('onStoreDocument', payload);
+
+      const stored = await pool.query<{ ydoc: Buffer | null }>(
+        'SELECT ydoc FROM pages WHERE id = $1',
+        [page.id],
+      );
+      expect(stored.rows[0]?.ydoc).toBeNull();
+    });
+
+    it('does not persist a wiki-link targetId from another workspace', async () => {
+      const sourceOwner = await createTestUser(pool);
+      const otherOwner = await createTestUser(pool);
+      const source = await createTestPage(pool, sourceOwner.id, 'Source');
+      const externalTarget = await createTestPage(pool, otherOwner.id, 'External Target');
+      const document = new Document(source.id);
+      appendWikiLink(document, {
+        path: 'missing-in-source-workspace',
+        label: 'External Target',
+        targetId: externalTarget.id,
+      });
+
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: sourceOwner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      await server.hocuspocus.hooks('onStoreDocument', payload);
+
+      const result = await pool.query<{ target_id: string | null }>(
+        `SELECT target_id FROM connections
+         WHERE source_id = $1 AND target_slug = 'missing-in-source-workspace'`,
+        [source.id],
+      );
+      expect(result.rows[0]?.target_id).toBeNull();
+    });
+
+    it('does not restore a stale wiki-link targetId from another workspace', async () => {
+      const sourceOwner = await createTestUser(pool);
+      const otherOwner = await createTestUser(pool);
+      const source = await createTestPage(pool, sourceOwner.id, 'Source');
+      const externalTarget = await createTestPage(pool, otherOwner.id, 'External Target');
+      await pool.query(
+        `INSERT INTO connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text, occurrence_count, updated_at
+         ) VALUES ('page', $1, 'page', $2, 'renamed-target',
+                   'External Target', 'wikilink', 'External Target', 1, NOW())`,
+        [source.id, externalTarget.id],
+      );
+
+      const document = new Document(source.id);
+      appendWikiLink(document, { path: 'renamed-target', label: 'External Target' });
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: sourceOwner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      await server.hocuspocus.hooks('onStoreDocument', payload);
+
+      const result = await pool.query<{ target_id: string | null }>(
+        `SELECT target_id FROM connections
+         WHERE source_id = $1 AND target_slug = 'renamed-target'`,
+        [source.id],
+      );
+      expect(result.rows[0]?.target_id).toBeNull();
+    });
+
+    it('retains a valid wiki-link targetId from the source workspace', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Source');
+      const target = await createTestPage(pool, owner.id, 'Roadmap');
+      const document = new Document(source.id);
+      appendWikiLink(document, { path: 'roadmap', label: 'Roadmap', targetId: target.id });
+
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      await server.hocuspocus.hooks('onStoreDocument', payload);
+
+      const result = await pool.query<{ target_id: string | null }>(
+        `SELECT target_id FROM connections
+         WHERE source_id = $1 AND target_slug = 'roadmap'`,
+        [source.id],
+      );
+      expect(result.rows[0]?.target_id).toBe(target.id);
+    });
+
+    it('publishes metadata only through an active user meta room', async () => {
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id, 'Original title');
+      const metaRoomName = `page-meta:${owner.id}`;
+      const metaDocument = new Document(metaRoomName);
+      server.hocuspocus.documents.set(metaRoomName, metaDocument);
+
+      try {
+        const document = new Document(page.id);
+        document.getText('title').insert(0, 'Updated title');
+        const payload: onStoreDocumentPayload = {
+          clientsCount: 1,
+          context: { user: { id: owner.id }, permission: 'admin' },
+          document,
+          documentName: page.id,
+          instance: server.hocuspocus,
+          requestHeaders: {},
+          requestParameters: new URLSearchParams(),
+          socketId: crypto.randomUUID(),
+        };
+
+        await server.hocuspocus.hooks('onStoreDocument', payload);
+
+        expect(metaDocument.getMap('pageIndex').get(page.id)).toEqual(
+          expect.objectContaining({ title: 'Updated title' }),
+        );
+        expect(metaDocument.getMap('backlinksVersion').get(page.id)).toEqual(expect.any(Number));
+      } finally {
+        server.hocuspocus.documents.delete(metaRoomName);
+      }
     });
 
     it('persists content edits to the database', async () => {
@@ -754,9 +1019,8 @@ describe('collab server', () => {
       await sleep(200);
 
       // 5 edits within debounce window should produce far fewer connects than edits.
-      // Each debounced onStoreDocument now also calls assertPageAccess (2 pool.querys)
-      // before persistDocument (1 pool.connect) + updatePageMeta (1 pool.query),
-      // plus potentially onDisconnect and meta room sync.
+      // Each debounced onStoreDocument also verifies access before persisting.
+      // Metadata fan-out is skipped here because no user meta room is active.
       expect(connectSpy.mock.calls.length).toBeGreaterThan(0);
       expect(connectSpy.mock.calls.length).toBeLessThanOrEqual(6);
 
@@ -769,6 +1033,104 @@ describe('collab server', () => {
 
       connectSpy.mockRestore();
       provider.destroy();
+    });
+  });
+
+  describe('database event publication', () => {
+    it('updates the active document even when rename metadata publication fails', async () => {
+      const pageId = crypto.randomUUID();
+      const activeDocument = new Document(pageId);
+      const metaRoomId = crypto.randomUUID();
+      activeDocument.getText('title').insert(0, 'Old title');
+      server.hocuspocus.documents.set(pageId, activeDocument);
+      server.hocuspocus.documents.set(
+        `page-meta:${metaRoomId}`,
+        new Document(`page-meta:${metaRoomId}`),
+      );
+      const failingPool = {
+        query: vi.fn(async () => {
+          throw new Error('metadata unavailable');
+        }),
+      } as unknown as typeof pool;
+
+      try {
+        await expect(
+          publishPageRename(server.hocuspocus, failingPool, pageId, 'New title', logger),
+        ).rejects.toThrow('Failed to publish rename metadata');
+        expect(activeDocument.getText('title').toString()).toBe('New title');
+      } finally {
+        server.hocuspocus.documents.delete(pageId);
+        server.hocuspocus.documents.delete(`page-meta:${metaRoomId}`);
+      }
+    });
+
+    it('publishes descendant page deletions from one folder event', async () => {
+      const owner = await createTestUser(pool);
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO folders (id, name, position, created_by, created_at, updated_at)
+         VALUES ($1, 'Deleted folder', '0', $2, now(), now())`,
+        [folderId, owner.id],
+      );
+      const page = await createTestPage(pool, owner.id);
+      const deletedAt = new Date();
+      await pool.query(
+        'UPDATE pages SET parent_id = $1, is_deleted = true, deleted_at = $2 WHERE id = $3',
+        [folderId, deletedAt, page.id],
+      );
+      await pool.query('UPDATE folders SET is_deleted = true, deleted_at = $1 WHERE id = $2', [
+        deletedAt,
+        folderId,
+      ]);
+      const connection = { sendStateless: vi.fn(), close: vi.fn() };
+      const activeDocument = new Document(page.id);
+      vi.spyOn(activeDocument, 'getConnections').mockReturnValue([
+        connection,
+      ] as unknown as ReturnType<Document['getConnections']>);
+      server.hocuspocus.documents.set(page.id, activeDocument);
+
+      try {
+        await publishFolderDeletion(server.hocuspocus, pool, folderId, logger);
+        expect(connection.close).toHaveBeenCalledWith({ code: 4402, reason: 'Page deleted' });
+      } finally {
+        server.hocuspocus.documents.delete(page.id);
+      }
+    });
+
+    it('closes active page connections before deleted-page metadata lookup', async () => {
+      const pageId = crypto.randomUUID();
+      const metaRoomId = crypto.randomUUID();
+      const connection = {
+        sendStateless: vi.fn(),
+        close: vi.fn(),
+      };
+      const activeDocument = new Document(pageId);
+      vi.spyOn(activeDocument, 'getConnections').mockReturnValue([
+        connection,
+      ] as unknown as ReturnType<Document['getConnections']>);
+      server.hocuspocus.documents.set(pageId, activeDocument);
+      server.hocuspocus.documents.set(
+        `page-meta:${metaRoomId}`,
+        new Document(`page-meta:${metaRoomId}`),
+      );
+      const failingPool = {
+        query: vi.fn(async () => {
+          expect(connection.close).toHaveBeenCalledWith({ code: 4402, reason: 'Page deleted' });
+          throw new Error('metadata unavailable');
+        }),
+      } as unknown as typeof pool;
+
+      try {
+        await expect(
+          publishPageDeletion(server.hocuspocus, failingPool, pageId, logger),
+        ).rejects.toThrow('metadata unavailable');
+        expect(connection.sendStateless).toHaveBeenCalledWith(
+          expect.stringContaining('"type":"entity_deleted"'),
+        );
+      } finally {
+        server.hocuspocus.documents.delete(pageId);
+        server.hocuspocus.documents.delete(`page-meta:${metaRoomId}`);
+      }
     });
   });
 
@@ -816,13 +1178,15 @@ describe('collab server', () => {
         maxDebounceMs: 100,
       });
 
-      const documentName = crypto.randomUUID();
+      const user = await createTestUser(pool);
+      const page = await createTestPage(pool, user.id);
+      const documentName = page.id;
       const doc = new Document(documentName);
       doc.getText('content').insert(0, 'pending');
       failingServer.hocuspocus.documents.set(documentName, doc);
       const payload: onDisconnectPayload = {
         clientsCount: 0,
-        context: { user: { id: crypto.randomUUID() } },
+        context: { user: { id: user.id } },
         document: doc,
         documentName,
         instance: failingServer.hocuspocus,

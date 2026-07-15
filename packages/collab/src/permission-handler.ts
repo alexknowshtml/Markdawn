@@ -60,16 +60,25 @@ async function getAnonymousPagePermission(
   return clientPermission(result.rows[0]?.permission as string | undefined) ?? null;
 }
 
-async function getAuthenticatedPagePermission(
+async function getAuthenticatedPagePermissions(
   pool: Pool,
   pageId: string,
-  userId: string,
-): Promise<SharePermission | null> {
-  const result = await pool.query('SELECT permission FROM get_effective_page_permission($1, $2)', [
-    pageId,
-    userId,
-  ]);
-  return clientPermission(result.rows[0]?.permission as string | undefined) ?? null;
+  userIds: string[],
+): Promise<Map<string, SharePermission | null>> {
+  if (userIds.length === 0) return new Map();
+
+  const result = await pool.query<{ user_id: string; permission: string | null }>(
+    `WITH requested_users AS (
+       SELECT DISTINCT unnest($2::uuid[]) AS user_id
+     )
+     SELECT requested_users.user_id, access.permission
+     FROM requested_users
+     LEFT JOIN LATERAL get_effective_page_permission($1, requested_users.user_id) access ON true`,
+    [pageId, userIds],
+  );
+  return new Map(
+    result.rows.map((row) => [row.user_id, clientPermission(row.permission ?? undefined) ?? null]),
+  );
 }
 
 /**
@@ -83,6 +92,7 @@ async function recomputePageConnections(
   pool: Pool | undefined,
   logger: Logger,
   message?: string,
+  targetUserId?: string,
 ): Promise<number> {
   const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
   if (!activeDoc) {
@@ -97,22 +107,38 @@ async function recomputePageConnections(
 
   const connections = activeDoc.getConnections();
   let affectedCount = 0;
-
-  for (const connection of connections) {
+  const candidates = connections.flatMap((connection) => {
     const ctx = connection.context as ConnectionContext | undefined;
     if (!ctx?.user) {
       logger.debug('[share] connection has no user context, skipping');
-      continue;
+      return [];
     }
+    if (targetUserId !== undefined && ctx.user.id !== targetUserId) return [];
+    return [{ connection, ctx }];
+  });
+  const authenticatedUserIds = Array.from(
+    new Set(
+      candidates
+        .filter(({ ctx }) => ctx.user?.isAnonymous !== true)
+        .map(({ ctx }) => ctx.user?.id)
+        .filter((userId): userId is string => userId !== undefined),
+    ),
+  );
+  const hasAnonymousConnections = candidates.some(({ ctx }) => ctx.user?.isAnonymous === true);
+  const [authenticatedResult, anonymousResult] = await Promise.allSettled([
+    getAuthenticatedPagePermissions(pool, pageId, authenticatedUserIds),
+    hasAnonymousConnections
+      ? getAnonymousPagePermission(pool, pageId)
+      : Promise.resolve<SharePermission | null>(null),
+  ]);
 
-    let permission: SharePermission | null;
-    try {
-      permission = ctx.user.isAnonymous
-        ? await getAnonymousPagePermission(pool, pageId)
-        : await getAuthenticatedPagePermission(pool, pageId, ctx.user.id);
-    } catch (err) {
+  for (const { connection, ctx } of candidates) {
+    const user = ctx.user;
+    if (!user) continue;
+    const permissionResult = user.isAnonymous ? anonymousResult : authenticatedResult;
+    if (permissionResult.status === 'rejected') {
       logger.error(
-        `[share] failed to recompute permission for user=${ctx.user.id} on page=${pageId}: ${err}`,
+        `[share] failed to recompute permission for user=${user.id} on page=${pageId}: ${permissionResult.reason}`,
       );
       connection.sendStateless(
         JSON.stringify({
@@ -126,6 +152,9 @@ async function recomputePageConnections(
       continue;
     }
 
+    const permission = user.isAnonymous
+      ? (permissionResult.value as SharePermission | null)
+      : ((permissionResult.value as Map<string, SharePermission | null>).get(user.id) ?? null);
     if (!permission) {
       connection.sendStateless(
         JSON.stringify({
@@ -136,7 +165,7 @@ async function recomputePageConnections(
       );
       connection.close({ code: 4401, reason: 'Access revoked' });
       logger.info(
-        `[share] revoked ${ctx.user.isAnonymous ? 'anonymous' : 'user'}=${ctx.user.id} on page ${pageId} after permission recompute`,
+        `[share] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page ${pageId} after permission recompute`,
       );
       affectedCount++;
       continue;
@@ -146,7 +175,7 @@ async function recomputePageConnections(
     const previousPermission = typeof ctx.permission === 'string' ? ctx.permission : undefined;
     if (connection.readOnly === isReadOnly && previousPermission === permission) {
       logger.debug(
-        `[share] skipping user=${ctx.user.id} on page ${pageId} (recomputed permission unchanged: ${permission})`,
+        `[share] skipping user=${user.id} on page ${pageId} (recomputed permission unchanged: ${permission})`,
       );
       continue;
     }
@@ -162,7 +191,7 @@ async function recomputePageConnections(
       } satisfies StatelessShareMessage),
     );
     logger.info(
-      `[share] recomputed ${ctx.user.isAnonymous ? 'anonymous' : 'user'}=${ctx.user.id} on page ${pageId} to ${permission}`,
+      `[share] recomputed ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page ${pageId} to ${permission}`,
     );
     affectedCount++;
   }
@@ -218,13 +247,23 @@ async function applyShareEventToPage(
     }
   }
 
-  // If the base permissions query failed, we cannot safely determine who has
-  // independent access — bail out rather than potentially disconnecting owners.
+  // If permissions cannot be verified after a link change, disconnect every
+  // affected session. Reconnection will run the normal authentication path.
   if (basePermissionsFailed) {
     logger.warn(
-      `[share] base permissions unavailable for page ${pageId}, skipping link share processing`,
+      `[share] base permissions unavailable for page ${pageId}, closing active connections`,
     );
-    return 0;
+    for (const connection of connections) {
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'share_event',
+          action: 'revoke',
+          ...(message !== undefined && { message }),
+        } satisfies StatelessShareMessage),
+      );
+      connection.close({ code: 4500, reason: 'Permission verification failed' });
+    }
+    return connections.length;
   }
 
   logger.debug(`[share] found document for page ${pageId}, ${connections.length} connection(s)`);
@@ -306,49 +345,26 @@ async function applyShareEventToPage(
     affectedCount++;
 
     if (action === 'revoke') {
-      // For targeted revokes, check if the user has remaining access paths
-      // before disconnecting (e.g., access via parent folder or link share).
+      // For targeted revokes, ask the canonical permission function whether
+      // another valid path remains. Null and query failures both fail closed.
       if (isTargeted && pool) {
         try {
-          const accessCheck = await pool.query(
-            `WITH page_parent AS (SELECT parent_id FROM pages WHERE id = $1)
-             SELECT 1 FROM (
-               SELECT 1 FROM shares
-               WHERE entity_type = 'page' AND entity_id = $1 AND recipient_user_id = $2
-                 AND token IS NULL
-               UNION ALL
-               SELECT 1 FROM shares s
-               JOIN folder_closure fc ON fc.ancestor_id = s.entity_id
-               JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-               WHERE s.entity_type = 'folder' AND s.recipient_user_id = $2 AND s.token IS NULL
-               UNION ALL
-               SELECT 1 FROM shares
-               WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL
-               UNION ALL
-               SELECT 1 FROM shares s
-               JOIN folder_closure fc ON fc.ancestor_id = s.entity_id
-               JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-               WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
-             ) remaining LIMIT 1`,
+          const permResult = await pool.query(
+            'SELECT permission FROM get_effective_page_permission($1, $2)',
             [pageId, ctx.user.id],
           );
-          const hasRemainingAccess = (accessCheck.rowCount ?? 0) > 0;
-          if (hasRemainingAccess) {
-            // User still has access via other paths — update their effective
-            // permission downward (e.g. folder edit → direct page view).
-            const permResult = await pool.query(
-              'SELECT permission FROM get_effective_page_permission($1, $2)',
-              [pageId, ctx.user.id],
-            );
-            const newPermission = (permResult.rows[0]?.permission as string | undefined) ?? 'view';
-            const isReadOnly = newPermission !== 'edit' && newPermission !== 'admin';
+          const newPermission = clientPermission(
+            permResult.rows[0]?.permission as string | undefined,
+          );
+          if (newPermission) {
+            const isReadOnly = newPermission === 'view';
             connection.readOnly = isReadOnly;
             (connection.context as Record<string, unknown>).permission = newPermission;
             connection.sendStateless(
               JSON.stringify({
                 type: 'share_event',
                 action: 'update',
-                permission: newPermission as SharePermission,
+                permission: newPermission,
                 ...(message !== undefined && { message }),
               } satisfies StatelessShareMessage),
             );
@@ -452,6 +468,13 @@ export async function handleShareEvent(
         pageIds = result.rows.map((r: { id: string }) => r.id);
       } catch (err) {
         logger.error(`[share] failed to query pages in folder ${entityId}: ${err}`);
+        // The subtree lookup failed, so revalidate matching users on every
+        // active page. Each per-page check still fails closed, while users
+        // whose effective access can be verified remain connected.
+        for (const activePageId of server.hocuspocus?.documents?.keys() ?? []) {
+          if (activePageId.startsWith('page-meta:')) continue;
+          await recomputePageConnections(server, activePageId, pool, logger, message, targetUserId);
+        }
         return;
       }
     }
@@ -531,113 +554,121 @@ export async function handleWorkspaceEvent(
 
   logger.debug(`[workspace] received event: action=${action} owner=${ownerId} member=${memberId}`);
 
+  const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${memberId}`) as
+    | Document
+    | undefined;
+  for (const connection of metaDocument?.getConnections() ?? []) {
+    connection.sendStateless(
+      JSON.stringify({
+        type: 'workspace_membership_event',
+        action,
+        ownerId,
+      }),
+    );
+  }
+
   if (!pool) {
     logger.warn('[workspace] no pool available, skipping');
     return;
   }
 
-  // Find all active page documents owned by the workspace owner
+  const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter(
+    (documentName) => !documentName.startsWith('page-meta:'),
+  );
+  if (activePageIds.length === 0) {
+    logger.debug(`[workspace] no active pages for workspace owner ${ownerId}, skipping`);
+    return;
+  }
+
   let pageIds: string[] = [];
   try {
-    const result = await pool.query(
-      `SELECT DISTINCT p.id FROM pages p
-       WHERE p.is_deleted = false
+    const result = await pool.query<{ id: string }>(
+      `SELECT p.id
+       FROM pages p
+       WHERE p.id = ANY($2::uuid[])
+         AND p.is_deleted = false
          AND COALESCE(get_root_folder_owner(p.parent_id), p.created_by) = $1`,
-      [ownerId],
+      [ownerId, activePageIds],
     );
-    pageIds = result.rows.map((r: { id: string }) => r.id);
+    pageIds = result.rows.map((row) => row.id);
   } catch (err) {
-    logger.error(`[workspace] failed to query pages for workspace owner ${ownerId}: ${err}`);
+    logger.error(`[workspace] failed to query active pages for workspace owner ${ownerId}: ${err}`);
+    // The workspace could not be identified, so revalidate only this member
+    // on active pages. Each recomputation remains fail closed.
+    for (const activePageId of activePageIds) {
+      await recomputePageConnections(server, activePageId, pool, logger, message, memberId);
+    }
     return;
   }
 
   if (pageIds.length === 0) {
-    logger.debug(`[workspace] no active pages found for workspace owner ${ownerId}, skipping`);
+    logger.debug(`[workspace] no matching active pages for workspace owner ${ownerId}, skipping`);
     return;
   }
 
-  // For member_removed, revoke access from all affected pages
-  // For member_added/role_changed, update permissions on all affected pages
+  let permissions: Map<string, SharePermission | null>;
+  let permissionQueryFailed = false;
+  try {
+    const permissionResult = await pool.query<{ page_id: string; permission: string | null }>(
+      `WITH requested_pages AS (
+         SELECT unnest($1::uuid[]) AS page_id
+       )
+       SELECT requested_pages.page_id, access.permission
+       FROM requested_pages
+       LEFT JOIN LATERAL get_effective_page_permission(requested_pages.page_id, $2) access ON true`,
+      [pageIds, memberId],
+    );
+    permissions = new Map(
+      permissionResult.rows.map((row) => [
+        row.page_id,
+        clientPermission(row.permission ?? undefined) ?? null,
+      ]),
+    );
+  } catch (err) {
+    permissionQueryFailed = true;
+    logger.error(`[workspace] failed to batch permissions for user=${memberId}: ${err}`);
+    permissions = new Map(pageIds.map((pageId) => [pageId, null]));
+  }
+
   for (const pageId of pageIds) {
     const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
     if (!activeDoc) continue;
+    const permission = permissions.get(pageId) ?? null;
 
-    const connections = activeDoc.getConnections();
-    for (const connection of connections) {
-      const ctx = connection.context as { user?: { id: string } } | undefined;
+    for (const connection of activeDoc.getConnections()) {
+      const ctx = connection.context as ConnectionContext | undefined;
       if (ctx?.user?.id !== memberId) continue;
 
-      if (action === 'member_removed') {
-        // Check if user has other access paths before disconnecting
-        try {
-          const accessCheck = await pool.query(
-            'SELECT permission FROM get_effective_page_permission($1, $2)',
-            [pageId, memberId],
-          );
-          const row = accessCheck.rows[0] as { permission: string | null } | undefined;
-          if (!row || row.permission === null) {
-            connection.sendStateless(
-              JSON.stringify({
-                type: 'share_event',
-                action: 'revoke',
-                ...(message !== undefined && { message }),
-              }),
-            );
-            connection.close({ code: 4401, reason: 'Access revoked' });
-            logger.info(
-              `[workspace] revoked user=${memberId} on page ${pageId} (workspace member removed)`,
-            );
-          } else {
-            // Still has access via other paths, update readOnly
-            const isReadOnly = row.permission === 'view';
-            connection.readOnly = isReadOnly;
-            (connection.context as Record<string, unknown>).permission = row.permission;
-            connection.sendStateless(
-              JSON.stringify({
-                type: 'share_event',
-                action: 'update',
-                permission: row.permission,
-                ...(message !== undefined && { message }),
-              }),
-            );
-            logger.info(
-              `[workspace] updated user=${memberId} on page ${pageId} to ${row.permission} (member removed but remaining access)`,
-            );
-          }
-        } catch (err) {
-          logger.error(
-            `[workspace] failed to check access for user=${memberId} on page=${pageId}: ${err}`,
-          );
-        }
-      } else {
-        // member_added or role_changed: recompute effective permission
-        try {
-          const permResult = await pool.query(
-            'SELECT permission FROM get_effective_page_permission($1, $2)',
-            [pageId, memberId],
-          );
-          const row = permResult.rows[0] as { permission: string | null } | undefined;
-          const newPermission = (row?.permission as string | undefined) ?? 'view';
-          const isReadOnly = newPermission === 'view';
-          connection.readOnly = isReadOnly;
-          (connection.context as Record<string, unknown>).permission = newPermission;
-          connection.sendStateless(
-            JSON.stringify({
-              type: 'share_event',
-              action: 'update',
-              permission: newPermission as SharePermission,
-              ...(message !== undefined && { message }),
-            }),
-          );
-          logger.info(
-            `[workspace] updated user=${memberId} on page ${pageId} to ${newPermission} (${action})`,
-          );
-        } catch (err) {
-          logger.error(
-            `[workspace] failed to update permission for user=${memberId} on page=${pageId}: ${err}`,
-          );
-        }
+      if (!permission) {
+        connection.sendStateless(
+          JSON.stringify({
+            type: 'share_event',
+            action: 'revoke',
+            ...(message !== undefined && { message }),
+          } satisfies StatelessShareMessage),
+        );
+        connection.close(
+          permissionQueryFailed
+            ? { code: 4500, reason: 'Permission verification failed' }
+            : { code: 4401, reason: 'Access revoked' },
+        );
+        logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
+        continue;
       }
+
+      connection.readOnly = permission === 'view';
+      (connection.context as Record<string, unknown>).permission = permission;
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'share_event',
+          action: 'update',
+          permission,
+          ...(message !== undefined && { message }),
+        } satisfies StatelessShareMessage),
+      );
+      logger.info(
+        `[workspace] updated user=${memberId} on page ${pageId} to ${permission} (${action})`,
+      );
     }
   }
 }

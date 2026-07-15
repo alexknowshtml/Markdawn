@@ -1,8 +1,9 @@
 import type { Editor } from '@milkdown/core';
 import { editorViewCtx } from '@milkdown/core';
 import { Selection } from 'prosemirror-state';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useCreatePage, usePages } from './use-pages';
+import { useAuth } from './useAuth';
 
 type WikiLinkPage = {
   id: string;
@@ -17,9 +18,19 @@ interface SuggestionsState {
   isLoading: boolean;
 }
 
-export function useWikiLinkSuggestions(editorRef: React.RefObject<Editor | null>) {
+export function useWikiLinkSuggestions(
+  editorRef: React.RefObject<Editor | null>,
+  sourcePageId: string,
+) {
   const createPageMutation = useCreatePage();
-  const { data: allPages = [] } = usePages();
+  const { data: session } = useAuth();
+  const { data: accessiblePages = [] } = usePages();
+  const sourceOwnerId = accessiblePages.find((page) => page.id === sourcePageId)?.ownerId;
+  const allPages = useMemo(() => {
+    if (!sourceOwnerId) return [];
+    return accessiblePages.filter((page) => page.ownerId === sourceOwnerId);
+  }, [accessiblePages, sourceOwnerId]);
+  const canAddPage = sourceOwnerId !== undefined && sourceOwnerId === session?.user?.id;
 
   const [suggestions, setSuggestions] = useState<SuggestionsState>({
     isOpen: false,
@@ -128,6 +139,7 @@ export function useWikiLinkSuggestions(editorRef: React.RefObject<Editor | null>
     handleWikiLinkSuggest,
     handleWikiLinkSelect,
     handleAddPage,
+    canAddPage,
     closeSuggestions: () => setSuggestions((prev) => ({ ...prev, isOpen: false })),
   };
 }

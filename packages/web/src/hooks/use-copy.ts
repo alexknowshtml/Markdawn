@@ -17,7 +17,9 @@ async function copyPage(pageId: string, parentId?: string | null): Promise<Page>
   return res.json();
 }
 
-async function copyFolder(folderId: string, parentId?: string | null): Promise<Folder> {
+type FolderCopyResult = Folder & { skippedRestrictedItems?: boolean };
+
+async function copyFolder(folderId: string, parentId?: string | null): Promise<FolderCopyResult> {
   const res = await fetch(`${API_BASE}/folders/${folderId}/copy`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -47,10 +49,14 @@ export function useCopyFolder() {
   return useMutation({
     mutationFn: ({ folderId, parentId }: { folderId: string; parentId?: string | null }) =>
       copyFolder(folderId, parentId),
-    onSuccess: () => {
+    onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      showSuccessToast('Folder copied');
+      showSuccessToast(
+        data.skippedRestrictedItems
+          ? 'Folder copied. Some restricted items were skipped.'
+          : 'Folder copied',
+      );
     },
   });
 }

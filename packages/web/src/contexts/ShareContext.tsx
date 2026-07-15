@@ -111,9 +111,13 @@ export function ShareProvider({
     const anonymousId = getAnonymousId();
     const anonymousName = getAnonymousName(anonymousId);
     // For anonymous users, derive capabilities from the link permission
-    const anonCapabilities = deriveCapabilities(
+    const derivedAnonymousCapabilities = deriveCapabilities(
       linkPermission === 'edit' ? 'edit' : linkPermission === 'view' ? 'view' : null,
     );
+    const anonCapabilities: CapabilitySet = {
+      ...derivedAnonymousCapabilities,
+      canCopy: false,
+    };
 
     return {
       isAnonymous: true,

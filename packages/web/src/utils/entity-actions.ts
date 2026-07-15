@@ -1,15 +1,19 @@
-import type { ShareEntityType } from '@markdawn/shared';
+import type { ShareEntityType, SharePermission } from '@markdawn/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { markSelfLeave } from './leave-page';
 import { showSuccessToast } from './toast';
 
 const API_BASE = '/api';
 
+export type EntityShareSource = 'direct' | 'link' | 'workspace';
+
 type EntityBase = {
   id: string;
   type: ShareEntityType;
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
+  userPermission?: SharePermission | null | undefined;
+  shareSource?: EntityShareSource | undefined;
 };
 
 type DeleteEntityOptions = {
@@ -22,8 +26,12 @@ type UseEntityDeletionParams = {
   onSuccess?: (() => void) | undefined;
 };
 
+export type DeleteEntityResult =
+  | { deleted: true }
+  | { requiresForce: true; childFolders: number; childPages: number; message: string };
+
 type UseEntityDeletionReturn = {
-  handleDelete: (entity: EntityBase, options?: DeleteEntityOptions) => Promise<void>;
+  handleDelete: (entity: EntityBase, options?: DeleteEntityOptions) => Promise<DeleteEntityResult>;
   isPending: boolean;
 };
 
@@ -44,7 +52,12 @@ async function leaveEntity(
 }
 
 async function bulkLeaveEntities(entityType: ShareEntityType, entityIds: string[]): Promise<void> {
-  await Promise.all(entityIds.map((id) => leaveEntity(entityType, id)));
+  const results = await Promise.allSettled(entityIds.map((id) => leaveEntity(entityType, id)));
+  const failedCount = results.filter((result) => result.status === 'rejected').length;
+  if (failedCount > 0) {
+    const removedCount = results.length - failedCount;
+    throw new Error(`${removedCount} removed, ${failedCount} failed`);
+  }
 }
 
 export interface OwnedEntity {
@@ -54,6 +67,14 @@ export interface OwnedEntity {
 
 export function isOwnedByUser(entity: OwnedEntity, userId: string): boolean {
   return (entity.ownerId ?? entity.createdBy) === userId;
+}
+
+/**
+ * Moving an item to a workspace root makes its creator the effective owner.
+ * Only offer that destination when doing so preserves the current owner.
+ */
+export function preservesEffectiveOwnerAtRoot(entity: OwnedEntity): boolean {
+  return entity.ownerId != null && entity.createdBy === entity.ownerId;
 }
 
 export function useLeaveEntity(entityType: ShareEntityType) {
@@ -88,13 +109,15 @@ export function useBulkLeaveEntities(entityType: ShareEntityType) {
     mutationFn: ({ entityIds }: { entityIds: string[] }) =>
       bulkLeaveEntities(entityType, entityIds),
     onSuccess: () => {
+      showSuccessToast('Removed from your view');
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: queryKeyMap[entityType] });
       const otherKey = entityType === 'page' ? 'folderTree' : 'pageTree';
       queryClient.invalidateQueries({ queryKey: [otherKey] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      showSuccessToast('Removed from your view');
     },
   });
 }
@@ -103,7 +126,7 @@ async function deleteEntity(
   entityType: ShareEntityType,
   entityId: string,
   force?: boolean,
-): Promise<void> {
+): Promise<DeleteEntityResult> {
   const url =
     entityType === 'folder' && force
       ? `${API_BASE}/${entityType}s/${entityId}?force=true`
@@ -111,10 +134,38 @@ async function deleteEntity(
   const res = await fetch(url, {
     method: 'DELETE',
   });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: `Failed to delete ${entityType}` }));
-    throw new Error(error.message);
+  const result = (await res.json().catch(() => ({ deleted: res.ok }))) as {
+    code?: unknown;
+    deleted?: unknown;
+    requiresForce?: unknown;
+    childFolders?: unknown;
+    childPages?: unknown;
+    message?: unknown;
+  };
+  if (
+    entityType === 'folder' &&
+    res.status === 409 &&
+    result.code === 'FOLDER_NOT_EMPTY' &&
+    result.requiresForce === true &&
+    typeof result.childFolders === 'number' &&
+    typeof result.childPages === 'number'
+  ) {
+    return {
+      requiresForce: true,
+      childFolders: result.childFolders,
+      childPages: result.childPages,
+      message:
+        'message' in result && typeof result.message === 'string'
+          ? result.message
+          : 'Folder is not empty',
+    };
   }
+  if (!res.ok) {
+    throw new Error(
+      typeof result.message === 'string' ? result.message : `Failed to delete ${entityType}`,
+    );
+  }
+  return { deleted: true };
 }
 
 export function useEntityDeletion({
@@ -127,7 +178,8 @@ export function useEntityDeletion({
   const deleteMutation = useMutation({
     mutationFn: ({ entityId, force }: { entityId: string; force?: boolean | undefined }) =>
       deleteEntity(entityType, entityId, force),
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if ('requiresForce' in result) return;
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
@@ -145,15 +197,21 @@ export function useEntityDeletion({
 
   const handleDelete = async (entity: EntityBase, options?: DeleteEntityOptions) => {
     const isOwned = currentUserId ? isOwnedByUser(entity, currentUserId) : false;
+    const canDelete = isOwned || entity.userPermission === 'admin';
 
-    if (isOwned) {
-      await deleteMutation.mutateAsync({ entityId: entity.id, force: options?.force });
-    } else {
-      if (entity.type === 'page') {
-        markSelfLeave(entity.id);
-      }
-      await leaveMutation.mutateAsync(entity.id);
+    if (canDelete) {
+      return deleteMutation.mutateAsync({ entityId: entity.id, force: options?.force });
     }
+
+    if (entity.shareSource !== 'direct' && entity.shareSource !== 'link') {
+      throw new Error(`This ${entity.type} inherits access and cannot be left directly`);
+    }
+
+    if (entity.type === 'page') {
+      markSelfLeave(entity.id);
+    }
+    await leaveMutation.mutateAsync(entity.id);
+    return { deleted: true as const };
   };
 
   return {

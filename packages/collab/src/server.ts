@@ -1,7 +1,11 @@
 import type { Hocuspocus } from '@hocuspocus/server';
 import { type Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import { getAnonymousName, type ShareEventPayload } from '@markdawn/shared';
+import {
+  getAnonymousName,
+  type ShareEventPayload,
+  type StatelessShareMessage,
+} from '@markdawn/shared';
 import {
   type ConnectionDraft,
   extractConnectionsFromYDoc,
@@ -18,6 +22,15 @@ import { parseCookies } from './utils';
 const META_ROOM_PREFIX = 'page-meta:';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+class CollabAccessError extends Error {
+  readonly code = 'COLLAB_ACCESS_DENIED';
+
+  constructor() {
+    super('Forbidden');
+    this.name = 'CollabAccessError';
+  }
+}
+
 function extractTitle(doc: Y.Doc): string {
   const titleText = doc.getText('title');
   return titleText.toString() || 'Untitled';
@@ -32,8 +45,15 @@ type PageLookupRow = {
   title: string;
 };
 
+type PageMeta = {
+  title: string;
+  icon: string | null;
+  parent_id: string | null;
+  position: string;
+};
+
 type PageContextRow = {
-  created_by: string;
+  owner_id: string;
   properties: unknown;
 };
 
@@ -57,31 +77,145 @@ interface InviteReceivedPayload {
   message?: string;
 }
 
+type ActiveMetaDocuments = Map<string, Document>;
+
+function getActiveMetaDocuments(hocuspocus: Hocuspocus): ActiveMetaDocuments {
+  const documents = new Map<string, Document>();
+  for (const [documentName, document] of hocuspocus.documents) {
+    if (!documentName.startsWith(META_ROOM_PREFIX)) continue;
+    const userId = documentName.slice(META_ROOM_PREFIX.length);
+    if (!UUID_REGEX.test(userId)) continue;
+    documents.set(userId, document as Document);
+  }
+  return documents;
+}
+
+async function getPageMetaRecipients(
+  pool: Pool,
+  pageIds: string[],
+  candidateUserIds: string[],
+): Promise<Map<string, string[]>> {
+  if (pageIds.length === 0 || candidateUserIds.length === 0) return new Map();
+
+  const result = await pool.query<{ page_id: string; user_id: string }>(
+    `with requested as (
+       select unnest($1::uuid[]) as page_id
+     ), active_users as (
+       select unnest($2::uuid[]) as user_id
+     ), recipients as (
+       select requested.page_id, base.user_id
+       from requested
+       join lateral get_page_base_permissions(requested.page_id) base on true
+       union
+       select requested.page_id, pae.user_id
+       from requested
+       join page_access_events pae on pae.page_id = requested.page_id
+       join lateral get_effective_page_permission(requested.page_id, pae.user_id) access on true
+       where access.permission is not null
+       union
+       select requested.page_id, fae.user_id
+       from requested
+       join pages p on p.id = requested.page_id and p.is_deleted = false
+       join folder_closure fc on fc.descendant_id = p.parent_id
+       join folder_access_events fae on fae.folder_id = fc.ancestor_id
+       join lateral get_effective_page_permission(requested.page_id, fae.user_id) access on true
+       where access.permission is not null
+     )
+     select distinct recipients.page_id, recipients.user_id
+     from recipients
+     join active_users on active_users.user_id = recipients.user_id
+     where recipients.user_id is not null`,
+    [pageIds, candidateUserIds],
+  );
+
+  const recipients = new Map<string, string[]>();
+  for (const row of result.rows) {
+    const ids = recipients.get(row.page_id) ?? [];
+    ids.push(row.user_id);
+    recipients.set(row.page_id, ids);
+  }
+  return recipients;
+}
+
+async function getDeletedPageMetaRecipientIds(
+  pool: Pool,
+  pageId: string,
+  candidateUserIds: string[],
+): Promise<string[]> {
+  if (candidateUserIds.length === 0) return [];
+
+  const result = await pool.query<{ user_id: string }>(
+    `with page_info as (
+       select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id, p.parent_id
+       from pages p where p.id = $1
+     ), recipients as (
+       select owner_id as user_id from page_info
+       union
+       select s.recipient_user_id
+       from shares s
+       where s.entity_type = 'page' and s.entity_id = $1
+         and s.recipient_user_id is not null and s.token is null
+         and (s.expires_at is null or s.expires_at > now())
+       union
+       select s.recipient_user_id
+       from shares s
+       join page_info pi on s.entity_id in (
+         select ancestor_id from folder_closure where descendant_id = pi.parent_id
+       )
+       where s.entity_type = 'folder' and s.recipient_user_id is not null and s.token is null
+         and (s.expires_at is null or s.expires_at > now())
+       union
+       select wm.member_id
+       from workspace_members wm
+       join page_info pi on pi.owner_id = wm.workspace_owner_id
+       union
+       select user_id from page_access_events where page_id = $1
+       union
+       select fae.user_id
+       from folder_access_events fae
+       join page_info pi on fae.folder_id in (
+         select ancestor_id from folder_closure where descendant_id = pi.parent_id
+       )
+     )
+     select distinct user_id
+     from recipients
+     where user_id is not null and user_id = any($2::uuid[])`,
+    [pageId, candidateUserIds],
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
 async function updatePageMeta(
   hocuspocus: Hocuspocus,
   pool: Pool,
   pageId: string,
   logger: Logger,
+  knownPage?: PageMeta,
+  knownRecipients?: Map<string, string[]>,
+  knownActiveDocuments?: ActiveMetaDocuments,
 ): Promise<void> {
-  try {
-    const pageResult = await pool.query(
-      'select created_by, title, icon, parent_id, position from pages where id = $1',
+  const activeDocuments = knownActiveDocuments ?? getActiveMetaDocuments(hocuspocus);
+  if (activeDocuments.size === 0) return;
+
+  let page = knownPage;
+  if (!page) {
+    const pageResult = await pool.query<PageMeta>(
+      'select title, icon, parent_id, position from pages where id = $1 and is_deleted = false',
       [pageId],
     );
-    if (pageResult.rows.length === 0) return;
+    page = pageResult.rows[0];
+  }
+  if (!page) return;
 
-    const page = pageResult.rows[0] as {
-      created_by: string;
-      title: string;
-      icon: string | null;
-      parent_id: string | null;
-      position: string;
-    };
-    const metaRoomName = `${META_ROOM_PREFIX}${page.created_by}`;
-
-    const connection = await hocuspocus.openDirectConnection(metaRoomName, {});
+  const recipients =
+    knownRecipients ??
+    (await getPageMetaRecipients(pool, [pageId], Array.from(activeDocuments.keys())));
+  const failures: unknown[] = [];
+  for (const recipientId of recipients.get(pageId) ?? []) {
+    const metaDoc = activeDocuments.get(recipientId);
+    if (!metaDoc) continue;
     try {
-      await connection.transact((metaDoc: Y.Doc) => {
+      metaDoc.transact(() => {
         const pageIndex = metaDoc.getMap('pageIndex');
         pageIndex.set(pageId, {
           title: page.title,
@@ -90,11 +224,16 @@ async function updatePageMeta(
           position: page.position,
         });
       });
-    } finally {
-      await connection.disconnect();
+    } catch (error) {
+      failures.push(error);
+      logger.error(
+        `[meta] failed to update meta for user ${recipientId} on page ${pageId}: ${error}`,
+      );
     }
-  } catch (err) {
-    logger.error(`[meta] failed to update meta for page ${pageId}: ${err}`);
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to update page metadata for ${pageId}`);
   }
 }
 
@@ -157,7 +296,7 @@ function isUuid(value: string): boolean {
 
 async function resolvePageTargets(
   client: PoolClient,
-  userId: string,
+  ownerId: string,
   connections: IndexedConnection[],
   staleTargets?: Map<string, string>,
 ): Promise<void> {
@@ -181,7 +320,7 @@ async function resolvePageTargets(
   const slugs = [
     ...new Set(
       connections
-        .filter((connection) => connection.targetType === 'page' && !connection.targetId)
+        .filter((connection) => connection.targetType === 'page')
         .map((connection) => connection.targetSlug)
         .filter(Boolean),
     ),
@@ -193,22 +332,60 @@ async function resolvePageTargets(
   if (ids.length > 0) {
     const result = await client.query<PageLookupRow>(
       `select id, title from pages
-       where id = any($1::uuid[]) and is_deleted = false`,
-      [ids],
+       where id = any($1::uuid[])
+         and is_deleted = false
+         and coalesce(get_root_folder_owner(parent_id), created_by) = $2`,
+      [ids, ownerId],
     );
     for (const row of result.rows) {
       byId.set(row.id, row);
     }
   }
 
-  if (slugs.length > 0) {
-    const result = await client.query<PageLookupRow>(
-      `select id, title from pages
-       where created_by = $1 and lower(title) = any($2::text[]) and is_deleted = false`,
-      [userId, slugs],
+  const titleSlugs = slugs.filter((slug) => !slug.includes('/'));
+  if (titleSlugs.length > 0) {
+    const result = await client.query<PageLookupRow & { normalized_title: string }>(
+      `select min(id::text) as id, min(title) as title, lower(trim(title)) as normalized_title
+       from pages
+       where coalesce(get_root_folder_owner(parent_id), created_by) = $1
+         and lower(trim(title)) = any($2::text[])
+         and is_deleted = false
+       group by lower(trim(title))
+       having count(*) = 1`,
+      [ownerId, titleSlugs],
     );
     for (const row of result.rows) {
-      bySlug.set(row.title.toLowerCase(), row);
+      bySlug.set(row.normalized_title, row);
+    }
+  }
+
+  const pathSlugs = slugs.filter((slug) => slug.includes('/'));
+  if (pathSlugs.length > 0) {
+    const result = await client.query<PageLookupRow & { normalized_path: string }>(
+      `with recursive folder_paths as (
+         select f.id, lower(trim(f.name))::text as folder_path
+         from folders f
+         where f.parent_id is null and f.created_by = $1 and f.is_deleted = false
+         union all
+         select child.id,
+                (parent.folder_path || '/' || lower(trim(child.name)))::text
+         from folders child
+         join folder_paths parent on parent.id = child.parent_id
+         where child.is_deleted = false
+       )
+       select min(p.id::text) as id,
+              min(p.title) as title,
+              paths.folder_path || '/' || lower(trim(p.title)) as normalized_path
+       from pages p
+       join folder_paths paths on paths.id = p.parent_id
+       where p.is_deleted = false
+         and paths.folder_path || '/' || lower(trim(p.title)) = any($2::text[])
+       group by paths.folder_path || '/' || lower(trim(p.title))
+       having count(*) = 1`,
+      [ownerId, pathSlugs],
+    );
+    for (const row of result.rows) {
+      bySlug.set(row.normalized_path, row);
     }
   }
 
@@ -220,6 +397,11 @@ async function resolvePageTargets(
       connection.targetLabel = byIdMatch.title;
       continue;
     }
+
+    // Never retain a client-provided target outside the source workspace.
+    // Slug and stale-target resolution below may replace this with a target
+    // that was returned by the workspace-scoped lookup.
+    connection.targetId = null;
 
     const bySlugMatch = bySlug.get(connection.targetSlug);
     if (bySlugMatch) {
@@ -235,45 +417,10 @@ async function resolvePageTargets(
     // page UUID. The byId map then resolves it to the updated page title.
     if (staleTargets) {
       const staleId = staleTargets.get(connection.targetSlug);
-      if (staleId) {
+      const staleMatch = staleId ? byId.get(staleId) : undefined;
+      if (staleId && staleMatch) {
         connection.targetId = staleId;
-        const staleMatch = byId.get(staleId);
-        if (staleMatch) {
-          connection.targetLabel = staleMatch.title;
-        }
-      }
-    }
-  }
-
-  // Batch last-resort cross-table slug lookup. Collect all slugs that
-  // remain unresolved (no targetId and not found by title or stale mapping)
-  // and query the connections table once instead of N separate queries.
-  const unresolvedSlugs = [
-    ...new Set(
-      connections.filter((c) => c.targetType === 'page' && !c.targetId).map((c) => c.targetSlug),
-    ),
-  ];
-  const slugTargetMap = new Map<string, string>();
-  if (unresolvedSlugs.length > 0) {
-    const crossResult = await client.query<{ target_slug: string; target_id: string }>(
-      `select distinct on (target_slug) target_slug, target_id from connections
-       where target_slug = any($1::text[]) and target_id is not null
-       order by target_slug, updated_at desc`,
-      [unresolvedSlugs],
-    );
-    for (const row of crossResult.rows) {
-      slugTargetMap.set(row.target_slug, row.target_id);
-    }
-  }
-
-  for (const connection of connections) {
-    if (connection.targetType !== 'page' || connection.targetId) continue;
-    const cid = slugTargetMap.get(connection.targetSlug);
-    if (cid) {
-      connection.targetId = cid;
-      const pageMatch = byId.get(cid);
-      if (pageMatch) {
-        connection.targetLabel = pageMatch.title;
+        connection.targetLabel = staleMatch.title;
       }
     }
   }
@@ -286,7 +433,8 @@ async function updateConnections(
   logger: Logger,
 ): Promise<string[]> {
   const pageResult = await client.query<PageContextRow>(
-    'select created_by, properties from pages where id = $1',
+    `select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id, properties
+     from pages where id = $1`,
     [pageId],
   );
   const page = pageResult.rows[0];
@@ -315,7 +463,7 @@ async function updateConnections(
   const extracted = extractConnectionsFromYDoc(ydocUpdate);
   const propertyTags = extractPropertyTags(page.properties);
   const indexedConnections = aggregateConnections([...extracted, ...propertyTags]);
-  await resolvePageTargets(client, page.created_by, indexedConnections, staleTargets);
+  await resolvePageTargets(client, page.owner_id, indexedConnections, staleTargets);
 
   await client.query('delete from connections where source_type = $1 and source_id = $2', [
     'page',
@@ -366,28 +514,49 @@ async function updateConnections(
 
 async function updateBacklinksVersion(
   hocuspocus: Hocuspocus,
-  userId: string,
+  pool: Pool,
   pageIds: string[],
   logger: Logger,
+  knownRecipients?: Map<string, string[]>,
+  knownActiveDocuments?: ActiveMetaDocuments,
 ): Promise<void> {
   if (pageIds.length === 0) return;
 
-  const metaRoomName = `${META_ROOM_PREFIX}${userId}`;
-  try {
-    const conn = await hocuspocus.openDirectConnection(metaRoomName, {});
+  const activeDocuments = knownActiveDocuments ?? getActiveMetaDocuments(hocuspocus);
+  if (activeDocuments.size === 0) return;
+
+  const pageIdsByRecipient = new Map<string, string[]>();
+  const recipientsByPage =
+    knownRecipients ??
+    (await getPageMetaRecipients(pool, pageIds, Array.from(activeDocuments.keys())));
+  for (const pageId of pageIds) {
+    for (const recipientId of recipientsByPage.get(pageId) ?? []) {
+      const ids = pageIdsByRecipient.get(recipientId) ?? [];
+      ids.push(pageId);
+      pageIdsByRecipient.set(recipientId, ids);
+    }
+  }
+
+  const failures: unknown[] = [];
+  for (const [recipientId, recipientPageIds] of pageIdsByRecipient) {
+    const metaDoc = activeDocuments.get(recipientId);
+    if (!metaDoc) continue;
     try {
-      await conn.transact((metaDoc: Y.Doc) => {
+      metaDoc.transact(() => {
         const bv = metaDoc.getMap('backlinksVersion');
         const now = Date.now();
-        for (const id of pageIds) {
+        for (const id of recipientPageIds) {
           bv.set(id, now);
         }
       });
-    } finally {
-      await conn.disconnect();
+    } catch (error) {
+      failures.push(error);
+      logger.error(`[meta] failed to update backlinksVersion for user ${recipientId}: ${error}`);
     }
-  } catch (err) {
-    logger.warn(`[meta] failed to update backlinksVersion for user ${userId}: ${err}`);
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Failed to update backlinks metadata');
   }
 }
 
@@ -401,8 +570,8 @@ async function persistDocument(
   attempt = 1,
 ) {
   const client = await pool.connect();
-  let createdBy: string | undefined;
   let targetPageIds: string[] = [];
+  let pageMeta: PageMeta | undefined;
 
   try {
     await client.query('BEGIN');
@@ -438,13 +607,11 @@ async function persistDocument(
       ]);
     }
     targetPageIds = await updateConnections(client, documentName, state, logger);
-
-    // Read created_by to know which meta room to notify.
-    const userResult = await client.query<{ created_by: string }>(
-      'select created_by from pages where id = $1',
+    const metaResult = await client.query<PageMeta>(
+      'select title, icon, parent_id, position from pages where id = $1',
       [documentName],
     );
-    createdBy = userResult.rows[0]?.created_by;
+    pageMeta = metaResult.rows[0];
 
     await client.query('COMMIT');
   } catch (err) {
@@ -466,13 +633,165 @@ async function persistDocument(
     client.release();
   }
 
-  updatePageMeta(hocuspocus, pool, documentName, logger);
+  // Notify only currently connected meta rooms. Offline users rebuild their
+  // metadata from PostgreSQL when they reconnect, so opening rooms for them
+  // here would add save latency without preserving useful state.
+  const activeDocuments = getActiveMetaDocuments(hocuspocus);
+  if (activeDocuments.size === 0) return;
 
-  // Notify all affected pages that their backlinks may have changed.
   const affectedIds = [...new Set([documentName, ...targetPageIds])];
-  if (createdBy) {
-    updateBacklinksVersion(hocuspocus, createdBy, affectedIds, logger);
+  const recipients = await getPageMetaRecipients(
+    pool,
+    affectedIds,
+    Array.from(activeDocuments.keys()),
+  );
+  const results = await Promise.allSettled([
+    updatePageMeta(hocuspocus, pool, documentName, logger, pageMeta, recipients, activeDocuments),
+    updateBacklinksVersion(hocuspocus, pool, affectedIds, logger, recipients, activeDocuments),
+  ]);
+  const failures = results
+    .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
+    .map((result) => result.reason as unknown);
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to publish metadata for ${documentName}`);
   }
+}
+
+export async function publishPageRename(
+  hocuspocus: Hocuspocus,
+  pool: Pool,
+  pageId: string,
+  newTitle: string,
+  logger: Logger,
+): Promise<void> {
+  const activeDoc = hocuspocus.documents.get(pageId) as Y.Doc | undefined;
+  if (activeDoc) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const beforeTitle = activeDoc.getText('title').toString();
+    if (beforeTitle !== newTitle) {
+      activeDoc.transact(() => {
+        const titleText = activeDoc.getText('title');
+        titleText.delete(0, titleText.length);
+        titleText.insert(0, newTitle);
+      });
+      logger.debug(
+        `[listen] pushed rename to active session for page ${pageId}: "${beforeTitle}" -> "${newTitle}"`,
+      );
+    }
+  }
+
+  const results = await Promise.allSettled([
+    updatePageMeta(hocuspocus, pool, pageId, logger),
+    updateBacklinksVersion(hocuspocus, pool, [pageId], logger),
+  ]);
+  const failures: unknown[] = [];
+  for (const result of results) {
+    if (result.status === 'fulfilled') continue;
+    failures.push(result.reason);
+    logger.error(`[listen] failed to publish rename metadata for page ${pageId}: ${result.reason}`);
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to publish rename metadata for ${pageId}`);
+  }
+
+  logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
+}
+
+export async function publishPageDeletion(
+  hocuspocus: Hocuspocus,
+  pool: Pool,
+  pageId: string,
+  logger: Logger,
+): Promise<void> {
+  const activeDoc = hocuspocus.documents.get(pageId) as Document | undefined;
+  if (activeDoc) {
+    for (const connection of activeDoc.getConnections()) {
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'entity_deleted',
+          entityType: 'page',
+          entityId: pageId,
+        }),
+      );
+      connection.close({ code: 4402, reason: 'Page deleted' });
+    }
+  }
+
+  const activeDocuments = getActiveMetaDocuments(hocuspocus);
+  const recipientIds = await getDeletedPageMetaRecipientIds(
+    pool,
+    pageId,
+    Array.from(activeDocuments.keys()),
+  );
+  const failures: unknown[] = [];
+
+  for (const recipientId of recipientIds) {
+    const metaDoc = activeDocuments.get(recipientId);
+    if (!metaDoc) continue;
+    try {
+      metaDoc.transact(() => {
+        metaDoc.getMap('pageIndex').delete(pageId);
+        metaDoc.getMap('backlinksVersion').set(pageId, Date.now());
+      });
+    } catch (error) {
+      failures.push(error);
+      logger.error(
+        `[listen] failed to remove page ${pageId} from meta for user ${recipientId}: ${error}`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to publish deletion metadata for ${pageId}`);
+  }
+  logger.debug(`[listen] removed deleted page ${pageId} from active meta rooms`);
+}
+
+export async function publishFolderDeletion(
+  hocuspocus: Hocuspocus,
+  pool: Pool,
+  folderId: string,
+  logger: Logger,
+): Promise<void> {
+  const result = await pool.query<{ id: string }>(
+    `SELECT p.id
+     FROM pages p
+     JOIN folders deleted_root ON deleted_root.id = $1
+     WHERE p.parent_id IN (
+       SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
+     )
+       AND p.is_deleted = true
+       AND p.deleted_at = deleted_root.deleted_at`,
+    [folderId],
+  );
+
+  const pageIds = result.rows.map((row) => row.id);
+  if (pageIds.length === 0) {
+    logger.debug(`[listen] no pages deleted with folder ${folderId}, skipping`);
+    return;
+  }
+
+  const failures: unknown[] = [];
+  const batchSize = 25;
+  for (let offset = 0; offset < pageIds.length; offset += batchSize) {
+    const batch = pageIds.slice(offset, offset + batchSize);
+    const results = await Promise.allSettled(
+      batch.map((pageId) => publishPageDeletion(hocuspocus, pool, pageId, logger)),
+    );
+    for (const [index, publishResult] of results.entries()) {
+      if (publishResult.status === 'fulfilled') continue;
+      const pageId = batch[index];
+      failures.push(publishResult.reason);
+      logger.error(
+        `[listen] failed to publish folder deletion for page ${pageId ?? 'unknown'}: ${publishResult.reason}`,
+      );
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to publish all page deletions for ${folderId}`);
+  }
+  logger.debug(`[listen] published ${pageIds.length} page deletion(s) for folder ${folderId}`);
 }
 
 export interface CollabServerConfig {
@@ -486,6 +805,12 @@ export interface CollabServerConfig {
 
 export function createCollabServer(config: CollabServerConfig) {
   const { port, pool, logger, debounceMs = 500, maxDebounceMs = 3000 } = config;
+  type PersistContext = {
+    user?: { id: string; isAnonymous?: boolean };
+    permission?: string;
+  };
+  const pendingWriters = new Map<string, Map<string, PersistContext>>();
+  const blockedDocuments = new Set<string>();
 
   async function assertPageAccess(
     documentName: string,
@@ -497,7 +822,7 @@ export function createCollabServer(config: CollabServerConfig) {
     );
     if (ownerResult.rowCount === 0) {
       logger.debug(`[auth] page=${documentName} not found`);
-      throw new Error('Forbidden');
+      throw new CollabAccessError();
     }
     const shareResult = await pool.query(
       'SELECT permission, full_access FROM get_effective_page_permission($1, $2)',
@@ -506,7 +831,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
     if (shareResult.rows.length === 0) {
       logger.debug(`[auth] user=${userId} denied access to page=${documentName} (no share)`);
-      throw new Error('Forbidden');
+      throw new CollabAccessError();
     }
 
     const rawPermission = shareResult.rows[0].permission;
@@ -514,7 +839,7 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.debug(
         `[auth] user=${userId} denied access to page=${documentName} (invalid permission)`,
       );
-      throw new Error('Forbidden');
+      throw new CollabAccessError();
     }
     return { permission: rawPermission };
   }
@@ -522,7 +847,7 @@ export function createCollabServer(config: CollabServerConfig) {
   async function assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void> {
     if (userId !== roomUserId) {
       logger.debug(`[auth] user=${userId} denied access to meta room for user=${roomUserId}`);
-      throw new Error('Forbidden');
+      throw new CollabAccessError();
     }
   }
 
@@ -561,9 +886,111 @@ export function createCollabServer(config: CollabServerConfig) {
     const rawPermission = shareResult.rows[0]?.permission;
     if (rawPermission !== 'view' && rawPermission !== 'edit' && rawPermission !== 'admin') {
       logger.debug(`[auth] anonymous denied: page ${documentName} has no valid link share`);
-      throw new Error('Forbidden');
+      throw new CollabAccessError();
     }
     return { permission: rawPermission };
+  }
+
+  function updateRevalidatedConnections(
+    documentName: string,
+    user: { id: string; isAnonymous?: boolean },
+    permission: 'view' | 'edit' | 'admin' | null,
+  ): void {
+    const activeDoc = server.hocuspocus.documents.get(documentName) as Document | undefined;
+    if (!activeDoc) return;
+
+    for (const connection of activeDoc.getConnections()) {
+      const connectionContext = connection.context as
+        | { user?: { id: string; isAnonymous?: boolean }; permission?: unknown }
+        | undefined;
+      if (
+        connectionContext?.user?.id !== user.id ||
+        connectionContext.user.isAnonymous !== user.isAnonymous
+      ) {
+        continue;
+      }
+      if (!permission) {
+        connection.sendStateless(
+          JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
+        );
+        connection.close({ code: 4401, reason: 'Access revoked' });
+        continue;
+      }
+
+      const readOnly = permission === 'view';
+      if (connection.readOnly === readOnly && connectionContext.permission === permission) continue;
+      connection.readOnly = readOnly;
+      (connection.context as Record<string, unknown>).permission = permission;
+      connection.sendStateless(
+        JSON.stringify({
+          type: 'share_event',
+          action: 'update',
+          permission,
+        } satisfies StatelessShareMessage),
+      );
+    }
+  }
+
+  async function canPersistDocument(
+    documentName: string,
+    context: { user?: { id: string; isAnonymous?: boolean }; permission?: string } | undefined,
+  ): Promise<boolean> {
+    if (!context?.user) return false;
+
+    try {
+      const access = context.user.isAnonymous
+        ? await assertAnonymousPageAccess(documentName)
+        : await assertPageAccess(documentName, context.user.id);
+      context.permission = access.permission;
+      updateRevalidatedConnections(documentName, context.user, access.permission);
+      if (access.permission === 'view') {
+        logger.warn(
+          `[persist] permission dropped to view for user=${context.user.id} on page=${documentName}, skipping persist`,
+        );
+        return false;
+      }
+      return true;
+    } catch (error) {
+      if (error instanceof CollabAccessError) {
+        updateRevalidatedConnections(documentName, context.user, null);
+        logger.warn(
+          `[persist] access revoked for user=${context.user.id} on page=${documentName}, skipping persist`,
+        );
+        return false;
+      }
+      logger.error(
+        `[persist] failed to verify access for user=${context.user.id} on page=${documentName}: ${error}`,
+      );
+      throw error;
+    }
+  }
+
+  async function canPersistPendingDocument(
+    documentName: string,
+    fallbackContext: PersistContext | undefined,
+  ): Promise<boolean> {
+    if (blockedDocuments.has(documentName)) return false;
+    const writers = Array.from(pendingWriters.get(documentName)?.values() ?? []);
+    if (writers.length === 0 && fallbackContext) writers.push(fallbackContext);
+
+    for (const writer of writers) {
+      if (await canPersistDocument(documentName, writer)) continue;
+
+      // The in-memory Y.Doc may already contain this writer's rejected update.
+      // Disconnect the affected room so Hocuspocus unloads it and reloads the
+      // last persisted state rather than saving a mixed-author update later.
+      blockedDocuments.add(documentName);
+      const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
+      for (const connection of activeDocument?.getConnections() ?? []) {
+        connection.sendStateless(
+          JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
+        );
+        connection.close({ code: 4500, reason: 'Document reload required' });
+      }
+      pendingWriters.delete(documentName);
+      return false;
+    }
+    return true;
   }
 
   async function handleWorkspaceEvent(
@@ -629,6 +1056,9 @@ export function createCollabServer(config: CollabServerConfig) {
     debounce: debounceMs,
     maxDebounce: maxDebounceMs,
     onAuthenticate: async ({ token, requestHeaders, documentName, connectionConfig }) => {
+      if (documentName && blockedDocuments.has(documentName)) {
+        throw new CollabAccessError();
+      }
       const cookies = parseCookies(requestHeaders.cookie);
       const bearerTokenHeader = requestHeaders.authorization;
       const bearerMatch = bearerTokenHeader?.match(/^Bearer\s+(.+)$/i);
@@ -714,16 +1144,39 @@ export function createCollabServer(config: CollabServerConfig) {
       return { user, permission };
     },
     onLoadDocument: async ({ documentName, document, context }) => {
+      blockedDocuments.delete(documentName);
+      pendingWriters.delete(documentName);
       if (isMetaRoom(documentName)) {
         const userId = documentName.slice(META_ROOM_PREFIX.length);
         logger.debug(`[meta] loading page meta for user: ${userId}`);
 
         const result = await pool.query(
-          'select id, title, icon, parent_id, position from pages where created_by = $1 and is_deleted = false order by position asc',
+          `select p.id, p.title, p.icon, p.parent_id, p.position
+           from pages p
+           where p.is_deleted = false
+             and (
+               p.id in (select page_id from get_accessible_page_ids($1))
+               or exists (
+                 select 1
+                 from page_access_events pae
+                 join lateral get_effective_page_permission(p.id, $1) access on true
+                 where pae.page_id = p.id and pae.user_id = $1 and access.permission is not null
+               )
+               or exists (
+                 select 1
+                 from folder_access_events fae
+                 join folder_closure fc
+                   on fc.ancestor_id = fae.folder_id and fc.descendant_id = p.parent_id
+                 join lateral get_effective_page_permission(p.id, $1) access on true
+                 where fae.user_id = $1 and access.permission is not null
+               )
+             )
+           order by p.position::numeric asc`,
           [userId],
         );
 
         const pageIndex = document.getMap('pageIndex');
+        pageIndex.clear();
         for (const row of result.rows as {
           id: string;
           title: string;
@@ -784,9 +1237,19 @@ export function createCollabServer(config: CollabServerConfig) {
         });
       }
     },
+    onChange: async ({ documentName, context }) => {
+      if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
+      const writer = context as PersistContext | undefined;
+      if (!writer?.user) return;
+      const writerKey = `${writer.user.isAnonymous === true ? 'anonymous' : 'user'}:${writer.user.id}`;
+      const writers = pendingWriters.get(documentName) ?? new Map<string, PersistContext>();
+      writers.set(writerKey, writer);
+      pendingWriters.set(documentName, writers);
+    },
     onStoreDocument: async (data) => {
       const documentName = data.documentName;
 
+      if (blockedDocuments.has(documentName)) return;
       if (isMetaRoom(documentName)) {
         logger.debug(`[meta] skip persist for meta room: ${documentName}`);
         return;
@@ -799,33 +1262,7 @@ export function createCollabServer(config: CollabServerConfig) {
         throw new Error('Unauthorized');
       }
 
-      if (context.user.isAnonymous && context.permission === 'view') {
-        logger.debug(`[persist] skipping anonymous view-only user save for ${documentName}`);
-        return;
-      }
-
-      if (!context.user.isAnonymous && context.user.id) {
-        try {
-          const access = await assertPageAccess(documentName, context.user.id);
-          if (access.permission === 'view') {
-            logger.warn(
-              `[persist] permission dropped to view for user=${context.user.id} on page=${documentName}, skipping persist`,
-            );
-            return;
-          }
-        } catch (err) {
-          if (err instanceof Error && err.message === 'Forbidden') {
-            logger.warn(
-              `[persist] access revoked for user=${context.user.id} on page=${documentName}, skipping persist`,
-            );
-            return;
-          }
-          logger.error(
-            `[persist] failed to verify access for user=${context.user.id} on page=${documentName}: ${err}`,
-          );
-          throw err;
-        }
-      }
+      if (!(await canPersistPendingDocument(documentName, context))) return;
 
       const state = Y.encodeStateAsUpdate(data.document);
       if (!state || state.length === 0) {
@@ -836,24 +1273,35 @@ export function createCollabServer(config: CollabServerConfig) {
       logger.info(`[persist] saving: "${documentName}", size: ${state.length} bytes`);
       try {
         await persistDocument(pool, server.hocuspocus, documentName, state, data.document, logger);
+        pendingWriters.delete(documentName);
         logger.debug(`[persist] saved: ${documentName}`);
       } catch (err) {
         logger.error(`[persist] failed to save "${documentName}": ${err}`);
         throw err;
       }
     },
-    onDisconnect: async ({ documentName, instance }) => {
-      if (isMetaRoom(documentName)) return;
+    afterUnloadDocument: async ({ documentName }) => {
+      blockedDocuments.delete(documentName);
+      pendingWriters.delete(documentName);
+    },
+    onDisconnect: async ({ documentName, instance, context }) => {
+      if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
 
       const doc = instance.documents.get(documentName) as Y.Doc | undefined;
       if (!doc) return;
 
-      const state = Y.encodeStateAsUpdate(doc);
-      if (!state || state.length === 0) return;
-
-      logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
       try {
+        const persistContext = context as
+          | { user?: { id: string; isAnonymous?: boolean }; permission?: string }
+          | undefined;
+        if (!(await canPersistPendingDocument(documentName, persistContext))) return;
+
+        const state = Y.encodeStateAsUpdate(doc);
+        if (!state || state.length === 0) return;
+
+        logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
         await persistDocument(pool, server.hocuspocus, documentName, state, doc, logger);
+        pendingWriters.delete(documentName);
         logger.debug(`[disconnect] force saved: ${documentName}`);
       } catch (err) {
         logger.error(`[disconnect] force save failed for "${documentName}": ${err}`);
@@ -871,133 +1319,15 @@ export function createCollabServer(config: CollabServerConfig) {
     const MAX_RECONNECT_DELAY = 30000;
 
     async function handlePageRenamed(pageId: string, newTitle: string): Promise<void> {
-      // Look up the page creator to determine which meta room to update.
-      const pageResult = await pool.query('select created_by from pages where id = $1', [pageId]);
-      const createdBy = pageResult.rows[0]?.created_by as string | undefined;
-      if (!createdBy) {
-        logger.debug(`[listen] page ${pageId} not found, skipping rename`);
-        return;
-      }
-
-      const metaRoomName = `${META_ROOM_PREFIX}${createdBy}`;
-      const conn = await server.hocuspocus.openDirectConnection(metaRoomName, {});
-      try {
-        await conn.transact((metaDoc: Y.Doc) => {
-          const pageIndex = metaDoc.getMap('pageIndex');
-          const existing = pageIndex.get(pageId) as
-            | { title: string; icon: string | null; parentId: string | null; position: string }
-            | undefined;
-          if (existing) {
-            pageIndex.set(pageId, { ...existing, title: newTitle });
-          }
-
-          metaDoc.getMap('backlinksVersion').set(pageId, Date.now());
-        });
-      } finally {
-        await conn.disconnect();
-      }
-
-      // Push the rename to the active Y.Doc so open editors see sidebar/home
-      // renames from other clients. Before pushing, delay briefly to let any
-      // in-flight WebSocket sync from the editing client arrive first — if
-      // it already wrote the new title, we skip to avoid CRDT merging two
-      // identical writes into a duplicate (e.g., "x" becomes "xx").
-      const activeDoc = server.hocuspocus.documents.get(pageId) as Y.Doc | undefined;
-      if (activeDoc) {
-        await new Promise((r) => setTimeout(r, 50));
-        const beforeTitle = activeDoc.getText('title').toString();
-        if (beforeTitle !== newTitle) {
-          activeDoc.transact(() => {
-            const titleText = activeDoc.getText('title');
-            titleText.delete(0, titleText.length);
-            titleText.insert(0, newTitle);
-          });
-          logger.debug(
-            `[listen] pushed rename to active session for page ${pageId}: "${beforeTitle}" -> "${newTitle}"`,
-          );
-        }
-      }
-
-      logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
+      await publishPageRename(server.hocuspocus, pool, pageId, newTitle, logger);
     }
 
     async function handlePageDeleted(pageId: string): Promise<void> {
-      const pageResult = await pool.query('select created_by from pages where id = $1', [pageId]);
-      const createdBy = pageResult.rows[0]?.created_by as string | undefined;
-      if (!createdBy) {
-        logger.debug(`[listen] page ${pageId} not found, skipping delete`);
-        return;
-      }
-
-      const metaRoomName = `${META_ROOM_PREFIX}${createdBy}`;
-      const conn = await server.hocuspocus.openDirectConnection(metaRoomName, {});
-      try {
-        await conn.transact((metaDoc: Y.Doc) => {
-          metaDoc.getMap('pageIndex').delete(pageId);
-          metaDoc.getMap('backlinksVersion').set(pageId, Date.now());
-        });
-      } finally {
-        await conn.disconnect();
-      }
-
-      const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
-      if (activeDoc) {
-        const connections = activeDoc.getConnections();
-        for (const connection of connections) {
-          connection.sendStateless(
-            JSON.stringify({
-              type: 'entity_deleted',
-              entityType: 'page',
-              entityId: pageId,
-            }),
-          );
-          connection.close({ code: 4402, reason: 'Page deleted' });
-        }
-      }
-
-      logger.debug(`[listen] removed deleted page ${pageId} from meta room`);
+      await publishPageDeletion(server.hocuspocus, pool, pageId, logger);
     }
 
     async function handleFolderDeleted(folderId: string): Promise<void> {
-      const result = await pool.query(
-        `SELECT p.id FROM pages p
-        WHERE p.parent_id IN (
-          SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
-        ) AND p.is_deleted = false`,
-        [folderId],
-      );
-
-      const pageIds = result.rows.map((r: { id: string }) => r.id);
-      if (pageIds.length === 0) {
-        logger.debug(`[listen] no active pages found in folder ${folderId}, skipping`);
-        return;
-      }
-
-      logger.debug(
-        `[listen] folder ${folderId} has ${pageIds.length} page(s), disconnecting connections`,
-      );
-
-      for (const pageId of pageIds) {
-        const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
-        if (!activeDoc) continue;
-
-        const connections = activeDoc.getConnections();
-        for (const connection of connections) {
-          connection.sendStateless(
-            JSON.stringify({
-              type: 'entity_deleted',
-              entityType: 'folder',
-              entityId: folderId,
-              pageId,
-            }),
-          );
-          connection.close({ code: 4402, reason: 'Folder deleted' });
-        }
-      }
-
-      logger.debug(
-        `[listen] disconnected connections for ${pageIds.length} page(s) in folder ${folderId}`,
-      );
+      await publishFolderDeletion(server.hocuspocus, pool, folderId, logger);
     }
 
     function scheduleReconnect() {

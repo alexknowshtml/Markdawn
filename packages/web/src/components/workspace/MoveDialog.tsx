@@ -2,7 +2,7 @@ import { FloatingPortal } from '@floating-ui/react';
 import type { FolderTreeNode } from '@markdawn/shared';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight, Folder, Home } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 
 interface MoveDialogProps {
   isOpen: boolean;
@@ -10,13 +10,15 @@ interface MoveDialogProps {
   onClose: () => void;
   onConfirm: (folderId: string | null) => void;
   movingFolderIds?: string[];
+  movingOwnerId?: string | null | undefined;
+  allowRoot?: boolean;
 }
 
 const canMoveIntoFolder = (folder: FolderTreeNode): boolean => {
   if (folder.userPermission === undefined || folder.userPermission === null) {
     return true;
   }
-  return folder.userPermission === 'edit' || folder.userPermission === 'admin';
+  return folder.userPermission === 'admin';
 };
 
 export function MoveDialog({
@@ -25,6 +27,8 @@ export function MoveDialog({
   onClose,
   onConfirm,
   movingFolderIds = [],
+  movingOwnerId,
+  allowRoot = true,
 }: MoveDialogProps) {
   const [selectedFolderId, setSelectedFolderId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
@@ -72,7 +76,9 @@ export function MoveDialog({
     });
   };
 
-  const renderFolder = (folder: FolderTreeNode, depth = 0) => {
+  const renderFolder = (folder: FolderTreeNode, depth = 0): ReactNode => {
+    if (movingOwnerId !== undefined && folder.ownerId !== movingOwnerId) return null;
+
     const isExpanded = expandedIds.has(folder.id);
     const hasChildren = folder.children.length > 0;
     const isBlocked = blockedFolderIds.has(folder.id);
@@ -81,7 +87,7 @@ export function MoveDialog({
     const disabledTitle = isBlocked
       ? 'Cannot move a folder into itself or one of its child folders'
       : !isWritable
-        ? 'You need edit access to move items here'
+        ? 'You need admin access to move items here'
         : undefined;
 
     return (
@@ -160,10 +166,14 @@ export function MoveDialog({
               type="button"
               className={clsx(
                 'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-left transition-colors',
-                selectedFolderId === null
+                selectedFolderId === null && allowRoot
                   ? 'bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900'
-                  : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300',
+                  : !allowRoot
+                    ? 'text-zinc-400 dark:text-zinc-600 opacity-60 cursor-not-allowed'
+                    : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-300',
               )}
+              disabled={!allowRoot}
+              title={allowRoot ? undefined : 'You need admin access to this workspace root'}
               onClick={() => setSelectedFolderId(null)}
             >
               <Home size={16} />
@@ -183,7 +193,8 @@ export function MoveDialog({
             <button
               type="button"
               onClick={() => onConfirm(selectedFolderId)}
-              className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer"
+              disabled={selectedFolderId === null && !allowRoot}
+              className="px-4 py-2 text-sm font-medium text-white bg-zinc-900 dark:bg-zinc-100 dark:text-zinc-900 rounded-md hover:bg-zinc-800 dark:hover:bg-zinc-200 transition-colors cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
             >
               Move here
             </button>

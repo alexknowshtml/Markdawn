@@ -2,6 +2,7 @@ import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
   boolean,
+  check,
   customType,
   index,
   integer,
@@ -9,6 +10,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -117,6 +119,9 @@ export const shares = pgTable(
       table.entityId,
       table.recipientUserId,
     ),
+    linkUnique: uniqueIndex('shares_link_unique')
+      .on(table.entityType, table.entityId)
+      .where(sql`${table.token} is not null`),
   }),
 );
 
@@ -143,32 +148,43 @@ export const pageAccessEvents = pgTable(
   }),
 );
 
-export const folders = pgTable('folders', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  parentId: uuid('parent_id').references((): AnyPgColumn => folders.id, { onDelete: 'cascade' }),
-  name: text('name').notNull().default('New Folder'),
-  icon: text('icon'),
-  position: text('position').notNull().default('0'),
+export const folders = pgTable(
+  'folders',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    parentId: uuid('parent_id').references((): AnyPgColumn => folders.id, {
+      onDelete: 'cascade',
+    }),
+    name: text('name').notNull().default('New Folder'),
+    icon: text('icon'),
+    position: text('position').notNull().default('0'),
 
-  createdBy: uuid('created_by').references(() => users.id),
+    createdBy: uuid('created_by').references(() => users.id),
 
-  createdAt: timestamp('created_at').defaultNow(),
+    createdAt: timestamp('created_at').defaultNow(),
 
-  updatedAt: timestamp('updated_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
 
-  isDeleted: boolean('is_deleted').default(false),
+    isDeleted: boolean('is_deleted').default(false),
 
-  deletedAt: timestamp('deleted_at'),
+    deletedAt: timestamp('deleted_at'),
 
-  isPublic: boolean('is_public').default(false),
+    isPublic: boolean('is_public').default(false),
 
-  publicToken: text('public_token'),
+    publicToken: text('public_token'),
 
-  inheritancePolicy: text('inheritance_policy')
-    .notNull()
-    .default('inherit')
-    .$type<'inherit' | 'restricted'>(),
-});
+    inheritancePolicy: text('inheritance_policy')
+      .notNull()
+      .default('inherit')
+      .$type<'inherit' | 'restricted'>(),
+  },
+  (table) => ({
+    positionNumeric: check(
+      'folders_position_numeric_check',
+      sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,
+    ),
+  }),
+);
 
 export const folderClosure = pgTable(
   'folder_closure',
@@ -248,6 +264,10 @@ export const pages = pgTable(
   },
   (table) => ({
     titleSearchIdx: index('pages_title_search_idx').using('gin', table.titleSearch),
+    positionNumeric: check(
+      'pages_position_numeric_check',
+      sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,
+    ),
   }),
 );
 

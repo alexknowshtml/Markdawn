@@ -38,11 +38,14 @@ export interface Folder {
 
 export interface FolderTreeNode extends Folder {
   children: FolderTreeNode[];
-  userPermission?: string | null;
+  userPermission?: SharePermission | null;
+  workspaceAccess?: boolean;
 }
 
 export interface PageTreeNode extends Page {
   children: PageTreeNode[];
+  userPermission?: SharePermission | null;
+  workspaceAccess?: boolean;
 }
 
 export type ShareEntityType = 'folder' | 'page';

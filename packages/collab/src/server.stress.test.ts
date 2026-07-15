@@ -41,9 +41,7 @@ describe('collab server stress', () => {
   });
 
   afterAll(async () => {
-    server.hocuspocus.closeConnections();
-    server.httpServer.closeAllConnections();
-    await new Promise<void>((resolve) => server.httpServer.close(() => resolve()));
+    await server.destroy();
     await pool.end();
   });
 

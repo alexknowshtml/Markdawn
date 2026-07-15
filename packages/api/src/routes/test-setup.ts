@@ -16,11 +16,13 @@ router.post('/test/setup', async (c) => {
   }
 
   const testToken = process.env.TEST_SETUP_TOKEN;
-  if (testToken) {
-    const headerToken = c.req.header('x-test-setup-token');
-    if (headerToken !== testToken) {
-      throw new HTTPException(403, { message: 'Invalid test setup token' });
-    }
+  if (!testToken) {
+    throw new HTTPException(403, { message: 'Test setup is not configured' });
+  }
+
+  const headerToken = c.req.header('x-test-setup-token');
+  if (headerToken !== testToken) {
+    throw new HTTPException(403, { message: 'Invalid test setup token' });
   }
 
   const { name } = (await c.req.json()) as { name?: string };

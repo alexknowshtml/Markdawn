@@ -16,13 +16,16 @@ import {
   createYjsDocWithTitle,
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
+import { normalizePosition } from '../utils/position';
 import {
   ensureCanAdminEntity,
-  ensureCanManageEntity,
   ensureFolderAccess,
   ensurePageAccess,
+  ensureWorkspaceAdmin,
+  type SharePermission,
 } from '../utils/share-access';
 import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
 type NormalizedPageRow = PageRow & { ownerId?: string | null };
@@ -94,6 +97,47 @@ const getPageById = async (pageId: string) => {
   return row ? normalizePageRow(row) : null;
 };
 
+const ensurePageOrganizationAccess = async (
+  page: NormalizedPageRow,
+  targetParentId: string | null,
+  userId: string,
+) => {
+  if (!page.ownerId) {
+    throw new HTTPException(409, { message: 'Page owner could not be determined' });
+  }
+  if (targetParentId === page.id) {
+    throw new HTTPException(400, { message: 'Cannot set parent to self' });
+  }
+
+  await ensurePageAccess(page.id, userId, 'admin');
+  if (page.parentId) {
+    await ensureFolderAccess(page.parentId, userId, 'admin');
+  } else {
+    await ensureWorkspaceAdmin(page.ownerId, userId);
+  }
+
+  let destinationOwnerId: string | null = page.createdBy;
+  if (targetParentId) {
+    const ownerResult = await query<{ owner_id: string | null }>(
+      `select get_root_folder_owner(id) as owner_id
+       from folders
+       where id = $1 and is_deleted = false`,
+      [targetParentId],
+    );
+    destinationOwnerId = ownerResult.rows[0]?.owner_id ?? null;
+    if (!destinationOwnerId) {
+      throw new HTTPException(404, { message: 'Parent folder not found' });
+    }
+    await ensureFolderAccess(targetParentId, userId, 'admin');
+  } else if (destinationOwnerId) {
+    await ensureWorkspaceAdmin(destinationOwnerId, userId);
+  }
+
+  if (destinationOwnerId !== page.ownerId) {
+    throw new HTTPException(409, { message: 'Pages cannot be moved between different owners' });
+  }
+};
+
 const getDeletedPageById = async (pageId: string) => {
   const result = await query(
     `select p.*, ${deletedPageOwnerSql} as owner_id from pages p where p.id = $1 and p.is_deleted = true limit 1`,
@@ -138,7 +182,7 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
           0 as priority,
           0 as depth
         from pages p
-        left join lateral (
+        join lateral (
           select permission, token
           from shares
           where entity_type = 'page'
@@ -169,7 +213,7 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
         from pages p
         join folder_closure fc on fc.descendant_id = p.parent_id
         join folders f on f.id = fc.ancestor_id and f.is_deleted = false
-        left join lateral (
+        join lateral (
           select permission, token
           from shares
           where entity_type = 'folder'
@@ -259,16 +303,34 @@ pagesRoute.get('/tree', async (c) => {
 
   const result = await query(
     `
-      select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+      select p.*,
+             coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+             access.permission as user_permission,
+             exists (
+               select 1 from workspace_members wm
+               where wm.workspace_owner_id = coalesce(get_root_folder_owner(p.parent_id), p.created_by)
+                 and wm.member_id = $1
+                 and not is_page_path_restricted(p.id)
+             ) as workspace_access
       from pages p
+      join lateral get_effective_page_permission(p.id, $1) access on true
       where p.is_deleted = false
         and p.id in (select page_id from get_accessible_page_ids($1))
-      order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position asc
+      order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position::numeric asc
     `,
     [user.id],
   );
 
-  const pagesList = (result.rows as RawPageRow[]).map(normalizePageRow);
+  const pagesList = (
+    result.rows as (RawPageRow & {
+      user_permission?: SharePermission | null;
+      workspace_access?: boolean;
+    })[]
+  ).map((row) => ({
+    ...normalizePageRow(row),
+    userPermission: row.user_permission ?? null,
+    workspaceAccess: row.workspace_access === true,
+  }));
   return c.json(
     pagesList.map((page) => ({
       ...page,
@@ -300,15 +362,14 @@ pagesRoute.post('/', async (c) => {
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
-    // ensure user can manage parent
-    await ensureFolderAccess(parentId, user.id, 'edit');
+    await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
   const positionResult = await query(
     parentId
-      ? 'select max(position) as max_position from pages where parent_id = $1 and created_by = $2'
-      : 'select max(position) as max_position from pages where parent_id is null and created_by = $1',
-    parentId ? [parentId, user.id] : [user.id],
+      ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
+      : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
+    parentId ? [parentId] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -345,7 +406,7 @@ pagesRoute.get('/trash', async (c) => {
      from pages p
      where p.is_deleted = true
        and ${deletedPageOwnerSql} = $1
-     order by p.deleted_at desc nulls last, p.position asc`,
+     order by p.deleted_at desc nulls last, p.position::numeric asc`,
     [user.id],
   );
 
@@ -589,7 +650,6 @@ pagesRoute.patch(':id', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(page.id, user.id, 'edit');
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -607,22 +667,12 @@ pagesRoute.patch(':id', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId) {
-    if (parentId) {
-      if (parentId === page.id) {
-        throw new HTTPException(400, { message: 'Cannot set parent to self' });
-      }
-      const folderResult = await query(
-        'select id from folders where id = $1 and is_deleted = false limit 1',
-        [parentId],
-      );
-      if (folderResult.rowCount === 0) {
-        throw new HTTPException(404, { message: 'Parent folder not found' });
-      }
-      await ensureFolderAccess(parentId, user.id, 'edit');
-    } else if (page.parentId !== null) {
-      await ensureCanAdminEntity('page', page.id, user.id);
-    }
+  const hasPosition = Object.hasOwn(body, 'position');
+  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
+  if (hasParentId || hasPosition) {
+    await ensurePageOrganizationAccess(page, nextParent, user.id);
+  } else {
+    await ensurePageAccess(page.id, user.id, 'edit');
   }
 
   const nextTitle =
@@ -636,15 +686,7 @@ pagesRoute.patch(':id', async (c) => {
       : icon === null
         ? null
         : page.icon;
-  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : page.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : page.position;
+  const nextPosition = normalizePosition(position, page.position);
   const hasCoverType = Object.hasOwn(body, 'coverType');
   const hasCoverValue = Object.hasOwn(body, 'coverValue');
   const hasProperties = Object.hasOwn(body, 'properties');
@@ -709,7 +751,6 @@ pagesRoute.patch(':id/move', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -722,33 +763,9 @@ pagesRoute.patch(':id/move', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId) {
-    if (parentId) {
-      if (parentId === page.id) {
-        throw new HTTPException(400, { message: 'Cannot set parent to self' });
-      }
-      const folderResult = await query(
-        'select id from folders where id = $1 and is_deleted = false limit 1',
-        [parentId],
-      );
-      if (folderResult.rowCount === 0) {
-        throw new HTTPException(404, { message: 'Parent folder not found' });
-      }
-      await ensureFolderAccess(parentId, user.id, 'edit');
-    } else if (page.parentId !== null) {
-      await ensureCanAdminEntity('page', page.id, user.id);
-    }
-  }
-
   const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : page.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : page.position;
+  await ensurePageOrganizationAccess(page, nextParent, user.id);
+  const nextPosition = normalizePosition(position, page.position);
 
   const updateResult = await query(
     'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
@@ -776,7 +793,7 @@ pagesRoute.get(':id/export/markdown', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
+  await ensurePageAccess(page.id, user.id);
 
   const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
   const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
@@ -813,7 +830,7 @@ pagesRoute.post(':id/import/markdown', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
+  await ensurePageAccess(page.id, user.id, 'edit');
 
   const contentType = c.req.header('content-type') ?? '';
   let markdown = '';
@@ -848,16 +865,14 @@ pagesRoute.post(':id/import/markdown', async (c) => {
   // Title and H1 are independent — we don't strip the first H1 anymore
   let ydocBuffer = Buffer.from(createYjsDocWithTitle(page.title || 'Untitled', markdown));
 
-  // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  {
-    const existingPages = await query('select id, title from pages where is_deleted = false', []);
-    const pageLookup = new Map<string, string>();
-    for (const row of existingPages.rows as { id: string; title: string }[]) {
-      pageLookup.set(row.title.trim().toLowerCase(), row.id);
-    }
-    if (pageLookup.size > 0) {
-      ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
-    }
+  // Resolve only unique titles in the destination workspace so imports never
+  // bind to another owner's similarly named private page.
+  if (!page.ownerId) {
+    throw new HTTPException(409, { message: 'Page owner could not be determined' });
+  }
+  const pageLookup = await getUniqueWorkspacePageLookup(page.ownerId);
+  if (pageLookup.size > 0) {
+    ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
 
   const updateResult = await query(
@@ -922,12 +937,18 @@ pagesRoute.post(':id/leave', async (c) => {
     [pageId, user.id],
   );
 
-  await query('delete from page_access_events where page_id = $1 and user_id = $2', [
-    pageId,
-    user.id,
-  ]);
+  const eventResult = await query(
+    'delete from page_access_events where page_id = $1 and user_id = $2 returning id',
+    [pageId, user.id],
+  );
 
   const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+  if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
+    throw new HTTPException(409, {
+      message: 'This page is inherited from a folder or workspace and cannot be left directly',
+    });
+  }
+
   if (shareRow?.recipient_user_id) {
     await notifyShareRevoke({
       entityType: 'page',
@@ -948,7 +969,7 @@ pagesRoute.post(':id/copy', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureCanManageEntity('page', page.id, user.id);
+  await ensurePageAccess(page.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   const parentId =
@@ -964,20 +985,20 @@ pagesRoute.post(':id/copy', async (c) => {
     if (folderResult.rowCount === 0) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
-    await ensureFolderAccess(parentId, user.id, 'edit');
+    await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
   const positionResult = await query(
     parentId
-      ? 'select max(position) as max_position from pages where parent_id = $1 and is_deleted = false and created_by = $2'
-      : 'select max(position) as max_position from pages where parent_id is null and is_deleted = false and created_by = $1',
-    parentId ? [parentId, user.id] : [user.id],
+      ? 'select max(position::numeric) as max_position from pages where parent_id = $1 and is_deleted = false'
+      : 'select max(position::numeric) as max_position from pages where parent_id is null and is_deleted = false and created_by = $1',
+    parentId ? [parentId] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
   const insertResult = await query(
-    `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
-     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
+    `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, properties, created_by)
+     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, properties, $4
      from pages where id = $5
      returning id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
     [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
@@ -989,6 +1010,13 @@ pagesRoute.post(':id/copy', async (c) => {
 
   const copiedPage = insertResult.rows[0] as RawPageRow;
   const newPageId = copiedPage.id;
+
+  await query(
+    `insert into upload_page_refs (upload_id, page_id)
+     select upload_id, $1 from upload_page_refs where page_id = $2
+     on conflict (upload_id, page_id) do nothing`,
+    [newPageId, pageId],
+  );
 
   if (page.ydoc && page.ydoc.length > 0) {
     try {
@@ -1079,7 +1107,7 @@ pagesRoute.delete(':id/permanent', async (c) => {
       });
     }
   } else {
-    await ensureCanManageEntity('page', page.id, user.id);
+    await ensureCanAdminEntity('page', page.id, user.id);
   }
 
   const userPages = await query(

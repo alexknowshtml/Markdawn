@@ -8,6 +8,33 @@ const workspaceRoute = new Hono();
 
 workspaceRoute.use('*', requireAuth);
 
+type WorkspaceRole = 'viewer' | 'editor' | 'admin';
+
+const parseWorkspaceRole = (value: unknown, defaultRole?: WorkspaceRole): WorkspaceRole => {
+  if (value === undefined && defaultRole) return defaultRole;
+  if (value === 'viewer' || value === 'editor' || value === 'admin') return value;
+  throw new HTTPException(400, { message: 'Invalid workspace role' });
+};
+
+/**
+ * GET /workspace/memberships — list workspaces the caller has joined.
+ */
+workspaceRoute.get('/memberships', async (c) => {
+  const user = c.get('user') as { id: string };
+  const result = await query(
+    `select wm.workspace_owner_id as "ownerId",
+            owner.name as "ownerName",
+            wm.role,
+            wm.created_at as "joinedAt"
+     from workspace_members wm
+     join users owner on owner.id = wm.workspace_owner_id
+     where wm.member_id = $1
+     order by wm.created_at asc`,
+    [user.id],
+  );
+  return c.json(result.rows);
+});
+
 /**
  * GET /workspace/members — list all members of the caller's workspace
  * Only the workspace owner can list members.
@@ -51,14 +78,13 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(400, { message: 'Email is required' });
   }
 
-  const role = ['viewer', 'editor', 'admin'].includes(rawRole ?? '')
-    ? (rawRole as string)
-    : 'editor';
+  const role = parseWorkspaceRole(rawRole, 'editor');
 
   // Find the user by email
-  const userResult = await query('SELECT id, name FROM users WHERE email = $1 LIMIT 1', [
-    email.trim().toLowerCase(),
-  ]);
+  const userResult = await query(
+    'SELECT id, name FROM users WHERE lower(email) = lower($1) LIMIT 1',
+    [email.trim()],
+  );
   const targetUser = userResult.rows[0] as { id: string; name: string } | undefined;
   if (!targetUser) {
     throw new HTTPException(404, { message: 'User not found' });
@@ -69,11 +95,10 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(400, { message: 'Cannot invite yourself' });
   }
 
-  // Check if already a member (either as owner or as member)
+  // Membership uniqueness is directional: each user owns an independent workspace.
   const existingResult = await query(
     `SELECT id FROM workspace_members
-     WHERE (workspace_owner_id = $1 AND member_id = $2)
-        OR (workspace_owner_id = $2 AND member_id = $1)
+     WHERE workspace_owner_id = $1 AND member_id = $2
      LIMIT 1`,
     [user.id, targetUser.id],
   );
@@ -117,9 +142,7 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
   }
 
   const { role: rawRole } = body as { role?: string };
-  const role = ['viewer', 'editor', 'admin'].includes(rawRole ?? '')
-    ? (rawRole as string)
-    : 'editor';
+  const role = parseWorkspaceRole(rawRole);
 
   const memberResult = await query('SELECT name FROM users WHERE id = $1', [memberId]);
   const memberName =
@@ -151,12 +174,19 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
   const user = c.get('user') as { id: string };
   const memberId = c.req.param('memberId');
 
-  // Owner can remove anyone; member can remove themselves
-  if (user.id !== memberId) {
-    // Only owner can remove other members
+  const isSelfRemoval = user.id === memberId;
+  const workspaceOwnerId = isSelfRemoval ? c.req.query('workspaceOwnerId') : user.id;
+  if (!workspaceOwnerId) {
+    throw new HTTPException(400, { message: 'workspaceOwnerId is required to leave a workspace' });
+  }
+  if (isSelfRemoval && workspaceOwnerId === user.id) {
+    throw new HTTPException(400, { message: 'Cannot leave your own workspace' });
+  }
+
+  if (!isSelfRemoval) {
     const ownerCheck = await query(
       'SELECT id FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 LIMIT 1',
-      [user.id, memberId],
+      [workspaceOwnerId, memberId],
     );
     if (!ownerCheck.rowCount || ownerCheck.rowCount === 0) {
       throw new HTTPException(403, { message: 'Only the workspace owner can remove members' });
@@ -169,17 +199,18 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
 
   const deleteResult = await query(
     'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',
-    [user.id, memberId],
+    [workspaceOwnerId, memberId],
   );
 
   if (!deleteResult.rowCount || deleteResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Member not found' });
   }
 
-  const removeMessage =
-    user.id === memberId ? `Left the workspace` : `Removed ${memberName} from workspace`;
+  const removeMessage = isSelfRemoval
+    ? 'Left the workspace'
+    : `Removed ${memberName} from workspace`;
 
-  await notifyWorkspaceEvent('member_removed', user.id, memberId, removeMessage);
+  await notifyWorkspaceEvent('member_removed', workspaceOwnerId, memberId, removeMessage);
 
   return c.json({ ok: true, message: removeMessage });
 });

@@ -26,6 +26,7 @@ import {
 } from '../../hooks/use-share';
 import { useAuth } from '../../hooks/useAuth';
 import { getInitial } from '../../utils/avatar';
+import { consumeSelfLeave, markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { ChoiceGroup, Dropdown, TextBox } from '../ui/FormControls';
 
@@ -221,7 +222,7 @@ export function PublicShareDialog({
                   options={[
                     { value: 'view', label: 'View' },
                     { value: 'edit', label: 'Edit' },
-                    { value: 'admin', label: 'Admin' },
+                    ...(isOwner ? [{ value: 'admin' as const, label: 'Admin' }] : []),
                   ]}
                   className="w-fit"
                   triggerClassName="px-2"
@@ -316,6 +317,11 @@ export function PublicShareDialog({
             }
             className="w-full justify-between"
           />
+          {summary?.link.permission === 'edit' && (
+            <p className="mt-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
+              No sign-in is required. Anyone who receives this link can change the content.
+            </p>
+          )}
           {linkHelpOpen && !canInvite && !isLoading && (
             <FloatingPortal>
               <div
@@ -324,7 +330,7 @@ export function PublicShareDialog({
                 {...linkHelpInteractions.getFloatingProps()}
                 className="z-[9999] max-w-[280px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
               >
-                You can see this link access, but you can't change it because you don't have access.
+                You can see this link access, but you need admin access to change it.
               </div>
             </FloatingPortal>
           )}
@@ -422,7 +428,7 @@ export function PublicShareDialog({
                       options={[
                         { value: 'view', label: 'View' },
                         { value: 'edit', label: 'Edit' },
-                        { value: 'admin', label: 'Admin' },
+                        ...(isOwner ? [{ value: 'admin' as const, label: 'Admin' }] : []),
                         { value: 'remove', label: 'Remove' },
                       ]}
                       onChange={(permission) => {
@@ -444,6 +450,22 @@ export function PublicShareDialog({
                       className="w-fit"
                       triggerClassName="px-1.5 text-xs"
                     />
+                  ) : canSelfRemove && entry.shareId ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!window.confirm('Are you sure you want to leave?')) return;
+                        if (entityType === 'page') markSelfLeave(entityId);
+                        removeShareMutation.mutate(entry.shareId as string, {
+                          onError: () => {
+                            if (entityType === 'page') consumeSelfLeave(entityId);
+                          },
+                        });
+                      }}
+                      className="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer"
+                    >
+                      Leave
+                    </button>
                   ) : (
                     <span className="text-xs text-zinc-600 dark:text-zinc-300">
                       {entry.permission === 'admin'

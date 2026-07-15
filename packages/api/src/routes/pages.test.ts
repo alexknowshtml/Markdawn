@@ -81,6 +81,23 @@ describe('pages API', () => {
       });
       expect(res.status).toBe(404);
     });
+
+    it('requires admin access to create inside a shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const folder = await createTestFolder(owner.id);
+      await addFolderShare(folder.id, editor.id, 'edit');
+
+      const res = await app.request('/api/pages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: 'Not allowed', parentId: folder.id }),
+      });
+
+      expect(res.status).toBe(403);
+    });
   });
 
   describe('GET /api/pages/tree', () => {
@@ -124,7 +141,8 @@ describe('pages API', () => {
 
       expect(res.status).toBe(200);
       const body = await res.json();
-      expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
+      const workspacePage = body.find((p: { id: string }) => p.id === page.id);
+      expect(workspacePage).toMatchObject({ workspaceAccess: true, userPermission: 'view' });
     });
 
     it('includes pages under directly shared folders for folder share recipients', async () => {
@@ -428,6 +446,43 @@ describe('pages API', () => {
       expect(body.id).toBe(page.id);
     });
 
+    it('rejects a non-numeric move position without changing the page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ position: 'a0' }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'INVALID_POSITION' });
+      const stored = await query<{ position: string }>('SELECT position FROM pages WHERE id = $1', [
+        page.id,
+      ]);
+      expect(stored.rows[0]?.position).toBe('0');
+    });
+
+    it('rejects decimal positions that exceed the database precision bound', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+      const oversizedPosition = `0.${'0'.repeat(128)}1`;
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ position: oversizedPosition }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'INVALID_POSITION' });
+    });
+
     it('prevents moving page to itself', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -473,6 +528,79 @@ describe('pages API', () => {
 
       expect(res.status).toBe(403);
     });
+
+    it('does not let editors move pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const sourceFolder = await createTestFolder(owner.id);
+      const destinationFolder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: sourceFolder.id });
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('folder', $1, $3, $2, 'edit'), ('folder', $4, $3, $2, 'edit')`,
+        [sourceFolder.id, editor.id, owner.id, destinationFolder.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: destinationFolder.id }),
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('lets admins move pages between folders owned by the same user', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const admin = await createTestUser();
+      const session = await createTestSession(admin.id);
+      const sourceFolder = await createTestFolder(owner.id);
+      const destinationFolder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, { parentId: sourceFolder.id });
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('folder', $1, $3, $2, 'admin'), ('folder', $4, $3, $2, 'admin')`,
+        [sourceFolder.id, admin.id, owner.id, destinationFolder.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: destinationFolder.id }),
+      });
+
+      expect(res.status).toBe(200);
+    });
+
+    it('blocks moves between different owners even when the caller is admin in both places', async () => {
+      const app = await createTestApp();
+      const sourceOwner = await createTestUser();
+      const destinationOwner = await createTestUser();
+      const admin = await createTestUser();
+      const session = await createTestSession(admin.id);
+      const sourceFolder = await createTestFolder(sourceOwner.id);
+      const destinationFolder = await createTestFolder(destinationOwner.id);
+      const page = await createTestPage(sourceOwner.id, { parentId: sourceFolder.id });
+
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('folder', $1, $3, $2, 'admin'), ('folder', $4, $5, $2, 'admin')`,
+        [sourceFolder.id, admin.id, sourceOwner.id, destinationFolder.id, destinationOwner.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/move`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: destinationFolder.id }),
+      });
+
+      expect(res.status).toBe(409);
+    });
   });
 
   describe('GET /api/pages/:id/export/markdown', () => {
@@ -491,6 +619,25 @@ describe('pages API', () => {
       expect(res.headers.get('Content-Disposition')).toContain('export.md');
       const body = await res.text();
       expect(typeof body).toBe('string');
+    });
+
+    it('allows signed-in viewers to export a shared page', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const session = await createTestSession(viewer.id);
+      const page = await createTestPage(owner.id, { title: 'Shared Export' });
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, viewer.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/export/markdown`, {
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
     });
 
     it('returns 404 for non-existent page', async () => {
@@ -586,6 +733,29 @@ describe('pages API', () => {
       const body = await res.json();
       expect(body.title).toBe('Copy of Original');
       expect(body.id).not.toBe(page.id);
+    });
+
+    it('allows a viewer to copy a shared page into their own workspace', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const session = await createTestSession(viewer.id);
+      const page = await createTestPage(owner.id, { title: 'Shared Original' });
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, viewer.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: null }),
+      });
+
+      expect(res.status).toBe(201);
+      const copied = await res.json();
+      expect(copied.createdBy).toBe(viewer.id);
     });
 
     it('returns 404 for non-existent page', async () => {
@@ -690,6 +860,46 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.title).toBe('Updated Title');
+    });
+
+    it('rejects a non-numeric page position', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+
+      const res = await app.request(`/api/pages/${page.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ position: 'not-a-number' }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'INVALID_POSITION' });
+    });
+
+    it('allows editors to update page content metadata', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const page = await createTestPage(owner.id, { title: 'Original' });
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'edit')`,
+        [page.id, owner.id, editor.id],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: 'Edited', icon: 'x', properties: { tags: ['shared'] } }),
+      });
+
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.title).toBe('Edited');
+      expect(body.icon).toBe('x');
     });
 
     it('returns 400 when setting parentId to self', async () => {
@@ -875,7 +1085,7 @@ describe('pages API', () => {
       expect(paeCheck.rowCount).toBe(0);
     });
 
-    it('is idempotent when no share/pae row exists', async () => {
+    it('rejects leave requests with no direct share or link-access record', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const stranger = await createTestUser();
@@ -889,8 +1099,7 @@ describe('pages API', () => {
           Origin: 'http://localhost:5173',
         },
       });
-      expect(res.status).toBe(200);
-      expect((await res.json()).ok).toBe(true);
+      expect(res.status).toBe(409);
     });
   });
 });

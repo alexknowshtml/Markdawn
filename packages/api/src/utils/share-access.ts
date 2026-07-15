@@ -4,13 +4,16 @@ import { query } from '../db/query';
 export type ShareEntityType = 'folder' | 'page';
 export type SharePermission = 'view' | 'edit' | 'admin';
 
-type AccessMode = 'view' | 'edit';
+type AccessMode = 'view' | 'edit' | 'admin';
 
 const permissionRank = (permission: SharePermission) =>
   permission === 'admin' ? 3 : permission === 'edit' ? 2 : 1;
 const hasRequiredPermission = (permission: SharePermission, mode: AccessMode) => {
   return permissionRank(permission) >= permissionRank(mode);
 };
+
+const accessModeLabel = (mode: AccessMode) =>
+  mode === 'admin' ? 'admin' : mode === 'edit' ? 'edit' : 'view';
 
 export const parsePermission = (value: unknown): SharePermission => {
   if (value === 'admin') return 'admin';
@@ -55,7 +58,9 @@ export const ensurePageAccess = async (
   }
 
   if (!hasRequiredPermission(permission, mode)) {
-    throw new HTTPException(403, { message: 'You need edit access to modify this page' });
+    throw new HTTPException(403, {
+      message: `You need ${accessModeLabel(mode)} access to access this page`,
+    });
   }
 
   return { hasAccess: true, fullAccess: false, permission };
@@ -84,23 +89,12 @@ export const ensureFolderAccess = async (
   }
 
   if (!hasRequiredPermission(permission, mode)) {
-    throw new HTTPException(403, { message: 'You need edit access to modify this folder' });
+    throw new HTTPException(403, {
+      message: `You need ${accessModeLabel(mode)} access to access this folder`,
+    });
   }
 
   return { hasAccess: true, fullAccess: false, permission };
-};
-
-export const ensureCanManageEntity = async (
-  entityType: 'page' | 'folder',
-  entityId: string,
-  userId: string,
-) => {
-  if (entityType === 'page') {
-    const access = await ensurePageAccess(entityId, userId, 'edit');
-    return access;
-  }
-  const access = await ensureFolderAccess(entityId, userId, 'edit');
-  return access;
 };
 
 export const ensureCanAdminEntity = async (
@@ -110,11 +104,26 @@ export const ensureCanAdminEntity = async (
 ) => {
   const access =
     entityType === 'page'
-      ? await ensurePageAccess(entityId, userId, 'edit')
-      : await ensureFolderAccess(entityId, userId, 'edit');
+      ? await ensurePageAccess(entityId, userId, 'admin')
+      : await ensureFolderAccess(entityId, userId, 'admin');
 
-  if (access.fullAccess || access.permission === 'admin') {
-    return { ...access, permission: 'admin' as SharePermission };
+  return { ...access, permission: 'admin' as SharePermission };
+};
+
+export const ensureWorkspaceAdmin = async (workspaceOwnerId: string, userId: string) => {
+  if (workspaceOwnerId === userId) {
+    return { fullAccess: true, permission: 'admin' as const };
   }
-  throw new HTTPException(403, { message: `You need admin access to manage this ${entityType}` });
+
+  const result = await query(
+    `select role from workspace_members
+     where workspace_owner_id = $1 and member_id = $2
+     limit 1`,
+    [workspaceOwnerId, userId],
+  );
+  if (result.rows[0]?.role !== 'admin') {
+    throw new HTTPException(403, { message: 'You need admin access to manage this workspace' });
+  }
+
+  return { fullAccess: false, permission: 'admin' as const };
 };

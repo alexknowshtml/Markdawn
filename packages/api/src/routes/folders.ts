@@ -5,7 +5,12 @@ import type { folders } from '../db';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensureCanAdminEntity, ensureFolderAccess } from '../utils/share-access';
+import { normalizePosition } from '../utils/position';
+import {
+  ensureCanAdminEntity,
+  ensureFolderAccess,
+  ensureWorkspaceAdmin,
+} from '../utils/share-access';
 import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
 
 type FolderRow = typeof folders.$inferSelect;
@@ -64,7 +69,7 @@ const getFolderLinkAccess = async (folderId: string): Promise<FolderLinkAccess |
         f.id as source_id
       from folder_closure fc
       join folders f on f.id = fc.ancestor_id and f.is_deleted = false
-      left join lateral (
+      join lateral (
         select permission, token
         from shares
         where entity_type = 'folder'
@@ -176,6 +181,42 @@ const getFolderById = async (folderId: string) => {
   return row ? normalizeFolderRow(row) : null;
 };
 
+const ensureFolderOrganizationAccess = async (
+  folder: NormalizedFolderRow,
+  targetParentId: string | null,
+  userId: string,
+) => {
+  if (!folder.ownerId) {
+    throw new HTTPException(409, { message: 'Folder owner could not be determined' });
+  }
+  if (targetParentId === folder.id) {
+    throw new HTTPException(400, { message: 'Cannot set parent to self' });
+  }
+
+  await ensureFolderAccess(folder.id, userId, 'admin');
+  if (folder.parentId) {
+    await ensureFolderAccess(folder.parentId, userId, 'admin');
+  } else {
+    await ensureWorkspaceAdmin(folder.ownerId, userId);
+  }
+
+  let destinationOwnerId: string | null = folder.createdBy;
+  if (targetParentId) {
+    const destination = await getFolderById(targetParentId);
+    if (!destination?.ownerId) {
+      throw new HTTPException(404, { message: 'Parent folder not found' });
+    }
+    destinationOwnerId = destination.ownerId;
+    await ensureFolderAccess(destination.id, userId, 'admin');
+  } else if (destinationOwnerId) {
+    await ensureWorkspaceAdmin(destinationOwnerId, userId);
+  }
+
+  if (destinationOwnerId !== folder.ownerId) {
+    throw new HTTPException(409, { message: 'Folders cannot be moved between different owners' });
+  }
+};
+
 const ensureNoFolderCycle = async (
   folderId: string,
   targetParentId: string | null,
@@ -224,7 +265,13 @@ foldersRoute.get('/tree', async (c) => {
 
   const result = await query(
     `
-      select f.*, get_root_folder_owner(f.id) as owner_id, perm.permission as user_permission
+      select f.*, get_root_folder_owner(f.id) as owner_id, perm.permission as user_permission,
+             exists (
+               select 1 from workspace_members wm
+               where wm.workspace_owner_id = get_root_folder_owner(f.id)
+                 and wm.member_id = $1
+                 and not is_folder_path_restricted(f.id)
+             ) as workspace_access
       from folders f
       join lateral (
         select permission
@@ -295,16 +342,22 @@ foldersRoute.get('/tree', async (c) => {
       ) perm on true
       where f.is_deleted = false
         and perm.permission is not null
-      order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position asc
+      order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position::numeric asc
     `,
     [user.id],
   );
 
   return c.json(
     buildFolderTree(
-      (result.rows as (RawFolderRow & { user_permission?: string | null })[]).map((row) => ({
+      (
+        result.rows as (RawFolderRow & {
+          user_permission?: string | null;
+          workspace_access?: boolean;
+        })[]
+      ).map((row) => ({
         ...normalizeFolderRow(row),
         userPermission: row.user_permission ?? null,
+        workspaceAccess: row.workspace_access === true,
       })),
     ),
   );
@@ -332,15 +385,14 @@ foldersRoute.post('/', async (c) => {
     if (parent.isDeleted) {
       throw new HTTPException(400, { message: 'Cannot create inside a deleted folder' });
     }
-    // ensure user can manage parent
-    await ensureFolderAccess(parent.id, user.id, 'edit');
+    await ensureFolderAccess(parent.id, user.id, 'admin');
   }
 
   const positionResult = await query(
     parentId
-      ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
-      : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
-    parentId ? [parentId, user.id] : [user.id],
+      ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
+      : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
+    parentId ? [parentId] : [user.id],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
@@ -384,7 +436,6 @@ foldersRoute.patch(':id', async (c) => {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
   const user = c.get('user') as { id: string };
-  await ensureFolderAccess(folder.id, user.id, 'edit');
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -399,22 +450,13 @@ foldersRoute.patch(':id', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId) {
-    if (parentId) {
-      if (parentId === folder.id) {
-        throw new HTTPException(400, { message: 'Cannot set parent to self' });
-      }
-      const parent = await getFolderById(parentId);
-      if (!parent) {
-        throw new HTTPException(404, { message: 'Parent folder not found' });
-      }
-      await ensureFolderAccess(parent.id, user.id, 'edit');
-    } else if (folder.parentId !== null) {
-      await ensureCanAdminEntity('folder', folder.id, user.id);
-    }
-  }
-
+  const hasPosition = Object.hasOwn(body, 'position');
   const nextParent = hasParentId ? (parentId ?? null) : folder.parentId;
+  if (hasParentId || hasPosition) {
+    await ensureFolderOrganizationAccess(folder, nextParent, user.id);
+  } else {
+    await ensureFolderAccess(folder.id, user.id, 'admin');
+  }
   await ensureNoFolderCycle(folder.id, nextParent, user.id);
 
   const nextName =
@@ -427,14 +469,7 @@ foldersRoute.patch(':id', async (c) => {
       : icon === null
         ? null
         : folder.icon;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : folder.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : folder.position;
+  const nextPosition = normalizePosition(position, folder.position);
 
   const updateResult = await query(
     `update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *`,
@@ -461,7 +496,7 @@ foldersRoute.post(':id/copy', async (c) => {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
   const user = c.get('user') as { id: string };
-  await ensureFolderAccess(folder.id, user.id, 'edit');
+  await ensureFolderAccess(folder.id, user.id);
 
   const body = await c.req.json().catch(() => null);
   const parentId =
@@ -480,21 +515,22 @@ foldersRoute.post(':id/copy', async (c) => {
     if (parent.isDeleted) {
       throw new HTTPException(400, { message: 'Cannot move into a deleted folder' });
     }
-    await ensureFolderAccess(parent.id, user.id, 'edit');
+    await ensureFolderAccess(parent.id, user.id, 'admin');
   }
 
   await ensureNoFolderCycle(folder.id, parentId, user.id);
 
-  try {
-    const newFolder = await db.transaction((tx) =>
-      copyFolderRecursive(tx, folderId, parentId, user.id),
-    );
-    return c.json(newFolder, 201);
-  } catch (err) {
-    throw new HTTPException(500, {
-      message: err instanceof Error ? err.message : 'Failed to copy folder',
+  const copyState = { skippedRestrictedItems: false };
+  const newFolder = await db.transaction((tx) =>
+    copyFolderRecursive(tx, folderId, parentId, user.id, copyState),
+  );
+  if (!newFolder) {
+    throw new HTTPException(409, {
+      message: 'Source folder is no longer accessible',
+      cause: { code: 'SOURCE_FOLDER_UNAVAILABLE' },
     });
   }
+  return c.json({ ...newFolder, skippedRestrictedItems: copyState.skippedRestrictedItems }, 201);
 });
 
 async function copyFolderRecursive(
@@ -502,50 +538,76 @@ async function copyFolderRecursive(
   sourceFolderId: string,
   newParentId: string | null,
   userId: string,
-): Promise<FolderRow> {
-  const sourceResult = await executeQuery(executor, 'select * from folders where id = $1', [
-    sourceFolderId,
-  ]);
-  const source = normalizeFolderRow(sourceResult.rows[0] as RawFolderRow);
+  state: { skippedRestrictedItems: boolean },
+): Promise<FolderRow | null> {
+  const sourceResult = await executeQuery(
+    executor,
+    `select f.*
+     from folders f
+     join lateral get_effective_folder_permission(f.id, $2) access on true
+     where f.id = $1 and f.is_deleted = false and access.permission is not null`,
+    [sourceFolderId, userId],
+  );
+  const sourceRow = sourceResult.rows[0] as RawFolderRow | undefined;
+  if (!sourceRow) {
+    state.skippedRestrictedItems = true;
+    return null;
+  }
+  const source = normalizeFolderRow(sourceRow);
 
   const positionResult = await executeQuery(
     executor,
     newParentId
-      ? 'select max(position) as max_position from folders where parent_id = $1 and created_by = $2'
-      : 'select max(position) as max_position from folders where parent_id is null and created_by = $1',
-    newParentId ? [newParentId, userId] : [userId],
+      ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
+      : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
+    newParentId ? [newParentId] : [userId],
   );
   const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
 
-  // Copies are created by the copier. The root folder owner does not
-  // automatically own copied content — ownership follows the creator.
   const insertResult = await executeQuery(
     executor,
     `insert into folders (id, parent_id, name, icon, position, created_by)
      values (gen_random_uuid(), $1, $2, $3, $4, $5)
      returning *`,
-    [newParentId ?? null, `Copy of ${source.name}`, source.icon, nextPosition, userId],
+    [newParentId, `Copy of ${source.name}`, source.icon, nextPosition, userId],
   );
   const newFolder = normalizeFolderRow(insertResult.rows[0] as RawFolderRow);
 
   const pagesResult = await executeQuery(
     executor,
-    'select * from pages where parent_id = $1 and is_deleted = false',
-    [sourceFolderId],
+    `select p.*, access.permission as effective_permission
+     from pages p
+     left join lateral get_effective_page_permission(p.id, $2) access on true
+     where p.parent_id = $1 and p.is_deleted = false
+     order by p.position::numeric asc`,
+    [sourceFolderId, userId],
   );
   for (const pageRow of pagesResult.rows) {
     const pr = pageRow as {
+      id: string;
       title: string;
       icon: string | null;
       cover_type: string | null;
       cover_value: string | null;
       position: string;
       ydoc: Buffer | null;
+      properties: unknown;
+      effective_permission: string | null;
     };
-    await executeQuery(
+    if (!pr.effective_permission) {
+      state.skippedRestrictedItems = true;
+      continue;
+    }
+
+    const copiedPage = await executeQuery(
       executor,
-      `insert into pages (id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
-        values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8)`,
+      `insert into pages (
+         id, parent_id, title, title_search, icon, cover_type, cover_value,
+         position, ydoc, properties, created_by
+       ) values (
+         gen_random_uuid(), $1, $2, to_tsvector('english', $2), $3, $4, $5,
+         $6, $7, $8, $9
+       ) returning id`,
       [
         newFolder.id,
         `Copy of ${pr.title}`,
@@ -554,18 +616,72 @@ async function copyFolderRecursive(
         pr.cover_value,
         pr.position,
         pr.ydoc,
+        pr.properties,
         userId,
       ],
     );
+    const copiedPageId = copiedPage.rows[0]?.id as string | undefined;
+    if (copiedPageId) {
+      await executeQuery(
+        executor,
+        `insert into upload_page_refs (upload_id, page_id)
+         select upload_id, $1 from upload_page_refs where page_id = $2
+         on conflict (upload_id, page_id) do nothing`,
+        [copiedPageId, pr.id],
+      );
+      await executeQuery(
+        executor,
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text, link_context,
+           occurrence_count, first_seen_at, updated_at
+         )
+         select source_type, $1, target_type, target_id, target_slug,
+                target_label, connection_type, link_text, link_context,
+                occurrence_count, first_seen_at, now()
+         from connections
+         where source_type = 'page' and source_id = $2`,
+        [copiedPageId, pr.id],
+      );
+      await executeQuery(
+        executor,
+        `insert into connection_occurrences (
+           connection_id, source_block_id, position, context, created_at
+         )
+         select copied.id, occurrence.source_block_id, occurrence.position,
+                occurrence.context, occurrence.created_at
+         from connections original
+         join connections copied
+           on copied.source_type = original.source_type
+          and copied.source_id = $1
+          and copied.target_type = original.target_type
+          and copied.target_slug = original.target_slug
+          and copied.connection_type = original.connection_type
+         join connection_occurrences occurrence on occurrence.connection_id = original.id
+         where original.source_type = 'page' and original.source_id = $2`,
+        [copiedPageId, pr.id],
+      );
+    }
   }
 
   const subfoldersResult = await executeQuery(
     executor,
-    'select id from folders where parent_id = $1 and is_deleted = false',
-    [sourceFolderId],
+    `select f.id, access.permission as effective_permission
+     from folders f
+     left join lateral get_effective_folder_permission(f.id, $2) access on true
+     where f.parent_id = $1 and f.is_deleted = false
+     order by f.position::numeric asc`,
+    [sourceFolderId, userId],
   );
-  for (const subfolderRow of subfoldersResult.rows) {
-    await copyFolderRecursive(executor, (subfolderRow as { id: string }).id, newFolder.id, userId);
+  for (const subfolderRow of subfoldersResult.rows as {
+    id: string;
+    effective_permission: string | null;
+  }[]) {
+    if (!subfolderRow.effective_permission) {
+      state.skippedRestrictedItems = true;
+      continue;
+    }
+    await copyFolderRecursive(executor, subfolderRow.id, newFolder.id, userId, state);
   }
 
   return newFolder;
@@ -581,8 +697,38 @@ foldersRoute.delete(':id', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureCanAdminEntity('folder', folder.id, user.id);
 
+  const inaccessibleDescendants = await query(
+    `select 1
+     from folders f
+     join lateral get_effective_folder_permission(f.id, $2) access on true
+     where f.id in (
+       select descendant_id from folder_closure where ancestor_id = $1 and descendant_id != $1
+     )
+       and f.is_deleted = false
+       and not coalesce(access.full_access or access.permission = 'admin', false)
+     union all
+     select 1
+     from pages p
+     join lateral get_effective_page_permission(p.id, $2) access on true
+     where p.parent_id in (
+       select descendant_id from folder_closure where ancestor_id = $1
+     )
+       and p.is_deleted = false
+       and not coalesce(access.full_access or access.permission = 'admin', false)
+     limit 1`,
+    [folderId, user.id],
+  );
+  if ((inaccessibleDescendants.rowCount ?? 0) > 0) {
+    throw new HTTPException(403, {
+      message: 'This folder contains restricted items you do not have admin access to',
+    });
+  }
+
   const descendantFolders = await query(
-    'SELECT descendant_id AS id FROM folder_closure WHERE ancestor_id = $1 AND descendant_id != $1',
+    `SELECT fc.descendant_id AS id
+     FROM folder_closure fc
+     JOIN folders f ON f.id = fc.descendant_id AND f.is_deleted = false
+     WHERE fc.ancestor_id = $1 AND fc.descendant_id != $1`,
     [folderId],
   );
   const descendantPages = await query(
@@ -592,49 +738,60 @@ foldersRoute.delete(':id', async (c) => {
 
   const hasChildren = (descendantFolders.rowCount ?? 0) > 0 || (descendantPages.rowCount ?? 0) > 0;
 
-  if (hasChildren) {
-    const force = c.req.query('force') === 'true';
-
-    if (!force) {
-      return c.json({
+  if (hasChildren && c.req.query('force') !== 'true') {
+    return c.json(
+      {
+        code: 'FOLDER_NOT_EMPTY',
         requiresForce: true,
         childFolders: descendantFolders.rowCount ?? 0,
         childPages: descendantPages.rowCount ?? 0,
-        message: 'Folder is not empty. Add ?force=true to delete contents as well.',
-      });
-    }
-
-    const childFolderIds = (descendantFolders.rows as { id: string }[]).map((r) => r.id);
-    for (const childFolderId of childFolderIds) {
-      await query(
-        'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-        [childFolderId],
-      );
-    }
-
-    const childPageIds = (descendantPages.rows as { id: string }[]).map((r) => r.id);
-    for (const childPageId of childPageIds) {
-      await query(
-        'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-        [childPageId],
-      );
-      await query('select pg_notify($1, $2)', [
-        'page_deleted',
-        JSON.stringify({ pageId: childPageId }),
-      ]);
-    }
+        message: 'Folder is not empty. Confirm recursive deletion to continue.',
+      },
+      409,
+    );
   }
 
-  const updateResult = await query(
-    'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-    [folderId],
-  );
+  const childFolderIds = (descendantFolders.rows as { id: string }[]).map((row) => row.id);
+  const childPageIds = (descendantPages.rows as { id: string }[]).map((row) => row.id);
+  const updateResult = await db.transaction(async (tx) => {
+    if (childFolderIds.length > 0) {
+      await executeQuery(
+        tx,
+        `update folders
+         set is_deleted = true, deleted_at = now(), updated_at = now()
+         where id = any($1::uuid[])`,
+        [childFolderIds],
+      );
+    }
+
+    if (childPageIds.length > 0) {
+      await executeQuery(
+        tx,
+        `update pages
+         set is_deleted = true, deleted_at = now(), updated_at = now()
+         where id = any($1::uuid[])`,
+        [childPageIds],
+      );
+    }
+
+    const result = await executeQuery(
+      tx,
+      `update folders
+       set is_deleted = true, deleted_at = now(), updated_at = now()
+       where id = $1
+       returning id`,
+      [folderId],
+    );
+    await executeQuery(tx, 'select pg_notify($1, $2)', [
+      'folder_deleted',
+      JSON.stringify({ folderId }),
+    ]);
+    return result;
+  });
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to delete folder' });
   }
-
-  await query('select pg_notify($1, $2)', ['folder_deleted', JSON.stringify({ folderId })]);
 
   await notifyShareRevoke({ entityType: 'folder', entityId: folderId });
 
@@ -662,12 +819,18 @@ foldersRoute.post(':id/leave', async (c) => {
     [folderId, user.id],
   );
 
-  await query('delete from folder_access_events where folder_id = $1 and user_id = $2', [
-    folderId,
-    user.id,
-  ]);
+  const eventResult = await query(
+    'delete from folder_access_events where folder_id = $1 and user_id = $2 returning id',
+    [folderId, user.id],
+  );
 
   const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+  if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
+    throw new HTTPException(409, {
+      message: 'This folder is inherited from a parent or workspace and cannot be left directly',
+    });
+  }
+
   if (shareRow?.recipient_user_id) {
     await notifyShareRevoke({
       entityType: 'folder',
@@ -724,11 +887,24 @@ foldersPublicRoute.get(
                WHERE access.permission IS NOT NULL
              )
              ELSE (
-               p.is_public = true
+               (
+                 p.is_public = true
+                 AND EXISTS (
+                   SELECT 1 FROM shares page_link
+                   WHERE page_link.entity_type = 'page'
+                     AND page_link.entity_id = p.id
+                     AND page_link.token IS NOT NULL
+                     AND (page_link.expires_at IS NULL OR page_link.expires_at > now())
+                 )
+               )
                OR EXISTS (
                  SELECT 1
                  FROM folder_closure fc
                  JOIN folders source_folder ON source_folder.id = fc.ancestor_id
+                 JOIN shares folder_link ON folder_link.entity_type = 'folder'
+                   AND folder_link.entity_id = source_folder.id
+                   AND folder_link.token IS NOT NULL
+                   AND (folder_link.expires_at IS NULL OR folder_link.expires_at > now())
                  WHERE fc.descendant_id = p.parent_id
                    AND source_folder.is_public = true
                    AND source_folder.is_deleted = false
@@ -736,7 +912,7 @@ foldersPublicRoute.get(
                )
              )
            END
-         ORDER BY position ASC`,
+         ORDER BY position::numeric ASC`,
         [folderId, authenticatedUserId],
       ),
       query(
@@ -754,13 +930,17 @@ foldersPublicRoute.get(
                SELECT 1
                FROM folder_closure fc
                JOIN folders source_folder ON source_folder.id = fc.ancestor_id
+               JOIN shares folder_link ON folder_link.entity_type = 'folder'
+                 AND folder_link.entity_id = source_folder.id
+                 AND folder_link.token IS NOT NULL
+                 AND (folder_link.expires_at IS NULL OR folder_link.expires_at > now())
                WHERE fc.descendant_id = f.id
                  AND source_folder.is_public = true
                  AND source_folder.is_deleted = false
                  AND NOT is_folder_inheritance_blocked(source_folder.id, f.id)
              )
            END
-         ORDER BY position ASC`,
+         ORDER BY position::numeric ASC`,
         [folderId, authenticatedUserId],
       ),
     ]);

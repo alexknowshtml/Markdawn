@@ -110,7 +110,9 @@ describe('obsidian import API', () => {
             { path: 'note.md', content: '# Note' },
             {
               path: 'image.png',
-              data: Buffer.from('fake-image').toString('base64'),
+              data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).toString(
+                'base64',
+              ),
               mimeType: 'image/png',
             },
           ],
@@ -120,6 +122,32 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.imagesUploaded).toBeGreaterThanOrEqual(1);
+    });
+
+    it('skips SVG and reports it as unsupported', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const res = await app.request('/api/import/obsidian', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: [
+            { path: 'note.md', content: '# Note\n![[unsafe.svg]]' },
+            {
+              path: 'unsafe.svg',
+              data: Buffer.from('<svg><script>alert(1)</script></svg>').toString('base64'),
+              mimeType: 'image/svg+xml',
+            },
+          ],
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.imagesUploaded).toBe(0);
+      expect(body.errors).toContainEqual(expect.stringContaining('Skipped unsupported image'));
     });
 
     it('creates backlinks between pages', async () => {

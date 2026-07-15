@@ -23,8 +23,6 @@ import {
 import {
   useBulkDeleteFolders,
   useBulkDeletePages,
-  useBulkLeaveFolders,
-  useBulkLeavePages,
   useBulkMoveFolders,
   useBulkMovePages,
 } from '../hooks/use-bulk-actions';
@@ -33,7 +31,9 @@ import { useFavorites } from '../hooks/use-favorites';
 import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-folders';
 import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-collaborators';
 import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
+import { preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
 import { getPagesInFolder } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
 import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../utils/url';
@@ -108,10 +108,11 @@ export default function FolderEntry() {
   } = usePageTree();
   const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
   const { data: favorites } = useFavorites();
+  const { data: workspaceMemberships } = useWorkspaceMemberships();
   const { data: session } = useAuth();
   const { capabilities, isAnonymous, publicEntity } = useShareContext();
   const currentUserId = session?.user?.id;
-  const canWrite = !!currentUserId && capabilities.canEdit;
+  const canManageFolder = !!currentUserId && capabilities.canDelete;
 
   const favoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
@@ -127,8 +128,6 @@ export default function FolderEntry() {
   const copyFolderMutation = useCopyFolder();
   const bulkDeletePagesMutation = useBulkDeletePages();
   const bulkDeleteFoldersMutation = useBulkDeleteFolders();
-  const bulkLeavePagesMutation = useBulkLeavePages();
-  const bulkLeaveFoldersMutation = useBulkLeaveFolders();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
 
@@ -248,6 +247,8 @@ export default function FolderEntry() {
       updatedAt: f.updatedAt,
       ownerId: f.ownerId,
       createdBy: f.createdBy,
+      userPermission: f.userPermission ?? null,
+      canMove: canManageFolder && (f.ownerId === currentUserId || f.userPermission === 'admin'),
       ...(folderCollaboratorsMap?.[f.id] ? { collaborators: folderCollaboratorsMap[f.id] } : {}),
     }));
     const pageItems: ExplorerItemData[] = currentPages.map((p) => ({
@@ -260,10 +261,19 @@ export default function FolderEntry() {
       coverValue: p.coverValue,
       ownerId: p.ownerId,
       createdBy: p.createdBy,
+      userPermission: p.userPermission ?? null,
+      canMove: canManageFolder && (p.ownerId === currentUserId || p.userPermission === 'admin'),
       ...(collaboratorsMap?.[p.id] ? { collaborators: collaboratorsMap[p.id] } : {}),
     }));
     return [...folderItems, ...pageItems];
-  }, [currentFolders, currentPages, collaboratorsMap, folderCollaboratorsMap]);
+  }, [
+    currentFolders,
+    currentPages,
+    collaboratorsMap,
+    folderCollaboratorsMap,
+    canManageFolder,
+    currentUserId,
+  ]);
 
   const favoriteItems = useMemo(
     () => allItems.filter((item) => favoriteKeys.has(`${item.type}:${item.id}`)),
@@ -359,23 +369,41 @@ export default function FolderEntry() {
         const item = allItems.find(
           (candidate) => candidate.id === selected.id && candidate.type === selected.type,
         );
-        return { ...selected, ownerId: item?.ownerId ?? null };
+        return {
+          ...selected,
+          ownerId: item?.ownerId ?? null,
+          createdBy: item?.createdBy ?? null,
+          userPermission: item?.userPermission ?? null,
+          canMove: item?.canMove ?? false,
+        };
       }),
     [selection.selectedItems, allItems],
   );
 
+  const canAdminItem = (item: (typeof selectedItems)[number]) =>
+    item.ownerId === currentUserId || item.userPermission === 'admin';
+  const canManageSelection =
+    selectedItems.length > 0 && selectedItems.every((item) => canAdminItem(item));
+  const selectedOwnerIds = new Set(selectedItems.map((item) => item.ownerId));
+  const selectedOwnerId = selectedOwnerIds.size === 1 ? selectedItems[0]?.ownerId : undefined;
+  const canMoveSelection =
+    selectedItems.length > 0 &&
+    selectedOwnerIds.size === 1 &&
+    selectedItems.every((item) => item.canMove);
+  const hasWorkspaceRootAccess =
+    selectedOwnerId === currentUserId ||
+    workspaceMemberships?.some(
+      (membership) => membership.ownerId === selectedOwnerId && membership.role === 'admin',
+    ) === true;
+  const canMoveSelectionToRoot =
+    hasWorkspaceRootAccess && selectedItems.every(preservesEffectiveOwnerAtRoot);
+
   const handleBulkDelete = async () => {
     const ownedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && item.ownerId === currentUserId)
-      .map((item) => item.id);
-    const sharedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && item.ownerId !== currentUserId)
+      .filter((item) => item.type === 'page' && canAdminItem(item))
       .map((item) => item.id);
     const ownedFolderIds = selectedItems
-      .filter((item) => item.type === 'folder' && item.ownerId === currentUserId)
-      .map((item) => item.id);
-    const sharedFolderIds = selectedItems
-      .filter((item) => item.type === 'folder' && item.ownerId !== currentUserId)
+      .filter((item) => item.type === 'folder' && canAdminItem(item))
       .map((item) => item.id);
 
     try {
@@ -383,10 +411,6 @@ export default function FolderEntry() {
         await bulkDeletePagesMutation.mutateAsync({ pageIds: ownedPageIds });
       if (ownedFolderIds.length > 0)
         await bulkDeleteFoldersMutation.mutateAsync({ folderIds: ownedFolderIds });
-      if (sharedPageIds.length > 0)
-        await bulkLeavePagesMutation.mutateAsync({ entityIds: sharedPageIds });
-      if (sharedFolderIds.length > 0)
-        await bulkLeaveFoldersMutation.mutateAsync({ entityIds: sharedFolderIds });
       selection.clear();
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -534,7 +558,7 @@ export default function FolderEntry() {
               <List size={16} />
             </button>
           </div>
-          {canWrite && (
+          {canManageFolder && (
             <div className="relative flex items-stretch" ref={newMenuRef}>
               <button
                 type="button"
@@ -611,7 +635,9 @@ export default function FolderEntry() {
           <FileText size={48} className="text-zinc-300 dark:text-zinc-600 mb-4" />
           <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">No items yet</h3>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
-            {canWrite ? 'Create a new page or folder to get started.' : 'No items in this folder.'}
+            {canManageFolder
+              ? 'Create a new page or folder to get started.'
+              : 'No items in this folder.'}
           </p>
         </div>
       ) : viewMode === 'card' ? (
@@ -636,7 +662,7 @@ export default function FolderEntry() {
                     onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
                     onRename={() => handleRenameItem(item)}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
-                    canSelect={canWrite}
+                    canSelect={!isAnonymous}
                     showContextMenu={!isAnonymous}
                   />
                 ))}
@@ -669,7 +695,7 @@ export default function FolderEntry() {
                   onEditSave={handleSaveRename}
                   onEditKeyDown={handleEditKeyDown}
                   collaborators={filterOutSelf(item.collaborators ?? [])}
-                  canSelect={canWrite}
+                  canSelect={!isAnonymous}
                   showContextMenu={!isAnonymous}
                 />
               ))}
@@ -708,7 +734,7 @@ export default function FolderEntry() {
                       }
                       onRename={() => handleRenameItem(item)}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
-                      canSelect={canWrite}
+                      canSelect={!isAnonymous}
                       showContextMenu={!isAnonymous}
                       showCheckboxes={hasSelection}
                     />
@@ -751,7 +777,7 @@ export default function FolderEntry() {
                     onEditSave={handleSaveRename}
                     onEditKeyDown={handleEditKeyDown}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
-                    canSelect={canWrite}
+                    canSelect={!isAnonymous}
                     showContextMenu={!isAnonymous}
                     showCheckboxes={hasSelection}
                   />
@@ -762,7 +788,7 @@ export default function FolderEntry() {
         </div>
       )}
 
-      {canWrite && (
+      {!isAnonymous && (
         <SelectionToolbar
           selectedCount={selection.selectedCount}
           totalCount={allItems.length}
@@ -771,6 +797,9 @@ export default function FolderEntry() {
           onCopy={handleBulkCopy}
           onCut={handleBulkCut}
           onMove={handleBulkMove}
+          canDelete={canManageSelection}
+          canMove={canMoveSelection}
+          canPaste={canManageFolder}
           onPaste={() => void handlePaste()}
           onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
           onClear={() => {
@@ -786,6 +815,8 @@ export default function FolderEntry() {
         movingFolderIds={selection.selectedItems
           .filter((item) => item.type === 'folder')
           .map((item) => item.id)}
+        {...(selectedOwnerId !== undefined ? { movingOwnerId: selectedOwnerId } : {})}
+        allowRoot={canMoveSelectionToRoot}
         onClose={() => setMoveDialogOpen(false)}
         onConfirm={handleConfirmMove}
       />

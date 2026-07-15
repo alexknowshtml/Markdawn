@@ -9,6 +9,8 @@ import {
   createTestUser,
 } from '../test-utils';
 
+const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 describe('uploads API', () => {
   describe('auth guard', () => {
     it('returns 401 without session cookie', async () => {
@@ -35,7 +37,7 @@ describe('uploads API', () => {
       const page = await createTestPage(user.id);
 
       const formData = new FormData();
-      formData.append('file', new File(['fake-image-data'], 'test.png', { type: 'image/png' }));
+      formData.append('file', new File([PNG_BYTES], 'test.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
 
       const res = await app.request('/api/uploads', {
@@ -47,6 +49,27 @@ describe('uploads API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.url).toMatch(/^\/api\/uploads\//);
+    });
+
+    it('rejects active content disguised as an image', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File(['<script>alert(1)</script>'], 'attack.png', { type: 'image/png' }),
+      );
+      formData.append('pageId', page.id);
+
+      const res = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(400);
     });
 
     it('returns 400 for unsupported file type', async () => {
@@ -119,7 +142,7 @@ describe('uploads API', () => {
       const session = await createTestSession(user.id);
       const page = await createTestPage(user.id);
 
-      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      const binaryData = PNG_BYTES;
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'real.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
@@ -150,7 +173,7 @@ describe('uploads API', () => {
       const recipientSession = await createTestSession(recipient.id);
       const page = await createTestPage(owner.id, { title: 'Shared Root Page' });
 
-      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const binaryData = PNG_BYTES;
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'shared-root.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
@@ -187,10 +210,7 @@ describe('uploads API', () => {
       const sharedPage = await createTestPage(owner.id, { title: 'Other Shared Page' });
 
       const formData = new FormData();
-      formData.append(
-        'file',
-        new File([new Uint8Array([0x89, 0x50])], 'scoped.png', { type: 'image/png' }),
-      );
+      formData.append('file', new File([PNG_BYTES], 'scoped.png', { type: 'image/png' }));
       formData.append('pageId', uploadPage.id);
 
       const uploadRes = await app.request('/api/uploads', {
@@ -220,10 +240,7 @@ describe('uploads API', () => {
       const page = await createTestPage(owner.id, { title: 'Private Page' });
 
       const formData = new FormData();
-      formData.append(
-        'file',
-        new File([new Uint8Array([0x89, 0x50])], 'private.png', { type: 'image/png' }),
-      );
+      formData.append('file', new File([PNG_BYTES], 'private.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
 
       const uploadRes = await app.request('/api/uploads', {
@@ -244,7 +261,7 @@ describe('uploads API', () => {
       const ownerSession = await createTestSession(owner.id);
       const page = await createTestPage(owner.id, { title: 'Public Page' });
 
-      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const binaryData = PNG_BYTES;
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'public.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
@@ -264,6 +281,33 @@ describe('uploads API', () => {
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(binaryData);
     });
 
+    it('denies anonymous downloads after the page link expires', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id);
+      const formData = new FormData();
+      formData.append('file', new File([PNG_BYTES], 'expired.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
+
+      const uploadRes = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: ownerSession.Cookie },
+        body: formData,
+      });
+      const { url } = (await uploadRes.json()) as { url: string };
+      await createTestPublicShare(page.id);
+      await query(
+        `UPDATE shares SET expires_at = now() - interval '1 hour'
+         WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL`,
+        [page.id],
+      );
+
+      const res = await app.request(url);
+
+      expect(res.status).toBe(404);
+    });
+
     it('allows anonymous downloads for uploads in public folders', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -271,7 +315,7 @@ describe('uploads API', () => {
       const folder = await createTestFolder(owner.id);
       const page = await createTestPage(owner.id, { parentId: folder.id });
 
-      const binaryData = new Uint8Array([0x89, 0x50, 0x4e, 0x47]);
+      const binaryData = PNG_BYTES;
       const formData = new FormData();
       formData.append('file', new File([binaryData], 'folder-public.png', { type: 'image/png' }));
       formData.append('pageId', page.id);
@@ -282,10 +326,16 @@ describe('uploads API', () => {
         body: formData,
       });
       const { url } = (await uploadRes.json()) as { url: string };
+      const token = crypto.randomUUID();
       await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        crypto.randomUUID(),
+        token,
         folder.id,
       ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
 
       const res = await app.request(url);
 

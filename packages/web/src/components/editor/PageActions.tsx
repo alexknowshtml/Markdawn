@@ -1,6 +1,7 @@
 import type { Page } from '@markdawn/shared';
 import { Share, Star } from 'lucide-react';
 import { useState } from 'react';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import { Tooltip } from '../Tooltip';
 import { PublicShareDialog } from './PublicShareDialog';
@@ -11,6 +12,7 @@ interface PageActionsProps {
 }
 
 export function PageActions({ pageId, page }: PageActionsProps) {
+  const { isAnonymous } = useShareContext();
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
   const { data: favorites } = useFavorites();
   const toggleFavoriteMutation = useToggleFavorite();
@@ -26,6 +28,8 @@ export function PageActions({ pageId, page }: PageActionsProps) {
       isFavorite,
     });
   };
+
+  if (isAnonymous) return null;
 
   return (
     <div className="flex items-center gap-2 shrink-0">

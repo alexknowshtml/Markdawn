@@ -31,6 +31,7 @@ import {
 } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
 import { type RecentPage, usePageTree } from '../hooks/use-pages';
+import { getLogger } from '../logger-init';
 import { ApiError } from '../utils/api';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
@@ -172,24 +173,44 @@ export default function Page() {
       return next.slice(0, old.length);
     });
 
-    fetch(`/api/pages/${pageId}/access`, {
-      method: 'POST',
-    })
-      .then(async (res) => {
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const recordAccess = async (attempt = 0): Promise<void> => {
+      try {
+        const res = await fetch(`/api/pages/${pageId}/access`, { method: 'POST' });
         if (!res.ok) {
-          throw new Error('Failed to record page access');
+          throw new Error(`Failed to record page access (${res.status})`);
         }
+        if (cancelled) return;
         const access = (await res.json()) as { recordedLinkAccess?: boolean };
+        if (cancelled) return;
         if (access.recordedLinkAccess) {
           queryClient.invalidateQueries({ queryKey: ['pageTree'] });
           queryClient.invalidateQueries({ queryKey: ['folderTree'] });
           queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
         }
         queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      })
-      .catch(() => {
-        void 0;
-      });
+      } catch (error) {
+        if (cancelled) return;
+        if (attempt < 1) {
+          retryTimer = window.setTimeout(() => void recordAccess(attempt + 1), 1000);
+          return;
+        }
+        try {
+          getLogger().error('Failed to record page access after retry', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        } catch {
+          // Logging must not interrupt page loading when the logger is unavailable.
+        }
+      }
+    };
+
+    void recordAccess();
+    return () => {
+      cancelled = true;
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+    };
   }, [page, pageId, isAnonymous, queryClient]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
@@ -364,7 +385,9 @@ export default function Page() {
         <div className="mb-6">
           <div className="relative flex-1 flex items-center mt-16">
             <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
-              <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
+              <EditorReadOnlyProvider readOnly={readOnly || isAnonymous}>
+                <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
+              </EditorReadOnlyProvider>
             </div>
             <div className="pl-[54px] w-full">
               <PageTitle
@@ -375,7 +398,9 @@ export default function Page() {
             </div>
           </div>
         </div>
-        <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
+        <EditorReadOnlyProvider readOnly={readOnly || isAnonymous}>
+          <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
+        </EditorReadOnlyProvider>
         {page && pageId ? (
           <MilkdownEditor
             key={pageId}

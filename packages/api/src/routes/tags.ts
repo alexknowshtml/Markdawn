@@ -16,7 +16,7 @@ tagsRoute.get('/', async (c) => {
      from connections c
      join pages p on p.id = c.source_id
      where c.connection_type = 'tag'
-       and p.created_by = $1
+       and p.id in (select page_id from get_accessible_page_ids($1))
        and p.is_deleted = false
      group by c.target_slug
      order by page_count desc, name asc`,
@@ -41,7 +41,7 @@ tagsRoute.get('/pages', async (c) => {
      join connections c on c.source_id = p.id
      where c.target_slug = $1
        and c.connection_type = 'tag'
-       and p.created_by = $2
+       and p.id in (select page_id from get_accessible_page_ids($2))
        and p.is_deleted = false
      order by p.updated_at desc`,
     [tagId.startsWith('#') ? tagId : `#${tagId}`, user.id],

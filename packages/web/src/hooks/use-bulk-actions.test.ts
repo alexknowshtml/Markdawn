@@ -2,8 +2,12 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
-vi.mock('../utils/toast', () => ({
+const toastMocks = vi.hoisted(() => ({
   showSuccessToast: vi.fn(),
+}));
+
+vi.mock('../utils/toast', () => ({
+  showSuccessToast: toastMocks.showSuccessToast,
   showErrorToast: vi.fn(),
   showInfoToast: vi.fn(),
 }));
@@ -58,7 +62,8 @@ describe('useBulkDeletePages', () => {
     );
   });
 
-  it('handles partial failure', async () => {
+  it('handles partial failure without reporting full success and refreshes stale lists', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     fetchMock.mockResolvedValueOnce({ ok: true });
     fetchMock.mockResolvedValueOnce({
       ok: false,
@@ -75,6 +80,11 @@ describe('useBulkDeletePages', () => {
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });
+
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pageTree'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['trashPages'] });
   });
 });
 
@@ -154,6 +164,27 @@ describe('useBulkMovePages', () => {
         body: JSON.stringify({ parentId: 'f1' }),
       }),
     );
+  });
+
+  it('reports a partial move failure without a false success message', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    fetchMock.mockResolvedValueOnce({ ok: true });
+    fetchMock.mockResolvedValueOnce({ ok: false });
+
+    const { result } = renderHook(() => useBulkMovePages(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({ pageIds: ['p1', 'p2'], parentId: 'f1' });
+
+    await waitFor(() => {
+      expect(result.current.isError).toBe(true);
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pageTree'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shared-with-me'] });
   });
 
   it('moves pages to root (null parent)', async () => {

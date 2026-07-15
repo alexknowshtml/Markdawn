@@ -103,7 +103,12 @@ export async function createApp() {
 
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
-      return c.json({ message: err.message }, err.status);
+      const cause = err.cause;
+      const code =
+        cause && typeof cause === 'object' && 'code' in cause && typeof cause.code === 'string'
+          ? cause.code
+          : undefined;
+      return c.json(code ? { message: err.message, code } : { message: err.message }, err.status);
     }
     appLogger.error(`Unhandled error: ${err.message}`, { stack: err.stack });
     return c.json({ message: 'Internal Server Error' }, 500);

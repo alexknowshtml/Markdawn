@@ -3,6 +3,8 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import * as Y from 'yjs';
 import { authClient } from '../lib/auth-client';
+import { getLogger } from '../logger-init';
+import { invalidateWorkspaceAccessQueries } from './use-workspace';
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 const META_ROOM_PREFIX = 'page-meta:';
@@ -20,6 +22,37 @@ let _pageIndex: Y.Map<unknown> | null = null;
 
 export function getPageIndexMap(): Y.Map<unknown> | null {
   return _pageIndex;
+}
+
+type WorkspaceMembershipEvent = {
+  type: 'workspace_membership_event';
+  action: 'member_added' | 'member_removed' | 'role_changed';
+  ownerId: string;
+};
+
+export function parsePageMetaStatelessMessage(payload: string): WorkspaceMembershipEvent | null {
+  const trimmed = payload.trim();
+  if (!trimmed.startsWith('{')) return null;
+
+  let message: unknown;
+  try {
+    message = JSON.parse(trimmed);
+  } catch (error) {
+    throw new Error('Malformed stateless message', { cause: error });
+  }
+  if (!message || typeof message !== 'object' || !('type' in message)) return null;
+  if (message.type !== 'workspace_membership_event') return null;
+
+  const action = 'action' in message ? message.action : undefined;
+  const ownerId = 'ownerId' in message ? message.ownerId : undefined;
+  if (
+    (action !== 'member_added' && action !== 'member_removed' && action !== 'role_changed') ||
+    typeof ownerId !== 'string' ||
+    ownerId.length === 0
+  ) {
+    throw new Error('Malformed workspace membership event');
+  }
+  return { type: 'workspace_membership_event', action, ownerId };
 }
 
 /**
@@ -83,6 +116,17 @@ export function usePageMeta() {
     };
     map.observe(pageIndexObserver);
 
+    const handleStateless = ({ payload }: { payload: string }) => {
+      try {
+        if (parsePageMetaStatelessMessage(payload)) {
+          invalidateWorkspaceAccessQueries(queryClient);
+        }
+      } catch (error) {
+        getLogger().warn('Ignored malformed page metadata message', { error: String(error) });
+      }
+    };
+    provider.on('stateless', handleStateless);
+
     return () => {
       if (effectId === effectIdRef.current) {
         _pageIndex = null;
@@ -98,6 +142,7 @@ export function usePageMeta() {
       } catch {
         // already detached
       }
+      provider.off('stateless', handleStateless);
       provider.destroy();
       doc.destroy();
     };

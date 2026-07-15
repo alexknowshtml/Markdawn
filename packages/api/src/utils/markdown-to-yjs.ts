@@ -122,6 +122,15 @@ function visitWikiLinks(
   }
 }
 
+export const normalizeWikilinkLookupKey = (value: string): string =>
+  value
+    .trim()
+    .replace(/\\/g, '/')
+    .replace(/^\.\//, '')
+    .replace(/^\//, '')
+    .replace(/\.md$/i, '')
+    .toLowerCase();
+
 /**
  * Post-processes a Yjs binary to backfill the `targetId` attribute on every
  * wikiLink element whose `path` matches a page title in the lookup map.
@@ -143,7 +152,9 @@ export function resolveWikilinkTargets(
   visitWikiLinks(fragment, (link) => {
     const path = link.getAttribute('path') || '';
     // Strip heading suffix if present ([[Title#Heading]])
-    const slug = path.split('#')[0]?.trim().toLowerCase();
+    const pathWithoutHeading = path.split('#')[0];
+    if (!pathWithoutHeading) return;
+    const slug = normalizeWikilinkLookupKey(pathWithoutHeading);
     if (!slug) return;
     const existingTargetId = link.getAttribute('targetId') || '';
     if (existingTargetId) return; // already resolved

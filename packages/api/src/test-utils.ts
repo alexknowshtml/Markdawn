@@ -207,6 +207,13 @@ export async function createTestPublicShare(pageId: string) {
     token,
     pageId,
   ]);
+  await query(
+    `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+     SELECT 'page', id, created_by, 'view', $1
+     FROM pages
+     WHERE id = $2`,
+    [token, pageId],
+  );
   return { pageId, token };
 }
 

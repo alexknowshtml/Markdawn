@@ -27,7 +27,7 @@ exportRoute.get('/export', async (c) => {
       from pages
       where is_deleted = false
         and id in (select page_id from get_accessible_page_ids($1))
-      order by parent_id nulls first, position asc
+      order by parent_id nulls first, position::numeric asc
     `,
     [user.id],
   );
