@@ -2,6 +2,13 @@ import type { ShareEntityType, ShareEventAction, SharePermission } from '@markda
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
+const MAX_NOTIFICATION_TEXT_LENGTH = 256;
+
+const boundedNotificationText = (value: string): string => {
+  if (value.length <= MAX_NOTIFICATION_TEXT_LENGTH) return value;
+  return `${value.slice(0, MAX_NOTIFICATION_TEXT_LENGTH - 1)}…`;
+};
+
 interface ShareEventBase {
   entityType: ShareEntityType;
   entityId: string;
@@ -24,7 +31,7 @@ function fireShareEvent(
     entityId: params.entityId,
     ...(params.permission !== undefined && { permission: params.permission }),
     ...(params.targetUserId !== undefined && { targetUserId: params.targetUserId }),
-    ...(params.message !== undefined && { message: params.message }),
+    ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
   };
   return executeQuery(executor, "SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
 }
@@ -39,10 +46,10 @@ export async function notifyShareGrant(
       type: 'invite_received',
       entityType: params.entityType,
       entityId: params.entityId,
-      entityTitle: params.entityTitle,
-      sharedByName: params.sharedByName,
+      entityTitle: boundedNotificationText(params.entityTitle),
+      sharedByName: boundedNotificationText(params.sharedByName),
       targetUserId: params.targetUserId,
-      message: params.message,
+      ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
     };
     await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [
       JSON.stringify(invitePayload),
@@ -74,7 +81,7 @@ export function notifyWorkspaceEvent(
     action,
     ownerId,
     memberId,
-    ...(message !== undefined && { message }),
+    ...(message !== undefined && { message: boundedNotificationText(message) }),
   };
   return executeQuery(executor, "SELECT pg_notify('workspace_event', $1)", [
     JSON.stringify(payload),

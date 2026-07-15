@@ -6,7 +6,8 @@ import { marked } from 'marked';
 import * as Y from 'yjs';
 import { auth } from '../auth';
 import type { pages } from '../db';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
@@ -700,37 +701,45 @@ pagesRoute.patch(':id', async (c) => {
       : null
     : page.properties;
 
-  const updateResult = hasProperties
-    ? await query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
-        [
-          nextTitle,
-          nextIcon,
-          nextParent,
-          nextPosition,
-          nextCoverType,
-          nextCoverValue,
-          nextProperties,
-          pageId,
-        ],
-      )
-    : await query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
-        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
-      );
+  const updateResult = await db.transaction(async (tx) => {
+    const result = hasProperties
+      ? await executeQuery(
+          tx,
+          "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
+          [
+            nextTitle,
+            nextIcon,
+            nextParent,
+            nextPosition,
+            nextCoverType,
+            nextCoverValue,
+            nextProperties,
+            pageId,
+          ],
+        )
+      : await executeQuery(
+          tx,
+          "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
+          [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
+        );
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to update page' });
-  }
+    if (result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to update page' });
+    }
 
-  // Notify the collab server so it can update the meta room sidebar and
-  // push the new title into any active in-memory Yjs session.
-  if (page.title !== nextTitle) {
-    await query('select pg_notify($1, $2)', [
-      'page_renamed',
-      JSON.stringify({ pageId, newTitle: nextTitle }),
-    ]);
-  }
+    // Keep the payload bounded; the collaboration server reloads the title
+    // from PostgreSQL after this transaction commits.
+    if (page.title !== nextTitle) {
+      await executeQuery(tx, 'select pg_notify($1, $2)', [
+        'page_renamed',
+        JSON.stringify({ pageId }),
+      ]);
+    }
+    if (hasParentId && nextParent !== page.parentId) {
+      await notifyShareRecompute({ entityType: 'page', entityId: pageId }, tx);
+    }
+    return result;
+  });
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
@@ -761,18 +770,22 @@ pagesRoute.patch(':id/move', async (c) => {
   await ensurePageOrganizationAccess(page, nextParent, user.id);
   const nextPosition = normalizePosition(position, page.position);
 
-  const updateResult = await query(
-    'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
-    [nextParent, nextPosition, pageId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    const result = await executeQuery(
+      tx,
+      'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
+      [nextParent, nextPosition, pageId],
+    );
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to move page' });
-  }
+    if (result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to move page' });
+    }
 
-  if (hasParentId && nextParent !== page.parentId) {
-    await notifyShareRecompute({ entityType: 'page', entityId: pageId });
-  }
+    if (hasParentId && nextParent !== page.parentId) {
+      await notifyShareRecompute({ entityType: 'page', entityId: pageId }, tx);
+    }
+    return result;
+  });
 
   const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
   return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
@@ -892,17 +905,23 @@ pagesRoute.delete(':id', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureCanAdminEntity('page', page.id, user.id);
 
-  const updateResult = await query(
-    'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-    [pageId],
-  );
+  await db.transaction(async (tx) => {
+    const updateResult = await executeQuery(
+      tx,
+      'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
+      [pageId],
+    );
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to delete page' });
-  }
+    if (updateResult.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to delete page' });
+    }
 
-  // Notify the collab server so it removes the page from the meta room.
-  await query('select pg_notify($1, $2)', ['page_deleted', JSON.stringify({ pageId })]);
+    // Notify the collab server so it removes the page from the meta room.
+    await executeQuery(tx, 'select pg_notify($1, $2)', [
+      'page_deleted',
+      JSON.stringify({ pageId }),
+    ]);
+  });
 
   return c.json({ deleted: true });
 });
@@ -926,30 +945,36 @@ pagesRoute.post(':id/leave', async (c) => {
     throw new HTTPException(400, { message: 'Cannot leave your own page' });
   }
 
-  const shareResult = await query(
-    "delete from shares where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
-    [pageId, user.id],
-  );
+  await db.transaction(async (tx) => {
+    const shareResult = await executeQuery(
+      tx,
+      "delete from shares where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
+      [pageId, user.id],
+    );
+    const eventResult = await executeQuery(
+      tx,
+      'delete from page_access_events where page_id = $1 and user_id = $2 returning id',
+      [pageId, user.id],
+    );
 
-  const eventResult = await query(
-    'delete from page_access_events where page_id = $1 and user_id = $2 returning id',
-    [pageId, user.id],
-  );
+    const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+    if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
+      throw new HTTPException(409, {
+        message: 'This page is inherited from a folder or workspace and cannot be left directly',
+      });
+    }
 
-  const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
-  if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
-    throw new HTTPException(409, {
-      message: 'This page is inherited from a folder or workspace and cannot be left directly',
-    });
-  }
-
-  if (shareRow?.recipient_user_id) {
-    await notifyShareRevoke({
-      entityType: 'page',
-      entityId: pageId,
-      targetUserId: shareRow.recipient_user_id,
-    });
-  }
+    if (shareRow?.recipient_user_id) {
+      await notifyShareRevoke(
+        {
+          entityType: 'page',
+          entityId: pageId,
+          targetUserId: shareRow.recipient_user_id,
+        },
+        tx,
+      );
+    }
+  });
 
   return c.json({ ok: true });
 });

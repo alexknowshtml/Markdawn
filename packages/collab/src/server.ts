@@ -1434,8 +1434,17 @@ export function createCollabServer(config: CollabServerConfig) {
     let stopped = false;
     const MAX_RECONNECT_DELAY = 30000;
 
-    async function handlePageRenamed(pageId: string, newTitle: string): Promise<void> {
-      await publishPageRename(server.hocuspocus, pool, pageId, newTitle, logger);
+    async function handlePageRenamed(pageId: string): Promise<void> {
+      const result = await pool.query<{ title: string }>(
+        'select title from pages where id = $1 and is_deleted = false',
+        [pageId],
+      );
+      const title = result.rows[0]?.title;
+      if (title === undefined) {
+        logger.debug(`[listen] renamed page ${pageId} is no longer active, skipping`);
+        return;
+      }
+      await publishPageRename(server.hocuspocus, pool, pageId, title, logger);
     }
 
     async function handlePageDeleted(pageId: string): Promise<void> {
@@ -1491,12 +1500,9 @@ export function createCollabServer(config: CollabServerConfig) {
                 logger.error(`[listen] handleFolderDeleted failed: ${err}`),
               );
             } else if (msg.channel === 'page_renamed') {
-              const payload = JSON.parse(msg.payload ?? '{}') as {
-                pageId?: string;
-                newTitle?: string;
-              };
-              if (!payload.pageId || !payload.newTitle) return;
-              void handlePageRenamed(payload.pageId, payload.newTitle).catch((err) =>
+              const payload = JSON.parse(msg.payload ?? '{}') as { pageId?: string };
+              if (!payload.pageId) return;
+              void handlePageRenamed(payload.pageId).catch((err) =>
                 logger.error(`[listen] handlePageRenamed failed: ${err}`),
               );
             } else if (msg.channel === 'share_event') {

@@ -883,6 +883,23 @@ describe('pages API', () => {
       expect(body.title).toBe('Updated Title');
     });
 
+    it('renames pages whose titles exceed the PostgreSQL notification limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id, { title: 'Original' });
+      const longTitle = 'T'.repeat(9000);
+
+      const res = await app.request(`/api/pages/${page.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: longTitle }),
+      });
+
+      expect(res.status).toBe(200);
+      expect((await res.json()).title).toBe(longTitle);
+    });
+
     it('rejects a non-numeric page position', async () => {
       const app = await createTestApp();
       const user = await createTestUser();

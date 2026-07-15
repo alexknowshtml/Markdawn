@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { notifyWorkspaceEvent } from '../utils/share-notify';
 
@@ -106,20 +107,23 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(409, { message: 'User is already a member of this workspace' });
   }
 
-  const insertResult = await query(
-    `INSERT INTO workspace_members (workspace_owner_id, member_id, role)
-     VALUES ($1, $2, $3)
-     RETURNING id`,
-    [user.id, targetUser.id, role],
-  );
-
-  if (!insertResult.rowCount || insertResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to add workspace member' });
-  }
-
   const inviteMessage = `Added ${targetUser.name ?? email} as ${role} to workspace`;
 
-  await notifyWorkspaceEvent('member_added', user.id, targetUser.id, inviteMessage);
+  await db.transaction(async (tx) => {
+    const insertResult = await executeQuery(
+      tx,
+      `INSERT INTO workspace_members (workspace_owner_id, member_id, role)
+       VALUES ($1, $2, $3)
+       RETURNING id`,
+      [user.id, targetUser.id, role],
+    );
+
+    if (!insertResult.rowCount || insertResult.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to add workspace member' });
+    }
+
+    await notifyWorkspaceEvent('member_added', user.id, targetUser.id, inviteMessage, tx);
+  });
 
   return c.json({
     ok: true,
@@ -148,20 +152,23 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
   const memberName =
     (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
 
-  const updateResult = await query(
-    `UPDATE workspace_members SET role = $1
-     WHERE workspace_owner_id = $2 AND member_id = $3
-     RETURNING id`,
-    [role, user.id, memberId],
-  );
-
-  if (!updateResult.rowCount || updateResult.rowCount === 0) {
-    throw new HTTPException(404, { message: 'Member not found' });
-  }
-
   const roleMessage = `Changed ${memberName}'s role to ${role}`;
 
-  await notifyWorkspaceEvent('role_changed', user.id, memberId, roleMessage);
+  await db.transaction(async (tx) => {
+    const updateResult = await executeQuery(
+      tx,
+      `UPDATE workspace_members SET role = $1
+       WHERE workspace_owner_id = $2 AND member_id = $3
+       RETURNING id`,
+      [role, user.id, memberId],
+    );
+
+    if (!updateResult.rowCount || updateResult.rowCount === 0) {
+      throw new HTTPException(404, { message: 'Member not found' });
+    }
+
+    await notifyWorkspaceEvent('role_changed', user.id, memberId, roleMessage, tx);
+  });
 
   return c.json({ ok: true, message: roleMessage });
 });
@@ -197,20 +204,23 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
   const memberName =
     (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
 
-  const deleteResult = await query(
-    'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',
-    [workspaceOwnerId, memberId],
-  );
-
-  if (!deleteResult.rowCount || deleteResult.rowCount === 0) {
-    throw new HTTPException(404, { message: 'Member not found' });
-  }
-
   const removeMessage = isSelfRemoval
     ? 'Left the workspace'
     : `Removed ${memberName} from workspace`;
 
-  await notifyWorkspaceEvent('member_removed', workspaceOwnerId, memberId, removeMessage);
+  await db.transaction(async (tx) => {
+    const deleteResult = await executeQuery(
+      tx,
+      'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',
+      [workspaceOwnerId, memberId],
+    );
+
+    if (!deleteResult.rowCount || deleteResult.rowCount === 0) {
+      throw new HTTPException(404, { message: 'Member not found' });
+    }
+
+    await notifyWorkspaceEvent('member_removed', workspaceOwnerId, memberId, removeMessage, tx);
+  });
 
   return c.json({ ok: true, message: removeMessage });
 });

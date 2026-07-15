@@ -465,18 +465,22 @@ foldersRoute.patch(':id', async (c) => {
         : folder.icon;
   const nextPosition = normalizePosition(position, folder.position);
 
-  const updateResult = await query(
-    `update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *`,
-    [nextName, nextIcon, nextParent, nextPosition, folderId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    const result = await executeQuery(
+      tx,
+      `update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *`,
+      [nextName, nextIcon, nextParent, nextPosition, folderId],
+    );
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to update folder' });
-  }
+    if (result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to update folder' });
+    }
 
-  if (hasParentId && nextParent !== folder.parentId) {
-    await notifyShareRecompute({ entityType: 'folder', entityId: folderId });
-  }
+    if (hasParentId && nextParent !== folder.parentId) {
+      await notifyShareRecompute({ entityType: 'folder', entityId: folderId }, tx);
+    }
+    return result;
+  });
 
   const updated = normalizeFolderRow(updateResult.rows[0] as RawFolderRow);
   return c.json(updated);
@@ -686,11 +690,6 @@ foldersRoute.delete(':id', async (c) => {
 
   const force = c.req.query('force') === 'true';
   const deletionResult = await db.transaction(async (tx) => {
-    // Block concurrent inserts and moves while the subtree is authorized and
-    // snapshotted. The active-parent triggers make queued writes re-check the
-    // destination after this transaction commits.
-    await executeQuery(tx, 'lock table folders, pages in share row exclusive mode');
-
     const lockedRoot = await executeQuery(
       tx,
       'select id from folders where id = $1 and is_deleted = false for update',
@@ -710,28 +709,39 @@ foldersRoute.delete(':id', async (c) => {
       throw new HTTPException(403, { message: 'You need admin access to access this folder' });
     }
 
-    const descendantFolders = await executeQuery<{ id: string }>(
-      tx,
-      `select f.id
-       from folder_closure fc
-       join folders f on f.id = fc.descendant_id and f.is_deleted = false
-       where fc.ancestor_id = $1 and fc.descendant_id != $1
-       order by f.id
-       for update of f`,
-      [folderId],
-    );
+    // Lock the subtree itself instead of taking a table-wide lock. Inserts,
+    // restores, and moves take a shared lock on their old/new parent through
+    // ensure_active_folder_parent(), so repeat discovery until every active
+    // descendant visible after waiting has been locked.
+    const lockedFolderIds = new Set<string>([folderId]);
+    while (true) {
+      const subtree = await executeQuery<{ id: string }>(
+        tx,
+        `select f.id
+         from folder_closure fc
+         join folders f on f.id = fc.descendant_id and f.is_deleted = false
+         where fc.ancestor_id = $1
+         order by f.id
+         for update of f`,
+        [folderId],
+      );
+      const previousSize = lockedFolderIds.size;
+      for (const row of subtree.rows) lockedFolderIds.add(row.id);
+      if (lockedFolderIds.size === previousSize) break;
+    }
+
+    const childFolderIds = Array.from(lockedFolderIds).filter((id) => id !== folderId);
     const descendantPages = await executeQuery<{ id: string }>(
       tx,
       `select p.id
        from pages p
-       where p.parent_id in (
-         select descendant_id from folder_closure where ancestor_id = $1
-       )
+       where p.parent_id = any($1::uuid[])
          and p.is_deleted = false
        order by p.id
        for update of p`,
-      [folderId],
+      [Array.from(lockedFolderIds)],
     );
+    const childPageIds = descendantPages.rows.map((row) => row.id);
 
     const inaccessibleDescendants = await executeQuery(
       tx,
@@ -747,11 +757,7 @@ foldersRoute.delete(':id', async (c) => {
        where p.id = any($3::uuid[])
          and not coalesce(access.full_access or access.permission = 'admin', false)
        limit 1`,
-      [
-        descendantFolders.rows.map((row) => row.id),
-        user.id,
-        descendantPages.rows.map((row) => row.id),
-      ],
+      [childFolderIds, user.id, childPageIds],
     );
     if ((inaccessibleDescendants.rowCount ?? 0) > 0) {
       throw new HTTPException(403, {
@@ -759,14 +765,11 @@ foldersRoute.delete(':id', async (c) => {
       });
     }
 
-    const childFolders = descendantFolders.rowCount ?? 0;
-    const childPages = descendantPages.rowCount ?? 0;
+    const childFolders = childFolderIds.length;
+    const childPages = childPageIds.length;
     if ((childFolders > 0 || childPages > 0) && !force) {
       return { requiresForce: true as const, childFolders, childPages };
     }
-
-    const childFolderIds = descendantFolders.rows.map((row) => row.id);
-    const childPageIds = descendantPages.rows.map((row) => row.id);
     if (childFolderIds.length > 0) {
       await executeQuery(
         tx,
@@ -836,30 +839,36 @@ foldersRoute.post(':id/leave', async (c) => {
     throw new HTTPException(400, { message: 'Cannot leave your own folder' });
   }
 
-  const shareResult = await query(
-    "delete from shares where entity_type = 'folder' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
-    [folderId, user.id],
-  );
+  await db.transaction(async (tx) => {
+    const shareResult = await executeQuery(
+      tx,
+      "delete from shares where entity_type = 'folder' and entity_id = $1 and recipient_user_id = $2 returning id, recipient_user_id",
+      [folderId, user.id],
+    );
+    const eventResult = await executeQuery(
+      tx,
+      'delete from folder_access_events where folder_id = $1 and user_id = $2 returning id',
+      [folderId, user.id],
+    );
 
-  const eventResult = await query(
-    'delete from folder_access_events where folder_id = $1 and user_id = $2 returning id',
-    [folderId, user.id],
-  );
+    const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
+    if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
+      throw new HTTPException(409, {
+        message: 'This folder is inherited from a parent or workspace and cannot be left directly',
+      });
+    }
 
-  const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
-  if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
-    throw new HTTPException(409, {
-      message: 'This folder is inherited from a parent or workspace and cannot be left directly',
-    });
-  }
-
-  if (shareRow?.recipient_user_id) {
-    await notifyShareRevoke({
-      entityType: 'folder',
-      entityId: folderId,
-      targetUserId: shareRow.recipient_user_id,
-    });
-  }
+    if (shareRow?.recipient_user_id) {
+      await notifyShareRevoke(
+        {
+          entityType: 'folder',
+          entityId: folderId,
+          targetUserId: shareRow.recipient_user_id,
+        },
+        tx,
+      );
+    }
+  });
 
   return c.json({ ok: true });
 });
