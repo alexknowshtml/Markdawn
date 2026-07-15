@@ -199,6 +199,187 @@ async function recomputePageConnections(
   return affectedCount;
 }
 
+const PAGE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Periodically revalidate active page rooms so time-based share expiry takes
+ * effect even when a connection is only receiving updates.
+ * Authenticated page/user pairs and anonymous pages are queried in two
+ * batches, independent of the number of open sockets.
+ */
+export async function revalidateActivePageConnections(
+  server: Server,
+  pool: Pool,
+  logger: Logger,
+): Promise<number> {
+  const candidates: Array<{
+    pageId: string;
+    connection: ReturnType<Document['getConnections']>[number];
+    ctx: ConnectionContext;
+  }> = [];
+
+  for (const [pageId, document] of server.hocuspocus?.documents ?? []) {
+    if (!PAGE_ID_PATTERN.test(pageId)) continue;
+    for (const connection of (document as Document).getConnections()) {
+      const ctx = connection.context as ConnectionContext | undefined;
+      if (!ctx?.user) continue;
+      candidates.push({ pageId, connection, ctx });
+    }
+  }
+  if (candidates.length === 0) return 0;
+
+  const authenticatedPairs = new Map<string, { pageId: string; userId: string }>();
+  const anonymousPageIds = new Set<string>();
+  for (const { pageId, ctx } of candidates) {
+    const user = ctx.user;
+    if (!user) continue;
+    if (user.isAnonymous === true) {
+      anonymousPageIds.add(pageId);
+    } else {
+      authenticatedPairs.set(`${pageId}:${user.id}`, { pageId, userId: user.id });
+    }
+  }
+
+  const pairs = Array.from(authenticatedPairs.values());
+  const anonymousIds = Array.from(anonymousPageIds);
+  const authenticatedPromise =
+    pairs.length === 0
+      ? Promise.resolve(new Map<string, SharePermission | null>())
+      : pool
+          .query<{ page_id: string; user_id: string; permission: string | null }>(
+            `with requested as (
+               select *
+               from unnest($1::uuid[], $2::uuid[]) as pair(page_id, user_id)
+             )
+             select requested.page_id, requested.user_id, access.permission
+             from requested
+             left join lateral get_effective_page_permission(
+               requested.page_id,
+               requested.user_id
+             ) access on true`,
+            [pairs.map((pair) => pair.pageId), pairs.map((pair) => pair.userId)],
+          )
+          .then(
+            (result) =>
+              new Map(
+                result.rows.map((row) => [
+                  `${row.page_id}:${row.user_id}`,
+                  clientPermission(row.permission ?? undefined) ?? null,
+                ]),
+              ),
+          );
+  const anonymousPromise =
+    anonymousIds.length === 0
+      ? Promise.resolve(new Map<string, SharePermission | null>())
+      : pool
+          .query<{ page_id: string; permission: string | null }>(
+            `with requested as (
+               select distinct unnest($1::uuid[]) as page_id
+             )
+             select requested.page_id, access.permission
+             from requested
+             left join lateral (
+               with page_parent as (
+                 select parent_id, is_public
+                 from pages
+                 where id = requested.page_id and is_deleted = false
+               )
+               select permission
+               from (
+                 select s.permission, 1 as src
+                 from shares s
+                 where s.entity_type = 'page'
+                   and s.entity_id = requested.page_id
+                   and s.token is not null
+                   and (s.expires_at is null or s.expires_at > now())
+                   and exists (select 1 from page_parent where is_public = true)
+                 union all
+                 select s.permission, 2 as src
+                 from shares s
+                 join folders f
+                   on f.id = s.entity_id and f.is_public = true and f.is_deleted = false
+                 where s.entity_type = 'folder'
+                   and s.token is not null
+                   and (s.expires_at is null or s.expires_at > now())
+                   and s.entity_id in (
+                     select ancestor_id
+                     from folder_closure fc
+                     join page_parent pp on fc.descendant_id = pp.parent_id
+                   )
+                   and not is_page_folder_inheritance_blocked(
+                     s.entity_id,
+                     requested.page_id
+                   )
+               ) permissions
+               order by case permission when 'admin' then 3 when 'edit' then 2 else 1 end desc,
+                        src asc
+               limit 1
+             ) access on true`,
+            [anonymousIds],
+          )
+          .then(
+            (result) =>
+              new Map(
+                result.rows.map((row) => [
+                  row.page_id,
+                  clientPermission(row.permission ?? undefined) ?? null,
+                ]),
+              ),
+          );
+
+  const [authenticatedResult, anonymousResult] = await Promise.allSettled([
+    authenticatedPromise,
+    anonymousPromise,
+  ]);
+  let affectedCount = 0;
+  for (const { pageId, connection, ctx } of candidates) {
+    const user = ctx.user;
+    if (!user) continue;
+    const result = user.isAnonymous ? anonymousResult : authenticatedResult;
+    if (result.status === 'rejected') {
+      logger.error(
+        `[expiry] failed to revalidate ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}: ${result.reason}`,
+      );
+      connection.sendStateless(
+        JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
+      );
+      connection.close({ code: 4500, reason: 'Permission verification failed' });
+      affectedCount++;
+      continue;
+    }
+
+    const permission = user.isAnonymous
+      ? (result.value as Map<string, SharePermission | null>).get(pageId)
+      : (result.value as Map<string, SharePermission | null>).get(`${pageId}:${user.id}`);
+    if (!permission) {
+      connection.sendStateless(
+        JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
+      );
+      connection.close({ code: 4401, reason: 'Access revoked' });
+      logger.info(
+        `[expiry] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}`,
+      );
+      affectedCount++;
+      continue;
+    }
+
+    const readOnly = permission === 'view';
+    if (connection.readOnly === readOnly && ctx.permission === permission) continue;
+    connection.readOnly = readOnly;
+    (connection.context as Record<string, unknown>).permission = permission;
+    connection.sendStateless(
+      JSON.stringify({
+        type: 'share_event',
+        action: 'update',
+        permission,
+      } satisfies StatelessShareMessage),
+    );
+    affectedCount++;
+  }
+
+  return affectedCount;
+}
+
 /**
  * Apply a share event to all active connections on a single page document.
  * Returns the number of connections affected.

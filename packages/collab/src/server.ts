@@ -16,6 +16,7 @@ import * as Y from 'yjs';
 import {
   handleShareEvent,
   handleWorkspaceEvent as handleWorkspaceEvent_,
+  revalidateActivePageConnections,
 } from './permission-handler';
 import { parseCookies } from './utils';
 
@@ -146,7 +147,17 @@ async function getDeletedPageMetaRecipientIds(
 
   const result = await pool.query<{ user_id: string }>(
     `with page_info as (
-       select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id, p.parent_id
+       select coalesce(
+         (
+           select root.created_by
+           from folder_closure fc
+           join folders root on root.id = fc.ancestor_id
+           where fc.descendant_id = p.parent_id and root.parent_id is null
+           order by fc.depth desc
+           limit 1
+         ),
+         p.created_by
+       ) as owner_id, p.parent_id
        from pages p where p.id = $1
      ), recipients as (
        select owner_id as user_id from page_info
@@ -181,6 +192,57 @@ async function getDeletedPageMetaRecipientIds(
      from recipients
      where user_id is not null and user_id = any($2::uuid[])`,
     [pageId, candidateUserIds],
+  );
+  return result.rows.map((row) => row.user_id);
+}
+
+async function getDeletedFolderMetaRecipientIds(
+  pool: Pool,
+  folderId: string,
+  candidateUserIds: string[],
+): Promise<string[]> {
+  if (candidateUserIds.length === 0) return [];
+
+  const result = await pool.query<{ user_id: string }>(
+    `with folder_info as (
+       select coalesce(
+         (
+           select root.created_by
+           from folder_closure fc
+           join folders root on root.id = fc.ancestor_id
+           where fc.descendant_id = f.id and root.parent_id is null
+           order by fc.depth desc
+           limit 1
+         ),
+         f.created_by
+       ) as owner_id
+       from folders f where f.id = $1
+     ), related_folders as (
+       select ancestor_id as folder_id from folder_closure where descendant_id = $1
+       union
+       select descendant_id as folder_id from folder_closure where ancestor_id = $1
+     ), recipients as (
+       select owner_id as user_id from folder_info
+       union
+       select s.recipient_user_id
+       from shares s
+       where s.entity_type = 'folder'
+         and s.entity_id in (select folder_id from related_folders)
+         and s.recipient_user_id is not null and s.token is null
+         and (s.expires_at is null or s.expires_at > now())
+       union
+       select wm.member_id
+       from workspace_members wm
+       join folder_info fi on fi.owner_id = wm.workspace_owner_id
+       union
+       select fae.user_id
+       from folder_access_events fae
+       where fae.folder_id in (select folder_id from related_folders)
+     )
+     select distinct user_id
+     from recipients
+     where user_id is not null and user_id = any($2::uuid[])`,
+    [folderId, candidateUserIds],
   );
   return result.rows.map((row) => row.user_id);
 }
@@ -766,11 +828,6 @@ export async function publishFolderDeletion(
   );
 
   const pageIds = result.rows.map((row) => row.id);
-  if (pageIds.length === 0) {
-    logger.debug(`[listen] no pages deleted with folder ${folderId}, skipping`);
-    return;
-  }
-
   const failures: unknown[] = [];
   const batchSize = 25;
   for (let offset = 0; offset < pageIds.length; offset += batchSize) {
@@ -788,10 +845,36 @@ export async function publishFolderDeletion(
     }
   }
 
-  if (failures.length > 0) {
-    throw new AggregateError(failures, `Failed to publish all page deletions for ${folderId}`);
+  try {
+    const activeDocuments = getActiveMetaDocuments(hocuspocus);
+    const recipientIds = await getDeletedFolderMetaRecipientIds(
+      pool,
+      folderId,
+      Array.from(activeDocuments.keys()),
+    );
+    const message = JSON.stringify({
+      type: 'entity_deleted',
+      entityType: 'folder',
+      entityId: folderId,
+    });
+    for (const recipientId of recipientIds) {
+      const metaDoc = activeDocuments.get(recipientId);
+      if (!metaDoc) continue;
+      for (const connection of metaDoc.getConnections()) {
+        connection.sendStateless(message);
+      }
+    }
+  } catch (error) {
+    failures.push(error);
+    logger.error(`[listen] failed to publish folder metadata deletion for ${folderId}: ${error}`);
   }
-  logger.debug(`[listen] published ${pageIds.length} page deletion(s) for folder ${folderId}`);
+
+  if (failures.length > 0) {
+    throw new AggregateError(failures, `Failed to publish all deletion events for ${folderId}`);
+  }
+  logger.debug(
+    `[listen] published folder deletion and ${pageIds.length} page deletion(s) for ${folderId}`,
+  );
 }
 
 export interface CollabServerConfig {
@@ -801,10 +884,18 @@ export interface CollabServerConfig {
   debounceMs?: number;
   maxDebounceMs?: number;
   databaseUrl?: string;
+  permissionRevalidationMs?: number;
 }
 
 export function createCollabServer(config: CollabServerConfig) {
-  const { port, pool, logger, debounceMs = 500, maxDebounceMs = 3000 } = config;
+  const {
+    port,
+    pool,
+    logger,
+    debounceMs = 500,
+    maxDebounceMs = 3000,
+    permissionRevalidationMs = 5000,
+  } = config;
   type PersistContext = {
     user?: { id: string; isAnonymous?: boolean };
     permission?: string;
@@ -1308,6 +1399,31 @@ export function createCollabServer(config: CollabServerConfig) {
       }
     },
     extensions: [],
+  });
+
+  let permissionRevalidationRunning = false;
+  const permissionRevalidationTimer =
+    permissionRevalidationMs > 0
+      ? setInterval(() => {
+          if (permissionRevalidationRunning) return;
+          permissionRevalidationRunning = true;
+          void revalidateActivePageConnections(server, pool, logger)
+            .catch((error) => logger.error(`[expiry] active access revalidation failed: ${error}`))
+            .finally(() => {
+              permissionRevalidationRunning = false;
+            });
+        }, permissionRevalidationMs)
+      : null;
+  permissionRevalidationTimer?.unref();
+
+  const destroyBeforePermissionTimer = server.destroy.bind(server);
+  Object.defineProperty(server, 'destroy', {
+    value() {
+      if (permissionRevalidationTimer) clearInterval(permissionRevalidationTimer);
+      return destroyBeforePermissionTimer();
+    },
+    writable: true,
+    configurable: true,
   });
 
   const listenUrl = config.databaseUrl;

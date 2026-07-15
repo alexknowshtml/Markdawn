@@ -12,6 +12,7 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import * as Y from 'yjs';
+import { revalidateActivePageConnections } from './permission-handler';
 import {
   createCollabServer,
   publishFolderDeletion,
@@ -100,7 +101,14 @@ describe('collab server', () => {
   let port: number;
 
   beforeAll(async () => {
-    server = createCollabServer({ port: 0, pool, logger, debounceMs: 50, maxDebounceMs: 100 });
+    server = createCollabServer({
+      port: 0,
+      pool,
+      logger,
+      debounceMs: 50,
+      maxDebounceMs: 100,
+      permissionRevalidationMs: 0,
+    });
     await server.listen();
     port = (server as unknown as { address: { port: number } }).address.port;
   });
@@ -638,6 +646,7 @@ describe('collab server', () => {
         logger: failingLogger,
         debounceMs: 50,
         maxDebounceMs: 100,
+        permissionRevalidationMs: 0,
       });
 
       const user = await createTestUser(pool);
@@ -1036,6 +1045,42 @@ describe('collab server', () => {
     });
   });
 
+  describe('active permission expiry', () => {
+    it('disconnects a viewer after their only invitation expires', async () => {
+      const owner = await createTestUser(pool);
+      const viewer = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      await pool.query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission, expires_at
+         ) values ('page', $1, $2, $3, 'view', now() - interval '1 second')`,
+        [page.id, owner.id, viewer.id],
+      );
+
+      const connection = {
+        context: { user: { id: viewer.id }, permission: 'view' },
+        readOnly: true,
+        sendStateless: vi.fn(),
+        close: vi.fn(),
+      };
+      const activeDocument = new Document(page.id);
+      vi.spyOn(activeDocument, 'getConnections').mockReturnValue([
+        connection,
+      ] as unknown as ReturnType<Document['getConnections']>);
+      server.hocuspocus.documents.set(page.id, activeDocument);
+
+      try {
+        await revalidateActivePageConnections(server, pool, logger);
+        expect(connection.close).toHaveBeenCalledWith({
+          code: 4401,
+          reason: 'Access revoked',
+        });
+      } finally {
+        server.hocuspocus.documents.delete(page.id);
+      }
+    });
+  });
+
   describe('database event publication', () => {
     it('updates the active document even when rename metadata publication fails', async () => {
       const pageId = crypto.randomUUID();
@@ -1094,6 +1139,72 @@ describe('collab server', () => {
         expect(connection.close).toHaveBeenCalledWith({ code: 4402, reason: 'Page deleted' });
       } finally {
         server.hocuspocus.documents.delete(page.id);
+      }
+    });
+
+    it('notifies active metadata rooms when an empty folder is deleted', async () => {
+      const owner = await createTestUser(pool);
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO folders (id, name, position, created_by, created_at, updated_at)
+         VALUES ($1, 'Empty folder', '0', $2, now(), now())`,
+        [folderId, owner.id],
+      );
+      await pool.query('UPDATE folders SET is_deleted = true, deleted_at = now() WHERE id = $1', [
+        folderId,
+      ]);
+
+      const connection = { sendStateless: vi.fn(), close: vi.fn() };
+      const metaDocument = new Document(`page-meta:${owner.id}`);
+      vi.spyOn(metaDocument, 'getConnections').mockReturnValue([
+        connection,
+      ] as unknown as ReturnType<Document['getConnections']>);
+      server.hocuspocus.documents.set(`page-meta:${owner.id}`, metaDocument);
+
+      try {
+        await publishFolderDeletion(server.hocuspocus, pool, folderId, logger);
+        expect(connection.sendStateless).toHaveBeenCalledWith(
+          JSON.stringify({
+            type: 'entity_deleted',
+            entityType: 'folder',
+            entityId: folderId,
+          }),
+        );
+      } finally {
+        server.hocuspocus.documents.delete(`page-meta:${owner.id}`);
+      }
+    });
+
+    it('removes admin-created deleted pages from the workspace owner metadata', async () => {
+      const owner = await createTestUser(pool);
+      const admin = await createTestUser(pool);
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `INSERT INTO folders (id, name, position, created_by, created_at, updated_at)
+         VALUES ($1, 'Owner folder', '0', $2, now(), now())`,
+        [folderId, owner.id],
+      );
+      const page = await createTestPage(pool, admin.id);
+      await pool.query('UPDATE pages SET parent_id = $1 WHERE id = $2', [folderId, page.id]);
+      const deletedAt = new Date();
+      await pool.query('UPDATE pages SET is_deleted = true, deleted_at = $1 WHERE id = $2', [
+        deletedAt,
+        page.id,
+      ]);
+      await pool.query('UPDATE folders SET is_deleted = true, deleted_at = $1 WHERE id = $2', [
+        deletedAt,
+        folderId,
+      ]);
+
+      const metaDocument = new Document(`page-meta:${owner.id}`);
+      metaDocument.getMap('pageIndex').set(page.id, { title: page.title });
+      server.hocuspocus.documents.set(`page-meta:${owner.id}`, metaDocument);
+
+      try {
+        await publishPageDeletion(server.hocuspocus, pool, page.id, logger);
+        expect(metaDocument.getMap('pageIndex').has(page.id)).toBe(false);
+      } finally {
+        server.hocuspocus.documents.delete(`page-meta:${owner.id}`);
       }
     });
 
@@ -1176,6 +1287,7 @@ describe('collab server', () => {
         logger: failingLogger,
         debounceMs: 50,
         maxDebounceMs: 100,
+        permissionRevalidationMs: 0,
       });
 
       const user = await createTestUser(pool);

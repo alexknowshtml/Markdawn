@@ -30,7 +30,15 @@ type WorkspaceMembershipEvent = {
   ownerId: string;
 };
 
-export function parsePageMetaStatelessMessage(payload: string): WorkspaceMembershipEvent | null {
+type FolderDeletionEvent = {
+  type: 'entity_deleted';
+  entityType: 'folder';
+  entityId: string;
+};
+
+type PageMetaStatelessMessage = WorkspaceMembershipEvent | FolderDeletionEvent;
+
+export function parsePageMetaStatelessMessage(payload: string): PageMetaStatelessMessage | null {
   const trimmed = payload.trim();
   if (!trimmed.startsWith('{')) return null;
 
@@ -41,6 +49,14 @@ export function parsePageMetaStatelessMessage(payload: string): WorkspaceMembers
     throw new Error('Malformed stateless message', { cause: error });
   }
   if (!message || typeof message !== 'object' || !('type' in message)) return null;
+  if (message.type === 'entity_deleted') {
+    const entityType = 'entityType' in message ? message.entityType : undefined;
+    const entityId = 'entityId' in message ? message.entityId : undefined;
+    if (entityType !== 'folder' || typeof entityId !== 'string' || entityId.length === 0) {
+      throw new Error('Malformed folder deletion event');
+    }
+    return { type: 'entity_deleted', entityType, entityId };
+  }
   if (message.type !== 'workspace_membership_event') return null;
 
   const action = 'action' in message ? message.action : undefined;

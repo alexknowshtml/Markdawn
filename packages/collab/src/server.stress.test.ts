@@ -35,7 +35,14 @@ describe('collab server stress', () => {
   let port: number;
 
   beforeAll(async () => {
-    server = createCollabServer({ port: 0, pool, logger, debounceMs: 50, maxDebounceMs: 100 });
+    server = createCollabServer({
+      port: 0,
+      pool,
+      logger,
+      debounceMs: 50,
+      maxDebounceMs: 100,
+      permissionRevalidationMs: 0,
+    });
     await server.listen();
     port = (server as unknown as { address: { port: number } }).address.port;
   });

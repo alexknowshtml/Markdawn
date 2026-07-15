@@ -2,7 +2,11 @@ import type { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
-import { handleShareEvent, handleWorkspaceEvent } from './permission-handler';
+import {
+  handleShareEvent,
+  handleWorkspaceEvent,
+  revalidateActivePageConnections,
+} from './permission-handler';
 
 function createLogger() {
   const fn = () => vi.fn();
@@ -975,5 +979,68 @@ describe('handleShareEvent', () => {
     expect(conn.context.permission).toBe('view');
     expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"action":"update"'));
     expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"permission":"view"'));
+  });
+});
+
+describe('revalidateActivePageConnections', () => {
+  it('revokes expired access with batched authenticated and anonymous lookups', async () => {
+    const logger = createLogger();
+    const pageId = '00000000-0000-4000-8000-000000000001';
+    const userId = '00000000-0000-4000-8000-000000000002';
+    const expiredConnection = createConnection({
+      context: { user: { id: userId }, permission: 'view' },
+      readOnly: true,
+    });
+    const anonymousConnection = createConnection({
+      context: { user: { id: 'anonymous-1', isAnonymous: true }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(
+      new Map([[pageId, createDocument([expiredConnection, anonymousConnection])]]),
+    );
+    const query = vi.fn(async (sql: string) => {
+      if (sql.includes('unnest($1::uuid[], $2::uuid[])')) {
+        return { rows: [{ page_id: pageId, user_id: userId, permission: null }] };
+      }
+      if (sql.includes('with page_parent')) {
+        return { rows: [{ page_id: pageId, permission: 'edit' }] };
+      }
+      return { rows: [] };
+    });
+
+    const affected = await revalidateActivePageConnections(
+      server,
+      { query } as unknown as Pool,
+      logger,
+    );
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(affected).toBe(1);
+    expect(expiredConnection.close).toHaveBeenCalledWith({
+      code: 4401,
+      reason: 'Access revoked',
+    });
+    expect(anonymousConnection.close).not.toHaveBeenCalled();
+  });
+
+  it('fails closed with a verification error when a batch query fails', async () => {
+    const logger = createLogger();
+    const pageId = '00000000-0000-4000-8000-000000000003';
+    const userId = '00000000-0000-4000-8000-000000000004';
+    const connection = createConnection({
+      context: { user: { id: userId }, permission: 'edit' },
+    });
+    const server = createServerWithDocuments(new Map([[pageId, createDocument([connection])]]));
+    const pool = {
+      query: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    } as unknown as Pool;
+
+    await revalidateActivePageConnections(server, pool, logger);
+
+    expect(connection.close).toHaveBeenCalledWith({
+      code: 4500,
+      reason: 'Permission verification failed',
+    });
   });
 });
