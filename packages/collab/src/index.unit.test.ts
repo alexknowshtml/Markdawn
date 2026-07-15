@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@hocuspocus/server', () => ({
   Server: class {
+    webSocketServer = { options: {} };
     listen() {}
     destroy() {}
   },

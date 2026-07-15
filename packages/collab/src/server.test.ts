@@ -713,6 +713,66 @@ describe('collab server', () => {
       }
     });
 
+    it('fails closed when persistence permission verification is unavailable', async () => {
+      const verificationLogger = mockLogger();
+      const verificationPool = {
+        query: vi.fn(async (text: string, values?: unknown[]) => {
+          if (text.includes('get_effective_page_permission')) {
+            throw new Error('permission database unavailable');
+          }
+          return pool.query(text, values);
+        }),
+      } as unknown as typeof pool;
+      const verificationServer = createCollabServer({
+        port: 0,
+        pool: verificationPool,
+        logger: verificationLogger,
+        permissionRevalidationMs: 0,
+      });
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const document = new Document(page.id);
+      document.getText('content').insert(0, 'Unverified edit');
+      const connection = { close: vi.fn() };
+      vi.spyOn(document, 'getConnections').mockReturnValue([connection] as unknown as ReturnType<
+        Document['getConnections']
+      >);
+      verificationServer.hocuspocus.documents.set(page.id, document);
+      const before = await pool.query<{ ydoc: Buffer | null }>(
+        'select ydoc from pages where id = $1',
+        [page.id],
+      );
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: page.id,
+        instance: verificationServer.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await verificationServer.hocuspocus.hooks('onStoreDocument', payload);
+        expect(connection.close).toHaveBeenCalledWith({
+          code: 4500,
+          reason: 'Permission verification failed',
+        });
+        const after = await pool.query<{ ydoc: Buffer | null }>(
+          'select ydoc from pages where id = $1',
+          [page.id],
+        );
+        expect(after.rows[0]?.ydoc).toEqual(before.rows[0]?.ydoc);
+        expect(verificationLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('permission verification failed'),
+        );
+      } finally {
+        verificationServer.hocuspocus.documents.delete(page.id);
+        await verificationServer.destroy();
+      }
+    });
+
     it('rethrows and logs when persistence update fails', async () => {
       const failingLogger = mockLogger();
       const mockClient = {

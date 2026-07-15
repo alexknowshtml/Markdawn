@@ -1039,20 +1039,23 @@ export function createCollabServer(config: CollabServerConfig) {
     }
   }
 
-  function blockOversizedDocument(documentName: string, size: number): void {
+  function blockDocumentForReload(documentName: string, code: number, reason: string): void {
     if (blockedDocuments.has(documentName)) return;
 
     blockedDocuments.add(documentName);
     pendingWriters.delete(documentName);
     documentSizeEstimates.delete(documentName);
+    const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
+    for (const connection of activeDocument?.getConnections() ?? []) {
+      connection.close({ code, reason });
+    }
+  }
+
+  function blockOversizedDocument(documentName: string, size: number): void {
     logger.warn(
       `[size] blocked page=${documentName}: encoded document is ${size} bytes (limit ${maxDocumentBytes})`,
     );
-
-    const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
-    for (const connection of activeDocument?.getConnections() ?? []) {
-      connection.close({ code: 1009, reason: 'Document size limit exceeded' });
-    }
+    blockDocumentForReload(documentName, 1009, 'Document size limit exceeded');
   }
 
   async function canPersistDocument(
@@ -1098,20 +1101,25 @@ export function createCollabServer(config: CollabServerConfig) {
     if (writers.length === 0 && fallbackContext) writers.push(fallbackContext);
 
     for (const writer of writers) {
-      if (await canPersistDocument(documentName, writer)) continue;
+      let canPersist: boolean;
+      try {
+        canPersist = await canPersistDocument(documentName, writer);
+      } catch (error) {
+        logger.warn(
+          `[persist] blocking page=${documentName} after permission verification failed: ${error}`,
+        );
+        blockDocumentForReload(documentName, 4500, 'Permission verification failed');
+        return false;
+      }
+      if (canPersist) continue;
 
       // The in-memory Y.Doc may already contain this writer's rejected update.
       // Disconnect the affected room so Hocuspocus unloads it and reloads the
       // last persisted state rather than saving a mixed-author update later.
-      blockedDocuments.add(documentName);
-      const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
-      for (const connection of activeDocument?.getConnections() ?? []) {
-        // Only the rejected writer receives a revoke/update event from the
-        // targeted revalidation above. Other collaborators need a clean room
-        // reload, not a false access-revocation notification.
-        connection.close({ code: 4500, reason: 'Document reload required' });
-      }
-      pendingWriters.delete(documentName);
+      // Only the rejected writer receives a revoke/update event from the
+      // targeted revalidation above. Other collaborators need a clean room
+      // reload, not a false access-revocation notification.
+      blockDocumentForReload(documentName, 4500, 'Document reload required');
       return false;
     }
     return true;
