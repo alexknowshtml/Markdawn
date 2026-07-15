@@ -62,6 +62,27 @@ describe('pages API', () => {
       expect(body.updatedAt).toBeTruthy();
     });
 
+    it('creates after a sibling with a position beyond JavaScript safe numeric formatting', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const existing = await createTestPage(user.id);
+      await query('update pages set position = $1 where id = $2', [
+        '1000000000000000000000',
+        existing.id,
+      ]);
+
+      const res = await app.request('/api/pages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: 'After large position' }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      expect(body.position).toBe('1000000000000000000001');
+    });
+
     it('returns 404 for non-existent parentId', async () => {
       const app = await createTestApp();
       const user = await createTestUser();

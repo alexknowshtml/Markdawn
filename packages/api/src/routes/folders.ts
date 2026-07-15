@@ -5,7 +5,7 @@ import type { folders } from '../db';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { normalizePosition } from '../utils/position';
+import { getNextPosition, normalizePosition } from '../utils/position';
 import {
   ensureCanAdminEntity,
   ensureFolderAccess,
@@ -388,13 +388,7 @@ foldersRoute.post('/', async (c) => {
     await ensureFolderAccess(parent.id, user.id, 'admin');
   }
 
-  const positionResult = await query(
-    parentId
-      ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
-      : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
-    parentId ? [parentId] : [user.id],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+  const nextPosition = await getNextPosition('folders', parentId ?? null, user.id);
 
   const insertResult = await query(
     'insert into folders (parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5) returning *',
@@ -555,14 +549,7 @@ async function copyFolderRecursive(
   }
   const source = normalizeFolderRow(sourceRow);
 
-  const positionResult = await executeQuery(
-    executor,
-    newParentId
-      ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
-      : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
-    newParentId ? [newParentId] : [userId],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+  const nextPosition = await getNextPosition('folders', newParentId, userId, executor);
 
   const insertResult = await executeQuery(
     executor,
@@ -697,63 +684,89 @@ foldersRoute.delete(':id', async (c) => {
   const user = c.get('user') as { id: string };
   await ensureCanAdminEntity('folder', folder.id, user.id);
 
-  const inaccessibleDescendants = await query(
-    `select 1
-     from folders f
-     join lateral get_effective_folder_permission(f.id, $2) access on true
-     where f.id in (
-       select descendant_id from folder_closure where ancestor_id = $1 and descendant_id != $1
-     )
-       and f.is_deleted = false
-       and not coalesce(access.full_access or access.permission = 'admin', false)
-     union all
-     select 1
-     from pages p
-     join lateral get_effective_page_permission(p.id, $2) access on true
-     where p.parent_id in (
-       select descendant_id from folder_closure where ancestor_id = $1
-     )
-       and p.is_deleted = false
-       and not coalesce(access.full_access or access.permission = 'admin', false)
-     limit 1`,
-    [folderId, user.id],
-  );
-  if ((inaccessibleDescendants.rowCount ?? 0) > 0) {
-    throw new HTTPException(403, {
-      message: 'This folder contains restricted items you do not have admin access to',
-    });
-  }
+  const force = c.req.query('force') === 'true';
+  const deletionResult = await db.transaction(async (tx) => {
+    // Block concurrent inserts and moves while the subtree is authorized and
+    // snapshotted. The active-parent triggers make queued writes re-check the
+    // destination after this transaction commits.
+    await executeQuery(tx, 'lock table folders, pages in share row exclusive mode');
 
-  const descendantFolders = await query(
-    `SELECT fc.descendant_id AS id
-     FROM folder_closure fc
-     JOIN folders f ON f.id = fc.descendant_id AND f.is_deleted = false
-     WHERE fc.ancestor_id = $1 AND fc.descendant_id != $1`,
-    [folderId],
-  );
-  const descendantPages = await query(
-    'SELECT p.id FROM pages p WHERE p.parent_id IN (SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1) AND p.is_deleted = false',
-    [folderId],
-  );
-
-  const hasChildren = (descendantFolders.rowCount ?? 0) > 0 || (descendantPages.rowCount ?? 0) > 0;
-
-  if (hasChildren && c.req.query('force') !== 'true') {
-    return c.json(
-      {
-        code: 'FOLDER_NOT_EMPTY',
-        requiresForce: true,
-        childFolders: descendantFolders.rowCount ?? 0,
-        childPages: descendantPages.rowCount ?? 0,
-        message: 'Folder is not empty. Confirm recursive deletion to continue.',
-      },
-      409,
+    const lockedRoot = await executeQuery(
+      tx,
+      'select id from folders where id = $1 and is_deleted = false for update',
+      [folderId],
     );
-  }
+    if ((lockedRoot.rowCount ?? 0) === 0) {
+      throw new HTTPException(404, { message: 'Folder not found' });
+    }
 
-  const childFolderIds = (descendantFolders.rows as { id: string }[]).map((row) => row.id);
-  const childPageIds = (descendantPages.rows as { id: string }[]).map((row) => row.id);
-  const updateResult = await db.transaction(async (tx) => {
+    const rootAccess = await executeQuery<{ permission: string; full_access: boolean }>(
+      tx,
+      'select permission, full_access from get_effective_folder_permission($1, $2)',
+      [folderId, user.id],
+    );
+    const rootPermission = rootAccess.rows[0];
+    if (!rootPermission?.full_access && rootPermission?.permission !== 'admin') {
+      throw new HTTPException(403, { message: 'You need admin access to access this folder' });
+    }
+
+    const descendantFolders = await executeQuery<{ id: string }>(
+      tx,
+      `select f.id
+       from folder_closure fc
+       join folders f on f.id = fc.descendant_id and f.is_deleted = false
+       where fc.ancestor_id = $1 and fc.descendant_id != $1
+       order by f.id
+       for update of f`,
+      [folderId],
+    );
+    const descendantPages = await executeQuery<{ id: string }>(
+      tx,
+      `select p.id
+       from pages p
+       where p.parent_id in (
+         select descendant_id from folder_closure where ancestor_id = $1
+       )
+         and p.is_deleted = false
+       order by p.id
+       for update of p`,
+      [folderId],
+    );
+
+    const inaccessibleDescendants = await executeQuery(
+      tx,
+      `select 1
+       from folders f
+       join lateral get_effective_folder_permission(f.id, $2) access on true
+       where f.id = any($1::uuid[])
+         and not coalesce(access.full_access or access.permission = 'admin', false)
+       union all
+       select 1
+       from pages p
+       join lateral get_effective_page_permission(p.id, $2) access on true
+       where p.id = any($3::uuid[])
+         and not coalesce(access.full_access or access.permission = 'admin', false)
+       limit 1`,
+      [
+        descendantFolders.rows.map((row) => row.id),
+        user.id,
+        descendantPages.rows.map((row) => row.id),
+      ],
+    );
+    if ((inaccessibleDescendants.rowCount ?? 0) > 0) {
+      throw new HTTPException(403, {
+        message: 'This folder contains restricted items you do not have admin access to',
+      });
+    }
+
+    const childFolders = descendantFolders.rowCount ?? 0;
+    const childPages = descendantPages.rowCount ?? 0;
+    if ((childFolders > 0 || childPages > 0) && !force) {
+      return { requiresForce: true as const, childFolders, childPages };
+    }
+
+    const childFolderIds = descendantFolders.rows.map((row) => row.id);
+    const childPageIds = descendantPages.rows.map((row) => row.id);
     if (childFolderIds.length > 0) {
       await executeQuery(
         tx,
@@ -763,7 +776,6 @@ foldersRoute.delete(':id', async (c) => {
         [childFolderIds],
       );
     }
-
     if (childPageIds.length > 0) {
       await executeQuery(
         tx,
@@ -774,28 +786,38 @@ foldersRoute.delete(':id', async (c) => {
       );
     }
 
-    const result = await executeQuery(
+    const updateResult = await executeQuery(
       tx,
       `update folders
        set is_deleted = true, deleted_at = now(), updated_at = now()
-       where id = $1
+       where id = $1 and is_deleted = false
        returning id`,
       [folderId],
     );
+    if ((updateResult.rowCount ?? 0) === 0) {
+      throw new HTTPException(409, { message: 'Folder was deleted concurrently' });
+    }
+
     await executeQuery(tx, 'select pg_notify($1, $2)', [
       'folder_deleted',
       JSON.stringify({ folderId }),
     ]);
-    return result;
+    await notifyShareRevoke({ entityType: 'folder', entityId: folderId }, tx);
+    return { deleted: true as const };
   });
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to delete folder' });
+  if ('requiresForce' in deletionResult) {
+    return c.json(
+      {
+        code: 'FOLDER_NOT_EMPTY',
+        ...deletionResult,
+        message: 'Folder is not empty. Confirm recursive deletion to continue.',
+      },
+      409,
+    );
   }
 
-  await notifyShareRevoke({ entityType: 'folder', entityId: folderId });
-
-  return c.json({ deleted: true });
+  return c.json(deletionResult);
 });
 
 foldersRoute.post(':id/leave', async (c) => {

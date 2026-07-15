@@ -24,6 +24,7 @@ import {
   isMarkdownFile,
   parseFrontmatter,
 } from '../utils/obsidian-parsers';
+import { getNextPosition } from '../utils/position';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 const obsidianImportRoute = new Hono();
@@ -225,13 +226,7 @@ obsidianImportRoute.post('/', async (c) => {
       const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
       const parentId = parentPath ? (folderPathToId.get(parentPath) ?? null) : null;
 
-      const positionResult = await query(
-        parentId
-          ? 'select max(position::numeric) as max_position from folders where parent_id = $1'
-          : 'select max(position::numeric) as max_position from folders where parent_id is null and created_by = $1',
-        parentId ? [parentId] : [user.id],
-      );
-      const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+      const nextPosition = await getNextPosition('folders', parentId, user.id);
 
       const insertResult = await query(
         'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
@@ -320,13 +315,7 @@ obsidianImportRoute.post('/', async (c) => {
       // Store for deferred targetId resolution after all pages are known
       pageYdocs.set(file.path, ydocBuffer);
 
-      const positionResult = await query(
-        parentId
-          ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
-          : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
-        parentId ? [parentId] : [user.id],
-      );
-      const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+      const nextPosition = await getNextPosition('pages', parentId, user.id);
 
       const insertResult = hasPropertiesColumn
         ? await query(

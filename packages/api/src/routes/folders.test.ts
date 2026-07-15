@@ -129,6 +129,22 @@ describe('folders API', () => {
       expect(res.status).toBe(404);
     });
 
+    it('rejects writes beneath a folder deleted after the caller checked it', async () => {
+      const user = await createTestUser();
+      const parent = await createTestFolder(user.id);
+      await query('update folders set is_deleted = true, deleted_at = now() where id = $1', [
+        parent.id,
+      ]);
+
+      await expect(
+        query(
+          `insert into folders (parent_id, name, position, created_by)
+           values ($1, 'Too late', '0', $2)`,
+          [parent.id, user.id],
+        ),
+      ).rejects.toThrow('Cannot place content inside a deleted folder');
+    });
+
     it('requires admin access to create a nested folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();

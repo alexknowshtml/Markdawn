@@ -11,6 +11,7 @@ import {
   resolveWikilinkTargets,
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
+import { getNextPosition } from '../utils/position';
 import { ensureFolderAccess } from '../utils/share-access';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
@@ -222,13 +223,7 @@ importRoute.post('/markdown', async (c) => {
     ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
   }
 
-  const positionResult = await query(
-    parentId
-      ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
-      : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
-    parentId ? [parentId] : [user.id],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+  const nextPosition = await getNextPosition('pages', parentId, user.id);
 
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = hasProperties

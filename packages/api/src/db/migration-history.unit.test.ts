@@ -90,6 +90,19 @@ describe('Drizzle v1 migration history', () => {
     );
   });
 
+  it('prevents writes from racing into deleted folder subtrees', () => {
+    const parentGuardMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_prevent_writes_under_deleted_folders'),
+    );
+    expect(parentGuardMigration, 'active parent migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(parentGuardMigration ?? '');
+    expect(migrationSql).toContain('ensure_active_folder_parent');
+    expect(migrationSql).toContain('folders_active_parent_trigger');
+    expect(migrationSql).toContain('pages_active_parent_trigger');
+    expect(migrationSql).toContain('FOR SHARE');
+  });
+
   it('does not reintroduce the legacy access restriction column', () => {
     const migrationDirs = listMigrationDirs();
     const migrationText = migrationDirs.map(readMigrationSql).join('\n');

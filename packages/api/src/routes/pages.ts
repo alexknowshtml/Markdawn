@@ -16,7 +16,7 @@ import {
   createYjsDocWithTitle,
   resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
-import { normalizePosition } from '../utils/position';
+import { getNextPosition, normalizePosition } from '../utils/position';
 import {
   ensureCanAdminEntity,
   ensureFolderAccess,
@@ -365,13 +365,7 @@ pagesRoute.post('/', async (c) => {
     await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
-  const positionResult = await query(
-    parentId
-      ? 'select max(position::numeric) as max_position from pages where parent_id = $1'
-      : 'select max(position::numeric) as max_position from pages where parent_id is null and created_by = $1',
-    parentId ? [parentId] : [user.id],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+  const nextPosition = await getNextPosition('pages', parentId ?? null, user.id);
 
   const pageTitle =
     typeof title === 'string' && title.trim().length > 0 ? title.trim() : 'Untitled';
@@ -988,13 +982,7 @@ pagesRoute.post(':id/copy', async (c) => {
     await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
-  const positionResult = await query(
-    parentId
-      ? 'select max(position::numeric) as max_position from pages where parent_id = $1 and is_deleted = false'
-      : 'select max(position::numeric) as max_position from pages where parent_id is null and is_deleted = false and created_by = $1',
-    parentId ? [parentId] : [user.id],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+  const nextPosition = await getNextPosition('pages', parentId ?? null, user.id);
 
   const insertResult = await query(
     `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, properties, created_by)
