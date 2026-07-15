@@ -763,6 +763,20 @@ describe('collab server', () => {
         ...changeBase,
         context: { user: { id: owner.id }, permission: 'edit' },
       });
+      const anonymousConnection = {
+        context: { user: { id: 'anonymous-writer', isAnonymous: true }, permission: 'edit' },
+        sendStateless: vi.fn(),
+        close: vi.fn(),
+      };
+      const ownerConnection = {
+        context: { user: { id: owner.id }, permission: 'edit' },
+        sendStateless: vi.fn(),
+        close: vi.fn(),
+      };
+      const activeDocument = {
+        getConnections: () => [anonymousConnection, ownerConnection],
+      } as unknown as Document;
+      server.hocuspocus.documents.set(page.id, activeDocument);
       await pool.query("DELETE FROM shares WHERE entity_type = 'page' AND entity_id = $1", [
         page.id,
       ]);
@@ -780,13 +794,25 @@ describe('collab server', () => {
         requestParameters: new URLSearchParams(),
         socketId: crypto.randomUUID(),
       };
-      await server.hocuspocus.hooks('onStoreDocument', payload);
+      try {
+        await server.hocuspocus.hooks('onStoreDocument', payload);
+      } finally {
+        server.hocuspocus.documents.delete(page.id);
+      }
 
       const stored = await pool.query<{ ydoc: Buffer | null }>(
         'SELECT ydoc FROM pages WHERE id = $1',
         [page.id],
       );
       expect(stored.rows[0]?.ydoc).toBeNull();
+      expect(anonymousConnection.sendStateless).toHaveBeenCalledWith(
+        expect.stringContaining('"action":"revoke"'),
+      );
+      expect(ownerConnection.sendStateless).not.toHaveBeenCalled();
+      expect(ownerConnection.close).toHaveBeenCalledWith({
+        code: 4500,
+        reason: 'Document reload required',
+      });
     });
 
     it('does not persist a wiki-link targetId from another workspace', async () => {

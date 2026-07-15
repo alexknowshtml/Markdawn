@@ -13,6 +13,7 @@ import {
 } from '@markdawn/shared/yjs-helpers';
 import { Client, type Pool, type PoolClient } from 'pg';
 import * as Y from 'yjs';
+import { createCoalescingTaskQueue } from './coalescingTaskQueue';
 import {
   handleShareEvent,
   handleWorkspaceEvent as handleWorkspaceEvent_,
@@ -21,6 +22,7 @@ import {
 import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
+const SHARE_EVENT_QUEUE_LIMIT = 256;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class CollabAccessError extends Error {
@@ -1073,9 +1075,9 @@ export function createCollabServer(config: CollabServerConfig) {
       blockedDocuments.add(documentName);
       const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
       for (const connection of activeDocument?.getConnections() ?? []) {
-        connection.sendStateless(
-          JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
-        );
+        // Only the rejected writer receives a revoke/update event from the
+        // targeted revalidation above. Other collaborators need a clean room
+        // reload, not a false access-revocation notification.
         connection.close({ code: 4500, reason: 'Document reload required' });
       }
       pendingWriters.delete(documentName);
@@ -1401,6 +1403,20 @@ export function createCollabServer(config: CollabServerConfig) {
     extensions: [],
   });
 
+  const shareEventQueue = createCoalescingTaskQueue<ShareEventPayload>({
+    maxPending: SHARE_EVENT_QUEUE_LIMIT,
+    getKey: (payload) =>
+      `${payload.entityType}:${payload.entityId}:${payload.targetUserId ?? 'anonymous'}`,
+    handle: (payload) => handleShareEvent(server, payload, pool, logger),
+    handleOverflow: async () => {
+      logger.warn(
+        `[listen] share event backlog exceeded ${SHARE_EVENT_QUEUE_LIMIT}; revalidating all active connections`,
+      );
+      await revalidateActivePageConnections(server, pool, logger);
+    },
+    onError: (error) => logger.error(`[listen] handleShareEvent failed: ${error}`),
+  });
+
   let permissionRevalidationRunning = false;
   const permissionRevalidationTimer =
     permissionRevalidationMs > 0
@@ -1420,6 +1436,7 @@ export function createCollabServer(config: CollabServerConfig) {
   Object.defineProperty(server, 'destroy', {
     value() {
       if (permissionRevalidationTimer) clearInterval(permissionRevalidationTimer);
+      shareEventQueue.stop();
       return destroyBeforePermissionTimer();
     },
     writable: true,
@@ -1519,9 +1536,7 @@ export function createCollabServer(config: CollabServerConfig) {
                   logger.error(`[listen] handleInviteReceived failed: ${err}`),
                 );
               } else {
-                void handleShareEvent(server, payload, pool, logger).catch((err) =>
-                  logger.error(`[listen] handleShareEvent failed: ${err}`),
-                );
+                shareEventQueue.enqueue(payload);
               }
             } else if (msg.channel === 'workspace_event') {
               logger.debug(`[listen] received workspace_event: ${msg.payload}`);
