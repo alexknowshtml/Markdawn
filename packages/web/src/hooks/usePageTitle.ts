@@ -20,9 +20,19 @@ function normalizeTitle(value: string): string {
   return trimmed.length > 0 ? trimmed : 'Untitled';
 }
 
-export function usePageTitle(pageId?: string, initialTitle?: string, ydoc?: Y.Doc | null) {
+type UsePageTitleOptions = {
+  persistViaApi?: boolean;
+};
+
+export function usePageTitle(
+  pageId?: string,
+  initialTitle?: string,
+  ydoc?: Y.Doc | null,
+  options: UsePageTitleOptions = {},
+) {
   const [title, setTitle] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
+  const persistViaApi = options.persistViaApi ?? true;
   const lastSavedTitleRef = useRef('Untitled');
   const ydocRef = useRef(ydoc);
   ydocRef.current = ydoc;
@@ -75,6 +85,13 @@ export function usePageTitle(pageId?: string, initialTitle?: string, ydoc?: Y.Do
         titleText.insert(0, nextTitle);
       }
 
+      if (!persistViaApi) {
+        // Anonymous edit links persist through the authorized collaboration
+        // document. The protected metadata API would reject this fast path.
+        if (currentDoc) lastSavedTitleRef.current = nextTitle;
+        return;
+      }
+
       // Send PATCH for DB column update (fast-path cache)
       mutation.mutate(nextTitle, {
         onSuccess: () => {
@@ -82,7 +99,7 @@ export function usePageTitle(pageId?: string, initialTitle?: string, ydoc?: Y.Do
         },
       });
     },
-    [mutation],
+    [mutation, persistViaApi],
   );
 
   return { title, setTitle, commitTitle };

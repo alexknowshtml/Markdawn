@@ -8,10 +8,13 @@ interface PageTitleProps {
   pageId: string;
   initialTitle: string;
   ydoc?: Y.Doc | null;
+  persistViaApi?: boolean;
 }
 
-export function PageTitle({ pageId, initialTitle, ydoc }: PageTitleProps) {
-  const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc);
+export function PageTitle({ pageId, initialTitle, ydoc, persistViaApi = true }: PageTitleProps) {
+  const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc, {
+    persistViaApi,
+  });
   const inputRef = useRef<HTMLInputElement>(null);
   const readOnly = useIsReadOnly();
 

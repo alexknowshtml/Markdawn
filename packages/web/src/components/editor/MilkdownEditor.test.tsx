@@ -9,11 +9,15 @@ const mocks = vi.hoisted(() => ({
   isAnonymous: true,
   imageUploadFromSlash: null as (() => void) | null,
   showInfoToast: vi.fn(),
+  providerHandlers: new Map<string, (payload: unknown) => void>(),
+  loggerWarn: vi.fn(),
 }));
 
 vi.mock('@hocuspocus/provider', () => {
   class MockProvider {
-    on = vi.fn();
+    on = vi.fn((event: string, handler: (payload: unknown) => void) => {
+      mocks.providerHandlers.set(event, handler);
+    });
     off = vi.fn();
     forceSync = vi.fn();
     destroy = vi.fn();
@@ -80,7 +84,7 @@ vi.mock('../../logger-init', () => ({
   getLogger: () => ({
     info: vi.fn(),
     debug: vi.fn(),
-    warn: vi.fn(),
+    warn: mocks.loggerWarn,
     error: vi.fn(),
   }),
 }));
@@ -111,6 +115,8 @@ describe('MilkdownEditor anonymous uploads', () => {
     mocks.isAnonymous = true;
     mocks.imageUploadFromSlash = null;
     mocks.showInfoToast.mockReset();
+    mocks.providerHandlers.clear();
+    mocks.loggerWarn.mockReset();
   });
 
   it('explains that image uploads require sign-in without opening a file picker', () => {
@@ -124,5 +130,14 @@ describe('MilkdownEditor anonymous uploads', () => {
 
     expect(mocks.showInfoToast).toHaveBeenCalledWith('Sign in to upload images');
     expect(createElementSpy).not.toHaveBeenCalledWith('input');
+  });
+
+  it('reports malformed collaboration control messages', () => {
+    renderEditor();
+
+    expect(() => {
+      act(() => mocks.providerHandlers.get('stateless')?.({ payload: 'not-json' }));
+    }).not.toThrow();
+    expect(mocks.loggerWarn).toHaveBeenCalled();
   });
 });

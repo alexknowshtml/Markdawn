@@ -974,119 +974,126 @@ export function MilkdownEditor({
     };
 
     const handleStateless = ({ payload }: { payload: string }) => {
+      let parsed: unknown;
       try {
-        const message = JSON.parse(payload) as Record<string, unknown>;
+        parsed = JSON.parse(payload);
+      } catch (error) {
+        logger.warn`[collab] ignored malformed stateless message: ${error instanceof Error ? error.message : String(error)}`;
+        return;
+      }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        logger.warn`[collab] ignored malformed stateless message: expected an object`;
+        return;
+      }
+      const message = parsed as Record<string, unknown>;
 
-        const syncPagePermission = (permission: SharePermission) => {
-          const capabilities = deriveCapabilities(permission);
-          queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
-            if (!old || typeof old !== 'object') return old;
-            return {
-              ...(old as Record<string, unknown>),
-              userPermission: permission,
-              linkPermission: permission === 'admin' ? 'edit' : permission,
-              capabilities,
-            } satisfies Record<string, unknown> & {
-              userPermission: SharePermission;
-              linkPermission: 'view' | 'edit';
-              capabilities: CapabilitySet;
-            };
-          });
-        };
+      const syncPagePermission = (permission: SharePermission) => {
+        const capabilities = deriveCapabilities(permission);
+        queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
+          if (!old || typeof old !== 'object') return old;
+          return {
+            ...(old as Record<string, unknown>),
+            userPermission: permission,
+            linkPermission: permission === 'admin' ? 'edit' : permission,
+            capabilities,
+          } satisfies Record<string, unknown> & {
+            userPermission: SharePermission;
+            linkPermission: 'view' | 'edit';
+            capabilities: CapabilitySet;
+          };
+        });
+      };
 
-        // Old format (backward compat during rollout): { type: 'permission_changed', permission }
-        if (message.type === 'permission_changed') {
-          const permission = message.permission as string | undefined;
-          logger.info`[collab] permission changed: ${permission}`;
+      // Old format (backward compat during rollout): { type: 'permission_changed', permission }
+      if (message.type === 'permission_changed') {
+        const permission = message.permission as string | undefined;
+        logger.info`[collab] permission changed: ${permission}`;
+        if (permission === 'view') {
+          setReadOnly(true);
+          setLinkPermission('view');
+          setCapabilities(deriveCapabilities('view'));
+          syncPagePermission('view');
+          showInfoToast('This page is now view-only');
+        } else if (permission === 'edit') {
+          setReadOnly(false);
+          setLinkPermission('edit');
+          setCapabilities(deriveCapabilities('edit'));
+          syncPagePermission('edit');
+          showInfoToast('You can now edit this page');
+        } else if (permission === 'private') {
+          if (!consumeSelfLeave(pageId)) {
+            showInfoToast('Removed from your view');
+          }
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+          navigate('/');
+        }
+        return;
+      }
+
+      if (message.type === 'share_event') {
+        const action = message.action as string | undefined;
+        const permission = message.permission as string | undefined;
+        const toastMessage = (message as { message?: string }).message;
+        logger.info`[collab] share event: action=${action} permission=${permission}`;
+        if (action === 'revoke') {
+          if (!consumeSelfLeave(pageId)) {
+            showInfoToast(toastMessage ?? 'Removed from your view');
+          }
+          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+          navigate('/');
+        } else if (action === 'grant' || action === 'update') {
+          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
           if (permission === 'view') {
             setReadOnly(true);
             setLinkPermission('view');
             setCapabilities(deriveCapabilities('view'));
             syncPagePermission('view');
-            showInfoToast('This page is now view-only');
-          } else if (permission === 'edit') {
+            showInfoToast(toastMessage ?? 'This page is now view-only');
+          } else if (permission === 'edit' || permission === 'admin') {
             setReadOnly(false);
             setLinkPermission('edit');
-            setCapabilities(deriveCapabilities('edit'));
-            syncPagePermission('edit');
-            showInfoToast('You can now edit this page');
-          } else if (permission === 'private') {
-            if (!consumeSelfLeave(pageId)) {
-              showInfoToast('Removed from your view');
-            }
-            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-            navigate('/');
+            setCapabilities(deriveCapabilities(permission));
+            syncPagePermission(permission);
+            showInfoToast(
+              toastMessage ??
+                (permission === 'admin' ? 'You are now an admin' : 'You can now edit this page'),
+            );
           }
-          return;
         }
+        return;
+      }
 
-        if (message.type === 'share_event') {
-          const action = message.action as string | undefined;
-          const permission = message.permission as string | undefined;
-          const toastMessage = (message as { message?: string }).message;
-          logger.info`[collab] share event: action=${action} permission=${permission}`;
-          if (action === 'revoke') {
-            if (!consumeSelfLeave(pageId)) {
-              showInfoToast(toastMessage ?? 'Removed from your view');
-            }
-            queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-            navigate('/');
-          } else if (action === 'grant' || action === 'update') {
-            queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-            queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-            queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-            if (permission === 'view') {
-              setReadOnly(true);
-              setLinkPermission('view');
-              setCapabilities(deriveCapabilities('view'));
-              syncPagePermission('view');
-              showInfoToast(toastMessage ?? 'This page is now view-only');
-            } else if (permission === 'edit' || permission === 'admin') {
-              setReadOnly(false);
-              setLinkPermission('edit');
-              setCapabilities(deriveCapabilities(permission));
-              syncPagePermission(permission);
-              showInfoToast(
-                toastMessage ??
-                  (permission === 'admin' ? 'You are now an admin' : 'You can now edit this page'),
-              );
-            }
-          }
-          return;
+      if (message.type === 'entity_deleted') {
+        const entityType = message.entityType as string | undefined;
+        const entityId = message.entityId as string | undefined;
+        logger.info`[collab] entity deleted: entityType=${entityType} entityId=${entityId}`;
+        if (!consumeSelfLeave(pageId)) {
+          showInfoToast(entityType === 'folder' ? 'Folder deleted' : 'Page deleted');
         }
+        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+        navigate('/');
+        return;
+      }
 
-        if (message.type === 'entity_deleted') {
-          const entityType = message.entityType as string | undefined;
-          const entityId = message.entityId as string | undefined;
-          logger.info`[collab] entity deleted: entityType=${entityType} entityId=${entityId}`;
-          if (!consumeSelfLeave(pageId)) {
-            showInfoToast(entityType === 'folder' ? 'Folder deleted' : 'Page deleted');
-          }
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          navigate('/');
-          return;
-        }
-
-        if (message.type === 'invite_received') {
-          const sharedByName = message.sharedByName as string | undefined;
-          const entityTitle = message.entityTitle as string | undefined;
-          const toastMessage = (message as { message?: string }).message;
-          logger.info`[collab] invite received: ${sharedByName} shared ${entityTitle}`;
-          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          showInfoToast(
-            toastMessage ??
-              `${sharedByName ?? 'Someone'} shared ${entityTitle ?? 'something'} with you. Refresh to see it.`,
-          );
-          return;
-        }
-      } catch {
-        // Ignore non-JSON stateless messages
+      if (message.type === 'invite_received') {
+        const sharedByName = message.sharedByName as string | undefined;
+        const entityTitle = message.entityTitle as string | undefined;
+        const toastMessage = (message as { message?: string }).message;
+        logger.info`[collab] invite received: ${sharedByName} shared ${entityTitle}`;
+        queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+        showInfoToast(
+          toastMessage ??
+            `${sharedByName ?? 'Someone'} shared ${entityTitle ?? 'something'} with you. Refresh to see it.`,
+        );
+        return;
       }
     };
 

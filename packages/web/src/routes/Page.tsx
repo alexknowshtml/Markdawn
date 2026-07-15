@@ -394,6 +394,7 @@ export default function Page() {
                 pageId={pageId}
                 initialTitle={page?.title ?? 'Untitled'}
                 ydoc={provider?.document ?? null}
+                persistViaApi={!isAnonymous}
               />
             </div>
           </div>

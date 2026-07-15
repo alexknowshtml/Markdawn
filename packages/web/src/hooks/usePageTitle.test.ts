@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as Y from 'yjs';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 import { usePageTitle } from './usePageTitle';
@@ -77,6 +78,20 @@ describe('usePageTitle', () => {
       },
       { timeout: 3000 },
     );
+  });
+
+  it('persists anonymous titles through Yjs without calling the protected API', () => {
+    const ydoc = new Y.Doc();
+    ydoc.getText('title').insert(0, 'Original');
+    const { result } = renderHook(
+      () => usePageTitle('p1', 'Original', ydoc, { persistViaApi: false }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    act(() => result.current.commitTitle('Anonymous title'));
+
+    expect(ydoc.getText('title').toString()).toBe('Anonymous title');
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it('does not save when pageId is missing', async () => {
