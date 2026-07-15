@@ -23,19 +23,35 @@ export function buildFolderPath(name: string, folderId: string): string {
   return `/app/folder/${slug}-${folderId}`;
 }
 
+const SAFE_LINK_SCHEMES = new Set(['http', 'https', 'mailto', 'tel', 'sms', 'fax']);
+const URL_SCHEME_REGEX = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
+
+const hasControlCharacter = (value: string) =>
+  Array.from(value).some((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127;
+  });
+
+/**
+ * Normalizes links entered in the editor and rejects executable or otherwise
+ * unsupported URL schemes. An empty result must never be opened or persisted.
+ */
 export function ensureAbsoluteUrl(url: string): string {
   if (!url) return url;
 
   const trimmed = url.trim();
+  if (!trimmed || hasControlCharacter(trimmed)) return '';
 
-  // Already has :// scheme (http://, https://, ftp://, etc.)
-  if (/^[a-zA-Z][a-zA-Z0-9+\-.]*:\/\//.test(trimmed)) return trimmed;
+  // A bare host with a numeric port resembles a URL scheme but should still
+  // receive the default HTTPS protocol.
+  if (/^[^/?#:]+\.[^/?#:]+:\d+(?:[/?#]|$)/.test(trimmed)) {
+    return `https://${trimmed}`;
+  }
 
-  // Known schemes without :// (mailto:, tel:, etc.)
-  if (/^(mailto|tel|sms|fax):/i.test(trimmed)) return trimmed;
-
-  // Common protocol-like prefix (javascript:, data:) — leave untouched
-  if (/^(javascript|data|blob):/i.test(trimmed)) return trimmed;
+  const scheme = trimmed.match(URL_SCHEME_REGEX)?.[1]?.toLowerCase();
+  if (scheme) {
+    return SAFE_LINK_SCHEMES.has(scheme) ? trimmed : '';
+  }
 
   // Leading slash, hash, question mark, or dot → relative/internal
   if (

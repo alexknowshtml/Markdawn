@@ -551,7 +551,12 @@ export function useMilkdown({
 
                 event.preventDefault();
                 linkEditor.close();
-                window.open(ensureAbsoluteUrl(href), '_blank', 'noopener,noreferrer');
+                const safeUrl = ensureAbsoluteUrl(href);
+                if (!safeUrl) {
+                  getLogger().warn('Blocked unsafe editor link', { href });
+                  return true;
+                }
+                window.open(safeUrl, '_blank', 'noopener,noreferrer');
                 return true;
               },
               mouseover: (view, event) => {
@@ -594,14 +599,17 @@ export function useMilkdown({
                   initialUrl: href,
                   initialText: anchor.textContent || href,
                   onConfirm: ({ url, text }) => {
+                    const safeUrl = ensureAbsoluteUrl(url);
+                    if (!safeUrl) {
+                      getLogger().warn('Refused to persist unsafe editor link', { url });
+                      return;
+                    }
                     const tr = view.state.tr;
                     tr.removeMark(markFrom, markTo, linkMarkType);
                     tr.replaceWith(
                       markFrom,
                       markTo,
-                      view.state.schema.text(text, [
-                        linkMarkType.create({ href: ensureAbsoluteUrl(url) }),
-                      ]),
+                      view.state.schema.text(text, [linkMarkType.create({ href: safeUrl })]),
                     );
                     view.dispatch(tr);
                   },

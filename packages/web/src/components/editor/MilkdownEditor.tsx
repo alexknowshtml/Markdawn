@@ -449,22 +449,28 @@ export function MilkdownEditor({
   };
   const handleLink = () => {
     const url = prompt('Enter link URL:');
-    if (url && editor) {
-      keepVisible();
-      editor.action((ctx) => {
-        const view = ctx.get(editorViewCtx);
-        if (!view) return;
+    if (!url || !editor) return;
 
-        const { state, dispatch } = view;
-        const linkMark = state.schema.marks.link;
-        if (!linkMark) return;
-
-        const mark = linkMark.create({ href: ensureAbsoluteUrl(url) });
-        const tr = state.tr.addMark(state.selection.from, state.selection.to, mark);
-        dispatch(tr);
-      });
-      setTimeout(updateActiveStates, 0);
+    const safeUrl = ensureAbsoluteUrl(url);
+    if (!safeUrl) {
+      showInfoToast('Enter a safe HTTP, HTTPS, email, phone, or relative link');
+      return;
     }
+
+    keepVisible();
+    editor.action((ctx) => {
+      const view = ctx.get(editorViewCtx);
+      if (!view) return;
+
+      const { state, dispatch } = view;
+      const linkMark = state.schema.marks.link;
+      if (!linkMark) return;
+
+      const mark = linkMark.create({ href: safeUrl });
+      const tr = state.tr.addMark(state.selection.from, state.selection.to, mark);
+      dispatch(tr);
+    });
+    setTimeout(updateActiveStates, 0);
   };
 
   const handleBlockquote = () => {

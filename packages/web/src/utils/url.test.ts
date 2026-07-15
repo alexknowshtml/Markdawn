@@ -48,14 +48,18 @@ describe('ensureAbsoluteUrl', () => {
     expect(ensureAbsoluteUrl('fax:+1234567890')).toBe('fax:+1234567890');
   });
 
-  it('leaves javascript: pseudo-protocol unchanged', () => {
-    expect(ensureAbsoluteUrl('javascript:alert(1)')).toBe('javascript:alert(1)');
+  it.each([
+    'javascript:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'blob:https://samvaad.live/unsafe',
+    'ftp://example.com/file',
+    'custom://open',
+  ])('rejects unsupported URL scheme %s', (url) => {
+    expect(ensureAbsoluteUrl(url)).toBe('');
   });
 
-  it('leaves data: URIs unchanged', () => {
-    expect(ensureAbsoluteUrl('data:text/plain;base64,SGVsbG8=')).toBe(
-      'data:text/plain;base64,SGVsbG8=',
-    );
+  it('rejects control characters that can obscure an executable scheme', () => {
+    expect(ensureAbsoluteUrl('java\nscript:alert(1)')).toBe('');
   });
 
   // Relative / internal

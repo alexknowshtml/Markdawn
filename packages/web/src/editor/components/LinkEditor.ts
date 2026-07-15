@@ -52,9 +52,14 @@ export class LinkEditor {
     tooltip.style.zIndex = '1000';
 
     const urlText = document.createElement('a');
-    urlText.href = ensureAbsoluteUrl(options.initialUrl);
-    urlText.target = '_blank';
-    urlText.rel = 'noopener noreferrer';
+    const safeUrl = ensureAbsoluteUrl(options.initialUrl);
+    if (safeUrl) {
+      urlText.href = safeUrl;
+      urlText.target = '_blank';
+      urlText.rel = 'noopener noreferrer';
+    } else {
+      urlText.setAttribute('aria-disabled', 'true');
+    }
     urlText.textContent = options.initialUrl;
     urlText.title = options.initialText || options.initialUrl;
 
@@ -296,10 +301,17 @@ export class LinkEditor {
     saveButton.addEventListener('click', () => {
       const newUrl = urlInput.value.trim();
       const newText = textInput.value.trim();
-      if (newUrl && newText) {
-        options.onConfirm({ url: newUrl, text: newText });
+      const safeUrl = ensureAbsoluteUrl(newUrl);
+      if (!safeUrl) {
+        urlInput.setCustomValidity('Enter a safe HTTP, HTTPS, email, phone, or relative link');
+        urlInput.reportValidity();
+        return;
       }
-      close();
+      urlInput.setCustomValidity('');
+      if (newText) {
+        options.onConfirm({ url: safeUrl, text: newText });
+        close();
+      }
     });
 
     cancelButton.addEventListener('click', () => {
