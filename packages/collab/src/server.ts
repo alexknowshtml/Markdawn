@@ -16,13 +16,15 @@ import * as Y from 'yjs';
 import { createCoalescingTaskQueue } from './coalescingTaskQueue';
 import {
   handleShareEvent,
-  handleWorkspaceEvent as handleWorkspaceEvent_,
+  handleWorkspaceEvent,
   revalidateActivePageConnections,
+  type WorkspaceEventPayload,
 } from './permission-handler';
 import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
 const SHARE_EVENT_QUEUE_LIMIT = 256;
+const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class CollabAccessError extends Error {
@@ -1086,20 +1088,6 @@ export function createCollabServer(config: CollabServerConfig) {
     return true;
   }
 
-  async function handleWorkspaceEvent(
-    action: 'member_added' | 'member_removed' | 'role_changed',
-    ownerId: string,
-    memberId: string,
-    message?: string,
-  ): Promise<void> {
-    await handleWorkspaceEvent_(
-      server,
-      { type: 'workspace_event', action, ownerId, memberId, ...(message ? { message } : {}) },
-      pool,
-      logger,
-    );
-  }
-
   async function handleInviteReceived(payload: {
     entityType: string;
     entityId: string;
@@ -1417,16 +1405,40 @@ export function createCollabServer(config: CollabServerConfig) {
     onError: (error) => logger.error(`[listen] handleShareEvent failed: ${error}`),
   });
 
-  let permissionRevalidationRunning = false;
+  const workspaceEventQueue = createCoalescingTaskQueue<WorkspaceEventPayload>({
+    maxPending: WORKSPACE_EVENT_QUEUE_LIMIT,
+    getKey: (payload) => `${payload.ownerId}:${payload.memberId}`,
+    handle: (payload) => handleWorkspaceEvent(server, payload, pool, logger),
+    handleOverflow: async () => {
+      logger.warn(
+        `[listen] workspace event backlog exceeded ${WORKSPACE_EVENT_QUEUE_LIMIT}; revalidating all active connections`,
+      );
+      const invalidationMessage = JSON.stringify({
+        type: 'workspace_membership_event',
+        action: 'role_changed',
+        ownerId: 'all',
+      });
+      for (const document of getActiveMetaDocuments(server.hocuspocus).values()) {
+        for (const connection of document.getConnections()) {
+          connection.sendStateless(invalidationMessage);
+        }
+      }
+      await revalidateActivePageConnections(server, pool, logger);
+    },
+    onError: (error) => logger.error(`[listen] handleWorkspaceEvent failed: ${error}`),
+  });
+
+  let permissionRevalidationTask: Promise<unknown> | null = null;
   const permissionRevalidationTimer =
     permissionRevalidationMs > 0
       ? setInterval(() => {
-          if (permissionRevalidationRunning) return;
-          permissionRevalidationRunning = true;
-          void revalidateActivePageConnections(server, pool, logger)
-            .catch((error) => logger.error(`[expiry] active access revalidation failed: ${error}`))
+          if (permissionRevalidationTask) return;
+          permissionRevalidationTask = revalidateActivePageConnections(server, pool, logger)
+            .catch((error) => {
+              logger.error(`[expiry] active access revalidation failed: ${error}`);
+            })
             .finally(() => {
-              permissionRevalidationRunning = false;
+              permissionRevalidationTask = null;
             });
         }, permissionRevalidationMs)
       : null;
@@ -1434,9 +1446,15 @@ export function createCollabServer(config: CollabServerConfig) {
 
   const destroyBeforePermissionTimer = server.destroy.bind(server);
   Object.defineProperty(server, 'destroy', {
-    value() {
+    async value() {
       if (permissionRevalidationTimer) clearInterval(permissionRevalidationTimer);
       shareEventQueue.stop();
+      workspaceEventQueue.stop();
+      await Promise.all([
+        shareEventQueue.waitForIdle(),
+        workspaceEventQueue.waitForIdle(),
+        permissionRevalidationTask ?? Promise.resolve(),
+      ]);
       return destroyBeforePermissionTimer();
     },
     writable: true,
@@ -1485,12 +1503,13 @@ export function createCollabServer(config: CollabServerConfig) {
 
       // Clean up existing client if any
       if (listenClient) {
-        try {
-          listenClient.end();
-        } catch {
-          // ignore cleanup errors
-        }
+        const staleClient = listenClient;
         listenClient = null;
+        try {
+          await staleClient.end();
+        } catch (error) {
+          logger.error(`[listen] failed to close stale client: ${error}`);
+        }
       }
 
       try {
@@ -1540,23 +1559,24 @@ export function createCollabServer(config: CollabServerConfig) {
               }
             } else if (msg.channel === 'workspace_event') {
               logger.debug(`[listen] received workspace_event: ${msg.payload}`);
-              const payload = JSON.parse(msg.payload ?? '{}') as {
-                type: string;
-                action: string;
-                ownerId: string;
-                memberId: string;
-                message?: string;
-              };
-              if (!payload.ownerId || !payload.memberId) {
-                logger.debug('[listen] workspace_event missing ownerId or memberId, skipping');
+              const payload = JSON.parse(msg.payload ?? '{}') as Partial<WorkspaceEventPayload>;
+              if (
+                !payload.ownerId ||
+                !payload.memberId ||
+                (payload.action !== 'member_added' &&
+                  payload.action !== 'member_removed' &&
+                  payload.action !== 'role_changed')
+              ) {
+                logger.debug('[listen] malformed workspace_event, skipping');
                 return;
               }
-              void handleWorkspaceEvent(
-                payload.action as 'member_added' | 'member_removed' | 'role_changed',
-                payload.ownerId,
-                payload.memberId,
-                payload.message,
-              ).catch((err) => logger.error(`[listen] handleWorkspaceEvent failed: ${err}`));
+              workspaceEventQueue.enqueue({
+                type: 'workspace_event',
+                action: payload.action,
+                ownerId: payload.ownerId,
+                memberId: payload.memberId,
+                ...(typeof payload.message === 'string' ? { message: payload.message } : {}),
+              });
             }
           } catch (err) {
             logger.error(`[listen] failed to process notification: ${err}`);
@@ -1590,16 +1610,17 @@ export function createCollabServer(config: CollabServerConfig) {
     // the dangling pg.Client and its timers would leak and keep retrying.
     const origDestroy = server.destroy.bind(server);
     Object.defineProperty(server, 'destroy', {
-      value() {
+      async value() {
         stopped = true;
         if (reconnectTimer) clearTimeout(reconnectTimer);
-        if (listenClient) {
+        const activeListenClient = listenClient;
+        listenClient = null;
+        if (activeListenClient) {
           try {
-            listenClient.end();
-          } catch {
-            // ignore cleanup errors
+            await activeListenClient.end();
+          } catch (error) {
+            logger.error(`[listen] failed to close client during shutdown: ${error}`);
           }
-          listenClient = null;
         }
         return origDestroy();
       },

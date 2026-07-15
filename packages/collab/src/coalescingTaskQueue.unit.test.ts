@@ -37,6 +37,36 @@ describe('createCoalescingTaskQueue', () => {
     expect(handled).toEqual(['first', 'latest', 'other']);
   });
 
+  it('waits for the active task after stopping and discards pending work', async () => {
+    const activeTask = deferred();
+    const handled: string[] = [];
+    const queue = createCoalescingTaskQueue<{ key: string }>({
+      maxPending: 2,
+      getKey: (task) => task.key,
+      handle: async (task) => {
+        handled.push(task.key);
+        if (task.key === 'active') await activeTask.promise;
+      },
+      handleOverflow: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    queue.enqueue({ key: 'active' });
+    queue.enqueue({ key: 'pending' });
+    queue.stop();
+
+    let idle = false;
+    const idlePromise = queue.waitForIdle().then(() => {
+      idle = true;
+    });
+    await Promise.resolve();
+    expect(idle).toBe(false);
+
+    activeTask.resolve();
+    await idlePromise;
+    expect(handled).toEqual(['active']);
+  });
+
   it('replaces an oversized backlog with a canonical refresh', async () => {
     const firstTask = deferred();
     const overflowTask = deferred();
