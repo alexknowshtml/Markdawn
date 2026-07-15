@@ -134,7 +134,16 @@ async function deleteEntity(
   const res = await fetch(url, {
     method: 'DELETE',
   });
-  const result = (await res.json().catch(() => ({ deleted: res.ok }))) as {
+  let payload: unknown;
+  try {
+    payload = await res.json();
+  } catch (error) {
+    throw new Error(`Invalid delete ${entityType} response`, { cause: error });
+  }
+  if (!payload || typeof payload !== 'object') {
+    throw new Error(`Invalid delete ${entityType} response`);
+  }
+  const result = payload as {
     code?: unknown;
     deleted?: unknown;
     requiresForce?: unknown;
@@ -164,6 +173,9 @@ async function deleteEntity(
     throw new Error(
       typeof result.message === 'string' ? result.message : `Failed to delete ${entityType}`,
     );
+  }
+  if (result.deleted !== true) {
+    throw new Error(`Invalid delete ${entityType} response`);
   }
   return { deleted: true };
 }

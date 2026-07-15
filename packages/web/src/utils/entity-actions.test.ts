@@ -82,6 +82,42 @@ describe('useBulkLeaveEntities', () => {
     expect(toastMocks.showSuccessToast).toHaveBeenCalledWith('Moved to trash');
   });
 
+  it('does not report success for an undecodable delete response', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.reject(new SyntaxError('Unexpected end of JSON input')),
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    const { result } = renderHook(
+      () => useEntityDeletion({ entityType: 'page', currentUserId: 'owner-1' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await expect(
+      result.current.handleDelete({ id: 'page-1', type: 'page', ownerId: 'owner-1' }),
+    ).rejects.toThrow('Invalid delete page response');
+    expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not report success when a delete response omits its result', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({}),
+    });
+    const { result } = renderHook(
+      () => useEntityDeletion({ entityType: 'page', currentUserId: 'owner-1' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await expect(
+      result.current.handleDelete({ id: 'page-1', type: 'page', ownerId: 'owner-1' }),
+    ).rejects.toThrow('Invalid delete page response');
+    expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+  });
+
   it('refreshes navigation after some leave requests succeed and another fails', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
