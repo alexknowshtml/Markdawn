@@ -444,6 +444,43 @@ describe('pages API', () => {
       const tree = await treeRes.json();
       expect(tree.some((p: { id: string }) => p.id === page.id)).toBe(true);
     });
+
+    it('restores a page from a deleted folder to the workspace root', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const collaborator = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(collaborator.id, { parentId: folder.id });
+
+      const deleteResponse = await app.request(`/api/folders/${folder.id}?force=true`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+      expect(deleteResponse.status).toBe(200);
+
+      const restoreResponse = await app.request(`/api/pages/${page.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
+      });
+
+      expect(restoreResponse.status).toBe(200);
+      const restored = await query<{
+        parent_id: string | null;
+        created_by: string;
+        is_deleted: boolean;
+      }>('SELECT parent_id, created_by, is_deleted FROM pages WHERE id = $1', [page.id]);
+      expect(restored.rows[0]).toEqual({
+        parent_id: null,
+        created_by: owner.id,
+        is_deleted: false,
+      });
+      const deletedFolder = await query<{ is_deleted: boolean }>(
+        'SELECT is_deleted FROM folders WHERE id = $1',
+        [folder.id],
+      );
+      expect(deletedFolder.rows[0]?.is_deleted).toBe(true);
+    });
   });
 
   describe('PATCH /api/pages/:id/move', () => {

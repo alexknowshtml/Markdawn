@@ -623,10 +623,23 @@ pagesRoute.patch(':id/restore', async (c) => {
     throw new HTTPException(403, { message: 'You can only restore pages that you own' });
   }
 
-  const updateResult = await query(
-    "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
-    [pageId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    const nextPosition = await getNextPosition('pages', null, user.id, tx);
+    return executeQuery(
+      tx,
+      `update pages
+       set is_deleted = false,
+           deleted_at = null,
+           parent_id = null,
+           created_by = $1,
+           position = $2,
+           title_search = to_tsvector('english', title),
+           updated_at = now()
+       where id = $3
+       returning *`,
+      [user.id, nextPosition, pageId],
+    );
+  });
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to restore page' });
