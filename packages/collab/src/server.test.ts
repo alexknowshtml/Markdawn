@@ -135,6 +135,56 @@ describe('collab server', () => {
       provider.destroy();
     });
 
+    it('makes user metadata rooms read only to clients', async () => {
+      const user = await createTestUser(pool);
+      const session = await createTestSession(pool, user.id);
+      const connectionConfig = createConnectionConfig();
+      const payload = createAuthenticatePayload(server, {
+        token: session.token,
+        documentName: `page-meta:${user.id}`,
+        connectionConfig,
+      });
+
+      await server.hocuspocus.hooks('onAuthenticate', payload);
+
+      expect(connectionConfig.readOnly).toBe(true);
+    });
+
+    it('closes connections that exceed the configured WebSocket payload limit', async () => {
+      const limitedServer = createCollabServer({
+        port: 0,
+        pool,
+        logger: mockLogger(),
+        permissionRevalidationMs: 0,
+        maxPayloadBytes: 1024,
+      });
+      await limitedServer.listen();
+      const limitedPort = (limitedServer as unknown as { address: { port: number } }).address.port;
+
+      try {
+        const closeCode = await new Promise<number>((resolve, reject) => {
+          const socket = new WebSocket(`ws://localhost:${limitedPort}`);
+          const timeout = setTimeout(() => {
+            socket.terminate();
+            reject(new Error('Timed out waiting for oversized payload rejection'));
+          }, 5000);
+          socket.on('open', () => socket.send(Buffer.alloc(1025)));
+          socket.on('close', (code) => {
+            clearTimeout(timeout);
+            resolve(code);
+          });
+          socket.on('error', (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          });
+        });
+
+        expect(closeCode).toBe(1009);
+      } finally {
+        await limitedServer.destroy();
+      }
+    });
+
     it('rejects connection without a token', async () => {
       const authResult = await new Promise<'failed' | 'timeout'>((resolve) => {
         const provider = new HocuspocusProvider({
@@ -618,6 +668,49 @@ describe('collab server', () => {
       await expect(server.hocuspocus.hooks('onStoreDocument', payload)).rejects.toThrow(
         'Unauthorized',
       );
+    });
+
+    it('disconnects and does not persist an oversized document', async () => {
+      const sizeLogger = mockLogger();
+      const sizeLimitedServer = createCollabServer({
+        port: 0,
+        pool,
+        logger: sizeLogger,
+        permissionRevalidationMs: 0,
+        maxDocumentBytes: 256,
+      });
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const before = await pool.query<{ ydoc: Buffer | null }>(
+        'select ydoc from pages where id = $1',
+        [page.id],
+      );
+      const document = new Document(page.id);
+      document.getText('content').insert(0, 'x'.repeat(2048));
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: page.id,
+        instance: sizeLimitedServer.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await sizeLimitedServer.hocuspocus.hooks('onStoreDocument', payload);
+        const after = await pool.query<{ ydoc: Buffer | null }>(
+          'select ydoc from pages where id = $1',
+          [page.id],
+        );
+        expect(after.rows[0]?.ydoc).toEqual(before.rows[0]?.ydoc);
+        expect(sizeLogger.warn).toHaveBeenCalledWith(
+          expect.stringContaining(`[size] blocked page=${page.id}`),
+        );
+      } finally {
+        await sizeLimitedServer.destroy();
+      }
     });
 
     it('rethrows and logs when persistence update fails', async () => {

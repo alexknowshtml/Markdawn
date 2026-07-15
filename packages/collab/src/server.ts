@@ -25,6 +25,8 @@ import { parseCookies } from './utils';
 const META_ROOM_PREFIX = 'page-meta:';
 const SHARE_EVENT_QUEUE_LIMIT = 256;
 const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
+const DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class CollabAccessError extends Error {
@@ -889,6 +891,8 @@ export interface CollabServerConfig {
   maxDebounceMs?: number;
   databaseUrl?: string;
   permissionRevalidationMs?: number;
+  maxPayloadBytes?: number;
+  maxDocumentBytes?: number;
 }
 
 export function createCollabServer(config: CollabServerConfig) {
@@ -899,13 +903,22 @@ export function createCollabServer(config: CollabServerConfig) {
     debounceMs = 500,
     maxDebounceMs = 3000,
     permissionRevalidationMs = 5000,
+    maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES,
+    maxDocumentBytes = DEFAULT_MAX_DOCUMENT_BYTES,
   } = config;
+  if (!Number.isInteger(maxPayloadBytes) || maxPayloadBytes < 1) {
+    throw new Error('maxPayloadBytes must be a positive integer');
+  }
+  if (!Number.isInteger(maxDocumentBytes) || maxDocumentBytes < 1) {
+    throw new Error('maxDocumentBytes must be a positive integer');
+  }
   type PersistContext = {
     user?: { id: string; isAnonymous?: boolean };
     permission?: string;
   };
   const pendingWriters = new Map<string, Map<string, PersistContext>>();
   const blockedDocuments = new Set<string>();
+  const documentSizeEstimates = new Map<string, number>();
 
   async function assertPageAccess(
     documentName: string,
@@ -1023,6 +1036,22 @@ export function createCollabServer(config: CollabServerConfig) {
           permission,
         } satisfies StatelessShareMessage),
       );
+    }
+  }
+
+  function blockOversizedDocument(documentName: string, size: number): void {
+    if (blockedDocuments.has(documentName)) return;
+
+    blockedDocuments.add(documentName);
+    pendingWriters.delete(documentName);
+    documentSizeEstimates.delete(documentName);
+    logger.warn(
+      `[size] blocked page=${documentName}: encoded document is ${size} bytes (limit ${maxDocumentBytes})`,
+    );
+
+    const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
+    for (const connection of activeDocument?.getConnections() ?? []) {
+      connection.close({ code: 1009, reason: 'Document size limit exceeded' });
     }
   }
 
@@ -1206,6 +1235,7 @@ export function createCollabServer(config: CollabServerConfig) {
         if (isMetaRoom(documentName)) {
           const roomUserId = documentName.slice(META_ROOM_PREFIX.length);
           await assertMetaRoomAccess(user.id, roomUserId);
+          connectionConfig.readOnly = true;
         } else if (UUID_REGEX.test(documentName)) {
           const pageExists = await pool.query('SELECT 1 FROM pages WHERE id = $1 LIMIT 1', [
             documentName,
@@ -1227,6 +1257,7 @@ export function createCollabServer(config: CollabServerConfig) {
     onLoadDocument: async ({ documentName, document, context }) => {
       blockedDocuments.delete(documentName);
       pendingWriters.delete(documentName);
+      documentSizeEstimates.delete(documentName);
       if (isMetaRoom(documentName)) {
         const userId = documentName.slice(META_ROOM_PREFIX.length);
         logger.debug(`[meta] loading page meta for user: ${userId}`);
@@ -1293,15 +1324,24 @@ export function createCollabServer(config: CollabServerConfig) {
       ]);
 
       if (result.rows.length === 0) {
+        documentSizeEstimates.set(documentName, 0);
         logger.info(`New document: ${documentName}`);
         return undefined;
       }
 
       const row = result.rows[0] as { ydoc: Buffer | null; title: string } | undefined;
       if (!row?.ydoc || row.ydoc.length === 0) {
+        documentSizeEstimates.set(documentName, 0);
         return undefined;
       }
+      if (row.ydoc.length > maxDocumentBytes) {
+        logger.warn(
+          `[size] refused to load page=${documentName}: stored document is ${row.ydoc.length} bytes (limit ${maxDocumentBytes})`,
+        );
+        throw new Error('Document size limit exceeded');
+      }
 
+      documentSizeEstimates.set(documentName, row.ydoc.length);
       logger.debug(`Loading document: ${documentName}, size: ${row.ydoc.length} bytes`);
       Y.applyUpdate(document, new Uint8Array(row.ydoc));
 
@@ -1317,11 +1357,32 @@ export function createCollabServer(config: CollabServerConfig) {
           titleText.insert(0, row.title);
         });
       }
+      const loadedSize = Y.encodeStateAsUpdate(document).length;
+      if (loadedSize > maxDocumentBytes) {
+        logger.warn(
+          `[size] refused to load page=${documentName}: reconciled document is ${loadedSize} bytes (limit ${maxDocumentBytes})`,
+        );
+        throw new Error('Document size limit exceeded');
+      }
+      documentSizeEstimates.set(documentName, loadedSize);
     },
-    onChange: async ({ documentName, context }) => {
+    onChange: async ({ documentName, context, document, update }) => {
       if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
       const writer = context as PersistContext | undefined;
       if (!writer?.user) return;
+
+      const estimatedSize = (documentSizeEstimates.get(documentName) ?? 0) + update.byteLength;
+      if (estimatedSize > maxDocumentBytes) {
+        const encodedSize = Y.encodeStateAsUpdate(document).length;
+        if (encodedSize > maxDocumentBytes) {
+          blockOversizedDocument(documentName, encodedSize);
+          return;
+        }
+        documentSizeEstimates.set(documentName, encodedSize);
+      } else {
+        documentSizeEstimates.set(documentName, estimatedSize);
+      }
+
       const writerKey = `${writer.user.isAnonymous === true ? 'anonymous' : 'user'}:${writer.user.id}`;
       const writers = pendingWriters.get(documentName) ?? new Map<string, PersistContext>();
       writers.set(writerKey, writer);
@@ -1350,11 +1411,16 @@ export function createCollabServer(config: CollabServerConfig) {
         logger.debug(`[persist] skipping empty state: ${documentName}`);
         return;
       }
+      if (state.length > maxDocumentBytes) {
+        blockOversizedDocument(documentName, state.length);
+        return;
+      }
 
       logger.info(`[persist] saving: "${documentName}", size: ${state.length} bytes`);
       try {
         await persistDocument(pool, server.hocuspocus, documentName, state, data.document, logger);
         pendingWriters.delete(documentName);
+        documentSizeEstimates.set(documentName, state.length);
         logger.debug(`[persist] saved: ${documentName}`);
       } catch (err) {
         logger.error(`[persist] failed to save "${documentName}": ${err}`);
@@ -1364,6 +1430,7 @@ export function createCollabServer(config: CollabServerConfig) {
     afterUnloadDocument: async ({ documentName }) => {
       blockedDocuments.delete(documentName);
       pendingWriters.delete(documentName);
+      documentSizeEstimates.delete(documentName);
     },
     onDisconnect: async ({ documentName, instance, context }) => {
       if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
@@ -1379,10 +1446,15 @@ export function createCollabServer(config: CollabServerConfig) {
 
         const state = Y.encodeStateAsUpdate(doc);
         if (!state || state.length === 0) return;
+        if (state.length > maxDocumentBytes) {
+          blockOversizedDocument(documentName, state.length);
+          return;
+        }
 
         logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
         await persistDocument(pool, server.hocuspocus, documentName, state, doc, logger);
         pendingWriters.delete(documentName);
+        documentSizeEstimates.set(documentName, state.length);
         logger.debug(`[disconnect] force saved: ${documentName}`);
       } catch (err) {
         logger.error(`[disconnect] force save failed for "${documentName}": ${err}`);
@@ -1390,6 +1462,7 @@ export function createCollabServer(config: CollabServerConfig) {
     },
     extensions: [],
   });
+  server.webSocketServer.options.maxPayload = maxPayloadBytes;
 
   const shareEventQueue = createCoalescingTaskQueue<ShareEventPayload>({
     maxPending: SHARE_EVENT_QUEUE_LIMIT,
