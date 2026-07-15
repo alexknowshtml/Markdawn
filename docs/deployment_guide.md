@@ -130,12 +130,17 @@ Expected response: `{"status":"ok","timestamp":...}`
 
 ## Future Deployments
 
-After initial setup, deploy updates with:
+After initial setup, fetch and execute the deployment script from the target revision before updating the working tree:
 
 ```bash
 cd /var/www/markdawn
-./deploy/deploy.sh
+git fetch origin master
+git show origin/master:deploy/deploy.sh > /tmp/markdawn-deploy.sh
+bash /tmp/markdawn-deploy.sh
+rm /tmp/markdawn-deploy.sh
 ```
+
+Fetching only updates Git metadata. Executing the fetched script separately ensures that new pre-deployment compatibility checks run during the first rollout that introduces them; invoking an older checked-out `deploy.sh` cannot run checks added by the release it later pulls.
 
 The script will:
 1. Verify that the existing database uses the current migration baseline

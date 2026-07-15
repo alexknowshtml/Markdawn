@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = resolve(currentDir, '../../drizzle');
 const deployScriptPath = resolve(currentDir, '../../../../deploy/deploy.sh');
+const deploymentGuidePath = resolve(currentDir, '../../../../docs/deployment_guide.md');
 const migrationDirPattern = /^\d{14}_[A-Za-z0-9_-]+$/;
 
 function listMigrationDirs(): string[] {
@@ -72,6 +73,20 @@ describe('Drizzle v1 migration history', () => {
     expect(imageBuild).toBeGreaterThan(compatibilityCheck);
     expect(serviceStop).toBeGreaterThan(compatibilityCheck);
     expect(deployScript).toContain('20260708053035_init');
+    expect(deployScript).toContain('podman volume exists postgres-data');
+  });
+
+  it('bootstraps deployment checks from the target revision', () => {
+    const deploymentGuide = readFileSync(deploymentGuidePath, 'utf8');
+    const fetch = deploymentGuide.indexOf('git fetch origin master');
+    const extractScript = deploymentGuide.indexOf(
+      'git show origin/master:deploy/deploy.sh > /tmp/markdawn-deploy.sh',
+    );
+    const executeScript = deploymentGuide.indexOf('bash /tmp/markdawn-deploy.sh');
+
+    expect(fetch).toBeGreaterThan(-1);
+    expect(extractScript).toBeGreaterThan(fetch);
+    expect(executeScript).toBeGreaterThan(extractScript);
   });
 
   it('enforces one link share and numeric page ordering values', () => {
@@ -100,6 +115,7 @@ describe('Drizzle v1 migration history', () => {
     expect(migrationSql).toContain('ensure_active_folder_parent');
     expect(migrationSql).toContain('folders_active_parent_trigger');
     expect(migrationSql).toContain('pages_active_parent_trigger');
+    expect(migrationSql).toContain('UPDATE OF parent_id, is_deleted');
     expect(migrationSql).toContain('FOR SHARE');
   });
 

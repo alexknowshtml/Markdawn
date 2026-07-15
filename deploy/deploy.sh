@@ -14,9 +14,25 @@ NC='\033[0m'
 cd "$REPO_DIR"
 
 MIGRATION_BASELINE="20260708053035_init"
+if ! podman container exists markdawn-postgres && podman volume exists postgres-data; then
+    echo -e "${YELLOW}[CHECK] Starting PostgreSQL from the existing volume for compatibility checks...${NC}"
+    if ! systemctl --user start markdawn-postgres.service; then
+        echo -e "${RED}[ERROR] PostgreSQL could not be started; refusing to modify deployment artifacts.${NC}"
+        exit 1
+    fi
+fi
+
 if podman container exists markdawn-postgres; then
     echo -e "${YELLOW}[CHECK] Verifying database migration compatibility...${NC}"
-    if ! podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+    POSTGRES_READY=false
+    for _ in {1..30}; do
+        if podman exec markdawn-postgres pg_isready -U markdawn -d markdawn >/dev/null 2>&1; then
+            POSTGRES_READY=true
+            break
+        fi
+        sleep 2
+    done
+    if [ "$POSTGRES_READY" != "true" ]; then
         echo -e "${RED}[ERROR] PostgreSQL is unavailable; refusing to modify deployment artifacts.${NC}"
         exit 1
     fi
