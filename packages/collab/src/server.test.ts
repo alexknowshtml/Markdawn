@@ -519,6 +519,29 @@ describe('collab server', () => {
       expect(logger.debug).toHaveBeenCalledWith('skipping non-meta, non-UUID room: not-a-uuid');
     });
 
+    it('rebuilds an authenticated user metadata room from PostgreSQL', async () => {
+      const user = await createTestUser(pool);
+      const page = await createTestPage(pool, user.id, 'Metadata page');
+      const documentName = `page-meta:${user.id}`;
+      const document = new Document(documentName);
+      const payload: onLoadDocumentPayload = {
+        context: { user: { id: user.id } },
+        document,
+        documentName,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+        connectionConfig: createConnectionConfig(),
+      };
+
+      await server.hocuspocus.hooks('onLoadDocument', payload);
+
+      expect(document.getMap('pageIndex').get(page.id)).toEqual(
+        expect.objectContaining({ title: 'Metadata page' }),
+      );
+    });
+
     it('creates a new document when the page has no stored ydoc', async () => {
       const user = await createTestUser(pool);
       const session = await createTestSession(pool, user.id);
@@ -770,6 +793,47 @@ describe('collab server', () => {
       } finally {
         verificationServer.hocuspocus.documents.delete(page.id);
         await verificationServer.destroy();
+      }
+    });
+
+    it('rethrows unexpected persistence verification errors after failing closed', async () => {
+      const unexpectedLogger = mockLogger();
+      const unexpectedServer = createCollabServer({
+        port: 0,
+        pool,
+        logger: unexpectedLogger,
+        permissionRevalidationMs: 0,
+      });
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const unexpectedError = new Error('forced connection update failure');
+      const activeDocument = {
+        getConnections: () => {
+          throw unexpectedError;
+        },
+      } as unknown as Document;
+      unexpectedServer.hocuspocus.documents.set(page.id, activeDocument);
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document: new Document(page.id),
+        documentName: page.id,
+        instance: unexpectedServer.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await expect(unexpectedServer.hocuspocus.hooks('onStoreDocument', payload)).rejects.toThrow(
+          'forced connection update failure',
+        );
+        expect(unexpectedLogger.error).toHaveBeenCalledWith(
+          expect.stringContaining('unexpected permission revalidation failure'),
+        );
+      } finally {
+        unexpectedServer.hocuspocus.documents.delete(page.id);
+        await unexpectedServer.destroy();
       }
     });
 

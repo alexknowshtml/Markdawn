@@ -2,7 +2,9 @@ import type { Hocuspocus } from '@hocuspocus/server';
 import { type Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import {
+  DEFAULT_MAX_COLLAB_PAYLOAD_BYTES,
   getAnonymousName,
+  MAX_YDOC_BYTES,
   type ShareEventPayload,
   type StatelessShareMessage,
 } from '@markdawn/shared';
@@ -23,10 +25,9 @@ import {
 import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
+const PAGE_RENAME_EVENT_QUEUE_LIMIT = 256;
 const SHARE_EVENT_QUEUE_LIMIT = 256;
 const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
-const DEFAULT_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024;
-const DEFAULT_MAX_DOCUMENT_BYTES = 16 * 1024 * 1024;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 class CollabAccessError extends Error {
@@ -35,6 +36,17 @@ class CollabAccessError extends Error {
   constructor() {
     super('Forbidden');
     this.name = 'CollabAccessError';
+  }
+}
+
+class CollabVerificationError extends Error {
+  readonly code = 'COLLAB_VERIFICATION_FAILED';
+  readonly originalError: unknown;
+
+  constructor(originalError: unknown) {
+    super('Permission verification failed');
+    this.name = 'CollabVerificationError';
+    this.originalError = originalError;
   }
 }
 
@@ -85,6 +97,7 @@ interface InviteReceivedPayload {
 }
 
 type ActiveMetaDocuments = Map<string, Document>;
+type PageMetaIndexRow = PageMeta & { id: string };
 
 function getActiveMetaDocuments(hocuspocus: Hocuspocus): ActiveMetaDocuments {
   const documents = new Map<string, Document>();
@@ -95,6 +108,105 @@ function getActiveMetaDocuments(hocuspocus: Hocuspocus): ActiveMetaDocuments {
     documents.set(userId, document as Document);
   }
   return documents;
+}
+
+async function rebuildPageMetaDocument(
+  pool: Pool,
+  userId: string,
+  document: Document,
+  logger: Logger,
+  invalidateBacklinks = false,
+): Promise<void> {
+  const result = await pool.query<PageMetaIndexRow>(
+    `select p.id, p.title, p.icon, p.parent_id, p.position
+     from pages p
+     where p.is_deleted = false
+       and (
+         p.id in (select page_id from get_accessible_page_ids($1))
+         or exists (
+           select 1
+           from page_access_events pae
+           join lateral get_effective_page_permission(p.id, $1) access on true
+           where pae.page_id = p.id and pae.user_id = $1 and access.permission is not null
+         )
+         or exists (
+           select 1
+           from folder_access_events fae
+           join folder_closure fc
+             on fc.ancestor_id = fae.folder_id and fc.descendant_id = p.parent_id
+           join lateral get_effective_page_permission(p.id, $1) access on true
+           where fae.user_id = $1 and access.permission is not null
+         )
+       )
+     order by p.position::numeric asc`,
+    [userId],
+  );
+
+  document.transact(() => {
+    const pageIndex = document.getMap('pageIndex');
+    const backlinksVersion = invalidateBacklinks ? document.getMap('backlinksVersion') : undefined;
+    const refreshVersion = Date.now();
+    pageIndex.clear();
+    for (const row of result.rows) {
+      pageIndex.set(row.id, {
+        title: row.title,
+        icon: row.icon,
+        parentId: row.parent_id,
+        position: row.position,
+      });
+      backlinksVersion?.set(row.id, refreshVersion);
+    }
+  });
+
+  logger.debug(`[meta] loaded ${result.rows.length} pages for user ${userId}`);
+}
+
+async function reconcileActivePageTitles(hocuspocus: Hocuspocus, pool: Pool): Promise<void> {
+  const activePageIds = Array.from(hocuspocus.documents.keys()).filter((documentName) =>
+    UUID_REGEX.test(documentName),
+  );
+  if (activePageIds.length === 0) return;
+
+  const result = await pool.query<{ id: string; title: string }>(
+    'select id, title from pages where id = any($1::uuid[]) and is_deleted = false',
+    [activePageIds],
+  );
+  for (const row of result.rows) {
+    const document = hocuspocus.documents.get(row.id) as Document | undefined;
+    if (!document) continue;
+    const currentTitle = document.getText('title');
+    if (currentTitle.toString() === row.title) continue;
+    document.transact(() => {
+      currentTitle.delete(0, currentTitle.length);
+      currentTitle.insert(0, row.title);
+    });
+  }
+}
+
+async function rebuildActivePageMetaDocuments(
+  hocuspocus: Hocuspocus,
+  pool: Pool,
+  logger: Logger,
+): Promise<void> {
+  const failures: unknown[] = [];
+  try {
+    await reconcileActivePageTitles(hocuspocus, pool);
+  } catch (error) {
+    failures.push(error);
+    logger.error(`[meta] failed to reconcile active page titles: ${error}`);
+  }
+
+  for (const [userId, document] of getActiveMetaDocuments(hocuspocus)) {
+    try {
+      await rebuildPageMetaDocument(pool, userId, document, logger, true);
+    } catch (error) {
+      failures.push(error);
+      logger.error(`[meta] failed to rebuild page metadata for user ${userId}: ${error}`);
+    }
+  }
+  if (failures.length > 0) {
+    throw new AggregateError(failures, 'Failed to rebuild canonical page rename state');
+  }
 }
 
 async function getPageMetaRecipients(
@@ -903,8 +1015,8 @@ export function createCollabServer(config: CollabServerConfig) {
     debounceMs = 500,
     maxDebounceMs = 3000,
     permissionRevalidationMs = 5000,
-    maxPayloadBytes = DEFAULT_MAX_PAYLOAD_BYTES,
-    maxDocumentBytes = DEFAULT_MAX_DOCUMENT_BYTES,
+    maxPayloadBytes = DEFAULT_MAX_COLLAB_PAYLOAD_BYTES,
+    maxDocumentBytes = MAX_YDOC_BYTES,
   } = config;
   if (!Number.isInteger(maxPayloadBytes) || maxPayloadBytes < 1) {
     throw new Error('maxPayloadBytes must be a positive integer');
@@ -920,21 +1032,32 @@ export function createCollabServer(config: CollabServerConfig) {
   const blockedDocuments = new Set<string>();
   const documentSizeEstimates = new Map<string, number>();
 
+  async function runPermissionQuery<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      throw new CollabVerificationError(error);
+    }
+  }
+
   async function assertPageAccess(
     documentName: string,
     userId: string,
   ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
-    const ownerResult = await pool.query(
-      'SELECT 1 FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1',
-      [documentName],
+    const ownerResult = await runPermissionQuery(() =>
+      pool.query('SELECT 1 FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1', [
+        documentName,
+      ]),
     );
     if (ownerResult.rowCount === 0) {
       logger.debug(`[auth] page=${documentName} not found`);
       throw new CollabAccessError();
     }
-    const shareResult = await pool.query(
-      'SELECT permission, full_access FROM get_effective_page_permission($1, $2)',
-      [documentName, userId],
+    const shareResult = await runPermissionQuery(() =>
+      pool.query('SELECT permission, full_access FROM get_effective_page_permission($1, $2)', [
+        documentName,
+        userId,
+      ]),
     );
 
     if (shareResult.rows.length === 0) {
@@ -962,8 +1085,9 @@ export function createCollabServer(config: CollabServerConfig) {
   async function assertAnonymousPageAccess(
     documentName: string,
   ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
-    const shareResult = await pool.query(
-      `WITH page_parent AS (
+    const shareResult = await runPermissionQuery(() =>
+      pool.query(
+        `WITH page_parent AS (
          SELECT parent_id, is_public
          FROM pages
          WHERE id = $1 AND is_deleted = false
@@ -989,7 +1113,8 @@ export function createCollabServer(config: CollabServerConfig) {
        ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
                 src ASC
        LIMIT 1`,
-      [documentName],
+        [documentName],
+      ),
     );
     const rawPermission = shareResult.rows[0]?.permission;
     if (rawPermission !== 'view' && rawPermission !== 'edit' && rawPermission !== 'admin') {
@@ -1085,9 +1210,6 @@ export function createCollabServer(config: CollabServerConfig) {
         );
         return false;
       }
-      logger.error(
-        `[persist] failed to verify access for user=${context.user.id} on page=${documentName}: ${error}`,
-      );
       throw error;
     }
   }
@@ -1105,11 +1227,25 @@ export function createCollabServer(config: CollabServerConfig) {
       try {
         canPersist = await canPersistDocument(documentName, writer);
       } catch (error) {
-        logger.warn(
-          `[persist] blocking page=${documentName} after permission verification failed: ${error}`,
+        if (error instanceof CollabVerificationError) {
+          logger.warn(
+            `[persist] blocking page=${documentName} after permission verification failed: ${error.originalError}`,
+          );
+          blockDocumentForReload(documentName, 4500, 'Permission verification failed');
+          return false;
+        }
+
+        logger.error(
+          `[persist] unexpected permission revalidation failure for page=${documentName}: ${error}`,
         );
-        blockDocumentForReload(documentName, 4500, 'Permission verification failed');
-        return false;
+        try {
+          blockDocumentForReload(documentName, 4500, 'Permission verification failed');
+        } catch (blockError) {
+          logger.error(
+            `[persist] failed to block page=${documentName} after unexpected error: ${blockError}`,
+          );
+        }
+        throw error;
       }
       if (canPersist) continue;
 
@@ -1270,49 +1406,7 @@ export function createCollabServer(config: CollabServerConfig) {
         const userId = documentName.slice(META_ROOM_PREFIX.length);
         logger.debug(`[meta] loading page meta for user: ${userId}`);
 
-        const result = await pool.query(
-          `select p.id, p.title, p.icon, p.parent_id, p.position
-           from pages p
-           where p.is_deleted = false
-             and (
-               p.id in (select page_id from get_accessible_page_ids($1))
-               or exists (
-                 select 1
-                 from page_access_events pae
-                 join lateral get_effective_page_permission(p.id, $1) access on true
-                 where pae.page_id = p.id and pae.user_id = $1 and access.permission is not null
-               )
-               or exists (
-                 select 1
-                 from folder_access_events fae
-                 join folder_closure fc
-                   on fc.ancestor_id = fae.folder_id and fc.descendant_id = p.parent_id
-                 join lateral get_effective_page_permission(p.id, $1) access on true
-                 where fae.user_id = $1 and access.permission is not null
-               )
-             )
-           order by p.position::numeric asc`,
-          [userId],
-        );
-
-        const pageIndex = document.getMap('pageIndex');
-        pageIndex.clear();
-        for (const row of result.rows as {
-          id: string;
-          title: string;
-          icon: string | null;
-          parent_id: string | null;
-          position: string;
-        }[]) {
-          pageIndex.set(row.id, {
-            title: row.title,
-            icon: row.icon,
-            parentId: row.parent_id,
-            position: row.position,
-          });
-        }
-
-        logger.debug(`[meta] loaded ${result.rows.length} pages for user ${userId}`);
+        await rebuildPageMetaDocument(pool, userId, document, logger);
         return;
       }
 
@@ -1529,8 +1623,8 @@ export function createCollabServer(config: CollabServerConfig) {
   Object.defineProperty(server, 'destroy', {
     async value() {
       if (permissionRevalidationTimer) clearInterval(permissionRevalidationTimer);
-      shareEventQueue.stop();
-      workspaceEventQueue.stop();
+      shareEventQueue.drainAndStop();
+      workspaceEventQueue.drainAndStop();
       await Promise.all([
         shareEventQueue.waitForIdle(),
         workspaceEventQueue.waitForIdle(),
@@ -1570,6 +1664,19 @@ export function createCollabServer(config: CollabServerConfig) {
     async function handleFolderDeleted(folderId: string): Promise<void> {
       await publishFolderDeletion(server.hocuspocus, pool, folderId, logger);
     }
+
+    const pageRenameEventQueue = createCoalescingTaskQueue<string>({
+      maxPending: PAGE_RENAME_EVENT_QUEUE_LIMIT,
+      getKey: (pageId) => pageId,
+      handle: handlePageRenamed,
+      handleOverflow: async () => {
+        logger.warn(
+          `[listen] page rename backlog exceeded ${PAGE_RENAME_EVENT_QUEUE_LIMIT}; rebuilding active metadata rooms`,
+        );
+        await rebuildActivePageMetaDocuments(server.hocuspocus, pool, logger);
+      },
+      onError: (error) => logger.error(`[listen] handlePageRenamed failed: ${error}`),
+    });
 
     function scheduleReconnect() {
       if (stopped) return;
@@ -1619,9 +1726,7 @@ export function createCollabServer(config: CollabServerConfig) {
             } else if (msg.channel === 'page_renamed') {
               const payload = JSON.parse(msg.payload ?? '{}') as { pageId?: string };
               if (!payload.pageId) return;
-              void handlePageRenamed(payload.pageId).catch((err) =>
-                logger.error(`[listen] handlePageRenamed failed: ${err}`),
-              );
+              pageRenameEventQueue.enqueue(payload.pageId);
             } else if (msg.channel === 'share_event') {
               logger.debug(`[listen] received share_event: ${msg.payload}`);
               const payload: ShareEventPayload | InviteReceivedPayload = JSON.parse(
@@ -1694,15 +1799,15 @@ export function createCollabServer(config: CollabServerConfig) {
       async value() {
         stopped = true;
         if (reconnectTimer) clearTimeout(reconnectTimer);
+        pageRenameEventQueue.drainAndStop();
         const activeListenClient = listenClient;
         listenClient = null;
-        if (activeListenClient) {
-          try {
-            await activeListenClient.end();
-          } catch (error) {
-            logger.error(`[listen] failed to close client during shutdown: ${error}`);
-          }
-        }
+        const closeListenClient = activeListenClient
+          ? activeListenClient.end().catch((error: unknown) => {
+              logger.error(`[listen] failed to close client during shutdown: ${error}`);
+            })
+          : Promise.resolve();
+        await Promise.all([closeListenClient, pageRenameEventQueue.waitForIdle()]);
         return origDestroy();
       },
       writable: true,

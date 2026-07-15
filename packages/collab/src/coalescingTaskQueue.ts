@@ -9,6 +9,7 @@ export type CoalescingTaskQueueOptions<T> = {
 export type CoalescingTaskQueue<T> = {
   enqueue: (task: T) => void;
   stop: () => void;
+  drainAndStop: () => void;
   waitForIdle: () => Promise<void>;
 };
 
@@ -28,7 +29,8 @@ export function createCoalescingTaskQueue<T>(
   let overflowPending = false;
   let overflowRunning = false;
   let processing = false;
-  let stopped = false;
+  let accepting = true;
+  let discardPending = false;
 
   const hasWork = () => overflowPending || pending.size > 0;
 
@@ -39,11 +41,11 @@ export function createCoalescingTaskQueue<T>(
   };
 
   const process = async () => {
-    if (processing || stopped) return;
+    if (processing || discardPending) return;
     processing = true;
 
     try {
-      while (!stopped && hasWork()) {
+      while (!discardPending && hasWork()) {
         if (overflowPending) {
           overflowPending = false;
           overflowRunning = true;
@@ -69,7 +71,7 @@ export function createCoalescingTaskQueue<T>(
       }
     } finally {
       processing = false;
-      if (!stopped && hasWork()) {
+      if (!discardPending && hasWork()) {
         void process();
       } else {
         resolveIdle();
@@ -79,7 +81,7 @@ export function createCoalescingTaskQueue<T>(
 
   return {
     enqueue(task) {
-      if (stopped) return;
+      if (!accepting) return;
 
       const key = options.getKey(task);
       if (pending.has(key)) {
@@ -96,9 +98,15 @@ export function createCoalescingTaskQueue<T>(
       void process();
     },
     stop() {
-      stopped = true;
+      accepting = false;
+      discardPending = true;
       pending.clear();
       overflowPending = false;
+      resolveIdle();
+    },
+    drainAndStop() {
+      accepting = false;
+      void process();
       resolveIdle();
     },
     waitForIdle() {

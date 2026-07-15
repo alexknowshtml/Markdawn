@@ -1,3 +1,4 @@
+export * from './constants/collaboration.js';
 export * from './logger.js';
 export * from './types/api.js';
 export * from './types/page.js';

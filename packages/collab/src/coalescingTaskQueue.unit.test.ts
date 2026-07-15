@@ -67,6 +67,30 @@ describe('createCoalescingTaskQueue', () => {
     expect(handled).toEqual(['active']);
   });
 
+  it('finishes pending work when draining before shutdown', async () => {
+    const activeTask = deferred();
+    const handled: string[] = [];
+    const queue = createCoalescingTaskQueue<{ key: string }>({
+      maxPending: 2,
+      getKey: (task) => task.key,
+      handle: async (task) => {
+        handled.push(task.key);
+        if (task.key === 'active') await activeTask.promise;
+      },
+      handleOverflow: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    queue.enqueue({ key: 'active' });
+    queue.enqueue({ key: 'pending' });
+    queue.drainAndStop();
+    queue.enqueue({ key: 'ignored' });
+    activeTask.resolve();
+    await queue.waitForIdle();
+
+    expect(handled).toEqual(['active', 'pending']);
+  });
+
   it('replaces an oversized backlog with a canonical refresh', async () => {
     const firstTask = deferred();
     const overflowTask = deferred();

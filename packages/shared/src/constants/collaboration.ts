@@ -1,0 +1,2 @@
+export const DEFAULT_MAX_COLLAB_PAYLOAD_BYTES = 4 * 1024 * 1024;
+export const MAX_YDOC_BYTES = 16 * 1024 * 1024;
