@@ -1,3 +1,4 @@
+import { Client } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { query } from '../db/query';
 import {
@@ -8,6 +9,29 @@ import {
   createTestUser,
   createTestWorkspaceMember,
 } from '../test-utils';
+
+async function waitForAdvisoryWaiters(client: Client, minimum: number): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const result = await client.query<{ count: number }>(
+      `select count(*)::int as count
+       from pg_locks waiting
+       join pg_locks held
+         on waiting.locktype = held.locktype
+        and waiting.database is not distinct from held.database
+        and waiting.classid is not distinct from held.classid
+        and waiting.objid is not distinct from held.objid
+        and waiting.objsubid is not distinct from held.objsubid
+       where held.pid = pg_backend_pid()
+         and held.locktype = 'advisory'
+         and held.granted = true
+         and waiting.granted = false`,
+    );
+    if ((result.rows[0]?.count ?? 0) >= minimum) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${minimum} advisory lock waiter(s)`);
+}
 
 describe('shares API — comprehensive sharing infrastructure', () => {
   beforeAll(async () => {
@@ -1387,6 +1411,75 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'edit' }),
       });
       expect(updateRes.status).toBe(200);
+    });
+
+    it('rejects an admin mutation that acquires the entity lock after demotion', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const admin = await createTestUser();
+      const viewer = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const adminSession = await createTestSession(admin.id);
+      const page = await createTestPage(owner.id);
+
+      for (const [email, permission] of [
+        [admin.email, 'admin'],
+        [viewer.email, 'view'],
+      ] as const) {
+        const response = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ email, permission }),
+        });
+        expect(response.status).toBe(200);
+      }
+
+      const adminShareId = await getShareIdForRecipient(admin.id);
+      const viewerShareId = await getShareIdForRecipient(viewer.id);
+      const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+      await blocker.connect();
+      let transactionOpen = false;
+
+      try {
+        await blocker.query('begin');
+        transactionOpen = true;
+        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `page:${page.id}`,
+        ]);
+
+        const demotion = app.request(`/api/shares/${adminShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 1);
+
+        const staleAdminMutation = app.request(`/api/shares/${viewerShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: adminSession.Cookie },
+          body: JSON.stringify({ permission: 'edit' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 2);
+
+        await blocker.query('commit');
+        transactionOpen = false;
+
+        const [demotionResponse, staleMutationResponse] = await Promise.all([
+          demotion,
+          staleAdminMutation,
+        ]);
+        expect(demotionResponse.status).toBe(200);
+        expect(staleMutationResponse.status).toBe(403);
+
+        const viewerShare = await query<{ permission: string }>(
+          'select permission from shares where id = $1',
+          [viewerShareId],
+        );
+        expect(viewerShare.rows[0]?.permission).toBe('view');
+      } finally {
+        if (transactionOpen) await blocker.query('rollback');
+        await blocker.end();
+      }
     });
 
     it('does not let admins grant admin access', async () => {

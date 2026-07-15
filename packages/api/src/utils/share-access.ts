@@ -1,5 +1,5 @@
 import { HTTPException } from 'hono/http-exception';
-import { query } from '../db/query';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 
 export type ShareEntityType = 'folder' | 'page';
 export type SharePermission = 'view' | 'edit' | 'admin';
@@ -39,11 +39,13 @@ export const ensurePageAccess = async (
   pageId: string,
   userId: string,
   mode: AccessMode = 'view',
+  executor?: QueryExecutor,
 ) => {
-  const result = await query('SELECT * FROM get_effective_page_permission($1, $2)', [
-    pageId,
-    userId,
-  ]);
+  const statement = 'SELECT * FROM get_effective_page_permission($1, $2)';
+  const parameters = [pageId, userId];
+  const result = executor
+    ? await executeQuery(executor, statement, parameters)
+    : await query(statement, parameters);
   const row = result.rows[0] as { permission: string | null; full_access: boolean } | undefined;
 
   if (!row || row.permission === null) {
@@ -70,11 +72,13 @@ export const ensureFolderAccess = async (
   folderId: string,
   userId: string,
   mode: AccessMode = 'view',
+  executor?: QueryExecutor,
 ) => {
-  const result = await query('SELECT * FROM get_effective_folder_permission($1, $2)', [
-    folderId,
-    userId,
-  ]);
+  const statement = 'SELECT * FROM get_effective_folder_permission($1, $2)';
+  const parameters = [folderId, userId];
+  const result = executor
+    ? await executeQuery(executor, statement, parameters)
+    : await query(statement, parameters);
   const row = result.rows[0] as { permission: string | null; full_access: boolean } | undefined;
 
   if (!row || row.permission === null) {
@@ -101,11 +105,12 @@ export const ensureCanAdminEntity = async (
   entityType: 'page' | 'folder',
   entityId: string,
   userId: string,
+  executor?: QueryExecutor,
 ) => {
   const access =
     entityType === 'page'
-      ? await ensurePageAccess(entityId, userId, 'admin')
-      : await ensureFolderAccess(entityId, userId, 'admin');
+      ? await ensurePageAccess(entityId, userId, 'admin', executor)
+      : await ensureFolderAccess(entityId, userId, 'admin', executor);
 
   return { ...access, permission: 'admin' as SharePermission };
 };
