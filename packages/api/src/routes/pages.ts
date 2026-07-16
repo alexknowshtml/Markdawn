@@ -6,7 +6,7 @@ import { marked } from 'marked';
 import { auth } from '../auth';
 import type { pages } from '../db';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize, prepareCopiedYdoc } from '../utils/documentSize';
@@ -24,6 +24,7 @@ import {
   ensurePageAccess,
   ensureWorkspaceAdmin,
   lockEntityAccessMutation,
+  lockEntityAccessMutations,
   type SharePermission,
 } from '../utils/share-access';
 import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
@@ -90,11 +91,12 @@ const isValidMarkdown = (markdown: string): boolean => {
   }
 };
 
-const getPageById = async (pageId: string) => {
-  const result = await query(
-    'select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = $1 and p.is_deleted = false limit 1',
-    [pageId],
-  );
+const getPageById = async (pageId: string, executor?: QueryExecutor) => {
+  const statement =
+    'select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = $1 and p.is_deleted = false limit 1';
+  const result = executor
+    ? await executeQuery(executor, statement, [pageId])
+    : await query(statement, [pageId]);
   const row = (result.rows[0] as RawPageRow | undefined) ?? null;
   return row ? normalizePageRow(row) : null;
 };
@@ -103,6 +105,7 @@ const ensurePageOrganizationAccess = async (
   page: NormalizedPageRow,
   targetParentId: string | null,
   userId: string,
+  executor?: QueryExecutor,
 ) => {
   if (!page.ownerId) {
     throw new HTTPException(409, { message: 'Page owner could not be determined' });
@@ -111,28 +114,28 @@ const ensurePageOrganizationAccess = async (
     throw new HTTPException(400, { message: 'Cannot set parent to self' });
   }
 
-  await ensurePageAccess(page.id, userId, 'admin');
+  await ensurePageAccess(page.id, userId, 'admin', executor);
   if (page.parentId) {
-    await ensureFolderAccess(page.parentId, userId, 'admin');
+    await ensureFolderAccess(page.parentId, userId, 'admin', executor);
   } else {
-    await ensureWorkspaceAdmin(page.ownerId, userId);
+    await ensureWorkspaceAdmin(page.ownerId, userId, executor);
   }
 
   let destinationOwnerId: string | null = page.createdBy;
   if (targetParentId) {
-    const ownerResult = await query<{ owner_id: string | null }>(
-      `select get_root_folder_owner(id) as owner_id
+    const ownerStatement = `select get_root_folder_owner(id) as owner_id
        from folders
-       where id = $1 and is_deleted = false`,
-      [targetParentId],
-    );
+       where id = $1 and is_deleted = false`;
+    const ownerResult = executor
+      ? await executeQuery<{ owner_id: string | null }>(executor, ownerStatement, [targetParentId])
+      : await query<{ owner_id: string | null }>(ownerStatement, [targetParentId]);
     destinationOwnerId = ownerResult.rows[0]?.owner_id ?? null;
     if (!destinationOwnerId) {
       throw new HTTPException(404, { message: 'Parent folder not found' });
     }
-    await ensureFolderAccess(targetParentId, userId, 'admin');
+    await ensureFolderAccess(targetParentId, userId, 'admin', executor);
   } else if (destinationOwnerId) {
-    await ensureWorkspaceAdmin(destinationOwnerId, userId);
+    await ensureWorkspaceAdmin(destinationOwnerId, userId, executor);
   }
 
   if (destinationOwnerId !== page.ownerId) {
@@ -356,35 +359,30 @@ pagesRoute.post('/', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  if (parentId) {
-    const folderResult = await query(
-      'select id from folders where id = $1 and is_deleted = false limit 1',
-      [parentId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
-    await ensureFolderAccess(parentId, user.id, 'admin');
-  }
-
-  const nextPosition = await getNextPosition('pages', parentId ?? null, user.id);
-
   const pageTitle =
     typeof title === 'string' && title.trim().length > 0 ? title.trim() : 'Untitled';
-
   const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
 
-  const insertResult = await query(
-    "insert into pages (parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
-    [
-      parentId ?? null,
-      pageTitle,
-      typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
-      nextPosition,
-      user.id,
-      ydocBuffer,
-    ],
-  );
+  const insertResult = await db.transaction(async (tx) => {
+    if (parentId) {
+      await lockEntityAccessMutation(tx, 'folder', parentId);
+      await ensureFolderAccess(parentId, user.id, 'admin', tx);
+    }
+
+    const nextPosition = await getNextPosition('pages', parentId ?? null, user.id, tx);
+    return executeQuery(
+      tx,
+      "insert into pages (parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
+      [
+        parentId ?? null,
+        pageTitle,
+        typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
+        nextPosition,
+        user.id,
+        ydocBuffer,
+      ],
+    );
+  });
 
   if (insertResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to create page' });
@@ -709,45 +707,55 @@ pagesRoute.patch(':id', async (c) => {
 
   const hasParentId = Object.hasOwn(body, 'parentId');
   const hasPosition = Object.hasOwn(body, 'position');
-  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  if (hasParentId || hasPosition) {
-    await ensurePageOrganizationAccess(page, nextParent, user.id);
-  } else {
-    await ensurePageAccess(page.id, user.id, 'edit');
-  }
-
-  const nextTitle =
-    typeof title === 'string' ? (title.trim().length > 0 ? title.trim() : 'Untitled') : page.title;
-
-  const nextIcon =
-    typeof icon === 'string'
-      ? icon.trim().length > 0
-        ? icon.trim()
-        : null
-      : icon === null
-        ? null
-        : page.icon;
-  const nextPosition = normalizePosition(position, page.position);
   const hasCoverType = Object.hasOwn(body, 'coverType');
   const hasCoverValue = Object.hasOwn(body, 'coverValue');
   const hasProperties = Object.hasOwn(body, 'properties');
-  const nextCoverType = hasCoverType
-    ? typeof coverType === 'string' && coverType.trim().length > 0
-      ? coverType.trim()
-      : null
-    : page.coverType;
-  const nextCoverValue = hasCoverValue
-    ? typeof coverValue === 'string' && coverValue.trim().length > 0
-      ? coverValue.trim()
-      : null
-    : page.coverValue;
-  const nextProperties = hasProperties
-    ? properties && typeof properties === 'object'
-      ? JSON.stringify(properties)
-      : null
-    : page.properties;
 
   const updateResult = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    const nextParent = hasParentId ? (parentId ?? null) : currentPage.parentId;
+    if (hasParentId || hasPosition) {
+      await ensurePageOrganizationAccess(currentPage, nextParent, user.id, tx);
+    } else {
+      await ensurePageAccess(currentPage.id, user.id, 'edit', tx);
+    }
+
+    const nextTitle =
+      typeof title === 'string'
+        ? title.trim().length > 0
+          ? title.trim()
+          : 'Untitled'
+        : currentPage.title;
+    const nextIcon =
+      typeof icon === 'string'
+        ? icon.trim().length > 0
+          ? icon.trim()
+          : null
+        : icon === null
+          ? null
+          : currentPage.icon;
+    const nextPosition = normalizePosition(position, currentPage.position);
+    const nextCoverType = hasCoverType
+      ? typeof coverType === 'string' && coverType.trim().length > 0
+        ? coverType.trim()
+        : null
+      : currentPage.coverType;
+    const nextCoverValue = hasCoverValue
+      ? typeof coverValue === 'string' && coverValue.trim().length > 0
+        ? coverValue.trim()
+        : null
+      : currentPage.coverValue;
+    const nextProperties = hasProperties
+      ? properties && typeof properties === 'object'
+        ? JSON.stringify(properties)
+        : null
+      : currentPage.properties;
+
     const result = hasProperties
       ? await executeQuery(
           tx,
@@ -775,13 +783,13 @@ pagesRoute.patch(':id', async (c) => {
 
     // Keep the payload bounded; the collaboration server reloads the title
     // from PostgreSQL after this transaction commits.
-    if (page.title !== nextTitle) {
+    if (currentPage.title !== nextTitle) {
       await executeQuery(tx, 'select pg_notify($1, $2)', [
         'page_renamed',
         JSON.stringify({ pageId }),
       ]);
     }
-    if (hasParentId && nextParent !== page.parentId) {
+    if (hasParentId && nextParent !== currentPage.parentId) {
       await notifyShareRecompute({ entityType: 'page', entityId: pageId }, tx);
     }
     return result;
@@ -812,11 +820,17 @@ pagesRoute.patch(':id/move', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  await ensurePageOrganizationAccess(page, nextParent, user.id);
-  const nextPosition = normalizePosition(position, page.position);
 
   const updateResult = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    const nextParent = hasParentId ? (parentId ?? null) : currentPage.parentId;
+    await ensurePageOrganizationAccess(currentPage, nextParent, user.id, tx);
+    const nextPosition = normalizePosition(position, currentPage.position);
     const result = await executeQuery(
       tx,
       'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
@@ -827,7 +841,7 @@ pagesRoute.patch(':id/move', async (c) => {
       throw new HTTPException(500, { message: 'Failed to move page' });
     }
 
-    if (hasParentId && nextParent !== page.parentId) {
+    if (hasParentId && nextParent !== currentPage.parentId) {
       await notifyShareRecompute({ entityType: 'page', entityId: pageId }, tx);
     }
     return result;
@@ -924,25 +938,33 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     throw new HTTPException(400, { message: 'Invalid markdown format' });
   }
 
-  // Build Yjs doc with both title and body content
-  // Title and H1 are independent — we don't strip the first H1 anymore
-  let ydocBuffer = Buffer.from(createYjsDocWithTitle(page.title || 'Untitled', markdown));
-
   // Resolve only unique titles in the destination workspace so imports never
   // bind to another owner's similarly named private page.
   if (!page.ownerId) {
     throw new HTTPException(409, { message: 'Page owner could not be determined' });
   }
   const pageLookup = await getUniqueWorkspacePageLookup(page.ownerId);
-  if (pageLookup.size > 0) {
-    ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
-  }
-  ensureYdocSize(ydocBuffer);
 
-  const updateResult = await query(
-    "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
-    [ydocBuffer, page.title || 'Untitled', pageId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
+
+    // Build the final Yjs state only after authorization is serialized so a
+    // concurrent title change cannot be replaced by stale imported state.
+    let ydocBuffer = Buffer.from(createYjsDocWithTitle(currentPage.title || 'Untitled', markdown));
+    if (pageLookup.size > 0) {
+      ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
+    }
+    ensureYdocSize(ydocBuffer);
+
+    return executeQuery(
+      tx,
+      "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
+      [ydocBuffer, currentPage.title || 'Untitled', pageId],
+    );
+  });
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to import page content' });
@@ -963,6 +985,8 @@ pagesRoute.delete(':id', async (c) => {
   await ensureCanAdminEntity('page', page.id, user.id);
 
   await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensureCanAdminEntity('page', pageId, user.id, tx);
     const updateResult = await executeQuery(
       tx,
       'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
@@ -1065,84 +1089,74 @@ pagesRoute.post(':id/copy', async (c) => {
     await ensureFolderAccess(parentId, user.id, 'admin');
   }
 
-  const copiedYdoc = prepareCopiedYdoc(page.ydoc, `Copy of ${page.title}`);
-  const nextPosition = await getNextPosition('pages', parentId ?? null, user.id);
+  const copiedPage = await db.transaction(async (tx) => {
+    await lockEntityAccessMutations(tx, [
+      { entityType: 'page', entityId: pageId },
+      ...(parentId ? [{ entityType: 'folder' as const, entityId: parentId }] : []),
+    ]);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    if (parentId) await ensureFolderAccess(parentId, user.id, 'admin', tx);
 
-  const insertResult = await query(
-    `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, properties, created_by)
-     select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, $4, properties, $5
-     from pages where id = $6
-     returning id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
-    [parentId ?? null, `Copy of ${page.title}`, nextPosition, copiedYdoc, user.id, pageId],
-  );
-
-  if (insertResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to copy page' });
-  }
-
-  const copiedPage = insertResult.rows[0] as RawPageRow;
-  const newPageId = copiedPage.id;
-
-  await query(
-    `insert into upload_page_refs (upload_id, page_id)
-     select upload_id, $1 from upload_page_refs where page_id = $2
-     on conflict (upload_id, page_id) do nothing`,
-    [newPageId, pageId],
-  );
-
-  // Copy connections from the original page so wiki links and tags
-  // appear immediately — without this, the copied page's backlinks
-  // panel and tag queries would be empty until a user opens it and
-  // triggers a collab persist.
-  {
-    const originalConnections = await query(
-      `select id, target_type, target_id, target_slug, target_label, connection_type,
-              link_text, link_context, occurrence_count
-       from connections
-       where source_type = 'page' and source_id = $1`,
-      [pageId],
+    const copiedYdoc = prepareCopiedYdoc(currentPage.ydoc, `Copy of ${currentPage.title}`);
+    const nextPosition = await getNextPosition('pages', parentId ?? null, user.id, tx);
+    const insertResult = await executeQuery(
+      tx,
+      `insert into pages (id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, properties, created_by)
+       select gen_random_uuid(), $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, $4, properties, $5
+       from pages where id = $6 and is_deleted = false
+       returning id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
+      [parentId ?? null, `Copy of ${currentPage.title}`, nextPosition, copiedYdoc, user.id, pageId],
     );
-    for (const conn of originalConnections.rows as {
-      id: string;
-      target_type: string;
-      target_id: string | null;
-      target_slug: string;
-      target_label: string;
-      connection_type: string;
-      link_text: string | null;
-      link_context: string | null;
-      occurrence_count: number;
-    }[]) {
-      const insertResult = await query(
-        `insert into connections (
-           source_type, source_id, target_type, target_id, target_slug,
-           target_label, connection_type, link_text, link_context, occurrence_count, updated_at
-         ) values ('page', $1, $2, $3, $4, $5, $6, $7, $8, $9, now())
-         returning id`,
-        [
-          newPageId,
-          conn.target_type,
-          conn.target_id,
-          conn.target_slug,
-          conn.target_label,
-          conn.connection_type,
-          conn.link_text,
-          conn.link_context,
-          conn.occurrence_count,
-        ],
-      );
-      const newConnectionId = insertResult.rows[0]?.id;
-      if (newConnectionId && conn.link_context) {
-        await query(
-          `insert into connection_occurrences (connection_id, context)
-           values ($1, $2)`,
-          [newConnectionId, conn.link_context],
-        );
-      }
+    const insertedPage = insertResult.rows[0] as RawPageRow | undefined;
+    if (!insertedPage) {
+      throw new HTTPException(500, { message: 'Failed to copy page' });
     }
-  }
 
-  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
+    await executeQuery(
+      tx,
+      `insert into upload_page_refs (upload_id, page_id)
+       select upload_id, $1 from upload_page_refs where page_id = $2
+       on conflict (upload_id, page_id) do nothing`,
+      [insertedPage.id, pageId],
+    );
+    await executeQuery(
+      tx,
+      `insert into connections (
+         source_type, source_id, target_type, target_id, target_slug,
+         target_label, connection_type, link_text, link_context,
+         occurrence_count, first_seen_at, updated_at
+       )
+       select source_type, $1, target_type, target_id, target_slug,
+              target_label, connection_type, link_text, link_context,
+              occurrence_count, first_seen_at, now()
+       from connections
+       where source_type = 'page' and source_id = $2`,
+      [insertedPage.id, pageId],
+    );
+    await executeQuery(
+      tx,
+      `insert into connection_occurrences (
+         connection_id, source_block_id, position, context, created_at
+       )
+       select copied.id, occurrence.source_block_id, occurrence.position,
+              occurrence.context, occurrence.created_at
+       from connections original
+       join connections copied
+         on copied.source_type = original.source_type
+        and copied.source_id = $1
+        and copied.target_type = original.target_type
+        and copied.target_slug = original.target_slug
+        and copied.connection_type = original.connection_type
+       join connection_occurrences occurrence on occurrence.connection_id = original.id
+       where original.source_type = 'page' and original.source_id = $2`,
+      [insertedPage.id, pageId],
+    );
+    return insertedPage;
+  });
+
+  const created = normalizePageRow(copiedPage);
   return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
 });
 
@@ -1199,7 +1213,13 @@ pagesRoute.delete(':id/permanent', async (c) => {
     }
   }
 
-  await query('delete from pages where id = any($1)', [Array.from(toDelete)]);
+  await db.transaction(async (tx) => {
+    if (!deletedPage) {
+      await lockEntityAccessMutation(tx, 'page', pageId);
+      await ensureCanAdminEntity('page', pageId, user.id, tx);
+    }
+    await executeQuery(tx, 'delete from pages where id = any($1)', [Array.from(toDelete)]);
+  });
 
   return c.json({ deleted: true });
 });

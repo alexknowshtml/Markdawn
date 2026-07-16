@@ -1482,6 +1482,64 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       }
     });
 
+    it('rejects a page write that acquires the workspace access lock after demotion', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const editorSession = await createTestSession(editor.id);
+      const page = await createTestPage(owner.id, { title: 'Original title' });
+
+      const inviteResponse = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+        body: JSON.stringify({ email: editor.email, permission: 'edit' }),
+      });
+      expect(inviteResponse.status).toBe(200);
+      const editorShareId = await getShareIdForRecipient(editor.id);
+
+      const blocker = new Client({ connectionString: process.env.DATABASE_URL });
+      await blocker.connect();
+      let transactionOpen = false;
+
+      try {
+        await blocker.query('begin');
+        transactionOpen = true;
+        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+          `workspace-access:${owner.id}`,
+        ]);
+
+        const demotion = app.request(`/api/shares/${editorShareId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission: 'view' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 1);
+
+        const staleWrite = app.request(`/api/pages/${page.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: editorSession.Cookie },
+          body: JSON.stringify({ title: 'Unauthorized title' }),
+        });
+        await waitForAdvisoryWaiters(blocker, 2);
+
+        await blocker.query('commit');
+        transactionOpen = false;
+
+        const [demotionResponse, staleWriteResponse] = await Promise.all([demotion, staleWrite]);
+        expect(demotionResponse.status).toBe(200);
+        expect(staleWriteResponse.status).toBe(403);
+
+        const storedPage = await query<{ title: string }>('select title from pages where id = $1', [
+          page.id,
+        ]);
+        expect(storedPage.rows[0]?.title).toBe('Original title');
+      } finally {
+        if (transactionOpen) await blocker.query('rollback');
+        await blocker.end();
+      }
+    });
+
     it('serializes child mutations with inherited admin demotion', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();

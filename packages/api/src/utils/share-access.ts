@@ -110,32 +110,49 @@ export const lockWorkspaceAccessMutation = async (
   ]);
 };
 
+export const lockEntityAccessMutations = async (
+  executor: QueryExecutor,
+  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+): Promise<string[]> => {
+  const ownerIds: string[] = [];
+  for (const { entityType, entityId } of entities) {
+    const statement =
+      entityType === 'page'
+        ? `select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+           from pages p
+           where p.id = $1 and p.is_deleted = false`
+        : `select get_root_folder_owner(f.id) as owner_id
+           from folders f
+           where f.id = $1 and f.is_deleted = false`;
+    const result = await executeQuery(executor, statement, [entityId]);
+    const row = result.rows[0] as { owner_id: string | null } | undefined;
+    if (!row) {
+      throw new HTTPException(404, {
+        message: entityType === 'page' ? 'Page not found' : 'Folder not found',
+      });
+    }
+    if (!row.owner_id) {
+      throw new HTTPException(409, { message: 'Entity owner could not be determined' });
+    }
+    ownerIds.push(row.owner_id);
+  }
+
+  const uniqueOwnerIds = [...new Set(ownerIds)].sort();
+  for (const ownerId of uniqueOwnerIds) {
+    await lockWorkspaceAccessMutation(executor, ownerId);
+  }
+  return ownerIds;
+};
+
 export const lockEntityAccessMutation = async (
   executor: QueryExecutor,
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<string> => {
-  const statement =
-    entityType === 'page'
-      ? `select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
-         from pages p
-         where p.id = $1 and p.is_deleted = false`
-      : `select get_root_folder_owner(f.id) as owner_id
-         from folders f
-         where f.id = $1 and f.is_deleted = false`;
-  const result = await executeQuery(executor, statement, [entityId]);
-  const row = result.rows[0] as { owner_id: string | null } | undefined;
-  if (!row) {
-    throw new HTTPException(404, {
-      message: entityType === 'page' ? 'Page not found' : 'Folder not found',
-    });
-  }
-  if (!row.owner_id) {
-    throw new HTTPException(409, { message: 'Entity owner could not be determined' });
-  }
-
-  await lockWorkspaceAccessMutation(executor, row.owner_id);
-  return row.owner_id;
+  const ownerIds = await lockEntityAccessMutations(executor, [{ entityType, entityId }]);
+  const ownerId = ownerIds[0];
+  if (!ownerId) throw new Error('Entity access lock did not resolve an owner');
+  return ownerId;
 };
 
 export const ensureCanAdminEntity = async (
@@ -152,17 +169,22 @@ export const ensureCanAdminEntity = async (
   return { ...access, permission: 'admin' as SharePermission };
 };
 
-export const ensureWorkspaceAdmin = async (workspaceOwnerId: string, userId: string) => {
+export const ensureWorkspaceAdmin = async (
+  workspaceOwnerId: string,
+  userId: string,
+  executor?: QueryExecutor,
+) => {
   if (workspaceOwnerId === userId) {
     return { fullAccess: true, permission: 'admin' as const };
   }
 
-  const result = await query(
-    `select role from workspace_members
+  const statement = `select role from workspace_members
      where workspace_owner_id = $1 and member_id = $2
-     limit 1`,
-    [workspaceOwnerId, userId],
-  );
+     limit 1`;
+  const parameters = [workspaceOwnerId, userId];
+  const result = executor
+    ? await executeQuery(executor, statement, parameters)
+    : await query(statement, parameters);
   if (result.rows[0]?.role !== 'admin') {
     throw new HTTPException(403, { message: 'You need admin access to manage this workspace' });
   }

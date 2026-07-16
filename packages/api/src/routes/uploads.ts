@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { auth } from '../auth';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import {
@@ -13,7 +14,7 @@ import {
   isSafeImageMime,
   MAX_IMAGE_SIZE_BYTES,
 } from '../utils/image-upload';
-import { ensurePageAccess } from '../utils/share-access';
+import { ensurePageAccess, lockEntityAccessMutation } from '../utils/share-access';
 
 const uploadsRoute = new Hono();
 
@@ -129,24 +130,41 @@ uploadsRoute.post('/', requireAuth, async (c) => {
   const filePath = path.join(uploadsDir, filename);
   await writeFile(filePath, buffer);
 
-  // Save upload record to database
-  const uploadResult = await query<{ id: string }>(
-    `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
-     values ($1, $2, $3, $4, $5)
-     returning id`,
-    [filename, file.name, file.type, file.size, user.id],
-  );
-  const uploadId = uploadResult.rows[0]?.id;
-  if (!uploadId) {
-    throw new HTTPException(500, { message: 'Failed to create upload' });
-  }
+  try {
+    await db.transaction(async (tx) => {
+      await lockEntityAccessMutation(tx, 'page', pageId);
+      await ensurePageAccess(pageId, user.id, 'edit', tx);
+      const uploadResult = await executeQuery<{ id: string }>(
+        tx,
+        `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
+         values ($1, $2, $3, $4, $5)
+         returning id`,
+        [filename, file.name, file.type, file.size, user.id],
+      );
+      const uploadId = uploadResult.rows[0]?.id;
+      if (!uploadId) {
+        throw new HTTPException(500, { message: 'Failed to create upload' });
+      }
 
-  await query(
-    `insert into upload_page_refs (upload_id, page_id)
-     values ($1, $2)
-     on conflict (upload_id, page_id) do nothing`,
-    [uploadId, pageId],
-  );
+      await executeQuery(
+        tx,
+        `insert into upload_page_refs (upload_id, page_id)
+         values ($1, $2)
+         on conflict (upload_id, page_id) do nothing`,
+        [uploadId, pageId],
+      );
+    });
+  } catch (error) {
+    try {
+      await unlink(filePath);
+    } catch (cleanupError) {
+      throw new AggregateError(
+        [error, cleanupError],
+        'Upload failed and file cleanup was unsuccessful',
+      );
+    }
+    throw error;
+  }
 
   return c.json({ url: `/api/uploads/${filename}` });
 });

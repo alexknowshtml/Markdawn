@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensurePageAccess } from '../utils/share-access';
+import { ensurePageAccess, lockEntityAccessMutation } from '../utils/share-access';
 
 type UserRow = {
   id: string;
@@ -176,10 +177,15 @@ commentsRoute.post(':pageId/comments', async (c) => {
     throw new HTTPException(400, { message: 'content is required' });
   }
 
-  const result = await query(
-    'insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at',
-    [pageId, user.id, content, anchorBlockId ?? null],
-  );
+  const result = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    return executeQuery(
+      tx,
+      'insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at',
+      [pageId, user.id, content, anchorBlockId ?? null],
+    );
+  });
 
   const row = result.rows[0];
   if (!row) {
@@ -221,24 +227,29 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
     throw new HTTPException(404, { message: 'User not found' });
   }
 
-  // Verify comment exists
-  const commentResult = await query('select id from comments where id = $1 and page_id = $2', [
-    commentId,
-    pageId,
-  ]);
-  if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: 'Comment not found' });
-  }
-
   const { content } = await c.req.json();
   if (!content || typeof content !== 'string') {
     throw new HTTPException(400, { message: 'content is required' });
   }
 
-  const result = await query(
-    'insert into comment_replies (comment_id, user_id, content) values ($1, $2, $3) returning id, comment_id, user_id, content, created_at',
-    [commentId, user.id, content],
-  );
+  const result = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    const commentResult = await executeQuery(
+      tx,
+      'select id from comments where id = $1 and page_id = $2',
+      [commentId, pageId],
+    );
+    if (commentResult.rowCount === 0) {
+      throw new HTTPException(404, { message: 'Comment not found' });
+    }
+
+    return executeQuery(
+      tx,
+      'insert into comment_replies (comment_id, user_id, content) values ($1, $2, $3) returning id, comment_id, user_id, content, created_at',
+      [commentId, user.id, content],
+    );
+  });
 
   const row = result.rows[0];
   if (!row) {
@@ -273,51 +284,53 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
 
   const { content, resolved } = await c.req.json();
 
-  const commentResult = await query('SELECT user_id FROM comments WHERE id = $1 AND page_id = $2', [
-    commentId,
-    pageId,
-  ]);
-
-  if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: 'Comment not found' });
-  }
-
-  const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
-
-  // Build update query dynamically
-  const updates: string[] = [];
-  const values: unknown[] = [];
-  let paramIndex = 1;
-
-  if (content !== undefined) {
-    if (typeof content !== 'string') {
-      throw new HTTPException(400, { message: 'content must be a string' });
+  const result = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    const commentResult = await executeQuery(
+      tx,
+      'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
+      [commentId, pageId],
+    );
+    if (commentResult.rowCount === 0) {
+      throw new HTTPException(404, { message: 'Comment not found' });
     }
-    if (!commentOwnerId || commentOwnerId !== user.id) {
-      throw new HTTPException(403, { message: 'You can only edit your own comments' });
+
+    const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
+    const updates: string[] = [];
+    const values: unknown[] = [];
+    let paramIndex = 1;
+
+    if (content !== undefined) {
+      if (typeof content !== 'string') {
+        throw new HTTPException(400, { message: 'content must be a string' });
+      }
+      if (!commentOwnerId || commentOwnerId !== user.id) {
+        throw new HTTPException(403, { message: 'You can only edit your own comments' });
+      }
+      updates.push(`content = $${paramIndex++}`);
+      values.push(content);
     }
-    updates.push(`content = $${paramIndex++}`);
-    values.push(content);
-  }
 
-  if (resolved !== undefined) {
-    if (typeof resolved !== 'boolean') {
-      throw new HTTPException(400, { message: 'resolved must be a boolean' });
+    if (resolved !== undefined) {
+      if (typeof resolved !== 'boolean') {
+        throw new HTTPException(400, { message: 'resolved must be a boolean' });
+      }
+      updates.push(`resolved = $${paramIndex++}`);
+      values.push(resolved);
     }
-    updates.push(`resolved = $${paramIndex++}`);
-    values.push(resolved);
-  }
 
-  if (updates.length === 0) {
-    throw new HTTPException(400, { message: 'No fields to update' });
-  }
-  updates.push('updated_at = NOW()');
-
-  values.push(commentId, pageId);
-  const result = await query(
-    `UPDATE comments SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
-    values,
-  );
+    if (updates.length === 0) {
+      throw new HTTPException(400, { message: 'No fields to update' });
+    }
+    updates.push('updated_at = NOW()');
+    values.push(commentId, pageId);
+    return executeQuery(
+      tx,
+      `UPDATE comments SET ${updates.join(', ')} WHERE id = $${paramIndex++} AND page_id = $${paramIndex} RETURNING id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at`,
+      values,
+    );
+  });
 
   if (result.rowCount === 0) {
     throw new HTTPException(404, { message: 'Comment not found' });
@@ -351,23 +364,29 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
   const user = c.get('user') as { id: string };
   await ensurePageAccess(pageId, user.id);
 
-  // Verify comment belongs to user or user is admin
-  const commentResult = await query('SELECT user_id FROM comments WHERE id = $1 AND page_id = $2', [
-    commentId,
-    pageId,
-  ]);
+  await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    const commentResult = await executeQuery(
+      tx,
+      'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
+      [commentId, pageId],
+    );
+    if (commentResult.rowCount === 0) {
+      throw new HTTPException(404, { message: 'Comment not found' });
+    }
 
-  if (commentResult.rowCount === 0) {
-    throw new HTTPException(404, { message: 'Comment not found' });
-  }
+    const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
+    if (!commentOwnerId || commentOwnerId !== user.id) {
+      throw new HTTPException(403, { message: 'You can only delete your own comments' });
+    }
 
-  const commentOwnerId = (commentResult.rows[0] as { user_id: string | null }).user_id;
-  if (!commentOwnerId || commentOwnerId !== user.id) {
-    throw new HTTPException(403, { message: 'You can only delete your own comments' });
-  }
-
-  // Delete comment (replies will cascade due to foreign key)
-  await query('DELETE FROM comments WHERE id = $1 AND page_id = $2', [commentId, pageId]);
+    // Delete comment (replies will cascade due to foreign key)
+    await executeQuery(tx, 'DELETE FROM comments WHERE id = $1 AND page_id = $2', [
+      commentId,
+      pageId,
+    ]);
+  });
 
   return c.json({ success: true });
 });

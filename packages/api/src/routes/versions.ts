@@ -1,8 +1,9 @@
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensurePageAccess } from '../utils/share-access';
+import { ensurePageAccess, lockEntityAccessMutation } from '../utils/share-access';
 
 type VersionRow = {
   id: string;
@@ -66,10 +67,15 @@ versionsRoute.post(':pageId/versions', async (c) => {
     throw new HTTPException(400, { message: 'title is required' });
   }
 
-  const result = await query(
-    "insert into page_versions (page_id, content, title, created_by) values ($1, '{}'::jsonb, $2, $3) returning id, page_id, title, created_at",
-    [pageId, title.trim(), user.id],
-  );
+  const result = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
+    return executeQuery(
+      tx,
+      "insert into page_versions (page_id, content, title, created_by) values ($1, '{}'::jsonb, $2, $3) returning id, page_id, title, created_at",
+      [pageId, title.trim(), user.id],
+    );
+  });
 
   const row = result.rows[0] as {
     id: string;
@@ -109,10 +115,20 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
 
   const versionTitle = (versionResult.rows[0] as { title: string | null }).title ?? null;
 
-  const updateResult = await query(
-    'update pages set title = $1 where id = $2 returning id, title',
-    [versionTitle, pageId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    await lockEntityAccessMutation(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
+    const result = await executeQuery(
+      tx,
+      "update pages set title = $1, title_search = to_tsvector('english', $1), updated_at = now() where id = $2 returning id, title",
+      [versionTitle, pageId],
+    );
+    await executeQuery(tx, 'select pg_notify($1, $2)', [
+      'page_renamed',
+      JSON.stringify({ pageId }),
+    ]);
+    return result;
+  });
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Page not found' });

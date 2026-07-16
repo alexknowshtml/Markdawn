@@ -3,7 +3,8 @@ import { mkdir } from 'node:fs/promises';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { pages } from '../db';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
@@ -13,7 +14,7 @@ import {
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
 import { getNextPosition } from '../utils/position';
-import { ensureFolderAccess } from '../utils/share-access';
+import { ensureFolderAccess, lockEntityAccessMutation } from '../utils/share-access';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
@@ -226,18 +227,25 @@ importRoute.post('/markdown', async (c) => {
   }
   ensureYdocSize(ydocBuffer);
 
-  const nextPosition = await getNextPosition('pages', parentId, user.id);
-
   const hasProperties = Object.keys(properties).length > 0;
-  const insertResult = hasProperties
-    ? await query(
-        "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
-        [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
-      )
-    : await query(
-        "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
-        [parentId, title, nextPosition, user.id, ydocBuffer],
-      );
+  const insertResult = await db.transaction(async (tx) => {
+    if (parentId) {
+      await lockEntityAccessMutation(tx, 'folder', parentId);
+      await ensureFolderAccess(parentId, user.id, 'admin', tx);
+    }
+    const nextPosition = await getNextPosition('pages', parentId, user.id, tx);
+    return hasProperties
+      ? executeQuery(
+          tx,
+          "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
+          [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
+        )
+      : executeQuery(
+          tx,
+          "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
+          [parentId, title, nextPosition, user.id, ydocBuffer],
+        );
+  });
 
   if (insertResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to create page' });
