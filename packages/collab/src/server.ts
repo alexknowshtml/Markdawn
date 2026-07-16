@@ -4,6 +4,7 @@ import type { Logger } from '@logtape/logtape';
 import {
   DEFAULT_MAX_COLLAB_PAYLOAD_BYTES,
   getAnonymousName,
+  MAX_PAGE_TITLE_LENGTH,
   MAX_YDOC_BYTES,
   type ShareEventPayload,
   type StatelessShareMessage,
@@ -1083,6 +1084,7 @@ export function createCollabServer(config: CollabServerConfig) {
   const documentChangeVersions = new Map<string, number>();
   const blockedDocuments = new Set<string>();
   const documentSizeEstimates = new Map<string, number>();
+  const acceptedPageTitles = new Map<string, string>();
 
   async function runPermissionQuery<T>(operation: () => Promise<T>): Promise<T> {
     try {
@@ -1258,6 +1260,42 @@ export function createCollabServer(config: CollabServerConfig) {
       `[size] blocked page=${documentName}: encoded document is ${size} bytes (limit ${maxDocumentBytes})`,
     );
     blockDocumentForReload(documentName, 1009, 'Document size limit exceeded');
+  }
+
+  function ensureTitleWithinLimit(documentName: string, document: Y.Doc): boolean {
+    if (!document.share.has('title')) return true;
+    const titleText = document.getText('title');
+    const title = titleText.toString();
+    if (title.length <= MAX_PAGE_TITLE_LENGTH) {
+      // Replacing a Y.Text normally arrives as a delete followed by an insert.
+      // Keep the previous title through that transient empty state so an
+      // oversized insert can be reverted to the actual last valid value.
+      if (title.length > 0) acceptedPageTitles.set(documentName, title);
+      return true;
+    }
+
+    const acceptedTitle = acceptedPageTitles.get(documentName);
+    // Existing titles can predate this boundary or originate from import
+    // workflows. Preserve that canonical value while rejecting new oversized
+    // collaborative replacements.
+    if (acceptedTitle === title) return true;
+    if (acceptedTitle === undefined) {
+      logger.error(`[title] cannot recover page=${documentName}: no canonical title is available`);
+      blockDocumentForReload(documentName, 4500, 'Document reload required');
+      return false;
+    }
+
+    // A Yjs update cannot be removed by reconnecting because clients retain
+    // and resend their local CRDT state. Apply a compensating update instead;
+    // it reaches every client and keeps the rejected title out of persistence.
+    document.transact(() => {
+      titleText.delete(0, titleText.length);
+      titleText.insert(0, acceptedTitle);
+    });
+    logger.warn(
+      `[title] rejected page=${documentName}: title is ${title.length} characters (limit ${MAX_PAGE_TITLE_LENGTH})`,
+    );
+    return true;
   }
 
   async function canPersistDocument(
@@ -1500,6 +1538,7 @@ export function createCollabServer(config: CollabServerConfig) {
       pendingWriters.delete(documentName);
       documentChangeVersions.delete(documentName);
       documentSizeEstimates.delete(documentName);
+      acceptedPageTitles.delete(documentName);
       if (isMetaRoom(documentName)) {
         const userId = documentName.slice(META_ROOM_PREFIX.length);
         logger.debug(`[meta] loading page meta for user: ${userId}`);
@@ -1530,6 +1569,7 @@ export function createCollabServer(config: CollabServerConfig) {
       }
 
       const row = result.rows[0] as { ydoc: Buffer | null; title: string } | undefined;
+      if (row) acceptedPageTitles.set(documentName, row.title || 'Untitled');
       if (!row?.ydoc || row.ydoc.length === 0) {
         documentSizeEstimates.set(documentName, 0);
         return undefined;
@@ -1568,6 +1608,7 @@ export function createCollabServer(config: CollabServerConfig) {
     },
     onChange: async ({ documentName, context, document, update }) => {
       if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
+      if (!ensureTitleWithinLimit(documentName, document)) return;
       const writer = context as PersistContext | undefined;
       if (!writer?.user) return;
 
@@ -1605,6 +1646,7 @@ export function createCollabServer(config: CollabServerConfig) {
       if (!context?.user) {
         throw new Error('Unauthorized');
       }
+      if (!ensureTitleWithinLimit(documentName, data.document)) return;
 
       if (!(await canPersistPendingDocument(documentName, context))) return;
 
@@ -1649,6 +1691,7 @@ export function createCollabServer(config: CollabServerConfig) {
       pendingWriters.delete(documentName);
       documentChangeVersions.delete(documentName);
       documentSizeEstimates.delete(documentName);
+      acceptedPageTitles.delete(documentName);
     },
     onDisconnect: async ({ documentName, instance, context }) => {
       if (isMetaRoom(documentName) || blockedDocuments.has(documentName)) return;
@@ -1660,6 +1703,7 @@ export function createCollabServer(config: CollabServerConfig) {
         const persistContext = context as
           | { user?: { id: string; isAnonymous?: boolean }; permission?: string }
           | undefined;
+        if (!ensureTitleWithinLimit(documentName, doc)) return;
         if (!(await canPersistPendingDocument(documentName, persistContext))) return;
 
         const state = Y.encodeStateAsUpdate(doc);

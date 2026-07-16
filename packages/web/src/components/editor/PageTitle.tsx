@@ -1,3 +1,4 @@
+import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import type React from 'react';
 import { useCallback, useRef } from 'react';
 import type * as Y from 'yjs';
@@ -8,12 +9,17 @@ interface PageTitleProps {
   pageId: string;
   initialTitle: string;
   ydoc?: Y.Doc | null;
-  persistViaApi?: boolean;
+  usePublicEndpoint?: boolean;
 }
 
-export function PageTitle({ pageId, initialTitle, ydoc, persistViaApi = true }: PageTitleProps) {
+export function PageTitle({
+  pageId,
+  initialTitle,
+  ydoc,
+  usePublicEndpoint = false,
+}: PageTitleProps) {
   const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc, {
-    persistViaApi,
+    usePublicEndpoint,
   });
   const inputRef = useRef<HTMLInputElement>(null);
   const readOnly = useIsReadOnly();
@@ -40,6 +46,7 @@ export function PageTitle({ pageId, initialTitle, ydoc, persistViaApi = true }: 
       className="w-full font-bold leading-tight text-zinc-900 dark:text-zinc-50 bg-transparent outline-none placeholder:text-zinc-300 dark:placeholder:text-zinc-700 focus:ring-0 focus:border-transparent transition-colors break-words font-serif"
       placeholder="Page Title"
       autoComplete="off"
+      maxLength={MAX_PAGE_TITLE_LENGTH}
       data-testid="page-title"
       style={{ fontSize: 'clamp(1.5rem, 3vw, 2.5rem)' }}
     />

@@ -1,5 +1,6 @@
-import { deriveCapabilities } from '@markdawn/shared';
+import { deriveCapabilities, MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
 import { marked } from 'marked';
@@ -32,6 +33,16 @@ import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
 type NormalizedPageRow = PageRow & { ownerId?: string | null };
+
+function normalizePageTitle(title: string): string {
+  if (title.length > MAX_PAGE_TITLE_LENGTH) {
+    throw new HTTPException(400, {
+      message: `Title must be ${MAX_PAGE_TITLE_LENGTH} characters or fewer`,
+    });
+  }
+  const trimmed = title.trim();
+  return trimmed.length > 0 ? trimmed : 'Untitled';
+}
 
 type RawPageRow = PageRow & {
   parent_id?: string | null;
@@ -170,9 +181,11 @@ const normalizeLinkPermission = (permission: string | null | undefined): LinkPer
   return permission === 'edit' || permission === 'admin' ? 'edit' : 'view';
 };
 
-const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null> => {
-  const result = await query(
-    `
+const getPageLinkAccess = async (
+  pageId: string,
+  executor?: QueryExecutor,
+): Promise<PageLinkAccess | null> => {
+  const statement = `
       with link_access as (
         select
           coalesce(s.permission, 'view') as permission,
@@ -237,9 +250,10 @@ const getPageLinkAccess = async (pageId: string): Promise<PageLinkAccess | null>
       from link_access
       order by rank desc, priority asc, depth asc
       limit 1
-    `,
-    [pageId],
-  );
+    `;
+  const result = executor
+    ? await executeQuery(executor, statement, [pageId])
+    : await query(statement, [pageId]);
 
   const row = result.rows[0] as
     | {
@@ -501,6 +515,65 @@ pagesRoute.get('/recent', async (c) => {
   );
 });
 
+pagesPublicRoute.patch(
+  ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}/title',
+  bodyLimit({
+    maxSize: 4 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    const pageId = c.req.param('id');
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // Malformed JSON is an expected HTTP boundary failure.
+        throw new HTTPException(400, { message: 'Invalid JSON body' });
+      }
+      throw error;
+    }
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      typeof (body as { title?: unknown }).title !== 'string'
+    ) {
+      throw new HTTPException(400, { message: 'Title is required' });
+    }
+    const nextTitle = normalizePageTitle((body as { title: string }).title);
+
+    const result = await db.transaction(async (tx) => {
+      await lockEntityAccessMutation(tx, 'page', pageId);
+      const page = await getPageById(pageId, tx);
+      if (!page) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+      const linkAccess = await getPageLinkAccess(pageId, tx);
+      if (!linkAccess) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+      if (linkAccess.permission !== 'edit') {
+        throw new HTTPException(403, { message: 'Forbidden' });
+      }
+
+      if (page.title !== nextTitle) {
+        await executeQuery(
+          tx,
+          "update pages set title = $1, title_search = to_tsvector('english', $1), updated_at = now() where id = $2",
+          [nextTitle, pageId],
+        );
+        await executeQuery(tx, 'select pg_notify($1, $2)', [
+          'page_renamed',
+          JSON.stringify({ pageId }),
+        ]);
+      }
+      return { title: nextTitle };
+    });
+
+    return c.json(result);
+  },
+);
+
 pagesPublicRoute.get(
   ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',
   async (c) => {
@@ -690,7 +763,16 @@ pagesRoute.patch(':id', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  const body = await c.req.json().catch(() => null);
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      // Malformed JSON is an expected HTTP boundary failure.
+      throw new HTTPException(400, { message: 'Invalid JSON body' });
+    }
+    throw error;
+  }
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
@@ -710,6 +792,8 @@ pagesRoute.patch(':id', async (c) => {
   const hasCoverType = Object.hasOwn(body, 'coverType');
   const hasCoverValue = Object.hasOwn(body, 'coverValue');
   const hasProperties = Object.hasOwn(body, 'properties');
+  const normalizedRequestedTitle =
+    typeof title === 'string' ? normalizePageTitle(title) : undefined;
 
   const updateResult = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, 'page', pageId);
@@ -725,12 +809,7 @@ pagesRoute.patch(':id', async (c) => {
       await ensurePageAccess(currentPage.id, user.id, 'edit', tx);
     }
 
-    const nextTitle =
-      typeof title === 'string'
-        ? title.trim().length > 0
-          ? title.trim()
-          : 'Untitled'
-        : currentPage.title;
+    const nextTitle = normalizedRequestedTitle ?? currentPage.title;
     const nextIcon =
       typeof icon === 'string'
         ? icon.trim().length > 0

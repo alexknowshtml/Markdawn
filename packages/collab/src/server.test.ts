@@ -9,6 +9,7 @@ import {
   type onStoreDocumentPayload,
   type Server,
 } from '@hocuspocus/server';
+import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import * as Y from 'yjs';
@@ -745,6 +746,97 @@ describe('collab server', () => {
         );
       } finally {
         await sizeLimitedServer.destroy();
+      }
+    });
+
+    it('broadcasts a canonical title update without disconnecting collaborators', async () => {
+      const owner = await createTestUser(pool);
+      const session = await createTestSession(pool, owner.id);
+      const page = await createTestPage(pool, owner.id);
+      const document = new Y.Doc();
+      const onDisconnect = vi.fn();
+      const provider = new HocuspocusProvider({
+        url: `ws://localhost:${port}`,
+        name: page.id,
+        document,
+        token: session.token,
+        onDisconnect,
+      });
+
+      try {
+        await waitFor(() => provider.synced, 5_000, 'provider to sync');
+        const titleText = document.getText('title');
+        titleText.delete(0, titleText.length);
+        titleText.insert(0, 'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1));
+
+        await waitFor(
+          () => titleText.toString() === page.title,
+          5_000,
+          'canonical title compensation',
+        );
+        expect(onDisconnect).not.toHaveBeenCalled();
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining(`[title] rejected page=${page.id}`),
+        );
+      } finally {
+        provider.destroy();
+      }
+    });
+
+    it('restores and persists the canonical title after an oversized collaborative update', async () => {
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const document = new Document(page.id);
+      const connection = { close: vi.fn(), send: vi.fn() };
+      vi.spyOn(document, 'getConnections').mockReturnValue([connection] as unknown as ReturnType<
+        Document['getConnections']
+      >);
+      server.hocuspocus.documents.set(page.id, document);
+      const context = { user: { id: owner.id }, permission: 'admin' };
+      const loadPayload: onLoadDocumentPayload = {
+        context,
+        document,
+        documentName: page.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+        connectionConfig: createConnectionConfig(),
+      };
+      const storePayload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context,
+        document,
+        documentName: page.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await server.hocuspocus.hooks('onLoadDocument', loadPayload);
+        const titleText = document.getText('title');
+        titleText.delete(0, titleText.length);
+        titleText.insert(0, 'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1));
+
+        await server.hocuspocus.hooks('onStoreDocument', storePayload);
+
+        const after = await pool.query<{ title: string; ydoc: Buffer | null }>(
+          'select title, ydoc from pages where id = $1',
+          [page.id],
+        );
+        const persistedDocument = new Y.Doc();
+        Y.applyUpdate(persistedDocument, new Uint8Array(after.rows[0]?.ydoc ?? []));
+        expect(document.getText('title').toString()).toBe(page.title);
+        expect(after.rows[0]?.title).toBe(page.title);
+        expect(persistedDocument.getText('title').toString()).toBe(page.title);
+        expect(connection.close).not.toHaveBeenCalled();
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining(`[title] rejected page=${page.id}`),
+        );
+      } finally {
+        server.hocuspocus.documents.delete(page.id);
       }
     });
 

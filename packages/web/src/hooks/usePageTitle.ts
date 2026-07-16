@@ -4,15 +4,25 @@ import type * as Y from 'yjs';
 
 const API_BASE = '/api';
 
-async function updatePageTitle(pageId: string, title: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ title }),
-  });
-  if (!res.ok) {
-    throw new Error('Failed to update title');
+async function updatePageTitle(
+  pageId: string,
+  title: string,
+  usePublicEndpoint: boolean,
+): Promise<void> {
+  const request = (path: string) =>
+    fetch(`${API_BASE}/pages/${path}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+  let res = await request(usePublicEndpoint ? `${pageId}/title` : pageId);
+  // Anonymous session detection can settle just after the page renders. If a
+  // user commits during that brief window, retry through the edit-link route
+  // instead of silently losing the title.
+  if (!usePublicEndpoint && res.status === 401) {
+    res = await request(`${pageId}/title`);
   }
+  if (!res.ok) throw new Error('Failed to update title');
 }
 
 function normalizeTitle(value: string): string {
@@ -21,7 +31,7 @@ function normalizeTitle(value: string): string {
 }
 
 type UsePageTitleOptions = {
-  persistViaApi?: boolean;
+  usePublicEndpoint?: boolean;
 };
 
 export function usePageTitle(
@@ -30,10 +40,15 @@ export function usePageTitle(
   ydoc?: Y.Doc | null,
   options: UsePageTitleOptions = {},
 ) {
-  const [title, setTitle] = useState(initialTitle ?? 'Untitled');
+  const [title, setTitleState] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
-  const persistViaApi = options.persistViaApi ?? true;
+  const usePublicEndpoint = options.usePublicEndpoint ?? false;
   const lastSavedTitleRef = useRef('Untitled');
+  const hasLocalEditsRef = useRef(false);
+  const setTitle = useCallback((value: string) => {
+    hasLocalEditsRef.current = true;
+    setTitleState(value);
+  }, []);
   const ydocRef = useRef(ydoc);
   ydocRef.current = ydoc;
 
@@ -43,8 +58,9 @@ export function usePageTitle(
 
     const titleText = ydoc.getText('title');
     const observer = () => {
+      if (hasLocalEditsRef.current) return;
       const newTitle = titleText.toString() || 'Untitled';
-      setTitle(newTitle);
+      setTitleState(newTitle);
       lastSavedTitleRef.current = newTitle;
     };
     titleText.observe(observer);
@@ -55,9 +71,9 @@ export function usePageTitle(
   }, [ydoc]);
 
   useEffect(() => {
-    if (typeof initialTitle === 'string') {
+    if (typeof initialTitle === 'string' && !hasLocalEditsRef.current) {
       const normalized = normalizeTitle(initialTitle);
-      setTitle(normalized);
+      setTitleState(normalized);
       lastSavedTitleRef.current = normalized;
     }
   }, [initialTitle]);
@@ -65,7 +81,7 @@ export function usePageTitle(
   const mutation = useMutation({
     mutationFn: (nextTitle: string) => {
       if (!pageId) throw new Error('pageId is required');
-      return updatePageTitle(pageId, nextTitle);
+      return updatePageTitle(pageId, nextTitle, usePublicEndpoint);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
@@ -75,7 +91,11 @@ export function usePageTitle(
   const commitTitle = useCallback(
     (newTitle: string) => {
       const nextTitle = normalizeTitle(newTitle);
-      if (nextTitle === lastSavedTitleRef.current) return;
+      if (nextTitle === lastSavedTitleRef.current) {
+        hasLocalEditsRef.current = false;
+        return;
+      }
+      hasLocalEditsRef.current = false;
 
       // Write to Yjs doc for offline queue and real-time sync
       const currentDoc = ydocRef.current;
@@ -85,21 +105,16 @@ export function usePageTitle(
         titleText.insert(0, nextTitle);
       }
 
-      if (!persistViaApi) {
-        // Anonymous edit links persist through the authorized collaboration
-        // document. The protected metadata API would reject this fast path.
-        if (currentDoc) lastSavedTitleRef.current = nextTitle;
-        return;
-      }
-
-      // Send PATCH for DB column update (fast-path cache)
+      // Persist through either the authenticated page endpoint or the
+      // public-link endpoint. The collaboration update provides immediate
+      // feedback while the API write makes the title canonical.
       mutation.mutate(nextTitle, {
         onSuccess: () => {
           lastSavedTitleRef.current = nextTitle;
         },
       });
     },
-    [mutation, persistViaApi],
+    [mutation],
   );
 
   return { title, setTitle, commitTitle };

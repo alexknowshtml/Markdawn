@@ -420,6 +420,114 @@ describe('pages API', () => {
     });
   });
 
+  describe('PATCH /api/pages/:id/title public access', () => {
+    it('renames a page through an anonymous edit link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id, { title: 'Original title' });
+      const token = crypto.randomUUID();
+      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        page.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'edit', $3)`,
+        [page.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/title`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Anonymous title' }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ title: 'Anonymous title' });
+      const stored = await query<{ title: string }>('select title from pages where id = $1', [
+        page.id,
+      ]);
+      expect(stored.rows[0]?.title).toBe('Anonymous title');
+    });
+
+    it('rejects title changes through a view-only link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      const token = crypto.randomUUID();
+      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        page.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'view', $3)`,
+        [page.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/title`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Not allowed' }),
+      });
+
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ message: 'Forbidden' });
+    });
+
+    it('rejects oversized public request bodies before parsing JSON', async () => {
+      const app = await createTestApp();
+
+      const res = await app.request('/api/pages/00000000-0000-0000-0000-000000000000/title', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'T'.repeat(5_000) }),
+      });
+
+      expect(res.status).toBe(413);
+      expect(await res.json()).toEqual({ message: 'Request body is too large' });
+    });
+
+    it('rejects oversized titles through an anonymous edit link', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      const token = crypto.randomUUID();
+      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
+        token,
+        page.id,
+      ]);
+      await query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
+         VALUES ('page', $1, $2, 'edit', $3)`,
+        [page.id, owner.id, token],
+      );
+
+      const res = await app.request(`/api/pages/${page.id}/title`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'T'.repeat(251) }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ message: 'Title must be 250 characters or fewer' });
+    });
+
+    it('does not reveal private pages through the public title endpoint', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+
+      const res = await app.request(`/api/pages/${page.id}/title`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'Not allowed' }),
+      });
+
+      expect(res.status).toBe(404);
+    });
+  });
+
   describe('PATCH /api/pages/:id/restore', () => {
     it('restores a soft-deleted page', async () => {
       const app = await createTestApp();
@@ -952,21 +1060,20 @@ describe('pages API', () => {
       expect(body.title).toBe('Updated Title');
     });
 
-    it('renames pages whose titles exceed the PostgreSQL notification limit', async () => {
+    it('rejects signed-in title updates longer than 250 characters', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
       const page = await createTestPage(user.id, { title: 'Original' });
-      const longTitle = 'T'.repeat(9000);
 
       const res = await app.request(`/api/pages/${page.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ title: longTitle }),
+        body: JSON.stringify({ title: 'T'.repeat(251) }),
       });
 
-      expect(res.status).toBe(200);
-      expect((await res.json()).title).toBe(longTitle);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({ message: 'Title must be 250 characters or fewer' });
     });
 
     it('rejects a non-numeric page position', async () => {
