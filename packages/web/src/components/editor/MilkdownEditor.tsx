@@ -1172,7 +1172,9 @@ export function MilkdownEditor({
   }, [editor, updateActiveStates]);
 
   return (
-    <div className="editor-wrapper min-h-[500px] relative">
+    <div
+      className={`editor-wrapper min-h-[500px] relative ${isReadOnly ? '' : 'editor-scroll-past-end'}`}
+    >
       {!isReadOnly && (
         <>
           <WikiLinkSuggestions

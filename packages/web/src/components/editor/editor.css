@@ -23,6 +23,14 @@
   caret-color: #fafafa;
 }
 
+/* Visual writing room only; this space is not persisted in the document. */
+.editor-wrapper.editor-scroll-past-end::after {
+  content: "";
+  display: block;
+  height: 40vh;
+  pointer-events: none;
+}
+
 .milkdown-editor-view p {
   margin-bottom: 1rem;
 }
