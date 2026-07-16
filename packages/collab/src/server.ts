@@ -1371,6 +1371,10 @@ export function createCollabServer(config: CollabServerConfig) {
 
       if (sessionToken.startsWith('anon:')) {
         const anonymousId = sessionToken.slice(5);
+        if (!UUID_REGEX.test(anonymousId)) {
+          logger.debug('[auth] anonymous token requires a valid UUID identity');
+          throw new Error('Forbidden');
+        }
         if (!documentName || !UUID_REGEX.test(documentName)) {
           logger.debug('[auth] anonymous token requires valid document name');
           throw new Error('Forbidden');

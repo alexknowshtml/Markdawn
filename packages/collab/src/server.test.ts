@@ -325,10 +325,11 @@ describe('collab server', () => {
         [folderId, owner.id, token],
       );
 
+      const anonymousId = crypto.randomUUID();
       const connectionConfig = createConnectionConfig();
       const payload = createAuthenticatePayload(server, {
         documentName: page.id,
-        token: 'anon:folder-link-user',
+        token: `anon:${anonymousId}`,
         connectionConfig,
       });
 
@@ -337,10 +338,21 @@ describe('collab server', () => {
         user: { id: string; isAnonymous: boolean };
         permission: 'view' | 'edit' | 'admin';
       };
-      expect(authenticated.user.id).toBe('folder-link-user');
+      expect(authenticated.user.id).toBe(anonymousId);
       expect(authenticated.user.isAnonymous).toBe(true);
       expect(authenticated.permission).toBe('view');
       expect(connectionConfig.readOnly).toBe(true);
+    });
+
+    it('rejects malformed anonymous identities before querying page access', async () => {
+      const querySpy = vi.spyOn(pool, 'query');
+      const payload = createAuthenticatePayload(server, {
+        documentName: crypto.randomUUID(),
+        token: 'anon:not-a-uuid\nforged-log-line',
+      });
+
+      await expect(server.hocuspocus.hooks('onAuthenticate', payload)).rejects.toThrow('Forbidden');
+      expect(querySpy).not.toHaveBeenCalled();
     });
 
     it('skips page access checks when document name is empty', async () => {
