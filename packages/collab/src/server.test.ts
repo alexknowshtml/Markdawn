@@ -900,6 +900,83 @@ describe('collab server', () => {
       );
     });
 
+    it('rechecks writer access under the workspace lock before persistence', async () => {
+      const owner = await createTestUser(pool);
+      const editor = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      await pool.query(
+        `INSERT INTO shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         VALUES ('page', $1, $2, $3, 'edit')`,
+        [page.id, owner.id, editor.id],
+      );
+
+      let resolveLockAttempt: (() => void) | undefined;
+      const lockAttempted = new Promise<void>((resolve) => {
+        resolveLockAttempt = resolve;
+      });
+      const persistencePool = {
+        query: (text: string, values?: unknown[]) => pool.query(text, values),
+        connect: async () => {
+          const client = await pool.connect();
+          return {
+            query: async (text: string, values?: unknown[]) => {
+              if (text.includes('pg_advisory_xact_lock')) resolveLockAttempt?.();
+              return client.query(text, values);
+            },
+            release: () => client.release(),
+          };
+        },
+      } as unknown as typeof pool;
+      const lockedServer = createCollabServer({
+        port: 0,
+        pool: persistencePool,
+        logger: mockLogger(),
+        permissionRevalidationMs: 0,
+      });
+      const permissionMutation = await pool.connect();
+      let mutationOpen = true;
+      await permissionMutation.query('BEGIN');
+      await permissionMutation.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `workspace-access:${owner.id}`,
+      ]);
+
+      const document = new Document(page.id);
+      document.getText('content').insert(0, 'Stale editor update');
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: editor.id }, permission: 'edit' },
+        document,
+        documentName: page.id,
+        instance: lockedServer.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        const storePromise = lockedServer.hocuspocus.hooks('onStoreDocument', payload);
+        await lockAttempted;
+        await permissionMutation.query(
+          `DELETE FROM shares
+           WHERE entity_type = 'page' AND entity_id = $1 AND recipient_user_id = $2`,
+          [page.id, editor.id],
+        );
+        await permissionMutation.query('COMMIT');
+        mutationOpen = false;
+        await storePromise;
+
+        const stored = await pool.query<{ ydoc: Buffer | null }>(
+          'SELECT ydoc FROM pages WHERE id = $1',
+          [page.id],
+        );
+        expect(stored.rows[0]?.ydoc).toBeNull();
+      } finally {
+        if (mutationOpen) await permissionMutation.query('ROLLBACK');
+        permissionMutation.release();
+        await lockedServer.destroy();
+      }
+    });
+
     it('does not persist anonymous edits after link access is revoked', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);

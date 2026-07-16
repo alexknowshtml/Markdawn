@@ -746,34 +746,33 @@ async function persistDocument(
   hocuspocus: Hocuspocus,
   documentName: string,
   state: Uint8Array,
-  sourceDoc: Y.Doc,
+  persistedTitle: { fieldExisted: boolean; value: string },
   logger: Logger,
+  authorizePersistence?: (client: PoolClient) => Promise<boolean>,
   attempt = 1,
-) {
+): Promise<boolean> {
   const client = await pool.connect();
   let targetPageIds: string[] = [];
   let pageMeta: PageMeta | undefined;
 
   try {
     await client.query('BEGIN');
+    if (authorizePersistence && !(await authorizePersistence(client))) {
+      await client.query('ROLLBACK');
+      return false;
+    }
 
-    // Read title from the Yjs doc inside the transaction so we capture the
-    // latest state — the doc could have been mutated between function entry
-    // and here by the pg_notify handler (which updates the in-memory doc).
-    const titleFieldExisted = sourceDoc.share.has('title');
-    const title = extractTitle(sourceDoc);
-
-    if (titleFieldExisted) {
+    if (persistedTitle.fieldExisted) {
       // Only update the pages.title column when the extracted title is
       // meaningful. This prevents auto-created empty title types (e.g. when a
       // page was imported via markdown without a Y.Doc title field) from
       // overwriting the real title with 'Untitled'. The Y.Doc binary is always
       // saved regardless so the title can be recovered on next load.
-      const hasMeaningfulTitle = title !== 'Untitled';
+      const hasMeaningfulTitle = persistedTitle.value !== 'Untitled';
       if (hasMeaningfulTitle) {
         await client.query(
           "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = NOW() where id = $3",
-          [state, title, documentName],
+          [state, persistedTitle.value, documentName],
         );
       } else {
         await client.query('update pages set ydoc = $1, updated_at = NOW() where id = $2', [
@@ -805,7 +804,16 @@ async function persistDocument(
       logger.warn(`[persist] deadlock on page ${documentName}, retrying (attempt ${attempt})`);
       const delay = Math.min(50 * 2 ** attempt, 500);
       await new Promise((r) => setTimeout(r, delay));
-      return persistDocument(pool, hocuspocus, documentName, state, sourceDoc, logger, attempt + 1);
+      return persistDocument(
+        pool,
+        hocuspocus,
+        documentName,
+        state,
+        persistedTitle,
+        logger,
+        authorizePersistence,
+        attempt + 1,
+      );
     }
 
     logger.error(`[persist] failed for page ${documentName}: ${err}`);
@@ -818,7 +826,7 @@ async function persistDocument(
   // metadata from PostgreSQL when they reconnect, so opening rooms for them
   // here would add save latency without preserving useful state.
   const activeDocuments = getActiveMetaDocuments(hocuspocus);
-  if (activeDocuments.size === 0) return;
+  if (activeDocuments.size === 0) return true;
 
   const affectedIds = [...new Set([documentName, ...targetPageIds])];
   const recipients = await getPageMetaRecipients(
@@ -836,6 +844,7 @@ async function persistDocument(
   if (failures.length > 0) {
     throw new AggregateError(failures, `Failed to publish metadata for ${documentName}`);
   }
+  return true;
 }
 
 export async function publishPageRename(
@@ -1068,7 +1077,10 @@ export function createCollabServer(config: CollabServerConfig) {
     user?: { id: string; isAnonymous?: boolean };
     permission?: string;
   };
-  const pendingWriters = new Map<string, Map<string, PersistContext>>();
+  type PermissionQueryExecutor = Pick<Pool, 'query'>;
+  type PendingWriter = { context: PersistContext; version: number };
+  const pendingWriters = new Map<string, Map<string, PendingWriter>>();
+  const documentChangeVersions = new Map<string, number>();
   const blockedDocuments = new Set<string>();
   const documentSizeEstimates = new Map<string, number>();
 
@@ -1083,9 +1095,10 @@ export function createCollabServer(config: CollabServerConfig) {
   async function assertPageAccess(
     documentName: string,
     userId: string,
+    executor: PermissionQueryExecutor = pool,
   ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
     const ownerResult = await runPermissionQuery(() =>
-      pool.query('SELECT 1 FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1', [
+      executor.query('SELECT 1 FROM pages WHERE id = $1 AND is_deleted = false LIMIT 1', [
         documentName,
       ]),
     );
@@ -1094,7 +1107,7 @@ export function createCollabServer(config: CollabServerConfig) {
       throw new CollabAccessError();
     }
     const shareResult = await runPermissionQuery(() =>
-      pool.query('SELECT permission, full_access FROM get_effective_page_permission($1, $2)', [
+      executor.query('SELECT permission, full_access FROM get_effective_page_permission($1, $2)', [
         documentName,
         userId,
       ]),
@@ -1124,9 +1137,10 @@ export function createCollabServer(config: CollabServerConfig) {
 
   async function assertAnonymousPageAccess(
     documentName: string,
+    executor: PermissionQueryExecutor = pool,
   ): Promise<{ permission: 'view' | 'edit' | 'admin' }> {
     const shareResult = await runPermissionQuery(() =>
-      pool.query(
+      executor.query(
         `WITH page_parent AS (
          SELECT parent_id, is_public
          FROM pages
@@ -1162,6 +1176,28 @@ export function createCollabServer(config: CollabServerConfig) {
       throw new CollabAccessError();
     }
     return { permission: rawPermission };
+  }
+
+  async function lockDocumentAccessMutation(
+    documentName: string,
+    executor: PermissionQueryExecutor,
+  ): Promise<void> {
+    const ownerResult = await runPermissionQuery(() =>
+      executor.query(
+        `SELECT COALESCE(get_root_folder_owner(p.parent_id), p.created_by) AS owner_id
+         FROM pages p
+         WHERE p.id = $1 AND p.is_deleted = false`,
+        [documentName],
+      ),
+    );
+    const ownerId = ownerResult.rows[0]?.owner_id as string | null | undefined;
+    if (!ownerId) return;
+
+    await runPermissionQuery(() =>
+      executor.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        `workspace-access:${ownerId}`,
+      ]),
+    );
   }
 
   function updateRevalidatedConnections(
@@ -1209,6 +1245,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
     blockedDocuments.add(documentName);
     pendingWriters.delete(documentName);
+    documentChangeVersions.delete(documentName);
     documentSizeEstimates.delete(documentName);
     const activeDocument = server.hocuspocus.documents.get(documentName) as Document | undefined;
     for (const connection of activeDocument?.getConnections() ?? []) {
@@ -1226,13 +1263,14 @@ export function createCollabServer(config: CollabServerConfig) {
   async function canPersistDocument(
     documentName: string,
     context: { user?: { id: string; isAnonymous?: boolean }; permission?: string } | undefined,
+    executor: PermissionQueryExecutor = pool,
   ): Promise<boolean> {
     if (!context?.user) return false;
 
     try {
       const access = context.user.isAnonymous
-        ? await assertAnonymousPageAccess(documentName)
-        : await assertPageAccess(documentName, context.user.id);
+        ? await assertAnonymousPageAccess(documentName, executor)
+        : await assertPageAccess(documentName, context.user.id, executor);
       context.permission = access.permission;
       updateRevalidatedConnections(documentName, context.user, access.permission);
       if (access.permission === 'view') {
@@ -1257,48 +1295,63 @@ export function createCollabServer(config: CollabServerConfig) {
   async function canPersistPendingDocument(
     documentName: string,
     fallbackContext: PersistContext | undefined,
+    executor?: PermissionQueryExecutor,
+    maximumWriterVersion = Number.POSITIVE_INFINITY,
   ): Promise<boolean> {
     if (blockedDocuments.has(documentName)) return false;
-    const writers = Array.from(pendingWriters.get(documentName)?.values() ?? []);
-    if (writers.length === 0 && fallbackContext) writers.push(fallbackContext);
 
-    for (const writer of writers) {
-      let canPersist: boolean;
-      try {
-        canPersist = await canPersistDocument(documentName, writer);
-      } catch (error) {
-        if (error instanceof CollabVerificationError) {
-          logger.warn(
-            `[persist] blocking page=${documentName} after permission verification failed: ${error.originalError}`,
-          );
-          blockDocumentForReload(documentName, 4500, 'Permission verification failed');
-          return false;
-        }
+    try {
+      if (executor) await lockDocumentAccessMutation(documentName, executor);
+      if (blockedDocuments.has(documentName)) return false;
+      const writers = Array.from(pendingWriters.get(documentName)?.values() ?? [])
+        .filter((writer) => writer.version <= maximumWriterVersion)
+        .map((writer) => writer.context);
+      if (writers.length === 0 && fallbackContext) writers.push(fallbackContext);
 
-        logger.error(
-          `[persist] unexpected permission revalidation failure for page=${documentName}: ${error}`,
-        );
-        try {
-          blockDocumentForReload(documentName, 4500, 'Permission verification failed');
-        } catch (blockError) {
-          logger.error(
-            `[persist] failed to block page=${documentName} after unexpected error: ${blockError}`,
-          );
-        }
-        throw error;
+      for (const writer of writers) {
+        const canPersist = await canPersistDocument(documentName, writer, executor ?? pool);
+        if (canPersist) continue;
+
+        // The in-memory Y.Doc may already contain this writer's rejected update.
+        // Disconnect the affected room so Hocuspocus unloads it and reloads the
+        // last persisted state rather than saving a mixed-author update later.
+        // Only the rejected writer receives a revoke/update event from the
+        // targeted revalidation above. Other collaborators need a clean room
+        // reload, not a false access-revocation notification.
+        blockDocumentForReload(documentName, 4500, 'Document reload required');
+        return false;
       }
-      if (canPersist) continue;
+      return true;
+    } catch (error) {
+      if (error instanceof CollabVerificationError) {
+        logger.warn(
+          `[persist] blocking page=${documentName} after permission verification failed: ${error.originalError}`,
+        );
+        blockDocumentForReload(documentName, 4500, 'Permission verification failed');
+        return false;
+      }
 
-      // The in-memory Y.Doc may already contain this writer's rejected update.
-      // Disconnect the affected room so Hocuspocus unloads it and reloads the
-      // last persisted state rather than saving a mixed-author update later.
-      // Only the rejected writer receives a revoke/update event from the
-      // targeted revalidation above. Other collaborators need a clean room
-      // reload, not a false access-revocation notification.
-      blockDocumentForReload(documentName, 4500, 'Document reload required');
-      return false;
+      logger.error(
+        `[persist] unexpected permission revalidation failure for page=${documentName}: ${error}`,
+      );
+      try {
+        blockDocumentForReload(documentName, 4500, 'Permission verification failed');
+      } catch (blockError) {
+        logger.error(
+          `[persist] failed to block page=${documentName} after unexpected error: ${blockError}`,
+        );
+      }
+      throw error;
     }
-    return true;
+  }
+
+  function clearPersistedWriters(documentName: string, maximumWriterVersion: number): void {
+    const writers = pendingWriters.get(documentName);
+    if (!writers) return;
+    for (const [key, writer] of writers) {
+      if (writer.version <= maximumWriterVersion) writers.delete(key);
+    }
+    if (writers.size === 0) pendingWriters.delete(documentName);
   }
 
   async function handleInviteReceived(payload: {
@@ -1445,6 +1498,7 @@ export function createCollabServer(config: CollabServerConfig) {
     onLoadDocument: async ({ documentName, document, context }) => {
       blockedDocuments.delete(documentName);
       pendingWriters.delete(documentName);
+      documentChangeVersions.delete(documentName);
       documentSizeEstimates.delete(documentName);
       if (isMetaRoom(documentName)) {
         const userId = documentName.slice(META_ROOM_PREFIX.length);
@@ -1530,8 +1584,10 @@ export function createCollabServer(config: CollabServerConfig) {
       }
 
       const writerKey = `${writer.user.isAnonymous === true ? 'anonymous' : 'user'}:${writer.user.id}`;
-      const writers = pendingWriters.get(documentName) ?? new Map<string, PersistContext>();
-      writers.set(writerKey, writer);
+      const version = (documentChangeVersions.get(documentName) ?? 0) + 1;
+      documentChangeVersions.set(documentName, version);
+      const writers = pendingWriters.get(documentName) ?? new Map<string, PendingWriter>();
+      writers.set(writerKey, { context: writer, version });
       pendingWriters.set(documentName, writers);
     },
     onStoreDocument: async (data) => {
@@ -1553,6 +1609,11 @@ export function createCollabServer(config: CollabServerConfig) {
       if (!(await canPersistPendingDocument(documentName, context))) return;
 
       const state = Y.encodeStateAsUpdate(data.document);
+      const persistedWriterVersion = documentChangeVersions.get(documentName) ?? 0;
+      const persistedTitle = {
+        fieldExisted: data.document.share.has('title'),
+        value: extractTitle(data.document),
+      };
       if (!state || state.length === 0) {
         logger.debug(`[persist] skipping empty state: ${documentName}`);
         return;
@@ -1564,8 +1625,18 @@ export function createCollabServer(config: CollabServerConfig) {
 
       logger.info(`[persist] saving: "${documentName}", size: ${state.length} bytes`);
       try {
-        await persistDocument(pool, server.hocuspocus, documentName, state, data.document, logger);
-        pendingWriters.delete(documentName);
+        const persisted = await persistDocument(
+          pool,
+          server.hocuspocus,
+          documentName,
+          state,
+          persistedTitle,
+          logger,
+          (client) =>
+            canPersistPendingDocument(documentName, context, client, persistedWriterVersion),
+        );
+        if (!persisted) return;
+        clearPersistedWriters(documentName, persistedWriterVersion);
         documentSizeEstimates.set(documentName, state.length);
         logger.debug(`[persist] saved: ${documentName}`);
       } catch (err) {
@@ -1576,6 +1647,7 @@ export function createCollabServer(config: CollabServerConfig) {
     afterUnloadDocument: async ({ documentName }) => {
       blockedDocuments.delete(documentName);
       pendingWriters.delete(documentName);
+      documentChangeVersions.delete(documentName);
       documentSizeEstimates.delete(documentName);
     },
     onDisconnect: async ({ documentName, instance, context }) => {
@@ -1591,6 +1663,11 @@ export function createCollabServer(config: CollabServerConfig) {
         if (!(await canPersistPendingDocument(documentName, persistContext))) return;
 
         const state = Y.encodeStateAsUpdate(doc);
+        const persistedWriterVersion = documentChangeVersions.get(documentName) ?? 0;
+        const persistedTitle = {
+          fieldExisted: doc.share.has('title'),
+          value: extractTitle(doc),
+        };
         if (!state || state.length === 0) return;
         if (state.length > maxDocumentBytes) {
           blockOversizedDocument(documentName, state.length);
@@ -1598,8 +1675,18 @@ export function createCollabServer(config: CollabServerConfig) {
         }
 
         logger.info(`[disconnect] force saving: ${documentName}, ${state.length} bytes`);
-        await persistDocument(pool, server.hocuspocus, documentName, state, doc, logger);
-        pendingWriters.delete(documentName);
+        const persisted = await persistDocument(
+          pool,
+          server.hocuspocus,
+          documentName,
+          state,
+          persistedTitle,
+          logger,
+          (client) =>
+            canPersistPendingDocument(documentName, persistContext, client, persistedWriterVersion),
+        );
+        if (!persisted) return;
+        clearPersistedWriters(documentName, persistedWriterVersion);
         documentSizeEstimates.set(documentName, state.length);
         logger.debug(`[disconnect] force saved: ${documentName}`);
       } catch (err) {
