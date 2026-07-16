@@ -25,6 +25,7 @@ import {
 import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
+const DELETION_EVENT_QUEUE_LIMIT = 256;
 const PAGE_RENAME_EVENT_QUEUE_LIMIT = 256;
 const SHARE_EVENT_QUEUE_LIMIT = 256;
 const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
@@ -877,25 +878,29 @@ export async function publishPageRename(
   logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
 }
 
+function closeDeletedPageConnections(hocuspocus: Hocuspocus, pageId: string): void {
+  const activeDoc = hocuspocus.documents.get(pageId) as Document | undefined;
+  if (!activeDoc) return;
+
+  for (const connection of activeDoc.getConnections()) {
+    connection.sendStateless(
+      JSON.stringify({
+        type: 'entity_deleted',
+        entityType: 'page',
+        entityId: pageId,
+      }),
+    );
+    connection.close({ code: 4402, reason: 'Page deleted' });
+  }
+}
+
 export async function publishPageDeletion(
   hocuspocus: Hocuspocus,
   pool: Pool,
   pageId: string,
   logger: Logger,
 ): Promise<void> {
-  const activeDoc = hocuspocus.documents.get(pageId) as Document | undefined;
-  if (activeDoc) {
-    for (const connection of activeDoc.getConnections()) {
-      connection.sendStateless(
-        JSON.stringify({
-          type: 'entity_deleted',
-          entityType: 'page',
-          entityId: pageId,
-        }),
-      );
-      connection.close({ code: 4402, reason: 'Page deleted' });
-    }
-  }
+  closeDeletedPageConnections(hocuspocus, pageId);
 
   const activeDocuments = getActiveMetaDocuments(hocuspocus);
   const recipientIds = await getDeletedPageMetaRecipientIds(
@@ -933,38 +938,41 @@ export async function publishFolderDeletion(
   folderId: string,
   logger: Logger,
 ): Promise<void> {
-  const result = await pool.query<{ id: string }>(
-    `SELECT p.id
-     FROM pages p
-     JOIN folders deleted_root ON deleted_root.id = $1
-     WHERE p.parent_id IN (
-       SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
-     )
-       AND p.is_deleted = true
-       AND p.deleted_at = deleted_root.deleted_at`,
-    [folderId],
+  const activePageIds = Array.from(hocuspocus.documents.keys()).filter((documentName) =>
+    UUID_REGEX.test(documentName),
   );
+  const deletedActivePages =
+    activePageIds.length === 0
+      ? []
+      : (
+          await pool.query<{ id: string }>(
+            `SELECT p.id
+             FROM pages p
+             JOIN folders deleted_root ON deleted_root.id = $1
+             WHERE p.id = ANY($2::uuid[])
+               AND p.parent_id IN (
+                 SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
+               )
+               AND p.is_deleted = true
+               AND p.deleted_at = deleted_root.deleted_at`,
+            [folderId, activePageIds],
+          )
+        ).rows.map((row) => row.id);
 
-  const pageIds = result.rows.map((row) => row.id);
+  for (const pageId of deletedActivePages) {
+    closeDeletedPageConnections(hocuspocus, pageId);
+  }
+
   const failures: unknown[] = [];
-  const batchSize = 25;
-  for (let offset = 0; offset < pageIds.length; offset += batchSize) {
-    const batch = pageIds.slice(offset, offset + batchSize);
-    const results = await Promise.allSettled(
-      batch.map((pageId) => publishPageDeletion(hocuspocus, pool, pageId, logger)),
-    );
-    for (const [index, publishResult] of results.entries()) {
-      if (publishResult.status === 'fulfilled') continue;
-      const pageId = batch[index];
-      failures.push(publishResult.reason);
-      logger.error(
-        `[listen] failed to publish folder deletion for page ${pageId ?? 'unknown'}: ${publishResult.reason}`,
-      );
-    }
+  const activeDocuments = getActiveMetaDocuments(hocuspocus);
+  try {
+    await rebuildActivePageMetaDocuments(hocuspocus, pool, logger);
+  } catch (error) {
+    failures.push(error);
+    logger.error(`[listen] failed to rebuild metadata after folder deletion ${folderId}: ${error}`);
   }
 
   try {
-    const activeDocuments = getActiveMetaDocuments(hocuspocus);
     const recipientIds = await getDeletedFolderMetaRecipientIds(
       pool,
       folderId,
@@ -991,8 +999,40 @@ export async function publishFolderDeletion(
     throw new AggregateError(failures, `Failed to publish all deletion events for ${folderId}`);
   }
   logger.debug(
-    `[listen] published folder deletion and ${pageIds.length} page deletion(s) for ${folderId}`,
+    `[listen] published folder deletion and closed ${deletedActivePages.length} active page(s) for ${folderId}`,
   );
+}
+
+async function reconcileDeletionOverflow(
+  hocuspocus: Hocuspocus,
+  pool: Pool,
+  logger: Logger,
+): Promise<void> {
+  const activePageIds = Array.from(hocuspocus.documents.keys()).filter((documentName) =>
+    UUID_REGEX.test(documentName),
+  );
+  if (activePageIds.length > 0) {
+    const result = await pool.query<{ id: string }>(
+      `SELECT requested.id
+       FROM unnest($1::uuid[]) requested(id)
+       LEFT JOIN pages p ON p.id = requested.id
+       WHERE p.id IS NULL OR p.is_deleted = true`,
+      [activePageIds],
+    );
+    for (const row of result.rows) closeDeletedPageConnections(hocuspocus, row.id);
+  }
+
+  await rebuildActivePageMetaDocuments(hocuspocus, pool, logger);
+  const invalidationMessage = JSON.stringify({
+    type: 'workspace_membership_event',
+    action: 'role_changed',
+    ownerId: 'all',
+  });
+  for (const document of getActiveMetaDocuments(hocuspocus).values()) {
+    for (const connection of document.getConnections()) {
+      connection.sendStateless(invalidationMessage);
+    }
+  }
 }
 
 export interface CollabServerConfig {
@@ -1665,6 +1705,23 @@ export function createCollabServer(config: CollabServerConfig) {
       await publishFolderDeletion(server.hocuspocus, pool, folderId, logger);
     }
 
+    type DeletionEvent = { entityType: 'page' | 'folder'; entityId: string };
+    const deletionEventQueue = createCoalescingTaskQueue<DeletionEvent>({
+      maxPending: DELETION_EVENT_QUEUE_LIMIT,
+      getKey: (event) => `${event.entityType}:${event.entityId}`,
+      handle: (event) =>
+        event.entityType === 'page'
+          ? handlePageDeleted(event.entityId)
+          : handleFolderDeleted(event.entityId),
+      handleOverflow: async () => {
+        logger.warn(
+          `[listen] deletion event backlog exceeded ${DELETION_EVENT_QUEUE_LIMIT}; rebuilding active state`,
+        );
+        await reconcileDeletionOverflow(server.hocuspocus, pool, logger);
+      },
+      onError: (error) => logger.error(`[listen] deletion event failed: ${error}`),
+    });
+
     const pageRenameEventQueue = createCoalescingTaskQueue<string>({
       maxPending: PAGE_RENAME_EVENT_QUEUE_LIMIT,
       getKey: (pageId) => pageId,
@@ -1714,15 +1771,11 @@ export function createCollabServer(config: CollabServerConfig) {
             if (msg.channel === 'page_deleted') {
               const payload = JSON.parse(msg.payload ?? '{}') as { pageId?: string };
               if (!payload.pageId) return;
-              void handlePageDeleted(payload.pageId).catch((err) =>
-                logger.error(`[listen] handlePageDeleted failed: ${err}`),
-              );
+              deletionEventQueue.enqueue({ entityType: 'page', entityId: payload.pageId });
             } else if (msg.channel === 'folder_deleted') {
               const payload = JSON.parse(msg.payload ?? '{}') as { folderId?: string };
               if (!payload.folderId) return;
-              void handleFolderDeleted(payload.folderId).catch((err) =>
-                logger.error(`[listen] handleFolderDeleted failed: ${err}`),
-              );
+              deletionEventQueue.enqueue({ entityType: 'folder', entityId: payload.folderId });
             } else if (msg.channel === 'page_renamed') {
               const payload = JSON.parse(msg.payload ?? '{}') as { pageId?: string };
               if (!payload.pageId) return;
@@ -1799,6 +1852,7 @@ export function createCollabServer(config: CollabServerConfig) {
       async value() {
         stopped = true;
         if (reconnectTimer) clearTimeout(reconnectTimer);
+        deletionEventQueue.drainAndStop();
         pageRenameEventQueue.drainAndStop();
         const activeListenClient = listenClient;
         listenClient = null;
@@ -1807,7 +1861,11 @@ export function createCollabServer(config: CollabServerConfig) {
               logger.error(`[listen] failed to close client during shutdown: ${error}`);
             })
           : Promise.resolve();
-        await Promise.all([closeListenClient, pageRenameEventQueue.waitForIdle()]);
+        await Promise.all([
+          closeListenClient,
+          deletionEventQueue.waitForIdle(),
+          pageRenameEventQueue.waitForIdle(),
+        ]);
         return origDestroy();
       },
       writable: true,

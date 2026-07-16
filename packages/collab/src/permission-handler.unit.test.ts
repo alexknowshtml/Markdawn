@@ -107,6 +107,9 @@ function createPool(
   } as unknown as Pool;
 }
 
+const ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000001';
+const OTHER_ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000002';
+
 function privilegedEntry(userId: string, permission: string = 'view') {
   return { user_id: userId, permission };
 }
@@ -637,10 +640,10 @@ describe('handleShareEvent', () => {
       readOnly: false,
     });
     const doc = createDocument([conn]);
-    const server = createServer(doc);
+    const server = createServerWithDocuments(new Map([[ACTIVE_PAGE_ID, doc]]));
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('SELECT p.id FROM pages p')) {
-        return { rows: [{ id: 'page-1' }] };
+        return { rows: [{ id: ACTIVE_PAGE_ID }] };
       }
       if (sql.includes('get_effective_page_permission')) {
         return { rows: [{ user_id: 'user-1', permission: 'edit' }] };
@@ -666,6 +669,10 @@ describe('handleShareEvent', () => {
     expect(conn.readOnly).toBe(false);
     expect(conn.context.permission).toBe('edit');
     expect(conn.sendStateless).not.toHaveBeenCalled();
+    expect(query).toHaveBeenCalledWith(expect.stringContaining('p.id = ANY($2::uuid[])'), [
+      'folder-1',
+      [ACTIVE_PAGE_ID],
+    ]);
   });
 
   it('recomputes folder inheritance changes and revokes users who lost access', async () => {
@@ -679,10 +686,10 @@ describe('handleShareEvent', () => {
       readOnly: false,
     });
     const doc = createDocument([inheritedConn, directConn]);
-    const server = createServer(doc);
+    const server = createServerWithDocuments(new Map([[ACTIVE_PAGE_ID, doc]]));
     const query = vi.fn(async (sql: string, params?: unknown[]) => {
       if (sql.includes('SELECT p.id FROM pages p')) {
-        return { rows: [{ id: 'page-1' }] };
+        return { rows: [{ id: ACTIVE_PAGE_ID }] };
       }
       if (sql.includes('get_effective_page_permission')) {
         const userIds = params?.[1] as string[];
@@ -731,8 +738,8 @@ describe('handleShareEvent', () => {
     });
     const server = createServerWithDocuments(
       new Map([
-        ['affected-page', createDocument([affectedConn, otherUserConn])],
-        ['unrelated-page', createDocument([unrelatedConn])],
+        [ACTIVE_PAGE_ID, createDocument([affectedConn, otherUserConn])],
+        [OTHER_ACTIVE_PAGE_ID, createDocument([unrelatedConn])],
       ]),
     );
     const query = vi.fn(async (sql: string, params?: unknown[]) => {
@@ -744,7 +751,7 @@ describe('handleShareEvent', () => {
         return {
           rows: userIds.map((userId) => ({
             user_id: userId,
-            permission: params?.[0] === 'affected-page' ? null : 'edit',
+            permission: params?.[0] === ACTIVE_PAGE_ID ? null : 'edit',
           })),
         };
       }

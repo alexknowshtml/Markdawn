@@ -91,6 +91,32 @@ describe('createCoalescingTaskQueue', () => {
     expect(handled).toEqual(['active', 'pending']);
   });
 
+  it('retries a failed canonical refresh without losing overflowed work', async () => {
+    const firstTask = deferred();
+    const handleOverflow = vi
+      .fn<() => Promise<void>>()
+      .mockRejectedValueOnce(new Error('database unavailable'))
+      .mockResolvedValueOnce();
+    const queue = createCoalescingTaskQueue<{ key: string }>({
+      maxPending: 1,
+      getKey: (task) => task.key,
+      handle: async (task) => {
+        if (task.key === 'first') await firstTask.promise;
+      },
+      handleOverflow,
+      onError: vi.fn(),
+      overflowRetryDelayMs: 0,
+    });
+
+    queue.enqueue({ key: 'first' });
+    queue.enqueue({ key: 'pending' });
+    queue.enqueue({ key: 'overflow' });
+    firstTask.resolve();
+    await queue.waitForIdle();
+
+    expect(handleOverflow).toHaveBeenCalledTimes(2);
+  });
+
   it('replaces an oversized backlog with a canonical refresh', async () => {
     const firstTask = deferred();
     const overflowTask = deferred();

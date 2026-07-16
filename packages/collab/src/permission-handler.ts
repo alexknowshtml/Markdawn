@@ -620,17 +620,29 @@ export async function handleShareEvent(
     `[share] received event: action=${action} entityType=${entityType} entity=${entityId} permission=${rawPermission ?? 'none'} targetUserId=${targetUserId ?? 'all'}`,
   );
 
-  // For folders, find all pages in the subtree and apply to each.
+  // For folders, intersect the subtree with active page rooms before doing
+  // any permission work. Inactive pages rebuild authorization from PostgreSQL
+  // when they are opened and must not block live revocations.
   if (entityType === 'folder') {
+    const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter((pageId) =>
+      PAGE_ID_PATTERN.test(pageId),
+    );
+    if (activePageIds.length === 0) {
+      logger.debug(`[share] no active pages for folder ${entityId}, skipping`);
+      return;
+    }
+
     let pageIds: string[] = [];
     if (pool) {
       try {
         const result = await pool.query(
           `SELECT p.id FROM pages p
-          WHERE p.parent_id IN (
-            SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
-          ) AND p.is_deleted = false`,
-          [entityId],
+          WHERE p.id = ANY($2::uuid[])
+            AND p.parent_id IN (
+              SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
+            )
+            AND p.is_deleted = false`,
+          [entityId, activePageIds],
         );
         pageIds = result.rows.map((r: { id: string }) => r.id);
       } catch (err) {
@@ -638,8 +650,7 @@ export async function handleShareEvent(
         // The subtree lookup failed, so revalidate matching users on every
         // active page. Each per-page check still fails closed, while users
         // whose effective access can be verified remain connected.
-        for (const activePageId of server.hocuspocus?.documents?.keys() ?? []) {
-          if (activePageId.startsWith('page-meta:')) continue;
+        for (const activePageId of activePageIds) {
           await recomputePageConnections(server, activePageId, pool, logger, message, targetUserId);
         }
         return;

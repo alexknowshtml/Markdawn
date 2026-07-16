@@ -4,6 +4,7 @@ export type CoalescingTaskQueueOptions<T> = {
   handle: (task: T) => Promise<void>;
   handleOverflow: () => Promise<void>;
   onError: (error: unknown) => void;
+  overflowRetryDelayMs?: number;
 };
 
 export type CoalescingTaskQueue<T> = {
@@ -25,6 +26,7 @@ export function createCoalescingTaskQueue<T>(
   }
 
   const pending = new Map<string, T>();
+  const overflowRetryDelayMs = options.overflowRetryDelayMs ?? 1000;
   const idleResolvers = new Set<() => void>();
   let overflowPending = false;
   let overflowRunning = false;
@@ -53,6 +55,10 @@ export function createCoalescingTaskQueue<T>(
             await options.handleOverflow();
           } catch (error) {
             options.onError(error);
+            if (accepting) {
+              overflowPending = true;
+              await new Promise<void>((resolve) => setTimeout(resolve, overflowRetryDelayMs));
+            }
           } finally {
             overflowRunning = false;
           }
