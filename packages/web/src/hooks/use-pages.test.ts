@@ -1,5 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMockPageTreeNode } from '../test-utils/factories';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 vi.mock('../utils/toast', () => ({
@@ -293,6 +294,33 @@ describe('useUpdatePage', () => {
         body: JSON.stringify({ title: 'Updated Title' }),
       }),
     );
+  });
+
+  it('updates cached properties immediately after a successful save', async () => {
+    const page = createMockPageTreeNode({ id: 'p1', properties: null });
+    queryClient.setQueryData(['pageTree'], [page]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ ...page, properties: { tags: ['fresh-tag'] } }),
+    });
+
+    const { result } = renderHook(() => useUpdatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    result.current.mutate({
+      pageId: 'p1',
+      updates: { properties: { tags: ['fresh-tag'] } },
+      silent: true,
+    });
+
+    await waitFor(() => {
+      expect(result.current.isSuccess).toBe(true);
+    });
+
+    expect(queryClient.getQueryData(['pageTree'])).toEqual([
+      expect.objectContaining({ id: 'p1', properties: { tags: ['fresh-tag'] } }),
+    ]);
   });
 
   it('suppresses success toast when silent option is set', async () => {

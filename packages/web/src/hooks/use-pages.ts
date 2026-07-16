@@ -135,6 +135,31 @@ async function importMarkdown(file: File): Promise<Page> {
   return res.json();
 }
 
+function updatePageInTree(
+  nodes: PageTreeNode[] | undefined,
+  pageId: string,
+  updates: Partial<Page>,
+): PageTreeNode[] | undefined {
+  if (!nodes) return nodes;
+
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.id === pageId) {
+      changed = true;
+      return { ...node, ...updates, children: node.children };
+    }
+
+    const children = updatePageInTree(node.children, pageId, updates) ?? node.children;
+    if (children !== node.children) {
+      changed = true;
+      return { ...node, children };
+    }
+    return node;
+  });
+
+  return changed ? next : nodes;
+}
+
 export function usePageTree() {
   return useQuery({
     queryKey: ['pageTree'],
@@ -179,7 +204,10 @@ export function useUpdatePage() {
       updates: Partial<Page>;
       silent?: boolean;
     }) => updatePage(pageId, updates),
-    onSuccess: (_, { pageId, silent }) => {
+    onSuccess: (_, { pageId, updates, silent }) => {
+      queryClient.setQueryData<PageTreeNode[]>(['pageTree'], (pages) =>
+        updatePageInTree(pages, pageId, updates),
+      );
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });

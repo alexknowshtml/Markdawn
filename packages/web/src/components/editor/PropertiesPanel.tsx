@@ -36,7 +36,8 @@ import type React from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useUpdatePage } from '../../hooks/use-pages';
-import { useTags } from '../../hooks/use-tags';
+import { usePropertyMetadata } from '../../hooks/usePropertyMetadata';
+import { cleanTagName, tagIdentity } from '../../utils/tags';
 
 interface PropertiesPanelProps {
   pageId: string;
@@ -80,28 +81,29 @@ interface TagValueEditorProps {
   onChange: (newTags: string[]) => void;
   suggestions: string[];
   onBlur?: () => void;
+  onSuggestionsOpen?: () => void;
 }
 
 const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
-  ({ tags, onChange, suggestions, onBlur }, ref) => {
+  ({ tags, onChange, suggestions, onBlur, onSuggestionsOpen }, ref) => {
     const readOnly = useIsReadOnly();
     const [inputValue, setInputValue] = useState('');
     const [isFocused, setIsFocused] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     const filteredSuggestions = useMemo(() => {
-      if (!inputValue) {
-        return suggestions.filter((s) => !tags.includes(s));
-      }
-      return suggestions.filter(
-        (s) => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s),
-      );
+      const existingTags = new Set(tags.map(tagIdentity));
+      return suggestions.filter((suggestion) => {
+        if (existingTags.has(tagIdentity(suggestion))) return false;
+        return !inputValue || suggestion.toLowerCase().includes(inputValue.toLowerCase());
+      });
     }, [inputValue, suggestions, tags]);
 
     const addTag = (tag: string) => {
-      const trimmed = tag.trim();
-      if (trimmed && !tags.includes(trimmed)) {
-        onChange([...tags, trimmed]);
+      const name = cleanTagName(tag);
+      const identity = tagIdentity(name);
+      if (identity && !tags.some((existing) => tagIdentity(existing) === identity)) {
+        onChange([...tags, name]);
       }
       setInputValue('');
     };
@@ -178,7 +180,10 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
                 setSelectedIndex(0);
               }}
               onKeyDown={handleKeyDown}
-              onFocus={() => setIsFocused(true)}
+              onFocus={() => {
+                setIsFocused(true);
+                onSuggestionsOpen?.();
+              }}
               onBlur={() => {
                 setIsFocused(false);
                 if (onBlur) onBlur();
@@ -414,8 +419,14 @@ function SortablePropertyRow({
   onDelete,
   onRename,
   isNew,
+  propertyKeySuggestions,
   tagSuggestions,
-}: SortablePropertyRowProps & { tagSuggestions: string[] }) {
+  refreshTags,
+}: SortablePropertyRowProps & {
+  propertyKeySuggestions: string[];
+  tagSuggestions: string[];
+  refreshTags: () => void;
+}) {
   const readOnly = useIsReadOnly();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
@@ -496,7 +507,7 @@ function SortablePropertyRow({
       <PropertyKeySelector
         currentKey={item.key}
         onSelect={handleKeySelect}
-        suggestions={['tags', 'date', 'author', 'url', 'created', 'updated']}
+        suggestions={propertyKeySuggestions}
         isEditing={isEditingKey}
         setIsEditing={setIsEditingKey}
       />
@@ -508,6 +519,7 @@ function SortablePropertyRow({
             tags={Array.isArray(item.value) ? (item.value as string[]) : []}
             suggestions={tagSuggestions}
             onChange={(newTags) => onUpdate(item.id, newTags)}
+            onSuggestionsOpen={refreshTags}
           />
         ) : isEditingValue ? (
           <input
@@ -638,8 +650,11 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
     });
   }, [properties]);
 
-  const { data: allTags } = useTags();
-  const tagSuggestions = useMemo(() => allTags?.map((t) => t.name) ?? [], [allTags]);
+  const {
+    allKeys: propertyKeySuggestions,
+    allTags: tagSuggestions,
+    refreshTags,
+  } = usePropertyMetadata();
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -783,7 +798,9 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
                   onUpdate={updateProperty}
                   onDelete={deleteProperty}
                   onRename={renameProperty}
+                  propertyKeySuggestions={propertyKeySuggestions}
                   tagSuggestions={tagSuggestions}
+                  refreshTags={refreshTags}
                 />
               ))}
             </SortableContext>
