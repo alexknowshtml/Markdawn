@@ -5,6 +5,7 @@ import {
   createTestPage,
   createTestSession,
   createTestUser,
+  createTestWorkspaceMember,
 } from '../test-utils';
 
 describe('comments API', () => {
@@ -66,6 +67,48 @@ describe('comments API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.content).toBe('Great page!');
+    });
+
+    it('allows viewers to read comments but denies comment mutations', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const session = await createTestSession(viewer.id);
+      const page = await createTestPage(owner.id);
+      const comment = await createTestComment(page.id, viewer.id);
+      await createTestWorkspaceMember(owner.id, viewer.id, 'viewer');
+      const headers = {
+        'Content-Type': 'application/json',
+        Cookie: session.Cookie,
+        Origin: 'http://localhost:5173',
+      };
+
+      const listResponse = await app.request(`/api/pages/${page.id}/comments`, { headers });
+      expect(listResponse.status).toBe(200);
+
+      const mutationResponses = await Promise.all([
+        app.request(`/api/pages/${page.id}/comments`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content: 'Viewer comment' }),
+        }),
+        app.request(`/api/pages/${page.id}/comments/${comment.id}/replies`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content: 'Viewer reply' }),
+        }),
+        app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+          method: 'PATCH',
+          headers,
+          body: JSON.stringify({ resolved: true }),
+        }),
+        app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+          method: 'DELETE',
+          headers,
+        }),
+      ]);
+
+      expect(mutationResponses.map((response) => response.status)).toEqual([403, 403, 403, 403]);
     });
 
     it('returns 400 when content is missing', async () => {

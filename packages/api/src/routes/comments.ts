@@ -165,7 +165,7 @@ commentsRoute.post(':pageId/comments', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
     throw new HTTPException(404, { message: 'User not found' });
@@ -179,7 +179,7 @@ commentsRoute.post(':pageId/comments', async (c) => {
 
   const result = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, 'page', pageId);
-    await ensurePageAccess(pageId, user.id, 'view', tx);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
     return executeQuery(
       tx,
       'insert into comments (page_id, user_id, content, anchor_block_id) values ($1, $2, $3, $4) returning id, page_id, user_id, content, anchor_block_id, resolved, created_at, updated_at',
@@ -221,7 +221,7 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
   const currentUser = await getUserById(user.id);
   if (!currentUser) {
     throw new HTTPException(404, { message: 'User not found' });
@@ -234,7 +234,7 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
 
   const result = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, 'page', pageId);
-    await ensurePageAccess(pageId, user.id, 'view', tx);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,
       'select id from comments where id = $1 and page_id = $2',
@@ -280,13 +280,13 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
 
   const { content, resolved } = await c.req.json();
 
   const result = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, 'page', pageId);
-    await ensurePageAccess(pageId, user.id, 'view', tx);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,
       'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
@@ -362,11 +362,11 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  await ensurePageAccess(pageId, user.id, 'edit');
 
   await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, 'page', pageId);
-    await ensurePageAccess(pageId, user.id, 'view', tx);
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,
       'SELECT user_id FROM comments WHERE id = $1 AND page_id = $2',
