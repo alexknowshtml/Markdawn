@@ -35,7 +35,7 @@ type UseEntityDeletionReturn = {
   isPending: boolean;
 };
 
-async function leaveEntity(
+export async function leaveEntity(
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<{ ok: boolean }> {

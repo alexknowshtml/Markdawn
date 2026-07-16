@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import * as Y from 'yjs';
 import { authClient } from '../lib/auth-client';
 import { getLogger } from '../logger-init';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showInfoToast } from '../utils/toast';
 import { invalidateWorkspaceAccessQueries } from './use-workspace';
 
@@ -66,6 +67,7 @@ export function applyPageMetaStatelessMessage(
   message: PageMetaStatelessMessage,
   queryClient: QueryClient,
   pathname: string,
+  suppressAccessInvalidation = false,
 ): boolean {
   if (message.type === 'entity_deleted') {
     queryClient.removeQueries({
@@ -80,7 +82,7 @@ export function applyPageMetaStatelessMessage(
   const refreshHandledByAccessVersion =
     (message.type === 'invite_received' || message.type === 'workspace_membership_event') &&
     message.refreshViaAccessVersion === true;
-  if (!refreshHandledByAccessVersion) {
+  if (!suppressAccessInvalidation && !refreshHandledByAccessVersion) {
     invalidateWorkspaceAccessQueries(queryClient);
     if (message.type === 'share_access_event' || message.type === 'entity_deleted') {
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
@@ -237,13 +239,17 @@ export function usePageMeta() {
         return;
       }
       if (pageTreeTimerRef.current) clearTimeout(pageTreeTimerRef.current);
+      if (isBulkRemovalInProgress()) return;
       pageTreeTimerRef.current = setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        if (!isBulkRemovalInProgress()) {
+          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        }
       }, 1000);
     };
     map.observe(pageIndexObserver);
 
     const handleSynced = () => {
+      if (isBulkRemovalInProgress()) return;
       // LISTEN/NOTIFY events are intentionally not retained. Rebuild all
       // access-sensitive queries after each meta-room handshake so a change
       // that happened during startup or a reconnect cannot leave stale UI.
@@ -278,7 +284,14 @@ export function usePageMeta() {
       }
       if (!message) return;
 
-      if (applyPageMetaStatelessMessage(message, queryClient, window.location.pathname)) {
+      if (
+        applyPageMetaStatelessMessage(
+          message,
+          queryClient,
+          window.location.pathname,
+          isBulkRemovalInProgress(),
+        )
+      ) {
         navigate('/app', { replace: true });
       }
       if (message.type === 'invite_received') {

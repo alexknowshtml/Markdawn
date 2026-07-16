@@ -1,5 +1,6 @@
 import type { SharedNavigationItem, SharedWithMeItem } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
 const API_BASE = '/api';
 
@@ -33,6 +34,8 @@ export function useSharedWithMe(limit?: number) {
   return useQuery({
     queryKey: limit === undefined ? ['shared-with-me'] : ['shared-with-me', limit],
     queryFn: () => fetchSharedWithMe(limit),
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 
@@ -40,5 +43,7 @@ export function useSharedWithMeTree(limit?: number) {
   return useQuery({
     queryKey: limit === undefined ? ['shared-with-me', 'tree'] : ['shared-with-me', 'tree', limit],
     queryFn: () => fetchSharedWithMeTree(limit),
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }

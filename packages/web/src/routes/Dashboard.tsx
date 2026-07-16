@@ -17,10 +17,10 @@ import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
 import { useClipboard } from '../contexts/ClipboardContext';
 import { useSelection } from '../contexts/SelectionContext';
 import {
-  useBulkDeleteFolders,
-  useBulkDeletePages,
+  BulkRemovalError,
   useBulkMoveFolders,
   useBulkMovePages,
+  useBulkRemoveEntities,
 } from '../hooks/use-bulk-actions';
 import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
 import { useFavorites } from '../hooks/use-favorites';
@@ -30,8 +30,10 @@ import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useSharedWithMe } from '../hooks/use-shared-with-me';
 import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
-import { preservesEffectiveOwnerAtRoot, useBulkLeaveEntities } from '../utils/entity-actions';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
+import { preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
+import { hasInitialQueryError } from '../utils/queryState';
 import { showSuccessToast } from '../utils/toast';
 import { buildFolderPath, buildPagePath } from '../utils/url';
 
@@ -89,12 +91,30 @@ export default function HomeView() {
     error: pagesError,
     refetch: refetchPages,
   } = usePageTree();
-  const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
-  const { data: sharedWithMe, isLoading: isSharedLoading, error: sharedError } = useSharedWithMe();
+  const {
+    data: folders,
+    isLoading: isFoldersLoading,
+    error: foldersError,
+    refetch: refetchFolders,
+  } = useFolderTree();
+  const {
+    data: sharedWithMe,
+    isLoading: isSharedLoading,
+    error: sharedError,
+    refetch: refetchSharedWithMe,
+  } = useSharedWithMe();
   const { data: workspaceMemberships } = useWorkspaceMemberships();
   const { data: favorites } = useFavorites();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      if (document.visibilityState !== 'visible' || isBulkRemovalInProgress()) return;
+      void Promise.all([refetchPages(), refetchFolders(), refetchSharedWithMe()]);
+    }, 30_000);
+    return () => window.clearInterval(interval);
+  }, [refetchPages, refetchFolders, refetchSharedWithMe]);
 
   const favoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
@@ -108,12 +128,9 @@ export default function HomeView() {
   const updateFolderMutation = useUpdateFolder();
   const copyPageMutation = useCopyPage();
   const copyFolderMutation = useCopyFolder();
-  const bulkDeletePagesMutation = useBulkDeletePages();
-  const bulkDeleteFoldersMutation = useBulkDeleteFolders();
+  const bulkRemoveMutation = useBulkRemoveEntities();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
-  const bulkLeavePagesMutation = useBulkLeaveEntities('page');
-  const bulkLeaveFoldersMutation = useBulkLeaveEntities('folder');
 
   const clipboard = useClipboard();
   const selection = useSelection();
@@ -436,31 +453,27 @@ export default function HomeView() {
     selectedItems.every((item) => canAdminItem(item) || canLeaveItem(item));
 
   const handleBulkDelete = async () => {
-    const ownedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && canAdminItem(item))
-      .map((item) => item.id);
-    const sharedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && canLeaveItem(item))
-      .map((item) => item.id);
-    const ownedFolderIdsForDelete = selectedItems
-      .filter((item) => item.type === 'folder' && canAdminItem(item))
-      .map((item) => item.id);
-    const sharedFolderIds = selectedItems
-      .filter((item) => item.type === 'folder' && canLeaveItem(item))
-      .map((item) => item.id);
-
     try {
-      if (ownedPageIds.length > 0)
-        await bulkDeletePagesMutation.mutateAsync({ pageIds: ownedPageIds });
-      if (ownedFolderIdsForDelete.length > 0)
-        await bulkDeleteFoldersMutation.mutateAsync({ folderIds: ownedFolderIdsForDelete });
-      if (sharedPageIds.length > 0)
-        await bulkLeavePagesMutation.mutateAsync({ entityIds: sharedPageIds });
-      if (sharedFolderIds.length > 0)
-        await bulkLeaveFoldersMutation.mutateAsync({ entityIds: sharedFolderIds });
-      selection.clear();
-    } catch {
-      // Error toast handled globally by MutationCache.onError
+      const result = await bulkRemoveMutation.mutateAsync({
+        pageIdsToDelete: selectedItems
+          .filter((item) => item.type === 'page' && canAdminItem(item))
+          .map((item) => item.id),
+        folderIdsToDelete: selectedItems
+          .filter((item) => item.type === 'folder' && canAdminItem(item))
+          .map((item) => item.id),
+        pageIdsToLeave: selectedItems
+          .filter((item) => item.type === 'page' && canLeaveItem(item))
+          .map((item) => item.id),
+        folderIdsToLeave: selectedItems
+          .filter((item) => item.type === 'folder' && canLeaveItem(item))
+          .map((item) => item.id),
+      });
+      for (const item of result.removedItems) selection.deselect(item.id);
+    } catch (error) {
+      if (!(error instanceof BulkRemovalError)) throw error;
+      // The mutation cache reports the aggregate failure. At this UI boundary,
+      // only successful removals are deselected so failed items remain retryable.
+      for (const item of error.result.removedItems) selection.deselect(item.id);
     }
   };
 
@@ -548,7 +561,11 @@ export default function HomeView() {
   };
 
   const isLoading = isPagesLoading || isFoldersLoading || isSharedLoading;
-  const hasError = pagesError || foldersError || sharedError;
+  const hasError = hasInitialQueryError([
+    { data: pages, error: pagesError },
+    { data: folders, error: foldersError },
+    { data: sharedWithMe, error: sharedError },
+  ]);
   const heading = FILTERS.find((filter) => filter.value === activeFilter)?.label ?? 'All';
   const emptyMessage =
     activeFilter === 'shared-with-me'
@@ -718,6 +735,7 @@ export default function HomeView() {
                   viewMode="card"
                   isSelected={selection.isSelected(item.id)}
                   isFavorite={isFavorite(item)}
+                  canSelect={!bulkRemoveMutation.isPending}
                   onSelect={(e) => {
                     e.stopPropagation();
                     selection.toggle({ id: item.id, type: item.type });
@@ -756,6 +774,7 @@ export default function HomeView() {
                     viewMode="list"
                     isSelected={selection.isSelected(item.id)}
                     isFavorite={isFavorite(item)}
+                    canSelect={!bulkRemoveMutation.isPending}
                     onSelect={(e) => {
                       e.stopPropagation();
                       selection.toggle({ id: item.id, type: item.type });
@@ -789,6 +808,7 @@ export default function HomeView() {
         onMove={handleBulkMove}
         canDelete={canRemoveSelection}
         canMove={canMoveSelection}
+        isRemoving={bulkRemoveMutation.isPending}
         onPaste={() => void handlePaste()}
         onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
         onClear={() => {

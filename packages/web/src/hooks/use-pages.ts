@@ -1,6 +1,7 @@
 import type { Page, PageTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { useLeaveEntity } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
@@ -165,7 +166,8 @@ export function usePageTree() {
     queryKey: ['pageTree'],
     queryFn: () => fetchPageTree(),
     staleTime: 0,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 
@@ -175,6 +177,7 @@ export function useRecentPages(limit = 8) {
     queryFn: () => fetchRecentPages(limit),
     staleTime: 0,
     refetchOnWindowFocus: false,
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 
@@ -238,6 +241,8 @@ export function useTrashPages() {
   return useQuery({
     queryKey: ['trashPages'],
     queryFn: () => fetchTrashPages(),
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 

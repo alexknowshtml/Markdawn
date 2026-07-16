@@ -25,6 +25,7 @@ interface SelectionToolbarProps {
   canDelete?: boolean;
   canMove?: boolean;
   canPaste?: boolean;
+  isRemoving?: boolean;
 }
 
 export function SelectionToolbar({
@@ -41,6 +42,7 @@ export function SelectionToolbar({
   canDelete = true,
   canMove = true,
   canPaste = true,
+  isRemoving = false,
 }: SelectionToolbarProps) {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   if (selectedCount === 0 && clipboardCount === 0) return null;
@@ -55,7 +57,8 @@ export function SelectionToolbar({
           <button
             type="button"
             onClick={allSelected ? onClear : onSelectAll}
-            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-sm cursor-pointer"
+            disabled={isRemoving}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-sm cursor-pointer disabled:opacity-50 disabled:cursor-wait"
             title={allSelected ? 'Deselect all' : 'Select all'}
           >
             {allSelected ? <CheckSquare size={14} /> : <Square size={14} />}
@@ -63,12 +66,16 @@ export function SelectionToolbar({
           </button>
         )}
         <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
-        <span className="text-sm font-medium px-2">{selectedCount} selected</span>
+        <span className="text-sm font-medium px-2">
+          {isRemoving
+            ? `Removing ${selectedCount} item${selectedCount === 1 ? '' : 's'}…`
+            : `${selectedCount} selected`}
+        </span>
         <div className="w-px h-5 bg-zinc-200 dark:bg-zinc-700 mx-1" />
         <button
           type="button"
           onClick={onCopy}
-          disabled={!hasSelection}
+          disabled={!hasSelection || isRemoving}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-sm cursor-pointer disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title="Copy"
         >
@@ -78,7 +85,7 @@ export function SelectionToolbar({
         <button
           type="button"
           onClick={onCut}
-          disabled={!hasSelection || !canMove}
+          disabled={!hasSelection || !canMove || isRemoving}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-sm cursor-pointer disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title={canMove ? 'Cut' : 'Admin access is required to move selected items'}
         >
@@ -88,7 +95,7 @@ export function SelectionToolbar({
         <button
           type="button"
           onClick={onMove}
-          disabled={!hasSelection || !canMove}
+          disabled={!hasSelection || !canMove || isRemoving}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-sm cursor-pointer disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title={canMove ? 'Move' : 'Admin access is required to move selected items'}
         >
@@ -98,9 +105,15 @@ export function SelectionToolbar({
         <button
           type="button"
           onClick={() => setShowDeleteConfirm(true)}
-          disabled={!hasSelection || !canDelete}
+          disabled={!hasSelection || !canDelete || isRemoving}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-sm cursor-pointer disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent hover:bg-red-50 dark:hover:bg-red-900/30 text-red-600 dark:text-red-400"
-          title={canDelete ? 'Delete or leave' : 'Selected inherited items cannot be removed here'}
+          title={
+            isRemoving
+              ? 'Removing selected items'
+              : canDelete
+                ? 'Delete or leave'
+                : 'Selected inherited items cannot be removed here'
+          }
         >
           <Trash2 size={14} />
           <span className="hidden sm:inline">Delete</span>
@@ -108,7 +121,7 @@ export function SelectionToolbar({
         <button
           type="button"
           onClick={onPaste}
-          disabled={clipboardCount === 0 || !canPaste}
+          disabled={clipboardCount === 0 || !canPaste || isRemoving}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-sm cursor-pointer disabled:opacity-30 disabled:cursor-default disabled:hover:bg-transparent hover:bg-zinc-100 dark:hover:bg-zinc-800"
           title={
             canPaste
@@ -123,7 +136,8 @@ export function SelectionToolbar({
         <button
           type="button"
           onClick={onClear}
-          className="p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+          disabled={isRemoving}
+          className="p-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-wait"
           title="Deselect all"
         >
           <X size={16} />

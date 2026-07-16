@@ -1,5 +1,6 @@
 import type { ShareEntityType } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
 const API_BASE = '/api';
 
@@ -52,6 +53,8 @@ export function useFavorites() {
     queryKey: ['favorites'],
     queryFn: () => fetchFavorites(),
     staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 

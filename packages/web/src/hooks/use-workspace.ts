@@ -1,4 +1,5 @@
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -32,9 +33,9 @@ export function useWorkspaceMembers() {
     queryKey: ['workspace-members'],
     queryFn: fetchWorkspaceMembers,
     staleTime: 1000 * 60,
-    refetchOnWindowFocus: 'always',
-    refetchOnReconnect: 'always',
-    refetchInterval: 30_000,
+    refetchOnWindowFocus: () => (isBulkRemovalInProgress() ? false : 'always'),
+    refetchOnReconnect: () => (isBulkRemovalInProgress() ? false : 'always'),
+    refetchInterval: () => (isBulkRemovalInProgress() ? false : 30_000),
     refetchIntervalInBackground: true,
   });
 }
@@ -50,6 +51,8 @@ export function useWorkspaceMemberships() {
     queryKey: ['workspace-memberships'],
     queryFn: fetchWorkspaceMemberships,
     staleTime: 1000 * 60,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 

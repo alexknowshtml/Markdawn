@@ -222,6 +222,22 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspace-members'] });
   });
 
+  it('can defer access-query refreshes during a bulk removal', () => {
+    const queryClient = new QueryClient();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    queryClient.setQueryData(['folders', 'detail', 'folder-1'], { id: 'folder-1' });
+
+    applyPageMetaStatelessMessage(
+      { type: 'entity_deleted', entityType: 'folder', entityId: 'folder-1' },
+      queryClient,
+      '/app',
+      true,
+    );
+
+    expect(queryClient.getQueryData(['folders', 'detail', 'folder-1'])).toBeUndefined();
+    expect(invalidateSpy).not.toHaveBeenCalled();
+  });
+
   it('ignores unrelated non-JSON provider messages', () => {
     expect(parsePageMetaStatelessMessage('provider-control-message')).toBeNull();
   });

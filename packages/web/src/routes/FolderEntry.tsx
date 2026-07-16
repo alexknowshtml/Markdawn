@@ -21,10 +21,10 @@ import {
   useShareContext,
 } from '../contexts/ShareContext';
 import {
-  useBulkDeleteFolders,
-  useBulkDeletePages,
+  BulkRemovalError,
   useBulkMoveFolders,
   useBulkMovePages,
+  useBulkRemoveEntities,
 } from '../hooks/use-bulk-actions';
 import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
 import { useFavorites } from '../hooks/use-favorites';
@@ -126,8 +126,7 @@ export default function FolderEntry() {
   const updateFolderMutation = useUpdateFolder();
   const copyPageMutation = useCopyPage();
   const copyFolderMutation = useCopyFolder();
-  const bulkDeletePagesMutation = useBulkDeletePages();
-  const bulkDeleteFoldersMutation = useBulkDeleteFolders();
+  const bulkRemoveMutation = useBulkRemoveEntities();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
 
@@ -399,21 +398,23 @@ export default function FolderEntry() {
     hasWorkspaceRootAccess && selectedItems.every(preservesEffectiveOwnerAtRoot);
 
   const handleBulkDelete = async () => {
-    const ownedPageIds = selectedItems
-      .filter((item) => item.type === 'page' && canAdminItem(item))
-      .map((item) => item.id);
-    const ownedFolderIds = selectedItems
-      .filter((item) => item.type === 'folder' && canAdminItem(item))
-      .map((item) => item.id);
-
     try {
-      if (ownedPageIds.length > 0)
-        await bulkDeletePagesMutation.mutateAsync({ pageIds: ownedPageIds });
-      if (ownedFolderIds.length > 0)
-        await bulkDeleteFoldersMutation.mutateAsync({ folderIds: ownedFolderIds });
-      selection.clear();
-    } catch {
-      // Error toast handled globally by MutationCache.onError
+      const result = await bulkRemoveMutation.mutateAsync({
+        pageIdsToDelete: selectedItems
+          .filter((item) => item.type === 'page' && canAdminItem(item))
+          .map((item) => item.id),
+        folderIdsToDelete: selectedItems
+          .filter((item) => item.type === 'folder' && canAdminItem(item))
+          .map((item) => item.id),
+        pageIdsToLeave: [],
+        folderIdsToLeave: [],
+      });
+      for (const item of result.removedItems) selection.deselect(item.id);
+    } catch (error) {
+      if (!(error instanceof BulkRemovalError)) throw error;
+      // The mutation cache reports the aggregate failure. At this UI boundary,
+      // only successful removals are deselected so failed items remain retryable.
+      for (const item of error.result.removedItems) selection.deselect(item.id);
     }
   };
 
@@ -662,7 +663,7 @@ export default function FolderEntry() {
                     onNavigate={(e) => handleItemClick(item, allItemIndexMap.get(item.id) ?? 0, e)}
                     onRename={() => handleRenameItem(item)}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
-                    canSelect={!isAnonymous}
+                    canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
                     showContextMenu={!isAnonymous}
                   />
                 ))}
@@ -695,7 +696,7 @@ export default function FolderEntry() {
                   onEditSave={handleSaveRename}
                   onEditKeyDown={handleEditKeyDown}
                   collaborators={filterOutSelf(item.collaborators ?? [])}
-                  canSelect={!isAnonymous}
+                  canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
                   showContextMenu={!isAnonymous}
                 />
               ))}
@@ -734,7 +735,7 @@ export default function FolderEntry() {
                       }
                       onRename={() => handleRenameItem(item)}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
-                      canSelect={!isAnonymous}
+                      canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
                       showContextMenu={!isAnonymous}
                       showCheckboxes={hasSelection}
                     />
@@ -777,7 +778,7 @@ export default function FolderEntry() {
                     onEditSave={handleSaveRename}
                     onEditKeyDown={handleEditKeyDown}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
-                    canSelect={!isAnonymous}
+                    canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
                     showContextMenu={!isAnonymous}
                     showCheckboxes={hasSelection}
                   />
@@ -800,6 +801,7 @@ export default function FolderEntry() {
           canDelete={canManageSelection}
           canMove={canMoveSelection}
           canPaste={canManageFolder}
+          isRemoving={bulkRemoveMutation.isPending}
           onPaste={() => void handlePaste()}
           onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
           onClear={() => {

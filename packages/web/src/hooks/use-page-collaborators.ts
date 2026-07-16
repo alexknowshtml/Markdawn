@@ -1,5 +1,6 @@
 import type { EntityAccessor } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
 const API_BASE = '/api';
 
@@ -21,6 +22,8 @@ export function usePageCollaborators(pageIds: string[]) {
     queryFn: () => fetchPageCollaborators(sortedIds),
     staleTime: 1000 * 60,
     enabled: sortedIds.length > 0,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 
@@ -42,5 +45,7 @@ export function useFolderCollaborators(folderIds: string[]) {
     queryFn: () => fetchFolderCollaborators(sortedIds),
     staleTime: 1000 * 60,
     enabled: sortedIds.length > 0,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }

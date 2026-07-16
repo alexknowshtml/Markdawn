@@ -1,5 +1,6 @@
 import type { Folder, FolderTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { useLeaveEntity } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
@@ -68,7 +69,8 @@ export function useFolderTree() {
     queryKey: ['folderTree'],
     queryFn: () => fetchFolderTree(),
     staleTime: 0,
-    refetchOnWindowFocus: false,
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 

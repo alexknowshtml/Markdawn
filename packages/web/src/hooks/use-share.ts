@@ -5,6 +5,7 @@ import type {
   ShareSummary,
 } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -107,10 +108,10 @@ export function useShareSummary(entityType: ShareEntityType, entityId?: string) 
       return fetchShareSummary(entityType, entityId);
     },
     enabled: !!entityId,
-    refetchOnMount: 'always',
-    refetchOnWindowFocus: 'always',
-    refetchOnReconnect: 'always',
-    refetchInterval: 30_000,
+    refetchOnMount: () => (isBulkRemovalInProgress() ? false : 'always'),
+    refetchOnWindowFocus: () => (isBulkRemovalInProgress() ? false : 'always'),
+    refetchOnReconnect: () => (isBulkRemovalInProgress() ? false : 'always'),
+    refetchInterval: () => (isBulkRemovalInProgress() ? false : 30_000),
     refetchIntervalInBackground: true,
   });
 }
