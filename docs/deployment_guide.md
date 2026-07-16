@@ -33,7 +33,7 @@ The `setup.sh` script installs everything automatically, but if doing it manuall
 sudo dnf install -y git nano curl podman
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
-eval "$(fnm env)"
+eval "$(fnm env --shell bash)"
 fnm install 24
 fnm use 24
 corepack enable pnpm
@@ -144,11 +144,13 @@ Fetching only updates Git metadata. Executing the fetched script separately ensu
 
 The script will:
 1. Verify that the existing database uses the current migration baseline
-2. Pull latest code
-3. Install dependencies
-4. Build all packages and container images
-5. Update Podman Quadlet units
-6. Restart Podman services and apply database migrations
+2. Pull the latest code and install dependencies
+3. Build the shared and web packages
+4. Update Podman Quadlet units
+5. Rebuild the API and collaboration container images
+6. Stop the application services
+7. Apply pending database migrations
+8. Restart the application services and verify API health
 
 The current Drizzle v1 baseline is not compatible with databases created from the removed legacy migration history. `deploy.sh` detects those databases before pulling code or replacing deployment artifacts and exits without resetting them.
 

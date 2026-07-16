@@ -234,7 +234,7 @@ export function TableOfContents({ editorElement }: TableOfContentsProps) {
 
       <div
         className={clsx(
-          'absolute right-0 top-0 min-w-[220px] max-w-[280px]',
+          'absolute right-0 top-1/2 min-w-[220px] max-w-[280px] -translate-y-1/2',
           'bg-white/90 dark:bg-zinc-900/90 backdrop-blur-xl',
           'border border-zinc-200/60 dark:border-zinc-700/50',
           'shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.4)]',

@@ -15,19 +15,21 @@ if [ "$EUID" -eq 0 ]; then
 fi
 
 echo -e "${YELLOW}[STEP 1/8] Installing common tools, Podman, and Caddy...${NC}"
-sudo dnf install -y git nano curl podman dnf5-plugins
+sudo dnf install -y git nano curl podman dnf5-plugins unzip
 sudo dnf copr enable -y @caddy/caddy
 sudo dnf install -y caddy
+sudo dnf install -y firewalld
+sudo systemctl enable --now firewalld
 sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --permanent --add-service=https
 sudo firewall-cmd --reload
 
 echo -e "${YELLOW}[STEP 2/8] Enabling lingering for user systemd services...${NC}"
-loginctl enable-linger "$(whoami)"
+sudo loginctl enable-linger "$(whoami)"
 
 echo -e "${YELLOW}[STEP 3/8] Preparing repository...${NC}"
 sudo mkdir -p /var/www
-sudo chown "$(whoami):$(whoami)" /var/www
+sudo chown -R "$(whoami):$(whoami)" /var/www
 
 if [ -d ".git" ]; then
     echo -e "${GREEN}[OK] Running from existing repo. Using current directory.${NC}"
@@ -43,7 +45,7 @@ cd "$REPO_DIR"
 echo -e "${YELLOW}[STEP 4/8] Installing Node.js and pnpm...${NC}"
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
-eval "$(fnm env)"
+eval "$(fnm env --shell bash)"
 fnm install 24
 fnm use 24
 node -v
@@ -63,11 +65,12 @@ echo -e "${YELLOW}[STEP 6/8] Building application...${NC}"
 pnpm install
 pnpm --filter @markdawn/shared build
 pnpm --filter @markdawn/web build
-pnpm --filter @markdawn/api build
-pnpm --filter @markdawn/collab build
 
 echo -e "${YELLOW}[STEP 7/8] Setting up Podman Quadlet services...${NC}"
 mkdir -p ~/.config/containers/systemd
+
+echo -e "${YELLOW}[PULL] Pre-pulling PostgreSQL image to avoid timeout on first start...${NC}"
+podman pull docker.io/library/postgres:17-alpine
 
 podman volume create postgres-data 2>/dev/null || true
 podman volume create markdawn-data 2>/dev/null || true
