@@ -73,6 +73,12 @@ export function createCoalescingTaskQueue<T>(
           await options.handle(task);
         } catch (error) {
           options.onError(error);
+          if (accepting) {
+            // The canonical refresh reflects all committed state, including
+            // this failed task and every task that was pending behind it.
+            pending.clear();
+            overflowPending = true;
+          }
         }
       }
     } finally {

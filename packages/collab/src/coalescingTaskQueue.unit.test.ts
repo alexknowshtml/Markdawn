@@ -91,6 +91,26 @@ describe('createCoalescingTaskQueue', () => {
     expect(handled).toEqual(['active', 'pending']);
   });
 
+  it('recovers a failed task with a canonical refresh', async () => {
+    const handleError = new Error('transient task failure');
+    const handle = vi.fn<() => Promise<void>>().mockRejectedValueOnce(handleError);
+    const handleOverflow = vi.fn<() => Promise<void>>().mockResolvedValue();
+    const onError = vi.fn();
+    const queue = createCoalescingTaskQueue<{ key: string }>({
+      maxPending: 2,
+      getKey: (task) => task.key,
+      handle,
+      handleOverflow,
+      onError,
+    });
+
+    queue.enqueue({ key: 'failed' });
+    await queue.waitForIdle();
+
+    expect(onError).toHaveBeenCalledWith(handleError);
+    expect(handleOverflow).toHaveBeenCalledOnce();
+  });
+
   it('retries a failed canonical refresh without losing overflowed work', async () => {
     const firstTask = deferred();
     const handleOverflow = vi
