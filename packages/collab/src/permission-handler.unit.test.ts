@@ -41,8 +41,14 @@ function createConnection(overrides?: {
 }
 
 function createDocument(connections: ReturnType<typeof createConnection>[]) {
+  const accessVersions = new Map<string, number>();
   return {
     getConnections: () => connections,
+    transact: (callback: () => void) => callback(),
+    getMap: () => ({
+      get: (key: string) => accessVersions.get(key),
+      set: (key: string, value: number) => accessVersions.set(key, value),
+    }),
   };
 }
 
@@ -582,7 +588,7 @@ describe('handleShareEvent', () => {
       readOnly: false,
     });
     const doc = createDocument([invitedConn]);
-    const server = createServer(doc);
+    const server = createServerWithDocuments(new Map([['page-1', doc]]));
     const pool = createPool([privilegedEntry('invited-user', 'edit')]);
 
     await handleShareEvent(
@@ -777,13 +783,59 @@ describe('handleShareEvent', () => {
     expect(otherUserConn.close).not.toHaveBeenCalled();
   });
 
-  it('notifies the active meta room when workspace membership changes', async () => {
+  it('notifies the recipient meta room even when no folder descendants are open', async () => {
     const logger = createLogger();
     const metaConnection = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'view' },
+    });
+    const ownerMetaConnection = createConnection({
+      context: { user: { id: 'owner-1' }, permission: 'admin' },
+    });
+    const recipientMetaDocument = createDocument([metaConnection]);
+    const ownerMetaDocument = createDocument([ownerMetaConnection]);
+    const server = createServerWithDocuments(
+      new Map([
+        ['page-meta:user-1', recipientMetaDocument],
+        ['page-meta:owner-1', ownerMetaDocument],
+      ]),
+    );
+    const pool = { query: vi.fn() } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'revoke',
+        entityType: 'folder',
+        entityId: 'folder-1',
+        targetUserId: 'user-1',
+        metaUserIds: ['owner-1'],
+      },
+      pool,
+      logger,
+    );
+
+    expect(recipientMetaDocument.getMap().get('access')).toBe(1);
+    expect(ownerMetaDocument.getMap().get('access')).toBe(1);
+    expect(metaConnection.sendStateless).not.toHaveBeenCalled();
+    expect(ownerMetaConnection.sendStateless).not.toHaveBeenCalled();
+  });
+
+  it('notifies the owner and member meta rooms when workspace membership changes', async () => {
+    const logger = createLogger();
+    const memberMetaConnection = createConnection({
       context: { user: { id: 'member-1' }, permission: 'edit' },
     });
+    const ownerMetaConnection = createConnection({
+      context: { user: { id: 'workspace-owner' }, permission: 'admin' },
+    });
+    const memberMetaDocument = createDocument([memberMetaConnection]);
+    const ownerMetaDocument = createDocument([ownerMetaConnection]);
     const server = createServerWithDocuments(
-      new Map([['page-meta:member-1', createDocument([metaConnection])]]),
+      new Map([
+        ['page-meta:member-1', memberMetaDocument],
+        ['page-meta:workspace-owner', ownerMetaDocument],
+      ]),
     );
     const pool = {
       query: vi.fn(async () => ({ rows: [] })),
@@ -801,13 +853,16 @@ describe('handleShareEvent', () => {
       logger,
     );
 
-    expect(metaConnection.sendStateless).toHaveBeenCalledWith(
-      JSON.stringify({
-        type: 'workspace_membership_event',
-        action: 'role_changed',
-        ownerId: 'workspace-owner',
-      }),
-    );
+    expect(memberMetaDocument.getMap().get('access')).toBe(1);
+    expect(ownerMetaDocument.getMap().get('access')).toBe(1);
+    const compatibilityMessage = JSON.stringify({
+      type: 'workspace_membership_event',
+      action: 'role_changed',
+      ownerId: 'workspace-owner',
+      refreshViaAccessVersion: true,
+    });
+    expect(memberMetaConnection.sendStateless).toHaveBeenCalledWith(compatibilityMessage);
+    expect(ownerMetaConnection.sendStateless).toHaveBeenCalledWith(compatibilityMessage);
   });
 
   it('batches workspace permission checks across active pages', async () => {
@@ -991,8 +1046,22 @@ describe('handleShareEvent', () => {
       context: { user: { id: 'user-1' }, permission: 'edit' },
       readOnly: false,
     });
-    const doc = createDocument([conn]);
-    const server = createServer(doc);
+    const secondTab = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'edit' },
+      readOnly: false,
+    });
+    const metaConnection = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'view' },
+      readOnly: true,
+    });
+    const doc = createDocument([conn, secondTab]);
+    const metaDocument = createDocument([metaConnection]);
+    const server = createServerWithDocuments(
+      new Map([
+        ['page-1', doc],
+        ['page-meta:user-1', metaDocument],
+      ]),
+    );
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('get_effective_page_permission')) {
         return { rows: [{ user_id: 'user-1', permission: 'view' }] };
@@ -1015,8 +1084,12 @@ describe('handleShareEvent', () => {
 
     expect(conn.readOnly).toBe(true);
     expect(conn.context.permission).toBe('view');
+    expect(secondTab.readOnly).toBe(true);
+    expect(secondTab.context.permission).toBe('view');
     expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"action":"update"'));
     expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"permission":"view"'));
+    expect(metaDocument.getMap().get('access')).toBe(1);
+    expect(metaConnection.sendStateless).not.toHaveBeenCalled();
   });
 });
 

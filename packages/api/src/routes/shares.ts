@@ -2003,6 +2003,7 @@ sharesRoute.delete('/:shareId', async (c) => {
         entityType: shareEntityType,
         entityId: shareEntityId,
         ...(targetRow.recipient_user_id ? { targetUserId: targetRow.recipient_user_id } : {}),
+        ...(isSelfRemoval && entity.ownerId ? { metaUserIds: [entity.ownerId] } : {}),
         message: revokeMessage,
       },
       tx,

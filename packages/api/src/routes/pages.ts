@@ -1131,6 +1131,7 @@ pagesRoute.post(':id/leave', async (c) => {
           entityType: 'page',
           entityId: pageId,
           targetUserId: shareRow.recipient_user_id,
+          ...(ownerId ? { metaUserIds: [ownerId] } : {}),
         },
         tx,
       );

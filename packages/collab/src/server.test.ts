@@ -1548,7 +1548,7 @@ describe('collab server', () => {
         [folderId, deletedAt, page.id],
       );
       await pool.query('UPDATE folders SET is_deleted = true, deleted_at = $1 WHERE id = $2', [
-        deletedAt,
+        new Date(deletedAt.getTime() + 1_000),
         folderId,
       ]);
       const connection = { sendStateless: vi.fn(), close: vi.fn() };

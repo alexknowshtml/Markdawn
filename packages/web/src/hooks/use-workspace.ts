@@ -32,6 +32,10 @@ export function useWorkspaceMembers() {
     queryKey: ['workspace-members'],
     queryFn: fetchWorkspaceMembers,
     staleTime: 1000 * 60,
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
   });
 }
 
@@ -50,12 +54,16 @@ export function useWorkspaceMemberships() {
 }
 
 export function invalidateWorkspaceAccessQueries(queryClient: QueryClient): void {
+  queryClient.invalidateQueries({ queryKey: ['workspace-members'] });
   queryClient.invalidateQueries({ queryKey: ['workspace-memberships'] });
   queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
   queryClient.invalidateQueries({ queryKey: ['pageTree'] });
   queryClient.invalidateQueries({ queryKey: ['folderTree'] });
   queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
   queryClient.invalidateQueries({ queryKey: ['favorites'] });
+  queryClient.invalidateQueries({ queryKey: ['shares'] });
+  queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
+  queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
 }
 
 async function inviteToWorkspace({

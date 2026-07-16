@@ -887,6 +887,7 @@ foldersRoute.post(':id/leave', async (c) => {
           entityType: 'folder',
           entityId: folderId,
           targetUserId: shareRow.recipient_user_id,
+          ...(rootOwnerId ? { metaUserIds: [rootOwnerId] } : {}),
         },
         tx,
       );

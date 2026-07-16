@@ -108,6 +108,10 @@ export function useShareSummary(entityType: ShareEntityType, entityId?: string) 
     },
     enabled: !!entityId,
     refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    refetchOnReconnect: 'always',
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: true,
   });
 }
 

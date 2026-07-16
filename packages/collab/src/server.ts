@@ -958,13 +958,11 @@ export async function publishFolderDeletion(
           await pool.query<{ id: string }>(
             `SELECT p.id
              FROM pages p
-             JOIN folders deleted_root ON deleted_root.id = $1
              WHERE p.id = ANY($2::uuid[])
                AND p.parent_id IN (
                  SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
                )
-               AND p.is_deleted = true
-               AND p.deleted_at = deleted_root.deleted_at`,
+               AND p.is_deleted = true`,
             [folderId, activePageIds],
           )
         ).rows.map((row) => row.id);
@@ -1405,29 +1403,40 @@ export function createCollabServer(config: CollabServerConfig) {
       return;
     }
 
+    const inviteMessage = JSON.stringify({
+      type: 'invite_received',
+      entityType: payload.entityType,
+      entityId: payload.entityId,
+      entityTitle: payload.entityTitle,
+      sharedByName: payload.sharedByName,
+      ...(payload.message !== undefined && { message: payload.message }),
+      refreshViaAccessVersion: true,
+    });
     let affectedCount = 0;
-    for (const [_pageId, doc] of server.hocuspocus.documents) {
-      const activeDoc = doc as Document | undefined;
-      if (!activeDoc) continue;
+    const metaDocument = server.hocuspocus.documents.get(`page-meta:${payload.targetUserId}`) as
+      | Document
+      | undefined;
+    for (const connection of metaDocument?.getConnections() ?? []) {
+      connection.sendStateless(inviteMessage);
+      affectedCount++;
+    }
 
-      const connections = activeDoc.getConnections();
-      for (const connection of connections) {
-        const ctx = connection.context as
-          | { user?: { id: string; isAnonymous?: boolean } }
-          | undefined;
-        if (!ctx?.user || ctx.user.id !== payload.targetUserId) continue;
-
-        connection.sendStateless(
-          JSON.stringify({
-            type: 'invite_received',
-            entityType: payload.entityType,
-            entityId: payload.entityId,
-            entityTitle: payload.entityTitle,
-            sharedByName: payload.sharedByName,
-            ...(payload.message !== undefined && { message: payload.message }),
-          }),
-        );
-        affectedCount++;
+    // The meta room is the normal global notification channel. During initial
+    // application startup it may not be connected yet, so retain an active
+    // page connection as a fallback instead of dropping the invitation event.
+    if (affectedCount === 0) {
+      for (const [documentName, doc] of server.hocuspocus.documents) {
+        if (documentName.startsWith(META_ROOM_PREFIX)) continue;
+        const activeDoc = doc as Document | undefined;
+        if (!activeDoc) continue;
+        for (const connection of activeDoc.getConnections()) {
+          const ctx = connection.context as
+            | { user?: { id: string; isAnonymous?: boolean } }
+            | undefined;
+          if (!ctx?.user || ctx.user.id !== payload.targetUserId) continue;
+          connection.sendStateless(inviteMessage);
+          affectedCount++;
+        }
       }
     }
 

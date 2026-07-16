@@ -32,6 +32,8 @@ export interface ShareEventPayload {
   entityId: string;
   permission?: SharePermission;
   targetUserId?: string;
+  /** Additional signed-in users whose metadata queries must refresh. */
+  metaUserIds?: string[];
   /** Human-readable toast message for the affected user(s). */
   message?: string;
 }

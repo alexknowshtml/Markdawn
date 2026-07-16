@@ -24,6 +24,42 @@ type ConnectionContext = {
   permission?: unknown;
 };
 
+function bumpShareAccessMetaVersion(server: Server, userIds: Iterable<string>): void {
+  for (const userId of new Set(userIds)) {
+    const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${userId}`) as
+      | Document
+      | undefined;
+    if (!metaDocument) continue;
+    metaDocument.transact(() => {
+      const versions = metaDocument.getMap<number>('accessVersion');
+      versions.set('access', (versions.get('access') ?? 0) + 1);
+    });
+  }
+}
+
+function sendWorkspaceMembershipCompatibilityEvent(
+  server: Server,
+  userIds: Iterable<string>,
+  event: Pick<WorkspaceEventPayload, 'action' | 'ownerId'>,
+): void {
+  const message = JSON.stringify({
+    type: 'workspace_membership_event',
+    action: event.action,
+    ownerId: event.ownerId,
+    // Older clients use this stateless event. New clients rely on the durable
+    // accessVersion update and skip the duplicate query invalidation.
+    refreshViaAccessVersion: true,
+  });
+  for (const userId of new Set(userIds)) {
+    const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${userId}`) as
+      | Document
+      | undefined;
+    for (const connection of metaDocument?.getConnections() ?? []) {
+      connection.sendStateless(message);
+    }
+  }
+}
+
 async function getAnonymousPagePermission(
   pool: Pool,
   pageId: string,
@@ -93,6 +129,7 @@ async function recomputePageConnections(
   logger: Logger,
   message?: string,
   targetUserId?: string,
+  metaUserIds?: Set<string>,
 ): Promise<number> {
   const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
   if (!activeDoc) {
@@ -131,6 +168,14 @@ async function recomputePageConnections(
       ? getAnonymousPagePermission(pool, pageId)
       : Promise.resolve<SharePermission | null>(null),
   ]);
+
+  if (authenticatedResult.status === 'fulfilled' && authenticatedUserIds.length > 0) {
+    if (metaUserIds) {
+      for (const userId of authenticatedUserIds) metaUserIds.add(userId);
+    } else {
+      bumpShareAccessMetaVersion(server, authenticatedUserIds);
+    }
+  }
 
   for (const { connection, ctx } of candidates) {
     const user = ctx.user;
@@ -620,98 +665,137 @@ export async function handleShareEvent(
     `[share] received event: action=${action} entityType=${entityType} entity=${entityId} permission=${rawPermission ?? 'none'} targetUserId=${targetUserId ?? 'all'}`,
   );
 
-  // For folders, intersect the subtree with active page rooms before doing
-  // any permission work. Inactive pages rebuild authorization from PostgreSQL
-  // when they are opened and must not block live revocations.
-  if (entityType === 'folder') {
-    const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter((pageId) =>
-      PAGE_ID_PATTERN.test(pageId),
-    );
-    if (activePageIds.length === 0) {
-      logger.debug(`[share] no active pages for folder ${entityId}, skipping`);
-      return;
-    }
+  const metaUserIds = new Set(payload.metaUserIds ?? []);
+  if (targetUserId) metaUserIds.add(targetUserId);
 
-    let pageIds: string[] = [];
-    if (pool) {
-      try {
-        const result = await pool.query(
-          `SELECT p.id FROM pages p
+  try {
+    // For folders, intersect the subtree with active page rooms before doing
+    // any permission work. Inactive pages rebuild authorization from PostgreSQL
+    // when they are opened and must not block live revocations.
+    if (entityType === 'folder') {
+      const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter(
+        (pageId) => PAGE_ID_PATTERN.test(pageId),
+      );
+      if (activePageIds.length === 0) {
+        logger.debug(`[share] no active pages for folder ${entityId}, skipping`);
+        return;
+      }
+
+      let pageIds: string[] = [];
+      if (pool) {
+        try {
+          const result = await pool.query(
+            `SELECT p.id FROM pages p
           WHERE p.id = ANY($2::uuid[])
             AND p.parent_id IN (
               SELECT descendant_id FROM folder_closure WHERE ancestor_id = $1
             )
             AND p.is_deleted = false`,
-          [entityId, activePageIds],
-        );
-        pageIds = result.rows.map((r: { id: string }) => r.id);
-      } catch (err) {
-        logger.error(`[share] failed to query pages in folder ${entityId}: ${err}`);
-        // The subtree lookup failed, so revalidate matching users on every
-        // active page. Each per-page check still fails closed, while users
-        // whose effective access can be verified remain connected.
-        for (const activePageId of activePageIds) {
-          await recomputePageConnections(server, activePageId, pool, logger, message, targetUserId);
+            [entityId, activePageIds],
+          );
+          pageIds = result.rows.map((r: { id: string }) => r.id);
+        } catch (err) {
+          logger.error(`[share] failed to query pages in folder ${entityId}: ${err}`);
+          // The subtree lookup failed, so revalidate matching users on every
+          // active page. Each per-page check still fails closed, while users
+          // whose effective access can be verified remain connected.
+          for (const activePageId of activePageIds) {
+            await recomputePageConnections(
+              server,
+              activePageId,
+              pool,
+              logger,
+              message,
+              targetUserId,
+              metaUserIds,
+            );
+          }
+          return;
         }
+      }
+
+      if (pageIds.length === 0) {
+        logger.debug(`[share] no active pages found in folder ${entityId}, skipping`);
         return;
       }
-    }
 
-    if (pageIds.length === 0) {
-      logger.debug(`[share] no active pages found in folder ${entityId}, skipping`);
-      return;
-    }
+      logger.debug(`[share] folder ${entityId} has ${pageIds.length} page(s), propagating to each`);
 
-    logger.debug(`[share] folder ${entityId} has ${pageIds.length} page(s), propagating to each`);
-
-    let totalAffected = 0;
-    for (const pageId of pageIds) {
-      totalAffected +=
-        pool !== undefined
-          ? await recomputePageConnections(server, pageId, pool, logger, message)
-          : action === 'recompute'
-            ? await recomputePageConnections(server, pageId, pool, logger, message)
-            : await applyShareEventToPage(
+      let totalAffected = 0;
+      for (const pageId of pageIds) {
+        totalAffected +=
+          pool !== undefined
+            ? await recomputePageConnections(
                 server,
                 pageId,
-                action,
-                rawPermission,
-                targetUserId,
                 pool,
                 logger,
                 message,
-              );
+                undefined,
+                metaUserIds,
+              )
+            : action === 'recompute'
+              ? await recomputePageConnections(
+                  server,
+                  pageId,
+                  pool,
+                  logger,
+                  message,
+                  undefined,
+                  metaUserIds,
+                )
+              : await applyShareEventToPage(
+                  server,
+                  pageId,
+                  action,
+                  rawPermission,
+                  targetUserId,
+                  pool,
+                  logger,
+                  message,
+                );
+      }
+
+      logger.info(
+        `[share] processed ${action} for folder ${entityId}: ${pageIds.length} page(s), ${totalAffected} connection(s) affected`,
+      );
+      return;
     }
 
-    logger.info(
-      `[share] processed ${action} for folder ${entityId}: ${pageIds.length} page(s), ${totalAffected} connection(s) affected`,
+    if (pool !== undefined || action === 'recompute') {
+      const affectedCount = await recomputePageConnections(
+        server,
+        entityId,
+        pool,
+        logger,
+        message,
+        undefined,
+        metaUserIds,
+      );
+      logger.info(
+        `[share] processed recompute for page ${entityId}: ${affectedCount} connection(s) affected`,
+      );
+      return;
+    }
+
+    // Fallback for tests/dev callers without a database pool.
+    const affectedCount = await applyShareEventToPage(
+      server,
+      entityId,
+      action,
+      rawPermission,
+      targetUserId,
+      pool,
+      logger,
+      message,
     );
-    return;
-  }
 
-  if (pool !== undefined || action === 'recompute') {
-    const affectedCount = await recomputePageConnections(server, entityId, pool, logger, message);
     logger.info(
-      `[share] processed recompute for page ${entityId}: ${affectedCount} connection(s) affected`,
+      `[share] processed ${action} for page ${entityId}: ${affectedCount} connection(s) affected`,
     );
-    return;
+  } finally {
+    bumpShareAccessMetaVersion(server, metaUserIds);
   }
-
-  // Fallback for tests/dev callers without a database pool.
-  const affectedCount = await applyShareEventToPage(
-    server,
-    entityId,
-    action,
-    rawPermission,
-    targetUserId,
-    pool,
-    logger,
-    message,
-  );
-
-  logger.info(
-    `[share] processed ${action} for page ${entityId}: ${affectedCount} connection(s) affected`,
-  );
 }
 
 export interface WorkspaceEventPayload {
@@ -732,124 +816,128 @@ export async function handleWorkspaceEvent(
 
   logger.debug(`[workspace] received event: action=${action} owner=${ownerId} member=${memberId}`);
 
-  const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${memberId}`) as
-    | Document
-    | undefined;
-  for (const connection of metaDocument?.getConnections() ?? []) {
-    connection.sendStateless(
-      JSON.stringify({
-        type: 'workspace_membership_event',
-        action,
-        ownerId,
-      }),
-    );
-  }
+  const metaUserIds = new Set([ownerId, memberId]);
 
-  if (!pool) {
-    logger.warn('[workspace] no pool available, skipping');
-    return;
-  }
-
-  const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter(
-    (documentName) => !documentName.startsWith('page-meta:'),
-  );
-  if (activePageIds.length === 0) {
-    logger.debug(`[workspace] no active pages for workspace owner ${ownerId}, skipping`);
-    return;
-  }
-
-  let pageIds: string[] = [];
   try {
-    const result = await pool.query<{ id: string }>(
-      `SELECT p.id
+    if (!pool) {
+      logger.warn('[workspace] no pool available, skipping');
+      return;
+    }
+
+    const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter(
+      (documentName) => !documentName.startsWith('page-meta:'),
+    );
+    if (activePageIds.length === 0) {
+      logger.debug(`[workspace] no active pages for workspace owner ${ownerId}, skipping`);
+      return;
+    }
+
+    let pageIds: string[] = [];
+    try {
+      const result = await pool.query<{ id: string }>(
+        `SELECT p.id
        FROM pages p
        WHERE p.id = ANY($2::uuid[])
          AND p.is_deleted = false
          AND COALESCE(get_root_folder_owner(p.parent_id), p.created_by) = $1`,
-      [ownerId, activePageIds],
-    );
-    pageIds = result.rows.map((row) => row.id);
-  } catch (err) {
-    logger.error(`[workspace] failed to query active pages for workspace owner ${ownerId}: ${err}`);
-    // The workspace could not be identified, so revalidate only this member
-    // on active pages. Each recomputation remains fail closed.
-    for (const activePageId of activePageIds) {
-      await recomputePageConnections(server, activePageId, pool, logger, message, memberId);
+        [ownerId, activePageIds],
+      );
+      pageIds = result.rows.map((row) => row.id);
+    } catch (err) {
+      logger.error(
+        `[workspace] failed to query active pages for workspace owner ${ownerId}: ${err}`,
+      );
+      // The workspace could not be identified, so revalidate only this member
+      // on active pages. Each recomputation remains fail closed.
+      for (const activePageId of activePageIds) {
+        await recomputePageConnections(
+          server,
+          activePageId,
+          pool,
+          logger,
+          message,
+          memberId,
+          metaUserIds,
+        );
+      }
+      return;
     }
-    return;
-  }
 
-  if (pageIds.length === 0) {
-    logger.debug(`[workspace] no matching active pages for workspace owner ${ownerId}, skipping`);
-    return;
-  }
+    if (pageIds.length === 0) {
+      logger.debug(`[workspace] no matching active pages for workspace owner ${ownerId}, skipping`);
+      return;
+    }
 
-  let permissions: Map<string, SharePermission | null>;
-  let permissionQueryFailed = false;
-  try {
-    const permissionResult = await pool.query<{ page_id: string; permission: string | null }>(
-      `WITH requested_pages AS (
+    let permissions: Map<string, SharePermission | null>;
+    let permissionQueryFailed = false;
+    try {
+      const permissionResult = await pool.query<{ page_id: string; permission: string | null }>(
+        `WITH requested_pages AS (
          SELECT unnest($1::uuid[]) AS page_id
        )
        SELECT requested_pages.page_id, access.permission
        FROM requested_pages
        LEFT JOIN LATERAL get_effective_page_permission(requested_pages.page_id, $2) access ON true`,
-      [pageIds, memberId],
-    );
-    permissions = new Map(
-      permissionResult.rows.map((row) => [
-        row.page_id,
-        clientPermission(row.permission ?? undefined) ?? null,
-      ]),
-    );
-  } catch (err) {
-    permissionQueryFailed = true;
-    logger.error(`[workspace] failed to batch permissions for user=${memberId}: ${err}`);
-    permissions = new Map(pageIds.map((pageId) => [pageId, null]));
-  }
-
-  for (const pageId of pageIds) {
-    const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
-    if (!activeDoc) continue;
-    const permission = permissions.get(pageId) ?? null;
-
-    for (const connection of activeDoc.getConnections()) {
-      const ctx = connection.context as ConnectionContext | undefined;
-      if (ctx?.user?.id !== memberId) continue;
-
-      if (!permission) {
-        if (permissionQueryFailed) {
-          connection.close({ code: 4500, reason: 'Permission verification failed' });
-          logger.warn(
-            `[workspace] could not verify user=${memberId} on page ${pageId} (${action})`,
-          );
-        } else {
-          connection.sendStateless(
-            JSON.stringify({
-              type: 'share_event',
-              action: 'revoke',
-              ...(message !== undefined && { message }),
-            } satisfies StatelessShareMessage),
-          );
-          connection.close({ code: 4401, reason: 'Access revoked' });
-          logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
-        }
-        continue;
-      }
-
-      connection.readOnly = permission === 'view';
-      (connection.context as Record<string, unknown>).permission = permission;
-      connection.sendStateless(
-        JSON.stringify({
-          type: 'share_event',
-          action: 'update',
-          permission,
-          ...(message !== undefined && { message }),
-        } satisfies StatelessShareMessage),
+        [pageIds, memberId],
       );
-      logger.info(
-        `[workspace] updated user=${memberId} on page ${pageId} to ${permission} (${action})`,
+      permissions = new Map(
+        permissionResult.rows.map((row) => [
+          row.page_id,
+          clientPermission(row.permission ?? undefined) ?? null,
+        ]),
       );
+    } catch (err) {
+      permissionQueryFailed = true;
+      logger.error(`[workspace] failed to batch permissions for user=${memberId}: ${err}`);
+      permissions = new Map(pageIds.map((pageId) => [pageId, null]));
     }
+
+    for (const pageId of pageIds) {
+      const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
+      if (!activeDoc) continue;
+      const permission = permissions.get(pageId) ?? null;
+
+      for (const connection of activeDoc.getConnections()) {
+        const ctx = connection.context as ConnectionContext | undefined;
+        if (ctx?.user?.id !== memberId) continue;
+
+        if (!permission) {
+          if (permissionQueryFailed) {
+            connection.close({ code: 4500, reason: 'Permission verification failed' });
+            logger.warn(
+              `[workspace] could not verify user=${memberId} on page ${pageId} (${action})`,
+            );
+          } else {
+            connection.sendStateless(
+              JSON.stringify({
+                type: 'share_event',
+                action: 'revoke',
+                ...(message !== undefined && { message }),
+              } satisfies StatelessShareMessage),
+            );
+            connection.close({ code: 4401, reason: 'Access revoked' });
+            logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
+          }
+          continue;
+        }
+
+        connection.readOnly = permission === 'view';
+        (connection.context as Record<string, unknown>).permission = permission;
+        connection.sendStateless(
+          JSON.stringify({
+            type: 'share_event',
+            action: 'update',
+            permission,
+            ...(message !== undefined && { message }),
+          } satisfies StatelessShareMessage),
+        );
+        logger.info(
+          `[workspace] updated user=${memberId} on page ${pageId} to ${permission} (${action})`,
+        );
+      }
+    }
+  } finally {
+    bumpShareAccessMetaVersion(server, metaUserIds);
+    sendWorkspaceMembershipCompatibilityEvent(server, metaUserIds, { action, ownerId });
   }
 }

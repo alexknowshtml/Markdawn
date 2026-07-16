@@ -14,6 +14,7 @@ interface ShareEventBase {
   entityId: string;
   permission?: SharePermission;
   targetUserId?: string;
+  metaUserIds?: string[];
   entityTitle?: string;
   sharedByName?: string;
   message?: string;
@@ -31,6 +32,7 @@ function fireShareEvent(
     entityId: params.entityId,
     ...(params.permission !== undefined && { permission: params.permission }),
     ...(params.targetUserId !== undefined && { targetUserId: params.targetUserId }),
+    ...(params.metaUserIds !== undefined && { metaUserIds: [...new Set(params.metaUserIds)] }),
     ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
   };
   return executeQuery(executor, "SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);

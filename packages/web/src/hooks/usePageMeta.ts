@@ -5,6 +5,7 @@ import { useNavigate } from 'react-router-dom';
 import * as Y from 'yjs';
 import { authClient } from '../lib/auth-client';
 import { getLogger } from '../logger-init';
+import { showInfoToast } from '../utils/toast';
 import { invalidateWorkspaceAccessQueries } from './use-workspace';
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
@@ -29,6 +30,7 @@ type WorkspaceMembershipEvent = {
   type: 'workspace_membership_event';
   action: 'member_added' | 'member_removed' | 'role_changed';
   ownerId: string;
+  refreshViaAccessVersion?: true;
 };
 
 type FolderDeletionEvent = {
@@ -37,7 +39,28 @@ type FolderDeletionEvent = {
   entityId: string;
 };
 
-type PageMetaStatelessMessage = WorkspaceMembershipEvent | FolderDeletionEvent;
+type ShareAccessEvent = {
+  type: 'share_access_event';
+  action: 'grant' | 'update' | 'revoke' | 'recompute';
+  entityType: 'page' | 'folder';
+  entityId: string;
+};
+
+type InviteReceivedEvent = {
+  type: 'invite_received';
+  entityType: 'page' | 'folder';
+  entityId: string;
+  entityTitle: string;
+  sharedByName: string;
+  message?: string;
+  refreshViaAccessVersion?: true;
+};
+
+type PageMetaStatelessMessage =
+  | WorkspaceMembershipEvent
+  | FolderDeletionEvent
+  | ShareAccessEvent
+  | InviteReceivedEvent;
 
 export function applyPageMetaStatelessMessage(
   message: PageMetaStatelessMessage,
@@ -54,7 +77,16 @@ export function applyPageMetaStatelessMessage(
       exact: true,
     });
   }
-  invalidateWorkspaceAccessQueries(queryClient);
+  const refreshHandledByAccessVersion =
+    (message.type === 'invite_received' || message.type === 'workspace_membership_event') &&
+    message.refreshViaAccessVersion === true;
+  if (!refreshHandledByAccessVersion) {
+    invalidateWorkspaceAccessQueries(queryClient);
+    if (message.type === 'share_access_event' || message.type === 'entity_deleted') {
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
+    }
+  }
   return (
     message.type === 'entity_deleted' &&
     pathname.startsWith('/app/folder/') &&
@@ -81,18 +113,72 @@ export function parsePageMetaStatelessMessage(payload: string): PageMetaStateles
     }
     return { type: 'entity_deleted', entityType, entityId };
   }
+  if (message.type === 'share_access_event') {
+    const action = 'action' in message ? message.action : undefined;
+    const entityType = 'entityType' in message ? message.entityType : undefined;
+    const entityId = 'entityId' in message ? message.entityId : undefined;
+    if (
+      (action !== 'grant' &&
+        action !== 'update' &&
+        action !== 'revoke' &&
+        action !== 'recompute') ||
+      (entityType !== 'page' && entityType !== 'folder') ||
+      typeof entityId !== 'string' ||
+      entityId.length === 0
+    ) {
+      throw new Error('Malformed share access event');
+    }
+    return { type: 'share_access_event', action, entityType, entityId };
+  }
+  if (message.type === 'invite_received') {
+    const entityType = 'entityType' in message ? message.entityType : undefined;
+    const entityId = 'entityId' in message ? message.entityId : undefined;
+    const entityTitle = 'entityTitle' in message ? message.entityTitle : undefined;
+    const sharedByName = 'sharedByName' in message ? message.sharedByName : undefined;
+    const eventMessage = 'message' in message ? message.message : undefined;
+    const refreshViaAccessVersion =
+      'refreshViaAccessVersion' in message ? message.refreshViaAccessVersion : undefined;
+    if (
+      (entityType !== 'page' && entityType !== 'folder') ||
+      typeof entityId !== 'string' ||
+      entityId.length === 0 ||
+      typeof entityTitle !== 'string' ||
+      typeof sharedByName !== 'string' ||
+      (eventMessage !== undefined && typeof eventMessage !== 'string') ||
+      (refreshViaAccessVersion !== undefined && refreshViaAccessVersion !== true)
+    ) {
+      throw new Error('Malformed invitation event');
+    }
+    return {
+      type: 'invite_received',
+      entityType,
+      entityId,
+      entityTitle,
+      sharedByName,
+      ...(eventMessage !== undefined && { message: eventMessage }),
+      ...(refreshViaAccessVersion === true && { refreshViaAccessVersion: true }),
+    };
+  }
   if (message.type !== 'workspace_membership_event') return null;
 
   const action = 'action' in message ? message.action : undefined;
   const ownerId = 'ownerId' in message ? message.ownerId : undefined;
+  const refreshViaAccessVersion =
+    'refreshViaAccessVersion' in message ? message.refreshViaAccessVersion : undefined;
   if (
     (action !== 'member_added' && action !== 'member_removed' && action !== 'role_changed') ||
     typeof ownerId !== 'string' ||
-    ownerId.length === 0
+    ownerId.length === 0 ||
+    (refreshViaAccessVersion !== undefined && refreshViaAccessVersion !== true)
   ) {
     throw new Error('Malformed workspace membership event');
   }
-  return { type: 'workspace_membership_event', action, ownerId };
+  return {
+    type: 'workspace_membership_event',
+    action,
+    ownerId,
+    ...(refreshViaAccessVersion === true && { refreshViaAccessVersion: true }),
+  };
 }
 
 /**
@@ -157,16 +243,48 @@ export function usePageMeta() {
     };
     map.observe(pageIndexObserver);
 
-    const handleStateless = ({ payload }: { payload: string }) => {
-      try {
-        const message = parsePageMetaStatelessMessage(payload);
-        if (!message) return;
+    const handleSynced = () => {
+      // LISTEN/NOTIFY events are intentionally not retained. Rebuild all
+      // access-sensitive queries after each meta-room handshake so a change
+      // that happened during startup or a reconnect cannot leave stale UI.
+      invalidateWorkspaceAccessQueries(queryClient);
+      queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
+    };
+    provider.on('synced', handleSynced);
+    const accessVersion = doc.getMap<number>('accessVersion');
+    accessVersion.observe(handleSynced);
+    let reconnectAfterDisconnect: (() => void) | null = null;
 
-        if (applyPageMetaStatelessMessage(message, queryClient, window.location.pathname)) {
-          navigate('/app', { replace: true });
-        }
+    const handleStateless = ({ payload }: { payload: string }) => {
+      let message: PageMetaStatelessMessage | null;
+      try {
+        message = parsePageMetaStatelessMessage(payload);
       } catch (error) {
-        getLogger().warn('Ignored malformed page metadata message', { error: String(error) });
+        getLogger().error('Malformed page metadata message; reconnecting', {
+          error: String(error),
+        });
+        if (!reconnectAfterDisconnect) {
+          reconnectAfterDisconnect = () => {
+            if (!reconnectAfterDisconnect) return;
+            provider.off('disconnect', reconnectAfterDisconnect);
+            reconnectAfterDisconnect = null;
+            void provider.connect();
+          };
+          provider.on('disconnect', reconnectAfterDisconnect);
+        }
+        provider.disconnect();
+        return;
+      }
+      if (!message) return;
+
+      if (applyPageMetaStatelessMessage(message, queryClient, window.location.pathname)) {
+        navigate('/app', { replace: true });
+      }
+      if (message.type === 'invite_received') {
+        showInfoToast(
+          message.message ?? `${message.sharedByName} shared ${message.entityTitle} with you.`,
+        );
       }
     };
     provider.on('stateless', handleStateless);
@@ -186,6 +304,9 @@ export function usePageMeta() {
       } catch {
         // already detached
       }
+      accessVersion.unobserve(handleSynced);
+      provider.off('synced', handleSynced);
+      if (reconnectAfterDisconnect) provider.off('disconnect', reconnectAfterDisconnect);
       provider.off('stateless', handleStateless);
       provider.destroy();
       doc.destroy();
