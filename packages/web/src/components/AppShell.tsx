@@ -138,7 +138,7 @@ export function AppShell() {
         </div>
       )}
 
-      <main className="flex-1 flex flex-col h-full overflow-hidden relative">
+      <main className="flex min-w-0 flex-1 flex-col h-full overflow-hidden relative">
         <div className="md:hidden flex items-center h-14 px-4 border-b border-zinc-200/50 dark:border-zinc-800/50 bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xl flex-shrink-0 z-10 sticky top-0">
           <button
             type="button"
@@ -150,8 +150,8 @@ export function AppShell() {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto scroll-smooth pb-8">
-          <div className="max-w-4xl mx-auto w-full p-6 md:p-12 min-h-full animate-fade-in">
+        <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto scroll-smooth pb-8">
+          <div className="mx-auto min-h-full w-full min-w-0 max-w-4xl p-6 md:p-12 animate-fade-in">
             <Outlet />
           </div>
         </div>
