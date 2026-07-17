@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import { Check, ChevronDown } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 type TextBoxProps = {
@@ -63,6 +63,40 @@ type DropdownProps<TValue extends string> = {
   triggerClassName?: string;
 };
 
+type DropdownMenuPosition = {
+  left: number;
+  top: number;
+  minWidth: number;
+  maxWidth: number;
+  maxHeight: number;
+};
+
+export function calculateDropdownMenuPosition(
+  trigger: Pick<DOMRect, 'bottom' | 'left' | 'top' | 'width'>,
+  menu: { height: number; width: number },
+  viewport: { height: number; width: number },
+): DropdownMenuPosition {
+  const gap = 4;
+  const viewportPadding = 8;
+  const spaceBelow = Math.max(0, viewport.height - trigger.bottom - gap - viewportPadding);
+  const spaceAbove = Math.max(0, trigger.top - gap - viewportPadding);
+  const openAbove = spaceBelow < menu.height && spaceAbove > spaceBelow;
+  const maxHeight = openAbove ? spaceAbove : spaceBelow;
+  const renderedHeight = Math.min(menu.height, maxHeight);
+  const maxWidth = Math.max(0, viewport.width - viewportPadding * 2);
+  const minWidth = Math.min(Math.max(trigger.width, menu.width, 80), maxWidth);
+  const maxLeft = Math.max(viewportPadding, viewport.width - minWidth - viewportPadding);
+  const left = Math.min(Math.max(viewportPadding, trigger.left), maxLeft);
+
+  return {
+    left,
+    top: openAbove ? trigger.top - gap - renderedHeight : trigger.bottom + gap,
+    minWidth,
+    maxWidth,
+    maxHeight,
+  };
+}
+
 export function Dropdown<TValue extends string>({
   value,
   options,
@@ -73,22 +107,43 @@ export function Dropdown<TValue extends string>({
 }: DropdownProps<TValue>) {
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
-  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({});
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({
+    position: 'fixed',
+    visibility: 'hidden',
+  });
 
   const currentLabel = useMemo(
     () => options.find((option) => option.value === value)?.label ?? '',
     [options, value],
   );
 
-  useEffect(() => {
-    if (!open || !triggerRef.current) return;
-    const rect = triggerRef.current.getBoundingClientRect();
-    setMenuStyle({
-      position: 'fixed',
-      left: rect.left,
-      top: rect.bottom + 4,
-      minWidth: Math.max(rect.width, 80),
-    });
+  useLayoutEffect(() => {
+    if (!open || !triggerRef.current || !menuRef.current) return undefined;
+
+    const updateMenuPosition = () => {
+      if (!triggerRef.current || !menuRef.current) return;
+      const triggerRect = triggerRef.current.getBoundingClientRect();
+      const menuRect = menuRef.current.getBoundingClientRect();
+      const position = calculateDropdownMenuPosition(
+        triggerRect,
+        { height: menuRef.current.scrollHeight || menuRect.height, width: menuRect.width },
+        { height: window.innerHeight, width: window.innerWidth },
+      );
+      setMenuStyle({
+        position: 'fixed',
+        ...position,
+        visibility: 'visible',
+      });
+    };
+
+    updateMenuPosition();
+    window.addEventListener('resize', updateMenuPosition);
+    document.addEventListener('scroll', updateMenuPosition, true);
+    return () => {
+      window.removeEventListener('resize', updateMenuPosition);
+      document.removeEventListener('scroll', updateMenuPosition, true);
+    };
   }, [open]);
 
   useEffect(() => {
@@ -112,7 +167,10 @@ export function Dropdown<TValue extends string>({
         ref={triggerRef}
         type="button"
         disabled={disabled}
-        onClick={() => setOpen((prev) => !prev)}
+        onClick={() => {
+          if (!open) setMenuStyle({ position: 'fixed', visibility: 'hidden' });
+          setOpen((previous) => !previous);
+        }}
         className={clsx(
           'inline-flex h-6 w-fit items-center justify-between gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 text-[11px] font-medium text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:focus:border-zinc-600 cursor-pointer disabled:cursor-default disabled:opacity-60',
           triggerClassName,
@@ -128,9 +186,10 @@ export function Dropdown<TValue extends string>({
       {open &&
         createPortal(
           <div
+            ref={menuRef}
             role="listbox"
             style={menuStyle}
-            className="z-50 overflow-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
+            className="z-50 overflow-y-auto overflow-x-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
             onMouseDown={(event) => event.stopPropagation()}
           >
             {options.map((option) => {
