@@ -7,7 +7,7 @@ import { authClient } from '../lib/auth-client';
 import { getLogger } from '../logger-init';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showInfoToast } from '../utils/toast';
-import { invalidateWorkspaceAccessQueries } from './use-workspace';
+import { invalidateWorkspaceAccessQueries, WORKSPACE_ACCESS_QUERY_KEYS } from './use-workspace';
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 const META_ROOM_PREFIX = 'page-meta:';
@@ -25,6 +25,28 @@ let _pageIndex: Y.Map<unknown> | null = null;
 
 export function getPageIndexMap(): Y.Map<unknown> | null {
   return _pageIndex;
+}
+
+const PAGE_META_SYNC_QUERY_KEYS = [
+  ...WORKSPACE_ACCESS_QUERY_KEYS,
+  ['pages', 'detail'],
+  ['folders', 'detail'],
+] as const;
+
+export async function refreshPageMetaQueriesAfterSync(queryClient: QueryClient): Promise<void> {
+  if (isBulkRemovalInProgress()) return;
+
+  // An initial dashboard request may have started before the meta room
+  // connected. Cancel it before refetching so its older snapshot cannot
+  // swallow an invitation or permission change received during startup.
+  await Promise.all(
+    PAGE_META_SYNC_QUERY_KEYS.map((queryKey) => queryClient.cancelQueries({ queryKey })),
+  );
+  if (isBulkRemovalInProgress()) return;
+
+  await Promise.all(
+    PAGE_META_SYNC_QUERY_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
+  );
 }
 
 type WorkspaceMembershipEvent = {
@@ -253,9 +275,11 @@ export function usePageMeta() {
       // LISTEN/NOTIFY events are intentionally not retained. Rebuild all
       // access-sensitive queries after each meta-room handshake so a change
       // that happened during startup or a reconnect cannot leave stale UI.
-      invalidateWorkspaceAccessQueries(queryClient);
-      queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
-      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
+      void refreshPageMetaQueriesAfterSync(queryClient).catch((error: unknown) => {
+        getLogger().error('Failed to refresh access after page metadata sync', {
+          error: String(error),
+        });
+      });
     };
     provider.on('synced', handleSynced);
     const accessVersion = doc.getMap<number>('accessVersion');

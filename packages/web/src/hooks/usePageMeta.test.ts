@@ -1,6 +1,46 @@
-import { QueryClient } from '@tanstack/react-query';
+import { QueryClient, QueryObserver } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import { applyPageMetaStatelessMessage, parsePageMetaStatelessMessage } from './usePageMeta';
+import {
+  applyPageMetaStatelessMessage,
+  parsePageMetaStatelessMessage,
+  refreshPageMetaQueriesAfterSync,
+} from './usePageMeta';
+
+describe('refreshPageMetaQueriesAfterSync', () => {
+  it('replaces an older initial request before it can hide a startup invitation', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    let resolveInitialRequest: ((value: string[]) => void) | undefined;
+    const queryFn = vi
+      .fn<() => Promise<string[]>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<string[]>((resolve) => {
+            resolveInitialRequest = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(['new invitation']);
+    const observer = new QueryObserver(queryClient, {
+      queryKey: ['shared-with-me'],
+      queryFn,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+
+    await vi.waitFor(() => expect(queryFn).toHaveBeenCalledOnce());
+    await refreshPageMetaQueriesAfterSync(queryClient);
+
+    expect(queryFn).toHaveBeenCalledTimes(2);
+    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new invitation']);
+
+    resolveInitialRequest?.(['older empty result']);
+    await Promise.resolve();
+    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new invitation']);
+
+    unsubscribe();
+    queryClient.clear();
+  });
+});
 
 describe('parsePageMetaStatelessMessage', () => {
   it('accepts valid workspace membership events', () => {

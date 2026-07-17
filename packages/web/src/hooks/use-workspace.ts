@@ -56,17 +56,23 @@ export function useWorkspaceMemberships() {
   });
 }
 
+export const WORKSPACE_ACCESS_QUERY_KEYS = [
+  ['workspace-members'],
+  ['workspace-memberships'],
+  ['shared-with-me'],
+  ['pageTree'],
+  ['folderTree'],
+  ['pages', 'recent'],
+  ['favorites'],
+  ['shares'],
+  ['pageCollaborators'],
+  ['folderCollaborators'],
+] as const;
+
 export function invalidateWorkspaceAccessQueries(queryClient: QueryClient): void {
-  queryClient.invalidateQueries({ queryKey: ['workspace-members'] });
-  queryClient.invalidateQueries({ queryKey: ['workspace-memberships'] });
-  queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-  queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-  queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-  queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-  queryClient.invalidateQueries({ queryKey: ['favorites'] });
-  queryClient.invalidateQueries({ queryKey: ['shares'] });
-  queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
-  queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
+  for (const queryKey of WORKSPACE_ACCESS_QUERY_KEYS) {
+    queryClient.invalidateQueries({ queryKey });
+  }
 }
 
 async function inviteToWorkspace({
