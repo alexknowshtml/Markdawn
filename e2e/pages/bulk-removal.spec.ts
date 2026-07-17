@@ -120,9 +120,29 @@ test('removes a mixed owned and shared selection with one progress state', async
     const ownedRemovalsCompleted = new Promise<void>((resolve) => {
       resolveOwnedRemovals = resolve;
     });
+    let resolveOwnedRefreshes: (() => void) | undefined;
+    const ownedRefreshesCompleted = new Promise<void>((resolve) => {
+      resolveOwnedRefreshes = resolve;
+    });
+    const completedOwnedRefreshes = new Set<string>();
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
+      const isFinalRefresh = request.method() === 'GET' && removalRequests.length === 4;
+      if (isFinalRefresh && pathname.startsWith('/api/shares/with-me')) {
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        const response = await route.fetch();
+        await route.fulfill({ response });
+        return;
+      }
+      if (isFinalRefresh && (pathname === '/api/pages/tree' || pathname === '/api/folders/tree')) {
+        const response = await route.fetch();
+        await route.fulfill({ response });
+        completedOwnedRefreshes.add(pathname);
+        if (completedOwnedRefreshes.size === 2) resolveOwnedRefreshes?.();
+        return;
+      }
+
       const isEntityDelete =
         request.method() === 'DELETE' && /^\/api\/(pages|folders)\/[^/]+$/.test(pathname);
       const isEntityLeave =
@@ -148,6 +168,16 @@ test('removes a mixed owned and shared selection with one progress state', async
 
     await ownedRemovalsCompleted;
     await page.waitForTimeout(500);
+    await expect(page.getByText('Removing 4 items…')).toBeVisible();
+    for (const title of Object.values(titles)) {
+      await expect(page.getByRole('heading', { name: title })).toBeVisible();
+      await expect(sidebar.getByText(title, { exact: true })).toBeVisible();
+    }
+
+    // The owned-item queries finish before the deliberately delayed shared-item
+    // queries. The dashboard and sidebar must keep showing the original complete
+    // list instead of exposing that partial final refresh.
+    await ownedRefreshesCompleted;
     await expect(page.getByText('Removing 4 items…')).toBeVisible();
     for (const title of Object.values(titles)) {
       await expect(page.getByRole('heading', { name: title })).toBeVisible();

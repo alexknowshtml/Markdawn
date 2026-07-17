@@ -30,6 +30,7 @@ import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useSharedWithMe } from '../hooks/use-shared-with-me';
 import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
+import { useStableValueWhile } from '../hooks/useStableValue';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
@@ -116,10 +117,12 @@ export default function HomeView() {
     return () => window.clearInterval(interval);
   }, [refetchPages, refetchFolders, refetchSharedWithMe]);
 
-  const favoriteKeys = useMemo(
+  const bulkRemoveMutation = useBulkRemoveEntities();
+  const refreshedFavoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
   );
+  const favoriteKeys = useStableValueWhile(refreshedFavoriteKeys, bulkRemoveMutation.isPending);
   const isFavorite = (item: ExplorerItemData) => favoriteKeys.has(`${item.type}:${item.id}`);
 
   const createPageMutation = useCreatePage();
@@ -128,7 +131,6 @@ export default function HomeView() {
   const updateFolderMutation = useUpdateFolder();
   const copyPageMutation = useCopyPage();
   const copyFolderMutation = useCopyFolder();
-  const bulkRemoveMutation = useBulkRemoveEntities();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
 
@@ -320,7 +322,7 @@ export default function HomeView() {
   );
   const { data: folderCollaboratorsMap } = useFolderCollaborators(folderIds);
 
-  const allItems: DashboardItem[] = useMemo(
+  const refreshedItems: DashboardItem[] = useMemo(
     () =>
       filteredBaseItems.map((item) => ({
         ...item,
@@ -333,6 +335,7 @@ export default function HomeView() {
       })),
     [filteredBaseItems, collaboratorsMap, folderCollaboratorsMap],
   );
+  const allItems = useStableValueWhile(refreshedItems, bulkRemoveMutation.isPending);
 
   const hasSelection = selection.selectedCount > 0;
 

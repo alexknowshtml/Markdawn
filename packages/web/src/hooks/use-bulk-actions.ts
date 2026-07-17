@@ -1,9 +1,10 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { beginBulkRemoval } from '../utils/bulkRemovalState';
 import { leaveEntity, useBulkLeaveEntities } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
+const BULK_REMOVAL_MUTATION_KEY = ['bulk-removal'] as const;
 
 async function deletePage(pageId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/pages/${pageId}`, { method: 'DELETE' });
@@ -108,9 +109,14 @@ async function removeEntities(input: BulkRemovalInput): Promise<BulkRemovalResul
   return result;
 }
 
+export function useIsBulkRemovalPending(): boolean {
+  return useIsMutating({ mutationKey: BULK_REMOVAL_MUTATION_KEY }) > 0;
+}
+
 export function useBulkRemoveEntities() {
   const queryClient = useQueryClient();
   return useMutation({
+    mutationKey: BULK_REMOVAL_MUTATION_KEY,
     mutationFn: removeEntities,
     onMutate: async () => {
       const endBulkRemoval = beginBulkRemoval();

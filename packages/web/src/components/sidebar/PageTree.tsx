@@ -13,6 +13,7 @@ import {
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useShareContext } from '../../contexts/ShareContext';
+import { useIsBulkRemovalPending } from '../../hooks/use-bulk-actions';
 import { useFavorites } from '../../hooks/use-favorites';
 import { useCreateFolder, useFolderTree, useUpdateFolder } from '../../hooks/use-folders';
 import {
@@ -25,6 +26,7 @@ import {
 import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
 import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
+import { useStableValueWhile } from '../../hooks/useStableValue';
 import { useEntityDeletion } from '../../utils/entity-actions';
 import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
 import { showErrorToast } from '../../utils/toast';
@@ -59,13 +61,27 @@ export function PageTree() {
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
 
-  const { data: pages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
-  const { data: folders, isLoading: isFoldersLoading, error: foldersError } = useFolderTree();
-  const { data: favorites } = useFavorites();
-  const { data: recentPages } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
-  const { data: sharedNavigation } = useSharedWithMeTree();
-  const { data: workspaceMemberships } = useWorkspaceMemberships();
+  const { data: refreshedPages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
+  const {
+    data: refreshedFolders,
+    isLoading: isFoldersLoading,
+    error: foldersError,
+  } = useFolderTree();
+  const { data: refreshedFavorites } = useFavorites();
+  const { data: refreshedRecentPages } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
+  const { data: refreshedSharedNavigation } = useSharedWithMeTree();
+  const { data: refreshedWorkspaceMemberships } = useWorkspaceMemberships();
   const leaveWorkspaceMutation = useLeaveWorkspace();
+  const isBulkRemovalPending = useIsBulkRemovalPending();
+  const pages = useStableValueWhile(refreshedPages, isBulkRemovalPending);
+  const folders = useStableValueWhile(refreshedFolders, isBulkRemovalPending);
+  const favorites = useStableValueWhile(refreshedFavorites, isBulkRemovalPending);
+  const recentPages = useStableValueWhile(refreshedRecentPages, isBulkRemovalPending);
+  const sharedNavigation = useStableValueWhile(refreshedSharedNavigation, isBulkRemovalPending);
+  const workspaceMemberships = useStableValueWhile(
+    refreshedWorkspaceMemberships,
+    isBulkRemovalPending,
+  );
 
   const favoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),

@@ -33,6 +33,7 @@ import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-
 import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
+import { useStableValueWhile } from '../hooks/useStableValue';
 import { preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
 import { getPagesInFolder } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
@@ -114,10 +115,12 @@ export default function FolderEntry() {
   const currentUserId = session?.user?.id;
   const canManageFolder = !!currentUserId && capabilities.canDelete;
 
-  const favoriteKeys = useMemo(
+  const bulkRemoveMutation = useBulkRemoveEntities();
+  const refreshedFavoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
   );
+  const favoriteKeys = useStableValueWhile(refreshedFavoriteKeys, bulkRemoveMutation.isPending);
   const isFavoriteItem = (item: ExplorerItemData) => favoriteKeys.has(`${item.type}:${item.id}`);
 
   const createPageMutation = useCreatePage();
@@ -126,7 +129,6 @@ export default function FolderEntry() {
   const updateFolderMutation = useUpdateFolder();
   const copyPageMutation = useCopyPage();
   const copyFolderMutation = useCopyFolder();
-  const bulkRemoveMutation = useBulkRemoveEntities();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
 
@@ -237,7 +239,7 @@ export default function FolderEntry() {
   );
   const { data: folderCollaboratorsMap } = useFolderCollaborators(childFolderIds);
 
-  const allItems: ExplorerItemData[] = useMemo(() => {
+  const refreshedItems: ExplorerItemData[] = useMemo(() => {
     const folderItems: ExplorerItemData[] = currentFolders.map((f) => ({
       id: f.id,
       type: 'folder',
@@ -273,6 +275,7 @@ export default function FolderEntry() {
     canManageFolder,
     currentUserId,
   ]);
+  const allItems = useStableValueWhile(refreshedItems, bulkRemoveMutation.isPending);
 
   const favoriteItems = useMemo(
     () => allItems.filter((item) => favoriteKeys.has(`${item.type}:${item.id}`)),
