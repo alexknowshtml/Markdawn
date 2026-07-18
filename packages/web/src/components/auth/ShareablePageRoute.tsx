@@ -1,9 +1,10 @@
 import { type CapabilitySet, deriveCapabilities } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { ShieldOff } from 'lucide-react';
-import { type ReactNode, useEffect } from 'react';
+import { FileQuestion, RefreshCw, ShieldOff } from 'lucide-react';
+import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
 import { type PublicFolderPayload, ShareProvider } from '../../contexts/ShareContext';
+import { invalidateWorkspaceAccessQueries } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../utils/api';
 
@@ -39,8 +40,12 @@ function extractUuid(slugAndId: string): string | null {
 async function fetchEntityPublic(
   entityType: EntityType,
   entityId: string,
+  shareToken: string | null,
 ): Promise<PublicEntityPayload> {
-  const res = await fetch(`/api/${entityType === 'folder' ? 'folders' : 'pages'}/${entityId}`);
+  const query = shareToken ? `?share=${encodeURIComponent(shareToken)}` : '';
+  const res = await fetch(
+    `/api/${entityType === 'folder' ? 'folders' : 'pages'}/${entityId}${query}`,
+  );
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message =
@@ -73,12 +78,60 @@ type ShareablePageRouteProps = {
   children: ReactNode;
 };
 
+function RouteErrorState({
+  kind,
+  entityType,
+  onRetry,
+}: {
+  kind: 'forbidden' | 'not-found' | 'server';
+  entityType: EntityType;
+  onRetry?: (() => void) | undefined;
+}) {
+  const isForbidden = kind === 'forbidden';
+  const isNotFound = kind === 'not-found';
+  return (
+    <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
+      <div className="flex max-w-md flex-col items-center gap-4 p-8 text-center">
+        {isForbidden ? (
+          <ShieldOff size={48} className="text-zinc-300 dark:text-zinc-600" />
+        ) : (
+          <FileQuestion size={48} className="text-zinc-300 dark:text-zinc-600" />
+        )}
+        <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+          {isForbidden
+            ? `You don't have access`
+            : isNotFound
+              ? `${entityType === 'folder' ? 'Folder' : 'Page'} not found`
+              : `Couldn't load this ${entityType}`}
+        </h2>
+        <p className="text-sm text-zinc-500 dark:text-zinc-400">
+          {isForbidden
+            ? `Your access may have been removed or the sharing link may have expired.`
+            : isNotFound
+              ? `It may have been deleted, or the sharing link is no longer active.`
+              : 'The server returned an error. Your sharing settings have not been changed.'}
+        </p>
+        {kind === 'server' && onRetry ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="inline-flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900 cursor-pointer"
+          >
+            <RefreshCw size={14} /> Retry
+          </button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 export function ShareablePageRoute({ entityType, children }: ShareablePageRouteProps) {
   const { data: session, isPending: authPending } = useAuth();
   const queryClient = useQueryClient();
   const location = useLocation();
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const entityId = slugAndId ? extractUuid(slugAndId) : null;
+  const shareToken = new URLSearchParams(location.search).get('share')?.trim() || null;
   const shouldFetchPublicEntity =
     !authPending && !!entityId && (!session?.user || entityType === 'folder');
 
@@ -86,20 +139,24 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     data: entity,
     isLoading: entityLoading,
     error: entityError,
+    refetch: refetchEntity,
   } = useQuery({
-    queryKey: [entityType === 'folder' ? 'folders' : 'pages', 'detail', entityId],
+    queryKey: [entityType === 'folder' ? 'folders' : 'pages', 'detail', entityId, shareToken],
     queryFn: () => {
       if (!entityId) throw new Error('entityId is required');
-      return fetchEntityPublic(entityType, entityId);
+      return fetchEntityPublic(entityType, entityId, shareToken);
     },
     enabled: shouldFetchPublicEntity,
     retry: false,
+    refetchInterval: entityType === 'folder' ? 5_000 : false,
+    refetchIntervalInBackground: entityType === 'folder',
   });
 
   const {
     data: sharesData,
     isLoading: sharesLoading,
     error: sharesError,
+    refetch: refetchShares,
   } = useQuery({
     queryKey: ['shares', 'entity', entityType, entityId],
     queryFn: () => {
@@ -108,6 +165,8 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     },
     enabled: !authPending && !!entityId && !!session?.user && entityType === 'folder',
     retry: false,
+    refetchInterval: entityType === 'folder' ? 5_000 : false,
+    refetchIntervalInBackground: entityType === 'folder',
   });
 
   const isLoading =
@@ -115,13 +174,32 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     (entityType === 'folder' && sharesLoading) ||
     (shouldFetchPublicEntity && entityLoading);
 
+  const folderAccessSignature = useMemo(() => {
+    if (entityType !== 'folder' || isLoading || !entityId) return null;
+    return JSON.stringify({
+      entityId,
+      isPublic: entity?.isPublic ?? null,
+      linkPermission: entity?.linkPermission ?? null,
+      shares: sharesData ?? null,
+    });
+  }, [entityType, isLoading, entityId, entity?.isPublic, entity?.linkPermission, sharesData]);
+  const previousFolderAccessRef = useRef<{ entityId: string; signature: string } | null>(null);
+
   useEffect(() => {
-    if (entityType !== 'folder' || !session?.user || !entity?.isPublic) {
+    if (!entityId || folderAccessSignature === null) return;
+    const previous = previousFolderAccessRef.current;
+    previousFolderAccessRef.current = { entityId, signature: folderAccessSignature };
+    if (previous?.entityId === entityId && previous.signature !== folderAccessSignature) {
+      invalidateWorkspaceAccessQueries(queryClient);
+    }
+  }, [entityId, folderAccessSignature, queryClient]);
+
+  useEffect(() => {
+    if (entityType !== 'folder' || !session?.user?.id || !entity?.isPublic) {
       return;
     }
-    queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-    queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-  }, [entityType, session?.user, entity?.isPublic, queryClient]);
+    invalidateWorkspaceAccessQueries(queryClient);
+  }, [entityType, session?.user?.id, entity?.isPublic, queryClient]);
 
   if (isLoading) {
     return (
@@ -139,19 +217,21 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     return <Navigate to="/login" replace state={{ from: location }} />;
   }
 
-  if (entityType === 'folder' && sharesError instanceof ApiError && sharesError.status === 403) {
+  const routeError = entityError ?? sharesError;
+  if (routeError) {
+    const status = routeError instanceof ApiError ? routeError.status : 500;
+    const kind = status === 403 ? 'forbidden' : status === 404 ? 'not-found' : 'server';
     return (
-      <div className="flex min-h-screen items-center justify-center bg-white dark:bg-zinc-950">
-        <div className="flex flex-col items-center gap-4 text-center max-w-md p-8">
-          <ShieldOff size={48} className="text-zinc-300 dark:text-zinc-600" />
-          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-            You don&apos;t have access
-          </h2>
-          <p className="text-sm text-zinc-500 dark:text-zinc-400">
-            Your access to this folder may have been removed. Contact the owner to request access.
-          </p>
-        </div>
-      </div>
+      <RouteErrorState
+        kind={kind}
+        entityType={entityType}
+        onRetry={() => {
+          void Promise.all([
+            ...(shouldFetchPublicEntity ? [refetchEntity()] : []),
+            ...(entityType === 'folder' && session?.user ? [refetchShares()] : []),
+          ]);
+        }}
+      />
     );
   }
 
@@ -163,6 +243,7 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
       return (
         <ShareProvider
           linkPermission={linkPermission}
+          shareToken={shareToken}
           capabilities={capabilities}
           publicEntity={entity ?? null}
         >
@@ -185,6 +266,7 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
   return (
     <ShareProvider
       linkPermission={entity.linkPermission ?? null}
+      shareToken={shareToken}
       publicEntity={entityType === 'folder' ? entity : null}
     >
       {children}

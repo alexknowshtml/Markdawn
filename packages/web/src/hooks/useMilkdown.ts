@@ -502,28 +502,22 @@ export function useMilkdown({
 
                   linkEditor.close();
 
-                  // Resolve by UUID first (stable across renames), fall back to
-                  // title-based path matching for legacy links without targetId.
-                  const targetId = anchor.getAttribute('data-target-id') || '';
-                  if (targetId && onWikiLinkClickRef.current) {
-                    // handleWikiLinkClick checks p.id === targetId, which is a
-                    // UUID match — resilient to title changes.
-                    onWikiLinkClickRef.current(targetId);
-                  } else {
-                    const path = anchor.getAttribute('data-path') || '';
-                    const heading = anchor.getAttribute('data-heading') || '';
-                    // Strip #heading suffix from path if present, since
-                    // handleWikiLinkClick resolves by title match and a
-                    // "#Heading" suffix would never match a page title.
-                    const pagePath =
-                      heading && path.endsWith(`#${heading}`)
-                        ? path.slice(0, -(heading.length + 1))
-                        : path;
-                    if (pagePath && onWikiLinkClickRef.current) {
-                      onWikiLinkClickRef.current(pagePath);
-                    } else if (heading) {
-                      scrollToHeading(heading);
-                    }
+                  // A target UUID is authorization-sensitive metadata and is
+                  // never stored in the shared node/canonical Yjs. Resolve the
+                  // authored path through requester-scoped navigation state.
+                  const path = anchor.getAttribute('data-path') || '';
+                  const heading = anchor.getAttribute('data-heading') || '';
+                  // Strip #heading suffix from path if present, since
+                  // handleWikiLinkClick resolves by title match and a
+                  // "#Heading" suffix would never match a page title.
+                  const pagePath =
+                    heading && path.endsWith(`#${heading}`)
+                      ? path.slice(0, -(heading.length + 1))
+                      : path;
+                  if (pagePath && onWikiLinkClickRef.current) {
+                    onWikiLinkClickRef.current(pagePath);
+                  } else if (heading) {
+                    scrollToHeading(heading);
                   }
                   return true;
                 }

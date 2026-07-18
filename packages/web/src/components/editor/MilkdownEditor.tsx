@@ -1,14 +1,25 @@
-import { type CapabilitySet, deriveCapabilities, type SharePermission } from '@markdawn/shared';
+import {
+  COLLAB_TERMINAL_REASONS,
+  deriveCapabilities,
+  type SharePermission,
+  shouldApplyPermissionSnapshot,
+} from '@markdawn/shared';
 import { useQueryClient } from '@tanstack/react-query';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useIsReadOnly, useSetReadOnly } from '../../contexts/EditorReadOnlyContext';
+import {
+  type IdentityLifecycle,
+  useIdentityLifecycle,
+  useIdentityNavigate,
+} from '../../contexts/IdentityLifecycleContext';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
 import {
   useSetCapabilities,
   useSetLinkPermission,
   useShareContext,
 } from '../../contexts/ShareContext';
+import { invalidateWorkspaceAccessQueries } from '../../hooks/use-workspace';
+import { useAuth } from '../../hooks/useAuth';
 import { useAwareness } from '../../hooks/useAwareness';
 import { useFloatingToolbar } from '../../hooks/useFloatingToolbar';
 import { useMilkdown } from '../../hooks/useMilkdown';
@@ -21,7 +32,12 @@ import { consumeSelfLeave } from '../../utils/leave-page';
 import { showInfoToast } from '../../utils/toast';
 import { ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
-import { HocuspocusProvider, WebSocketStatus } from '@hocuspocus/provider';
+import {
+  HocuspocusProvider,
+  type onAuthenticationFailedParameters,
+  type onCloseParameters,
+  WebSocketStatus,
+} from '@hocuspocus/provider';
 import type { Editor } from '@milkdown/core';
 import { commandsCtx, editorViewCtx } from '@milkdown/core';
 import type { EditorView } from '@milkdown/kit/prose/view';
@@ -48,13 +64,69 @@ import { WikiLinkSuggestions } from './WikiLinkSuggestions';
 interface MilkdownEditorProps {
   pageId: string;
   initialValue?: string;
+  shareToken?: string | null;
   onChange?: (markdown: string) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
   onWikiLinkClick?: (path: string) => void;
+  onPermissionSnapshot?: (permission: SharePermission | null, accessRevision: string) => void;
 }
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
+
+type PageProviderCacheEntry = {
+  identityLifecycle: IdentityLifecycle;
+  pageId: string;
+  provider: HocuspocusProvider;
+};
+
+// React Strict Mode may invoke a useMemo factory twice before committing its
+// result. Constructing a provider directly in that factory leaks the discarded
+// provider and opens two sockets over the same Y.Doc/client ID. Keep the
+// provider unique for the document and render identity while React decides
+// which memo result to commit. Replaced providers are still destroyed by the
+// component's normal lifecycle cleanup below.
+const pageProvidersByDocument = new WeakMap<Y.Doc, PageProviderCacheEntry>();
+
+function getOrCreatePageProvider(
+  doc: Y.Doc,
+  pageId: string,
+  identityLifecycle: IdentityLifecycle,
+  create: () => HocuspocusProvider,
+): HocuspocusProvider {
+  const cached = pageProvidersByDocument.get(doc);
+  if (
+    cached?.pageId === pageId &&
+    cached.identityLifecycle === identityLifecycle &&
+    cached.provider.isAttached
+  ) {
+    return cached.provider;
+  }
+
+  const provider = create();
+  pageProvidersByDocument.set(doc, { identityLifecycle, pageId, provider });
+  return provider;
+}
+
+type TerminalCollabEviction = 'access_revoked' | 'page_deleted';
+type CollabCloseEvent = onCloseParameters['event'];
+
+function getTerminalCollabEviction({
+  code,
+  reason,
+}: CollabCloseEvent): TerminalCollabEviction | null {
+  // Hocuspocus turns its per-document CLOSE message into code 1000 and
+  // preserves only the server reason. Native WebSocket closes retain 44xx.
+  if (
+    code === 4401 ||
+    reason === COLLAB_TERMINAL_REASONS.ACCESS_REVOKED ||
+    reason === COLLAB_TERMINAL_REASONS.SESSION_EXPIRED
+  ) {
+    return 'access_revoked';
+  }
+  if (code === 4402 || reason === COLLAB_TERMINAL_REASONS.PAGE_DELETED) return 'page_deleted';
+  return null;
+}
 
 function _execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): void {
   if (!editor) return;
@@ -68,20 +140,32 @@ function _execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): v
 export function MilkdownEditor({
   pageId,
   initialValue,
+  shareToken,
   onChange,
   onStatusChange,
   onProviderReady,
   onWikiLinkClick,
+  onPermissionSnapshot,
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), []);
   const editorRef = useRef<Editor | null>(null);
-  const { isAnonymous } = useShareContext();
+  const { isAnonymous, shareToken: contextShareToken } = useShareContext();
+  const { data: session } = useAuth();
+  const currentUserId = session?.user?.id ?? null;
   const isReadOnly = useIsReadOnly();
   const setReadOnly = useSetReadOnly();
   const setLinkPermission = useSetLinkPermission();
   const setCapabilities = useSetCapabilities();
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
+  const identityLifecycle = useIdentityLifecycle();
   const queryClient = useQueryClient();
+  const latestAccessRevisionRef = useRef<{ pageId: string; revision: bigint | null }>({
+    pageId,
+    revision: null,
+  });
+  const authoritativePermissionRef = useRef<SharePermission | null | undefined>(undefined);
+  const latestOnPermissionSnapshot = useRef(onPermissionSnapshot);
+  latestOnPermissionSnapshot.current = onPermissionSnapshot;
 
   const {
     suggestions,
@@ -213,33 +297,101 @@ export function MilkdownEditor({
   // Key the cache by user ID to avoid session fixation on shared machines.
   const cachedTokenRef = useRef<{ token: string; userId: string; expiresAt: number } | null>(null);
   const isAnonymousRef = useRef(isAnonymous);
+  const currentUserIdRef = useRef(currentUserId);
+  const tokenIdentity = isAnonymous ? 'anonymous' : currentUserId;
+  const previousTokenIdentityRef = useRef(tokenIdentity);
   isAnonymousRef.current = isAnonymous;
+  currentUserIdRef.current = currentUserId;
+  const activeShareToken = shareToken ?? contextShareToken;
+  const statelessHandlerRef = useRef<(({ payload }: { payload: string }) => void) | null>(null);
+  const pendingStatelessPayloadsRef = useRef<string[]>([]);
+  const closeHandlerRef = useRef<((parameters: onCloseParameters) => void) | null>(null);
+  const pendingCloseEventsRef = useRef<CollabCloseEvent[]>([]);
+  const authenticationFailedHandlerRef = useRef<
+    ((parameters: onAuthenticationFailedParameters) => void) | null
+  >(null);
+  const pendingAuthenticationFailuresRef = useRef<onAuthenticationFailedParameters[]>([]);
 
   const provider = useMemo(() => {
-    return new HocuspocusProvider({
-      url: COLLAB_URL,
-      name: pageId,
-      document: doc,
-      forceSyncInterval: 2000,
-      token: async () => {
-        const cached = cachedTokenRef.current;
-        if (cached && Date.now() < cached.expiresAt) {
-          return cached.token;
-        }
+    return getOrCreatePageProvider(doc, pageId, identityLifecycle, () => {
+      return new HocuspocusProvider({
+        url: COLLAB_URL,
+        name: pageId,
+        document: doc,
+        forceSyncInterval: 2000,
+        onStateless: (message) => {
+          if (!identityLifecycle.isActive()) return;
+          const handler = statelessHandlerRef.current;
+          if (handler) handler(message);
+          else pendingStatelessPayloadsRef.current.push(message.payload);
+        },
+        onClose: (parameters) => {
+          if (!identityLifecycle.isActive()) return;
+          const handler = closeHandlerRef.current;
+          if (handler) handler(parameters);
+          else pendingCloseEventsRef.current.push(parameters.event);
+        },
+        onAuthenticationFailed: (parameters) => {
+          if (!identityLifecycle.isActive()) return;
+          const handler = authenticationFailedHandlerRef.current;
+          if (handler) handler(parameters);
+          else pendingAuthenticationFailuresRef.current.push(parameters);
+        },
+        token: async () => {
+          if (!identityLifecycle.isActive()) {
+            throw new Error('Collaboration identity is no longer active');
+          }
+          if (isAnonymousRef.current) {
+            if (!activeShareToken) {
+              throw new Error('Anonymous collaboration requires a sharing token');
+            }
+            const anonymousId = getAnonymousId();
+            return `anon:${anonymousId}:${activeShareToken}`;
+          }
 
-        if (isAnonymousRef.current) {
-          const anonymousId = getAnonymousId();
-          return `anon:${anonymousId}`;
-        }
+          const expectedUserId = currentUserIdRef.current;
+          const cached = cachedTokenRef.current;
+          if (
+            expectedUserId &&
+            cached?.userId === expectedUserId &&
+            Date.now() < cached.expiresAt
+          ) {
+            return cached.token;
+          }
 
-        const session = await authClient.getSession();
-        const token = session.data?.session?.token ?? '';
-        const userId = session.data?.user?.id ?? '';
-        cachedTokenRef.current = { token, userId, expiresAt: Date.now() + 5 * 60 * 1000 };
-        return token;
-      },
+          const session = await authClient.getSession();
+          if (!identityLifecycle.isActive()) {
+            throw new Error('Collaboration identity is no longer active');
+          }
+          const token = session.data?.session?.token ?? '';
+          const userId = session.data?.user?.id ?? '';
+          if (!token || !userId || !expectedUserId || userId !== expectedUserId) {
+            cachedTokenRef.current = null;
+            throw new Error('Authenticated collaboration session changed or is unavailable');
+          }
+          cachedTokenRef.current = { token, userId, expiresAt: Date.now() + 5 * 60 * 1000 };
+          return token;
+        },
+      });
     });
-  }, [pageId, doc]);
+  }, [pageId, doc, identityLifecycle, activeShareToken]);
+
+  useLayoutEffect(() => {
+    if (previousTokenIdentityRef.current !== tokenIdentity) {
+      previousTokenIdentityRef.current = tokenIdentity;
+      cachedTokenRef.current = null;
+    }
+  }, [tokenIdentity]);
+
+  // The page API is useful for rendering metadata, but it is not authoritative
+  // for a collaboration connection. Keep the editor fail-closed until this
+  // provider receives its versioned permission snapshot.
+  useLayoutEffect(() => {
+    latestAccessRevisionRef.current = { pageId, revision: null };
+    authoritativePermissionRef.current = undefined;
+    setReadOnly(true);
+    setCapabilities(deriveCapabilities(null));
+  }, [pageId, setCapabilities, setReadOnly]);
 
   const handleSlashMenuSuggestRef = useRef<
     (
@@ -497,6 +649,7 @@ export function MilkdownEditor({
   };
 
   const handleImageUpload = async (file: File) => {
+    if (!identityLifecycle.isActive()) return;
     if (isAnonymous) {
       showInfoToast('Sign in to upload images');
       return;
@@ -511,11 +664,14 @@ export function MilkdownEditor({
         body: formData,
         credentials: 'include',
       });
+      if (!identityLifecycle.isActive()) return;
       if (!res.ok) {
         const err = await res.json();
+        if (!identityLifecycle.isActive()) return;
         throw new Error(err.message ?? 'Upload failed');
       }
       const data = await res.json();
+      if (!identityLifecycle.isActive()) return;
       const imageMarkdown = `![${file.name}](${data.url})`;
       if (editor) {
         keepVisible();
@@ -536,11 +692,13 @@ export function MilkdownEditor({
         });
       }
     } catch (e) {
+      if (!identityLifecycle.isActive()) return;
       alert(`Upload failed: ${(e as Error).message}`);
     }
   };
 
   const handleImageUploadFromSlash = () => {
+    if (!identityLifecycle.isActive()) return;
     if (isAnonymous) {
       showInfoToast('Sign in to upload images');
       return;
@@ -550,6 +708,7 @@ export function MilkdownEditor({
     input.type = 'file';
     input.accept = 'image/*';
     input.onchange = (e) => {
+      if (!identityLifecycle.isActive()) return;
       const file = (e.target as HTMLInputElement).files?.[0];
       if (file) {
         handleImageUpload(file);
@@ -955,12 +1114,65 @@ export function MilkdownEditor({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: logger is stable, doc.on/off are event subscriptions
   useEffect(() => {
+    let hasEvictedPage = false;
+
+    const evictPage = (
+      reason: TerminalCollabEviction,
+      suppressToast: boolean,
+      deletedEntityType: 'page' | 'folder' = 'page',
+    ) => {
+      if (hasEvictedPage || !identityLifecycle.isActive()) return;
+      hasEvictedPage = true;
+      authoritativePermissionRef.current = null;
+      setReadOnly(true);
+      setLinkPermission(null);
+      setCapabilities(deriveCapabilities(null));
+      queryClient.removeQueries({ queryKey: ['pages', 'detail', pageId], exact: true });
+      invalidateWorkspaceAccessQueries(queryClient);
+      if (!suppressToast) {
+        showInfoToast(
+          reason === 'access_revoked'
+            ? 'Removed from your view'
+            : deletedEntityType === 'folder'
+              ? 'Folder deleted'
+              : 'Page deleted',
+        );
+      }
+      navigate('/app', { replace: true });
+    };
+
     const handleStatus = ({ status }: { status: WebSocketStatus }) => {
       logger.debug`[collab] status: ${status}`;
+      if (status !== WebSocketStatus.Connected) {
+        setReadOnly(true);
+        setCapabilities(deriveCapabilities(null));
+      }
       const cb = latestOnStatusChange.current;
       if (cb) {
         cb(status);
       }
+    };
+
+    const handleClose = ({ event }: onCloseParameters) => {
+      if (!identityLifecycle.isActive()) return;
+      const terminalEviction = getTerminalCollabEviction(event);
+      logger.debug`[collab] closed: code=${event.code} reason=${event.reason}`;
+      // A Hocuspocus CLOSE frame ends this logical document even when the
+      // underlying socket remains connected. Never leave that document
+      // editable; only exact authorization/deletion signals also evict it.
+      setReadOnly(true);
+      setCapabilities(deriveCapabilities(null));
+      if (terminalEviction === null) return;
+      evictPage(terminalEviction, consumeSelfLeave(pageId));
+    };
+
+    const handleAuthenticationFailed = ({ reason }: onAuthenticationFailedParameters) => {
+      if (!identityLifecycle.isActive()) return;
+      logger.debug`[collab] authentication failed: reason=${reason}`;
+      // Authentication rejection is authoritative for this document. The
+      // page may already be rendered from an API/cache snapshot, so retaining
+      // it would expose stale private content after the server denied access.
+      evictPage('access_revoked', consumeSelfLeave(pageId));
     };
 
     const handleSync = ({ documentName, state }: { documentName: string; state: Uint8Array }) => {
@@ -980,6 +1192,7 @@ export function MilkdownEditor({
     };
 
     const handleStateless = ({ payload }: { payload: string }) => {
+      if (!identityLifecycle.isActive()) return;
       let parsed: unknown;
       try {
         parsed = JSON.parse(payload);
@@ -993,7 +1206,7 @@ export function MilkdownEditor({
       }
       const message = parsed as Record<string, unknown>;
 
-      const syncPagePermission = (permission: SharePermission) => {
+      const syncPagePermission = (permission: SharePermission | null) => {
         const capabilities = deriveCapabilities(permission);
         queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
           if (!old || typeof old !== 'object') return old;
@@ -1002,17 +1215,96 @@ export function MilkdownEditor({
             userPermission: permission,
             linkPermission: permission === 'admin' ? 'edit' : permission,
             capabilities,
-          } satisfies Record<string, unknown> & {
-            userPermission: SharePermission;
-            linkPermission: 'view' | 'edit';
-            capabilities: CapabilitySet;
           };
         });
       };
 
+      if (message.type === 'permission_snapshot') {
+        const permission = message.permission;
+        const accessRevision = message.accessRevision;
+        const validPermission =
+          permission === null ||
+          permission === 'view' ||
+          permission === 'edit' ||
+          permission === 'admin';
+        if (
+          !validPermission ||
+          typeof accessRevision !== 'string' ||
+          !/^\d+$/.test(accessRevision)
+        ) {
+          logger.warn`[collab] ignored malformed permission snapshot`;
+          return;
+        }
+
+        let revision: bigint;
+        try {
+          revision = BigInt(accessRevision);
+        } catch {
+          logger.warn`[collab] ignored malformed permission revision`;
+          return;
+        }
+        const previousRevision =
+          latestAccessRevisionRef.current.pageId === pageId
+            ? latestAccessRevisionRef.current.revision
+            : null;
+        const previousPermission = authoritativePermissionRef.current;
+        if (
+          !shouldApplyPermissionSnapshot(
+            previousRevision !== null && previousPermission !== undefined
+              ? {
+                  permission: previousPermission,
+                  accessRevision: previousRevision.toString(),
+                }
+              : null,
+            { permission, accessRevision },
+          )
+        ) {
+          logger.warn`[collab] ignored stale permission snapshot revision=${accessRevision}`;
+          return;
+        }
+
+        latestAccessRevisionRef.current = { pageId, revision };
+        authoritativePermissionRef.current = permission;
+        const isPermissionTransition =
+          previousRevision === null ||
+          revision > previousRevision ||
+          previousPermission !== permission;
+        const isSelfLeaveTransition = isPermissionTransition && consumeSelfLeave(pageId);
+        setReadOnly(permission === null || permission === 'view');
+        setLinkPermission(permission === 'admin' ? 'edit' : permission);
+        setCapabilities(deriveCapabilities(permission));
+        syncPagePermission(permission);
+        latestOnPermissionSnapshot.current?.(permission, accessRevision);
+
+        if (permission === null) {
+          evictPage('access_revoked', isSelfLeaveTransition);
+        } else if (
+          previousRevision !== null &&
+          (revision > previousRevision || previousPermission !== permission)
+        ) {
+          invalidateWorkspaceAccessQueries(queryClient);
+        }
+        if (
+          permission !== null &&
+          previousPermission !== undefined &&
+          previousPermission !== permission
+        ) {
+          showInfoToast(
+            permission === 'view'
+              ? 'This page is now view-only'
+              : permission === 'admin'
+                ? 'You are now an admin'
+                : 'You can now edit this page',
+          );
+        }
+        return;
+      }
+
       // Old format (backward compat during rollout): { type: 'permission_changed', permission }
       if (message.type === 'permission_changed') {
+        if (authoritativePermissionRef.current !== undefined) return;
         const permission = message.permission as string | undefined;
+        const isSelfLeaveTransition = consumeSelfLeave(pageId);
         logger.info`[collab] permission changed: ${permission}`;
         if (permission === 'view') {
           setReadOnly(true);
@@ -1027,12 +1319,7 @@ export function MilkdownEditor({
           syncPagePermission('edit');
           showInfoToast('You can now edit this page');
         } else if (permission === 'private') {
-          if (!consumeSelfLeave(pageId)) {
-            showInfoToast('Removed from your view');
-          }
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          navigate('/');
+          evictPage('access_revoked', isSelfLeaveTransition);
         }
         return;
       }
@@ -1040,37 +1327,14 @@ export function MilkdownEditor({
       if (message.type === 'share_event') {
         const action = message.action as string | undefined;
         const permission = message.permission as string | undefined;
-        const toastMessage = (message as { message?: string }).message;
         logger.info`[collab] share event: action=${action} permission=${permission}`;
-        if (action === 'revoke') {
-          if (!consumeSelfLeave(pageId)) {
-            showInfoToast(toastMessage ?? 'Removed from your view');
-          }
-          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          navigate('/');
-        } else if (action === 'grant' || action === 'update') {
-          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          if (permission === 'view') {
-            setReadOnly(true);
-            setLinkPermission('view');
-            setCapabilities(deriveCapabilities('view'));
-            syncPagePermission('view');
-            showInfoToast(toastMessage ?? 'This page is now view-only');
-          } else if (permission === 'edit' || permission === 'admin') {
-            setReadOnly(false);
-            setLinkPermission('edit');
-            setCapabilities(deriveCapabilities(permission));
-            syncPagePermission(permission);
-            showInfoToast(
-              toastMessage ??
-                (permission === 'admin' ? 'You are now an admin' : 'You can now edit this page'),
-            );
-          }
-        }
+        // This is a notification hint only. A versioned permission_snapshot
+        // is the sole authority for editor mode and access loss so a direct
+        // revoke cannot erase a valid folder/workspace/public-link fallback.
+        queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+        queryClient.invalidateQueries({ queryKey: ['shares'] });
         return;
       }
 
@@ -1078,12 +1342,11 @@ export function MilkdownEditor({
         const entityType = message.entityType as string | undefined;
         const entityId = message.entityId as string | undefined;
         logger.info`[collab] entity deleted: entityType=${entityType} entityId=${entityId}`;
-        if (!consumeSelfLeave(pageId)) {
-          showInfoToast(entityType === 'folder' ? 'Folder deleted' : 'Page deleted');
-        }
-        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-        navigate('/');
+        evictPage(
+          'page_deleted',
+          consumeSelfLeave(pageId),
+          entityType === 'folder' ? 'folder' : 'page',
+        );
         return;
       }
 
@@ -1108,7 +1371,18 @@ export function MilkdownEditor({
     provider.on('persisted', handlePersisted);
     provider.on('awareness', handleAwareness);
     provider.on('error', handleError);
-    provider.on('stateless', handleStateless);
+    statelessHandlerRef.current = handleStateless;
+    closeHandlerRef.current = handleClose;
+    authenticationFailedHandlerRef.current = handleAuthenticationFailed;
+    for (const payload of pendingStatelessPayloadsRef.current.splice(0)) {
+      handleStateless({ payload });
+    }
+    for (const event of pendingCloseEventsRef.current.splice(0)) {
+      handleClose({ event });
+    }
+    for (const parameters of pendingAuthenticationFailuresRef.current.splice(0)) {
+      handleAuthenticationFailed(parameters);
+    }
 
     const onDocUpdate = (_update: Uint8Array, origin: unknown) => {
       logger.debug`[collab] doc update: origin=${String(origin)}, bytes=${_update.length}`;
@@ -1129,7 +1403,11 @@ export function MilkdownEditor({
       provider.off('persisted', handlePersisted);
       provider.off('awareness', handleAwareness);
       provider.off('error', handleError);
-      provider.off('stateless', handleStateless);
+      if (statelessHandlerRef.current === handleStateless) statelessHandlerRef.current = null;
+      if (closeHandlerRef.current === handleClose) closeHandlerRef.current = null;
+      if (authenticationFailedHandlerRef.current === handleAuthenticationFailed) {
+        authenticationFailedHandlerRef.current = null;
+      }
       doc.off('update', onDocUpdate);
       logger.debug`[editor] disconnected: ${pageId}`;
     };

@@ -10,6 +10,7 @@ interface PageTitleProps {
   initialTitle: string;
   ydoc?: Y.Doc | null;
   usePublicEndpoint?: boolean;
+  shareToken?: string | null;
 }
 
 export function PageTitle({
@@ -17,21 +18,25 @@ export function PageTitle({
   initialTitle,
   ydoc,
   usePublicEndpoint = false,
+  shareToken = null,
 }: PageTitleProps) {
   const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc, {
     usePublicEndpoint,
+    shareToken,
   });
   const inputRef = useRef<HTMLInputElement>(null);
   const readOnly = useIsReadOnly();
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   const handleBlurOrEnter = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement> | React.FocusEvent<HTMLInputElement>) => {
-      if (readOnly) return;
+      if (readOnlyRef.current) return;
       if ('key' in e && e.key !== 'Enter') return;
       const liveValue = inputRef.current?.value ?? title;
       commitTitle(liveValue);
     },
-    [commitTitle, title, readOnly],
+    [commitTitle, title],
   );
 
   return (

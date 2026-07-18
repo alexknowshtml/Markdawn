@@ -1,6 +1,12 @@
+import { QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import React, { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
+import {
+  createIdentityLifecycle,
+  IdentityLifecycleProvider,
+} from '../contexts/IdentityLifecycleContext';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 import { usePageTitle } from './usePageTitle';
@@ -131,6 +137,35 @@ describe('usePageTitle', () => {
         expect.objectContaining({ body: JSON.stringify({ title: 'Early anonymous title' }) }),
       );
     });
+  });
+
+  it('does not retry a title request after its identity retires', async () => {
+    let resolveFirstRequest: ((response: Response) => void) | undefined;
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        resolveFirstRequest = resolve;
+      }),
+    );
+    const lifecycle = createIdentityLifecycle();
+    const wrapper = ({ children }: { children: ReactNode }) =>
+      React.createElement(
+        QueryClientProvider,
+        { client: queryClient },
+        React.createElement(IdentityLifecycleProvider, { lifecycle }, children),
+      );
+    const { result } = renderHook(() => usePageTitle('p1', 'Original'), { wrapper });
+
+    act(() => result.current.commitTitle('A private title'));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+
+    lifecycle.retire();
+    await act(async () => {
+      resolveFirstRequest?.({ ok: false, status: 401 } as Response);
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(queryClient.isMutating()).toBe(0));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('does not save when pageId is missing', async () => {

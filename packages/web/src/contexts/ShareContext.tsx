@@ -42,6 +42,7 @@ interface ShareContextType {
   isAnonymous: boolean;
   anonymousId: string | null;
   anonymousName: string | null;
+  shareToken: string | null;
   linkPermission: LinkPermission;
   capabilities: CapabilitySet;
   publicEntity: PublicFolderPayload | null;
@@ -67,6 +68,7 @@ const DEFAULT_CAPABILITIES: CapabilitySet = {
 interface ShareProviderProps {
   children: ReactNode;
   linkPermission?: LinkPermission;
+  shareToken?: string | null;
   capabilities?: CapabilitySet;
   publicEntity?: PublicFolderPayload | null;
 }
@@ -74,6 +76,7 @@ interface ShareProviderProps {
 export function ShareProvider({
   children,
   linkPermission: initial = null,
+  shareToken = null,
   capabilities: initialCapabilities,
   publicEntity = null,
 }: ShareProviderProps) {
@@ -101,6 +104,7 @@ export function ShareProvider({
         isAnonymous: false,
         anonymousId: null,
         anonymousName: null,
+        shareToken,
         linkPermission,
         capabilities,
         publicEntity,
@@ -123,12 +127,13 @@ export function ShareProvider({
       isAnonymous: true,
       anonymousId,
       anonymousName,
+      shareToken,
       linkPermission,
       capabilities: anonCapabilities,
       publicEntity,
       canEdit: anonCapabilities.canEdit,
     };
-  }, [isAnonymous, linkPermission, capabilities, publicEntity]);
+  }, [isAnonymous, shareToken, linkPermission, capabilities, publicEntity]);
 
   return (
     <SetCapabilitiesContext.Provider value={setCapabilities}>
@@ -143,6 +148,7 @@ const DEFAULT_SHARE_CONTEXT: ShareContextType = {
   isAnonymous: false,
   anonymousId: null,
   anonymousName: null,
+  shareToken: null,
   linkPermission: null,
   capabilities: DEFAULT_CAPABILITIES,
   publicEntity: null,

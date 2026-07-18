@@ -1,6 +1,7 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type * as Y from 'yjs';
+import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 
 const API_BASE = '/api';
 
@@ -8,18 +9,25 @@ async function updatePageTitle(
   pageId: string,
   title: string,
   usePublicEndpoint: boolean,
+  shareToken: string | null,
+  isIdentityActive: () => boolean,
 ): Promise<void> {
-  const request = (path: string) =>
-    fetch(`${API_BASE}/pages/${path}`, {
+  const request = (path: string) => {
+    const query = usePublicEndpoint && shareToken ? `?share=${encodeURIComponent(shareToken)}` : '';
+    return fetch(`${API_BASE}/pages/${path}${query}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
     });
+  };
   let res = await request(usePublicEndpoint ? `${pageId}/title` : pageId);
   // Anonymous session detection can settle just after the page renders. If a
   // user commits during that brief window, retry through the edit-link route
   // instead of silently losing the title.
   if (!usePublicEndpoint && res.status === 401) {
+    // A request that began for identity A must never retry after identity B
+    // has mounted, because the second fetch would otherwise use B's cookies.
+    if (!isIdentityActive()) throw new Error('Identity retired during title update');
     res = await request(`${pageId}/title`);
   }
   if (!res.ok) throw new Error('Failed to update title');
@@ -32,6 +40,7 @@ function normalizeTitle(value: string): string {
 
 type UsePageTitleOptions = {
   usePublicEndpoint?: boolean;
+  shareToken?: string | null;
 };
 
 export function usePageTitle(
@@ -42,7 +51,9 @@ export function usePageTitle(
 ) {
   const [title, setTitleState] = useState(initialTitle ?? 'Untitled');
   const queryClient = useQueryClient();
+  const identityLifecycle = useIdentityLifecycle();
   const usePublicEndpoint = options.usePublicEndpoint ?? false;
+  const shareToken = options.shareToken ?? null;
   const lastSavedTitleRef = useRef('Untitled');
   const hasLocalEditsRef = useRef(false);
   const setTitle = useCallback((value: string) => {
@@ -81,10 +92,24 @@ export function usePageTitle(
   const mutation = useMutation({
     mutationFn: (nextTitle: string) => {
       if (!pageId) throw new Error('pageId is required');
-      return updatePageTitle(pageId, nextTitle, usePublicEndpoint);
+      return updatePageTitle(
+        pageId,
+        nextTitle,
+        usePublicEndpoint,
+        shareToken,
+        identityLifecycle.isActive,
+      );
     },
-    onSuccess: () => {
+    onSuccess: (_data, nextTitle) => {
+      queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
+        if (!old || typeof old !== 'object' || Array.isArray(old)) return old;
+        return { ...old, title: nextTitle };
+      });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
     },
   });
 

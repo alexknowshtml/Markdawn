@@ -10,9 +10,9 @@ import {
   type SharePermission,
 } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { LogIn, ShieldOff } from 'lucide-react';
+import { FileQuestion, LogIn, RefreshCw, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
 import { MilkdownEditor } from '../components/editor/MilkdownEditor';
@@ -24,6 +24,7 @@ import { PropertiesPanel } from '../components/editor/PropertiesPanel';
 import { TableOfContents } from '../components/editor/TableOfContents';
 import { ThemeToggle } from '../components/ThemeToggle';
 import { EditorReadOnlyProvider } from '../contexts/EditorReadOnlyContext';
+import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import {
   useSetCapabilities,
   useSetLinkPermission,
@@ -33,6 +34,7 @@ import { useFolderTree } from '../hooks/use-folders';
 import { type RecentPage, usePageTree } from '../hooks/use-pages';
 import { getLogger } from '../logger-init';
 import { ApiError } from '../utils/api';
+import { resetDocumentMetadata } from '../utils/documentMeta';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
@@ -43,8 +45,9 @@ type PageDetail = PageType & {
   linkPermission?: 'view' | 'edit' | null;
 };
 
-async function fetchPage(pageId: string): Promise<PageDetail> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}`);
+async function fetchPage(pageId: string, shareToken: string | null): Promise<PageDetail> {
+  const query = shareToken ? `?share=${encodeURIComponent(shareToken)}` : '';
+  const res = await fetch(`${API_BASE}/pages/${pageId}${query}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message =
@@ -58,15 +61,21 @@ async function fetchPage(pageId: string): Promise<PageDetail> {
 
 export default function Page() {
   const { slugAndId } = useParams<{ slugAndId: string }>();
+  const location = useLocation();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
-  const navigate = useNavigate();
+  const routeShareToken = new URLSearchParams(location.search).get('share')?.trim() || null;
+  const navigate = useIdentityNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
+  const [collabPermission, setCollabPermission] = useState<SharePermission | null | undefined>(
+    undefined,
+  );
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
   const queryClient = useQueryClient();
-  const { isAnonymous, capabilities, linkPermission } = useShareContext();
+  const { isAnonymous, linkPermission, shareToken: contextShareToken } = useShareContext();
+  const shareToken = contextShareToken ?? routeShareToken;
   const setLinkPermission = useSetLinkPermission();
   const setCapabilities = useSetCapabilities();
 
@@ -92,27 +101,37 @@ export default function Page() {
     // This effect runs AFTER MilkdownEditor's onProviderReady (child effects
     // fire first), so setProvider(null) would overwrite the new provider.
     setCollabStatus(WebSocketStatus.Connecting);
+    setCollabPermission(undefined);
     setEditorElement(null);
   }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
 
-  const { data: page, error } = useQuery({
-    queryKey: ['pages', 'detail', pageId],
+  const {
+    data: page,
+    error,
+    refetch: refetchPage,
+  } = useQuery({
+    queryKey: ['pages', 'detail', pageId, shareToken],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');
-      return fetchPage(pageId);
+      return fetchPage(pageId, shareToken);
     },
     enabled: !!pageId,
     retry: false,
   });
 
-  const pagePermission = page?.userPermission ?? linkPermission;
+  const pagePermission =
+    collabPermission !== undefined ? collabPermission : (page?.userPermission ?? linkPermission);
   const contextLinkPermission = pagePermission === 'admin' ? 'edit' : pagePermission;
   const effectiveCapabilities = useMemo(
-    () => page?.capabilities ?? (page ? deriveCapabilities(pagePermission) : capabilities),
-    [page, pagePermission, capabilities],
+    () =>
+      collabPermission === undefined
+        ? deriveCapabilities(null)
+        : deriveCapabilities(collabPermission),
+    [collabPermission],
   );
-  const readOnly = pagePermission === 'view';
+  const readOnly =
+    collabPermission === undefined || pagePermission === null || pagePermission === 'view';
 
   useEffect(() => {
     if (!page) return;
@@ -177,18 +196,22 @@ export default function Page() {
     let retryTimer: number | undefined;
     const recordAccess = async (attempt = 0): Promise<void> => {
       try {
-        const res = await fetch(`/api/pages/${pageId}/access`, { method: 'POST' });
+        const res = await fetch(`/api/pages/${pageId}/access`, {
+          method: 'POST',
+          ...(shareToken ? { headers: { 'x-share-token': shareToken } } : {}),
+        });
         if (!res.ok) {
           throw new Error(`Failed to record page access (${res.status})`);
         }
         if (cancelled) return;
-        const access = (await res.json()) as { recordedLinkAccess?: boolean };
+        await res.json();
         if (cancelled) return;
-        if (access.recordedLinkAccess) {
-          queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-          queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-          queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-        }
+        // A visit can establish latent public-link provenance even while a
+        // stronger account grant currently wins. Always refresh navigation so
+        // that fallback remains discoverable after that stronger grant ends.
+        queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+        queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+        queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
         queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       } catch (error) {
         if (cancelled) return;
@@ -211,10 +234,13 @@ export default function Page() {
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [page, pageId, isAnonymous, queryClient]);
+  }, [page, pageId, isAnonymous, queryClient, shareToken]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
+    if (newStatus !== WebSocketStatus.Connected) {
+      setCollabPermission(undefined);
+    }
   };
 
   const updateDocumentMeta = useCallback(() => {
@@ -246,6 +272,7 @@ export default function Page() {
 
   useEffect(() => {
     updateDocumentMeta();
+    return resetDocumentMetadata;
   }, [updateDocumentMeta]);
 
   useEffect(() => {
@@ -258,8 +285,8 @@ export default function Page() {
     }
   }, [page, slugAndId]);
 
-  const { data: pageTree } = usePageTree();
-  const { data: folderTree } = useFolderTree();
+  const { data: pageTree } = usePageTree({ enabled: !isAnonymous });
+  const { data: folderTree } = useFolderTree({ enabled: !isAnonymous });
 
   const flatPages = useMemo(() => {
     if (isAnonymous) return [];
@@ -299,7 +326,12 @@ export default function Page() {
 
   const handleWikiLinkClick = useCallback(
     (path: string) => {
-      if (!path || isAnonymous) return;
+      if (!path) return;
+      if (isAnonymous) {
+        const targetId = extractUuidFromSlug(path);
+        if (targetId) navigate(`/app/${targetId}`);
+        return;
+      }
       const targetPage = flatPages.find(
         (p) => p.id === path || p.title.toLowerCase() === path.toLowerCase(),
       );
@@ -335,9 +367,39 @@ export default function Page() {
         </div>
       );
     }
+    if (error instanceof ApiError && error.status === 404) {
+      return (
+        <div className="mx-auto max-w-4xl px-6 py-8 md:py-12 animate-fade-in">
+          <div className="flex flex-col items-center gap-4 py-16 text-center">
+            <FileQuestion size={48} className="text-zinc-300 dark:text-zinc-600" />
+            <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+              Page not found
+            </h2>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">
+              It may have been deleted, or the link is no longer active.
+            </p>
+          </div>
+        </div>
+      );
+    }
     return (
-      <div className="max-w-4xl mx-auto px-6 py-8 md:py-12 text-zinc-400 animate-fade-in">
-        Page not found.
+      <div className="mx-auto max-w-4xl px-6 py-8 md:py-12 animate-fade-in">
+        <div className="flex flex-col items-center gap-4 py-16 text-center">
+          <FileQuestion size={48} className="text-zinc-300 dark:text-zinc-600" />
+          <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+            Couldn&apos;t load this page
+          </h2>
+          <p className="text-sm text-zinc-500 dark:text-zinc-400">
+            The server returned an error. Your page has not been changed.
+          </p>
+          <button
+            type="button"
+            onClick={() => void refetchPage()}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-zinc-200 px-3 py-1.5 text-sm text-zinc-700 hover:bg-zinc-50 dark:border-zinc-800 dark:text-zinc-200 dark:hover:bg-zinc-900"
+          >
+            <RefreshCw size={14} /> Retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -395,6 +457,7 @@ export default function Page() {
                 initialTitle={page?.title ?? 'Untitled'}
                 ydoc={provider?.document ?? null}
                 usePublicEndpoint={isAnonymous}
+                shareToken={shareToken}
               />
             </div>
           </div>
@@ -406,9 +469,11 @@ export default function Page() {
           <MilkdownEditor
             key={pageId}
             pageId={pageId}
+            shareToken={shareToken}
             onProviderReady={setProvider}
             onStatusChange={handleStatusChange}
             onWikiLinkClick={handleWikiLinkClick}
+            onPermissionSnapshot={setCollabPermission}
           />
         ) : null}
         {!isAnonymous && <BacklinksPanel pageId={pageId} />}

@@ -191,6 +191,9 @@ export function useUpdateSharePermission() {
   return useMutation({
     mutationFn: updateSharePermission,
     onSuccess: (data) => {
+      // A direct grant update can change which of several independent sources
+      // wins. Refetch the server-computed provenance instead of locally
+      // mutating only one source into an internally inconsistent summary.
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       queryClient.invalidateQueries({ queryKey: ['pageCollaborators'] });
       queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
@@ -205,6 +208,8 @@ export function useRemoveShare() {
   return useMutation({
     mutationFn: removeShare,
     onSuccess: (data) => {
+      // Removing one grant can promote a latent folder, workspace, or link
+      // source. Only the API has enough context to recompute the winner.
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });

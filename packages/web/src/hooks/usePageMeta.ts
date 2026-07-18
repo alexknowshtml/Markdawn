@@ -1,9 +1,15 @@
-import { HocuspocusProvider } from '@hocuspocus/provider';
+import {
+  HocuspocusProvider,
+  type onAuthenticationFailedParameters,
+  type onCloseParameters,
+} from '@hocuspocus/provider';
+import { COLLAB_TERMINAL_REASONS } from '@markdawn/shared';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import * as Y from 'yjs';
+import { useIdentityLifecycle, useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { authClient } from '../lib/auth-client';
+import { retireQueryClient } from '../lib/query-client';
 import { getLogger } from '../logger-init';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showInfoToast } from '../utils/toast';
@@ -12,11 +18,21 @@ import { invalidateWorkspaceAccessQueries, WORKSPACE_ACCESS_QUERY_KEYS } from '.
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
 const META_ROOM_PREFIX = 'page-meta:';
 
+function isTerminalMetaClose({ event }: onCloseParameters): boolean {
+  return (
+    event.code === 4401 ||
+    event.code === 4500 ||
+    event.reason === COLLAB_TERMINAL_REASONS.ACCESS_REVOKED ||
+    event.reason === COLLAB_TERMINAL_REASONS.SESSION_EXPIRED ||
+    event.reason === COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED
+  );
+}
+
 /**
  * Module-level reference to the current pageIndex Y.Map.
  *
  * Set by `usePageMeta` when the meta room connects, read by the
- * wiki link node view to resolve targetId -> current title at render time.
+ * wiki link node view to resolve authored paths against requester-visible pages.
  *
  * An effect-local ID (`effectIdRef`) prevents the cleanup from nulling
  * the map during a user switch.
@@ -27,11 +43,7 @@ export function getPageIndexMap(): Y.Map<unknown> | null {
   return _pageIndex;
 }
 
-const PAGE_META_SYNC_QUERY_KEYS = [
-  ...WORKSPACE_ACCESS_QUERY_KEYS,
-  ['pages', 'detail'],
-  ['folders', 'detail'],
-] as const;
+const PAGE_META_SYNC_QUERY_KEYS = [...WORKSPACE_ACCESS_QUERY_KEYS] as const;
 
 export async function refreshPageMetaQueriesAfterSync(queryClient: QueryClient): Promise<void> {
   if (isBulkRemovalInProgress()) return;
@@ -217,36 +229,87 @@ export function parsePageMetaStatelessMessage(payload: string): PageMetaStateles
  */
 export function usePageMeta() {
   const queryClient = useQueryClient();
-  const navigate = useNavigate();
-  const { data: session } = authClient.useSession();
+  const navigate = useIdentityNavigate();
+  const identityLifecycle = useIdentityLifecycle();
+  const { data: session, refetch: refetchSession } = authClient.useSession();
   const userId = session?.user?.id;
 
   const effectIdRef = useRef(0);
+  const refetchSessionRef = useRef(refetchSession);
+  refetchSessionRef.current = refetchSession;
 
   useEffect(() => {
-    if (!userId) return undefined;
+    if (!userId || !identityLifecycle.isActive()) return undefined;
 
     const effectId = ++effectIdRef.current;
 
     const doc = new Y.Doc();
+    const map = doc.getMap('pageIndex');
+    _pageIndex = map;
+    let hasTerminatedIdentity = false;
+
+    const terminateIdentity = (reason: string) => {
+      if (hasTerminatedIdentity || !identityLifecycle.isActive()) return;
+      hasTerminatedIdentity = true;
+      getLogger().warn('Page metadata authentication ended; retiring identity state', { reason });
+      if (effectId === effectIdRef.current) _pageIndex = null;
+
+      // Navigation must run before retirement because useIdentityNavigate is
+      // intentionally inert for a retired identity. Clearing and retiring the
+      // identity-scoped client immediately prevents already-rendered private
+      // metadata (and pending mutation callbacks) from surviving until the
+      // authoritative session request resolves.
+      navigate('/login', { replace: true });
+      identityLifecycle.retire();
+      retireQueryClient(queryClient);
+      void Promise.resolve(refetchSessionRef.current()).catch((error: unknown) => {
+        getLogger().error('Failed to refresh session after page metadata authentication ended', {
+          error: String(error),
+        });
+      });
+    };
+
+    const handleClose = (parameters: onCloseParameters) => {
+      if (!isTerminalMetaClose(parameters)) return;
+      terminateIdentity(parameters.event.reason || `close code ${parameters.event.code}`);
+    };
+
+    const handleAuthenticationFailed = ({ reason }: onAuthenticationFailedParameters) => {
+      terminateIdentity(reason || 'authentication failed');
+    };
+
     const provider = new HocuspocusProvider({
       url: COLLAB_URL,
       name: `${META_ROOM_PREFIX}${userId}`,
       document: doc,
+      onClose: handleClose,
+      onAuthenticationFailed: handleAuthenticationFailed,
       token: async () => {
         const s = await authClient.getSession();
-        return s.data?.session?.token ?? '';
+        const token = s.data?.session?.token ?? '';
+        const sessionUserId = s.data?.user?.id ?? '';
+        if (!identityLifecycle.isActive() || !token || sessionUserId !== userId) {
+          throw new Error('Page metadata identity changed or is unavailable');
+        }
+        return token;
       },
     });
 
-    const map = doc.getMap('pageIndex');
-    _pageIndex = map;
+    // Configuration callbacks can fire while the provider is being
+    // constructed. Do not attach observers or restore the module-level map
+    // after a synchronous authentication rejection/terminal close.
+    if (hasTerminatedIdentity) {
+      provider.destroy();
+      doc.destroy();
+      return undefined;
+    }
 
     // Observe backlinksVersion bumps emitted by the collab server after
     // every persist. When a version changes, invalidate TanStack Query
     // for that page's backlinks and outgoing links so the panel refetches.
     const bv = doc.getMap<number>('backlinksVersion');
     const bvObserver = () => {
+      if (!identityLifecycle.isActive()) return;
       queryClient.invalidateQueries({ queryKey: ['backlinks'] });
     };
     bv.observe(bvObserver);
@@ -256,6 +319,7 @@ export function usePageMeta() {
     const pageTreeTimerRef = { current: null as ReturnType<typeof setTimeout> | null };
     const pageIndexInitialRef = { current: true };
     const pageIndexObserver = () => {
+      if (!identityLifecycle.isActive()) return;
       if (pageIndexInitialRef.current) {
         pageIndexInitialRef.current = false;
         return;
@@ -263,7 +327,7 @@ export function usePageMeta() {
       if (pageTreeTimerRef.current) clearTimeout(pageTreeTimerRef.current);
       if (isBulkRemovalInProgress()) return;
       pageTreeTimerRef.current = setTimeout(() => {
-        if (!isBulkRemovalInProgress()) {
+        if (identityLifecycle.isActive() && !isBulkRemovalInProgress()) {
           queryClient.invalidateQueries({ queryKey: ['pageTree'] });
         }
       }, 1000);
@@ -271,6 +335,7 @@ export function usePageMeta() {
     map.observe(pageIndexObserver);
 
     const handleSynced = () => {
+      if (!identityLifecycle.isActive()) return;
       if (isBulkRemovalInProgress()) return;
       // LISTEN/NOTIFY events are intentionally not retained. Rebuild all
       // access-sensitive queries after each meta-room handshake so a change
@@ -287,6 +352,7 @@ export function usePageMeta() {
     let reconnectAfterDisconnect: (() => void) | null = null;
 
     const handleStateless = ({ payload }: { payload: string }) => {
+      if (!identityLifecycle.isActive()) return;
       let message: PageMetaStatelessMessage | null;
       try {
         message = parsePageMetaStatelessMessage(payload);
@@ -348,5 +414,5 @@ export function usePageMeta() {
       provider.destroy();
       doc.destroy();
     };
-  }, [userId, queryClient, navigate]);
+  }, [userId, queryClient, navigate, identityLifecycle]);
 }
