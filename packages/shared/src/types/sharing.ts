@@ -34,6 +34,8 @@ export interface ShareEventPayload {
   targetUserId?: string;
   /** Additional signed-in users whose metadata queries must refresh. */
   metaUserIds?: string[];
+  /** Refresh metadata/access versions without revalidating active page connections. */
+  metaOnly?: boolean;
   /** Human-readable toast message for the affected user(s). */
   message?: string;
 }
@@ -52,6 +54,44 @@ export interface StatelessShareMessage {
   action: StatelessShareEventAction;
   permission?: SharePermission;
   message?: string;
+}
+
+/**
+ * Authoritative effective permission for a collaboration connection.
+ *
+ * `accessRevision` is a durable, transactionally updated access-state revision
+ * encoded as a decimal string. Clients compare it as an integer and must
+ * ignore older snapshots.
+ * Unlike `share_event`, this message is state rather than a toast/invalidation.
+ */
+export interface PermissionSnapshotMessage {
+  type: 'permission_snapshot';
+  permission: SharePermission | null;
+  accessRevision: string;
+}
+
+const permissionRank = (permission: SharePermission | null): number => {
+  if (permission === 'admin') return 3;
+  if (permission === 'edit') return 2;
+  if (permission === 'view') return 1;
+  return 0;
+};
+
+/**
+ * Equal revisions occur at natural expiry boundaries because no database
+ * mutation increments the durable access counter. At an equal revision, only
+ * the same permission or a downgrade is safe; an upgrade requires a newer
+ * revision from an explicit access mutation.
+ */
+export function shouldApplyPermissionSnapshot(
+  current: Pick<PermissionSnapshotMessage, 'permission' | 'accessRevision'> | null,
+  incoming: Pick<PermissionSnapshotMessage, 'permission' | 'accessRevision'>,
+): boolean {
+  if (!current) return true;
+  const currentRevision = BigInt(current.accessRevision);
+  const incomingRevision = BigInt(incoming.accessRevision);
+  if (incomingRevision !== currentRevision) return incomingRevision > currentRevision;
+  return permissionRank(incoming.permission) <= permissionRank(current.permission);
 }
 
 export interface EntityDeletedMessage {

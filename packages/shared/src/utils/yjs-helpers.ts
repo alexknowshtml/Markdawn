@@ -400,6 +400,90 @@ export function extractConnectionsFromYDoc(update: Uint8Array): ConnectionDraft[
   return extractConnectionsFromXml(fragment);
 }
 
+function visitXmlElements(
+  element: Y.XmlFragment | Y.XmlElement,
+  visitor: (xmlElement: Y.XmlElement) => void,
+): void {
+  for (let i = 0; i < element.length; i++) {
+    const item = element.get(i);
+    if (!(item instanceof Y.XmlElement)) continue;
+
+    visitor(item);
+    visitXmlElements(item, visitor);
+  }
+}
+
+function visitNestedXmlElements(
+  value: unknown,
+  visitor: (xmlElement: Y.XmlElement) => void,
+  visited: Set<Y.AbstractType<unknown>>,
+): void {
+  if (!(value instanceof Y.AbstractType) || visited.has(value)) return;
+  visited.add(value);
+
+  if (value instanceof Y.XmlFragment || value instanceof Y.XmlElement) {
+    visitXmlElements(value, visitor);
+    return;
+  }
+  if (value instanceof Y.Map) {
+    for (const nested of value.values()) visitNestedXmlElements(nested, visitor, visited);
+    return;
+  }
+  if (value instanceof Y.Array) {
+    for (const nested of value.toArray()) visitNestedXmlElements(nested, visitor, visited);
+  }
+}
+
+function visitDocumentXmlElements(doc: Y.Doc, visitor: (xmlElement: Y.XmlElement) => void): void {
+  const visited = new Set<Y.AbstractType<unknown>>();
+  for (const sharedType of doc.share.values()) {
+    visitNestedXmlElements(sharedType, visitor, visited);
+  }
+}
+
+/**
+ * Target page UUIDs are authorization-sensitive metadata and must never live
+ * in the canonical page document, which is shared identically with every
+ * reader. Wiki links retain only their authored path, heading, and label.
+ */
+export function hasWikiLinkTargetIds(doc: Y.Doc): boolean {
+  // Applied binary updates leave roots as untyped AbstractType instances until
+  // a consumer requests their concrete type. Materialize the canonical editor
+  // root so legacy attributes are visible to the traversal below.
+  doc.getXmlFragment('prosemirror');
+  let found = false;
+  visitDocumentXmlElements(doc, (xmlElement) => {
+    if (Object.hasOwn(xmlElement.getAttributes(), 'targetId')) found = true;
+  });
+  return found;
+}
+
+/** Remove legacy or untrusted target UUID attributes from a canonical Y.Doc. */
+export function stripWikiLinkTargetIds(doc: Y.Doc): number {
+  doc.getXmlFragment('prosemirror');
+  const wikiLinks: Y.XmlElement[] = [];
+  visitDocumentXmlElements(doc, (xmlElement) => {
+    if (Object.hasOwn(xmlElement.getAttributes(), 'targetId')) wikiLinks.push(xmlElement);
+  });
+  if (wikiLinks.length === 0) return 0;
+
+  doc.transact(() => {
+    for (const wikiLink of wikiLinks) wikiLink.removeAttribute('targetId');
+  });
+  return wikiLinks.length;
+}
+
+/** Detect a live targetId XML attribute in an encoded canonical Yjs state. */
+export function encodedYDocHasTargetIdAttributes(update: Uint8Array): boolean {
+  const decoded = Y.decodeUpdate(update);
+  return decoded.structs.some(
+    (struct) =>
+      struct instanceof Y.Item &&
+      struct.parentSub === 'targetId' &&
+      !(struct.content instanceof Y.ContentDeleted),
+  );
+}
+
 function extractConnectionsFromXml(element: Y.XmlFragment | Y.XmlElement): ConnectionDraft[] {
   const connections: ConnectionDraft[] = [];
 
@@ -426,7 +510,6 @@ function collectConnections(
     if (item.nodeName === 'wikiLink') {
       const path = item.getAttribute('path') || '';
       const label = item.getAttribute('label') || path;
-      const targetId = item.getAttribute('targetId') || '';
       const heading = item.getAttribute('heading') || '';
       const target = heading ? `${path}#${heading}` : path;
       const targetSlug = normalizePageSlug(path);
@@ -440,7 +523,6 @@ function collectConnections(
           linkText: label || target || path,
         };
         if (context) draft.linkContext = context;
-        if (targetId) draft.targetId = targetId;
         connections.push(draft);
       }
       continue;

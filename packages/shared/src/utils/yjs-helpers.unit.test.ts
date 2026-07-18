@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { extractConnectionsFromYDoc, yDocToMarkdown } from './yjs-helpers';
+import {
+  extractConnectionsFromYDoc,
+  hasWikiLinkTargetIds,
+  stripWikiLinkTargetIds,
+  yDocToMarkdown,
+} from './yjs-helpers';
 
 // --------------------------------------------------------------------------
 // Helpers for building Yjs test documents
@@ -404,7 +409,6 @@ describe('extractConnectionsFromYDoc', () => {
     expect(extractConnectionsFromYDoc(update)).toEqual([
       {
         targetType: 'page',
-        targetId: '11111111-1111-1111-1111-111111111111',
         targetSlug: 'roadmap',
         targetLabel: 'Roadmap',
         connectionType: 'wikilink',
@@ -420,5 +424,44 @@ describe('extractConnectionsFromYDoc', () => {
         linkContext: 'See Roadmap for #Project',
       },
     ]);
+  });
+});
+
+describe('wiki-link target ID confidentiality', () => {
+  it('detects and strips targetId attributes without changing authored link text', () => {
+    const source = new Y.Doc();
+    const link = new Y.XmlElement('wikiLink');
+    link.setAttribute('targetId', '11111111-1111-1111-1111-111111111111');
+    link.setAttribute('path', 'Private roadmap');
+    link.setAttribute('label', 'Authored alias');
+    source.getXmlFragment('prosemirror').push([block('paragraph', [link])]);
+
+    // Exercise the persisted-binary path, where Yjs roots remain untyped until
+    // the concrete shared type is requested by a consumer.
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, Y.encodeStateAsUpdate(source));
+
+    expect(hasWikiLinkTargetIds(doc)).toBe(true);
+    expect(stripWikiLinkTargetIds(doc)).toBe(1);
+    expect(hasWikiLinkTargetIds(doc)).toBe(false);
+    const strippedLink = (doc.getXmlFragment('prosemirror').get(0) as Y.XmlElement).get(
+      0,
+    ) as Y.XmlElement;
+    expect(strippedLink.getAttribute('targetId')).toBeUndefined();
+    expect(strippedLink.getAttribute('path')).toBe('Private roadmap');
+    expect(strippedLink.getAttribute('label')).toBe('Authored alias');
+    expect(stripWikiLinkTargetIds(doc)).toBe(0);
+  });
+
+  it('treats an empty targetId attribute as forbidden structured metadata', () => {
+    const doc = new Y.Doc();
+    const link = new Y.XmlElement('wikiLink');
+    link.setAttribute('targetId', '');
+    link.setAttribute('path', 'Roadmap');
+    doc.getXmlFragment('prosemirror').push([block('paragraph', [link])]);
+
+    expect(hasWikiLinkTargetIds(doc)).toBe(true);
+    expect(stripWikiLinkTargetIds(doc)).toBe(1);
+    expect(hasWikiLinkTargetIds(doc)).toBe(false);
   });
 });

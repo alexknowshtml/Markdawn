@@ -79,6 +79,47 @@ export interface EntityAccessor {
   isOwner: boolean;
 }
 
+/** Non-manageable collaborator presence safe to show to ordinary viewers. */
+export interface CollaboratorPresence {
+  presenceId: string;
+  name: string | null;
+  avatarUrl: string | null;
+}
+
+export type CollaboratorDisplay = EntityAccessor | CollaboratorPresence;
+
+/**
+ * One independently manageable source of account access.
+ *
+ * A user can have several simultaneous sources (for example a direct View
+ * invite and inherited Edit access).  Keep those sources separate so the
+ * management UI never hides a latent grant behind the currently winning one.
+ */
+export interface EntityAccessSource {
+  kind: 'owner' | 'direct' | 'folder' | 'workspace';
+  shareId: string | null;
+  userId: string;
+  name: string | null;
+  email: string | null;
+  avatarUrl: string | null;
+  permission: SharePermission;
+  effectivePermission: SharePermission;
+  isWinning: boolean;
+  isOwner: boolean;
+  isManageable: boolean;
+  folderId?: string | null;
+  folderName?: string | null;
+}
+
+/** Public access inherited from an ancestor folder. */
+export interface InheritedPublicLink {
+  entityId: string;
+  entityTitle: string;
+  permission: Exclude<SharePermission, 'admin'>;
+  token: string;
+  url: string;
+}
+
 export interface CapabilitySet {
   canEdit: boolean;
   canComment: boolean;
@@ -135,6 +176,9 @@ export interface InheritedAccessor {
 }
 
 export interface ShareSummary {
+  /** Limited summaries intentionally omit sharing identities and topology. */
+  visibility?: 'full' | 'limited';
+  collaboratorCount?: number;
   entity: {
     type: ShareEntityType;
     id: string;
@@ -151,6 +195,10 @@ export interface ShareSummary {
   };
   invites: EntityShare[];
   accessors: EntityAccessor[];
+  /** Every account source, including weaker grants hidden by a stronger one. */
+  accessSources: EntityAccessSource[];
+  /** Active public links inherited from ancestor folders. */
+  inheritedLinks: InheritedPublicLink[];
   /** Effective permission for the requesting user (highest across all sources). */
   userPermission: SharePermission | null;
   /** Computed capabilities derived from userPermission. */
