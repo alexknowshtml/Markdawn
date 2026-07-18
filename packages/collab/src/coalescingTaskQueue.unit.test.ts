@@ -1,5 +1,7 @@
+import type { ShareEventPayload } from '@markdawn/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { createCoalescingTaskQueue } from './coalescingTaskQueue';
+import { getShareEventQueueKey, mergeShareEventMetadata } from './server';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolvePromise: (() => void) | undefined;
@@ -35,6 +37,101 @@ describe('createCoalescingTaskQueue', () => {
     await queue.waitForIdle();
 
     expect(handled).toEqual(['first', 'latest', 'other']);
+  });
+
+  it('merges pending tasks with the same key when a merge strategy is provided', async () => {
+    const firstTask = deferred();
+    const handled: Array<{ key: string; values: string[] }> = [];
+    const queue = createCoalescingTaskQueue<{ key: string; values: string[] }>({
+      maxPending: 4,
+      getKey: (task) => task.key,
+      mergePending: (existing, incoming) => ({
+        ...incoming,
+        values: [...existing.values, ...incoming.values],
+      }),
+      handle: async (task) => {
+        handled.push(task);
+        if (task.key === 'first') await firstTask.promise;
+      },
+      handleOverflow: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    queue.enqueue({ key: 'first', values: [] });
+    queue.enqueue({ key: 'same', values: ['one'] });
+    queue.enqueue({ key: 'same', values: ['two'] });
+    firstTask.resolve();
+    await queue.waitForIdle();
+
+    expect(handled).toEqual([
+      { key: 'first', values: [] },
+      { key: 'same', values: ['one', 'two'] },
+    ]);
+  });
+
+  it('retains the latest same-key event queued behind an in-flight handler', async () => {
+    const activeTask = deferred();
+    const handled: ShareEventPayload[] = [];
+    const targetUserId = crypto.randomUUID();
+    const pageId = crypto.randomUUID();
+    const firstMetaUserId = crypto.randomUUID();
+    const secondMetaUserId = crypto.randomUUID();
+    const queue = createCoalescingTaskQueue<ShareEventPayload>({
+      maxPending: 4,
+      getKey: getShareEventQueueKey,
+      mergePending: mergeShareEventMetadata,
+      handle: async (task) => {
+        handled.push(task);
+        if (task.permission === 'view') await activeTask.promise;
+      },
+      handleOverflow: vi.fn(),
+      onError: vi.fn(),
+    });
+
+    queue.enqueue({
+      type: 'share_event',
+      action: 'grant',
+      entityType: 'page',
+      entityId: pageId,
+      targetUserId,
+      permission: 'view',
+      message: 'View access granted',
+      metaUserIds: [firstMetaUserId],
+    });
+    queue.enqueue({
+      type: 'share_event',
+      action: 'update',
+      entityType: 'page',
+      entityId: pageId,
+      targetUserId,
+      permission: 'edit',
+      message: 'Edit access granted',
+      metaUserIds: [secondMetaUserId],
+    });
+    activeTask.resolve();
+    await queue.waitForIdle();
+
+    expect(handled).toHaveLength(2);
+    expect(handled[0]).toEqual({
+      type: 'share_event',
+      action: 'grant',
+      entityType: 'page',
+      entityId: pageId,
+      targetUserId,
+      permission: 'view',
+      message: 'View access granted',
+      metaUserIds: [firstMetaUserId],
+    });
+    expect(handled[1]).toEqual({
+      type: 'share_event',
+      action: 'update',
+      entityType: 'page',
+      entityId: pageId,
+      targetUserId,
+      permission: 'edit',
+      message: 'Edit access granted',
+      metaUserIds: [secondMetaUserId],
+    });
   });
 
   it('waits for the active task after stopping and discards pending work', async () => {

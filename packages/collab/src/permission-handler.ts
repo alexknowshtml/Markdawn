@@ -1,11 +1,13 @@
 import type { Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import type {
+  PermissionSnapshotMessage,
   ShareEventPayload,
   SharePermission,
   StatelessShareEventAction,
   StatelessShareMessage,
 } from '@markdawn/shared';
+import { COLLAB_TERMINAL_REASONS, shouldApplyPermissionSnapshot } from '@markdawn/shared';
 import type { Pool } from 'pg';
 
 /**
@@ -22,7 +24,44 @@ const rank = (p: string) => (p === 'admin' ? 3 : p === 'edit' ? 2 : 1);
 type ConnectionContext = {
   user?: { id: string; isAnonymous?: boolean };
   permission?: unknown;
+  accessRevision?: string;
+  sessionToken?: string;
 };
+
+type PermissionState = {
+  permission: SharePermission | null;
+  accessRevision: string;
+};
+
+function sendPermissionSnapshot(
+  connection: ReturnType<Document['getConnections']>[number],
+  ctx: ConnectionContext,
+  state: PermissionState,
+): boolean {
+  const currentPermission = clientPermission(
+    typeof ctx.permission === 'string' ? ctx.permission : undefined,
+  );
+  if (
+    !shouldApplyPermissionSnapshot(
+      ctx.accessRevision
+        ? { permission: currentPermission ?? null, accessRevision: ctx.accessRevision }
+        : null,
+      state,
+    )
+  ) {
+    return false;
+  }
+  ctx.permission = state.permission;
+  ctx.accessRevision = state.accessRevision;
+  connection.sendStateless(
+    JSON.stringify({
+      type: 'permission_snapshot',
+      permission: state.permission,
+      accessRevision: state.accessRevision,
+    } satisfies PermissionSnapshotMessage),
+  );
+  return true;
+}
 
 function bumpShareAccessMetaVersion(server: Server, userIds: Iterable<string>): void {
   for (const userId of new Set(userIds)) {
@@ -60,28 +99,26 @@ function sendWorkspaceMembershipCompatibilityEvent(
   }
 }
 
-async function getAnonymousPagePermission(
-  pool: Pool,
-  pageId: string,
-): Promise<SharePermission | null> {
-  const result = await pool.query(
+async function getAnonymousPagePermission(pool: Pool, pageId: string): Promise<PermissionState> {
+  const result = await pool.query<{ permission: string | null; access_revision: string }>(
     `WITH page_parent AS (
        SELECT parent_id, is_public
        FROM pages
        WHERE id = $1 AND is_deleted = false
      )
+     SELECT (
      SELECT permission FROM (
        SELECT s.permission, 1 AS src
        FROM shares s
        WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.token IS NOT NULL
-         AND (s.expires_at IS NULL OR s.expires_at > now())
+         AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
          AND EXISTS (SELECT 1 FROM page_parent WHERE is_public = true)
        UNION ALL
        SELECT s.permission, 2 AS src
        FROM shares s
        JOIN folders f ON f.id = s.entity_id AND f.is_public = true AND f.is_deleted = false
        WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
-         AND (s.expires_at IS NULL OR s.expires_at > now())
+         AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
          AND s.entity_id IN (
            SELECT ancestor_id FROM folder_closure fc
            JOIN page_parent pp ON fc.descendant_id = pp.parent_id
@@ -90,30 +127,52 @@ async function getAnonymousPagePermission(
      ) perms
      ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
               src ASC
-     LIMIT 1`,
+     LIMIT 1
+     ) AS permission,
+     get_page_access_revision($1)::text AS access_revision`,
     [pageId],
   );
-  return clientPermission(result.rows[0]?.permission as string | undefined) ?? null;
+  const row = result.rows[0];
+  if (!row) throw new Error('Missing anonymous permission revision');
+  return {
+    permission: clientPermission(row.permission ?? undefined) ?? null,
+    accessRevision: row.access_revision,
+  };
 }
 
 async function getAuthenticatedPagePermissions(
   pool: Pool,
   pageId: string,
   userIds: string[],
-): Promise<Map<string, SharePermission | null>> {
+): Promise<Map<string, PermissionState>> {
   if (userIds.length === 0) return new Map();
 
-  const result = await pool.query<{ user_id: string; permission: string | null }>(
+  const result = await pool.query<{
+    user_id: string;
+    permission: string | null;
+    access_revision: string;
+  }>(
     `WITH requested_users AS (
        SELECT DISTINCT unnest($2::uuid[]) AS user_id
      )
-     SELECT requested_users.user_id, access.permission
+     SELECT requested_users.user_id, access.permission,
+            get_page_access_revision($1)::text AS access_revision
      FROM requested_users
-     LEFT JOIN LATERAL get_effective_page_permission($1, requested_users.user_id) access ON true`,
+     LEFT JOIN LATERAL get_effective_page_permission_at(
+       $1,
+       requested_users.user_id,
+       statement_timestamp()
+     ) access ON true`,
     [pageId, userIds],
   );
   return new Map(
-    result.rows.map((row) => [row.user_id, clientPermission(row.permission ?? undefined) ?? null]),
+    result.rows.map((row) => [
+      row.user_id,
+      {
+        permission: clientPermission(row.permission ?? undefined) ?? null,
+        accessRevision: row.access_revision,
+      },
+    ]),
   );
 }
 
@@ -130,6 +189,8 @@ async function recomputePageConnections(
   message?: string,
   targetUserId?: string,
   metaUserIds?: Set<string>,
+  advertisedAction?: ShareEventPayload['action'],
+  advertisedPermission?: SharePermission,
 ): Promise<number> {
   const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
   if (!activeDoc) {
@@ -166,7 +227,7 @@ async function recomputePageConnections(
     getAuthenticatedPagePermissions(pool, pageId, authenticatedUserIds),
     hasAnonymousConnections
       ? getAnonymousPagePermission(pool, pageId)
-      : Promise.resolve<SharePermission | null>(null),
+      : Promise.resolve<PermissionState>({ permission: null, accessRevision: '0' }),
   ]);
 
   if (authenticatedResult.status === 'fulfilled' && authenticatedUserIds.length > 0) {
@@ -188,23 +249,53 @@ async function recomputePageConnections(
       // Fail closed without claiming access was revoked. The client can
       // reconnect and distinguish a verification outage from a real revoke by
       // the close code.
-      connection.close({ code: 4500, reason: 'Permission verification failed' });
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
       affectedCount++;
       continue;
     }
 
-    const permission = user.isAnonymous
-      ? (permissionResult.value as SharePermission | null)
-      : ((permissionResult.value as Map<string, SharePermission | null>).get(user.id) ?? null);
+    const state = user.isAnonymous
+      ? (permissionResult.value as PermissionState)
+      : (permissionResult.value as Map<string, PermissionState>).get(user.id);
+    if (!state) {
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
+      affectedCount++;
+      continue;
+    }
+    const previousPermission = typeof ctx.permission === 'string' ? ctx.permission : undefined;
+    if (!sendPermissionSnapshot(connection, ctx, state)) {
+      logger.debug(
+        `[share] ignored stale permission snapshot for user=${user.id} on page=${pageId}`,
+      );
+      continue;
+    }
+    const permission = state.permission;
+    const canonicalMessage =
+      message === undefined || advertisedAction === undefined
+        ? message
+        : permission === null
+          ? advertisedAction === 'revoke'
+            ? message
+            : undefined
+          : (advertisedAction === 'grant' || advertisedAction === 'update') &&
+              advertisedPermission === permission
+            ? message
+            : undefined;
     if (!permission) {
       connection.sendStateless(
         JSON.stringify({
           type: 'share_event',
           action: 'revoke',
-          ...(message !== undefined && { message }),
+          ...(canonicalMessage !== undefined && { message: canonicalMessage }),
         } satisfies StatelessShareMessage),
       );
-      connection.close({ code: 4401, reason: 'Access revoked' });
+      connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
       logger.info(
         `[share] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page ${pageId} after permission recompute`,
       );
@@ -213,8 +304,19 @@ async function recomputePageConnections(
     }
 
     const isReadOnly = permission === 'view';
-    const previousPermission = typeof ctx.permission === 'string' ? ctx.permission : undefined;
     if (connection.readOnly === isReadOnly && previousPermission === permission) {
+      if (canonicalMessage !== undefined) {
+        connection.sendStateless(
+          JSON.stringify({
+            type: 'share_event',
+            action: 'update',
+            permission,
+            message: canonicalMessage,
+          } satisfies StatelessShareMessage),
+        );
+        affectedCount++;
+        continue;
+      }
       logger.debug(
         `[share] skipping user=${user.id} on page ${pageId} (recomputed permission unchanged: ${permission})`,
       );
@@ -222,13 +324,12 @@ async function recomputePageConnections(
     }
 
     connection.readOnly = isReadOnly;
-    (connection.context as Record<string, unknown>).permission = permission;
     connection.sendStateless(
       JSON.stringify({
         type: 'share_event',
         action: 'update',
         permission,
-        ...(message !== undefined && { message }),
+        ...(canonicalMessage !== undefined && { message: canonicalMessage }),
       } satisfies StatelessShareMessage),
     );
     logger.info(
@@ -253,31 +354,46 @@ export async function revalidateActivePageConnections(
   pool: Pool,
   logger: Logger,
 ): Promise<number> {
-  const candidates: Array<{
+  const pageCandidates: Array<{
     pageId: string;
     connection: ReturnType<Document['getConnections']>[number];
     ctx: ConnectionContext;
   }> = [];
+  const metaCandidates: Array<{
+    connection: ReturnType<Document['getConnections']>[number];
+    ctx: ConnectionContext;
+  }> = [];
 
-  for (const [pageId, document] of server.hocuspocus?.documents ?? []) {
-    if (!PAGE_ID_PATTERN.test(pageId)) continue;
+  for (const [documentName, document] of server.hocuspocus?.documents ?? []) {
     for (const connection of (document as Document).getConnections()) {
       const ctx = connection.context as ConnectionContext | undefined;
       if (!ctx?.user) continue;
-      candidates.push({ pageId, connection, ctx });
+      if (PAGE_ID_PATTERN.test(documentName)) {
+        pageCandidates.push({ pageId: documentName, connection, ctx });
+      } else if (documentName.startsWith('page-meta:') && ctx.user.isAnonymous !== true) {
+        metaCandidates.push({ connection, ctx });
+      }
     }
   }
-  if (candidates.length === 0) return 0;
+  if (pageCandidates.length === 0 && metaCandidates.length === 0) return 0;
 
-  const authenticatedPairs = new Map<string, { pageId: string; userId: string }>();
+  const authenticatedPairs = new Map<
+    string,
+    { pageId: string; userId: string; sessionToken: string | null }
+  >();
   const anonymousPageIds = new Set<string>();
-  for (const { pageId, ctx } of candidates) {
+  for (const { pageId, ctx } of pageCandidates) {
     const user = ctx.user;
     if (!user) continue;
     if (user.isAnonymous === true) {
       anonymousPageIds.add(pageId);
     } else {
-      authenticatedPairs.set(`${pageId}:${user.id}`, { pageId, userId: user.id });
+      const sessionToken = ctx.sessionToken ?? null;
+      authenticatedPairs.set(`${pageId}:${user.id}:${sessionToken ?? ''}`, {
+        pageId,
+        userId: user.id,
+        sessionToken,
+      });
     }
   }
 
@@ -285,39 +401,65 @@ export async function revalidateActivePageConnections(
   const anonymousIds = Array.from(anonymousPageIds);
   const authenticatedPromise =
     pairs.length === 0
-      ? Promise.resolve(new Map<string, SharePermission | null>())
+      ? Promise.resolve(new Map<string, PermissionState>())
       : pool
-          .query<{ page_id: string; user_id: string; permission: string | null }>(
+          .query<{
+            page_id: string;
+            user_id: string;
+            session_token: string | null;
+            permission: string | null;
+            access_revision: string;
+          }>(
             `with requested as (
                select *
-               from unnest($1::uuid[], $2::uuid[]) as pair(page_id, user_id)
+               from unnest($1::uuid[], $2::uuid[], $3::text[])
+                 as pair(page_id, user_id, session_token)
              )
-             select requested.page_id, requested.user_id, access.permission
+             select requested.page_id, requested.user_id, requested.session_token,
+                    case
+                      when requested.session_token is null or exists (
+                        select 1 from sessions
+                        where token = requested.session_token
+                          and user_id = requested.user_id
+                          and expires_at > statement_timestamp()
+                      ) then access.permission
+                      else null
+                    end as permission,
+                    get_page_access_revision(requested.page_id)::text as access_revision
              from requested
-             left join lateral get_effective_page_permission(
+             left join lateral get_effective_page_permission_at(
                requested.page_id,
-               requested.user_id
+               requested.user_id,
+               statement_timestamp()
              ) access on true`,
-            [pairs.map((pair) => pair.pageId), pairs.map((pair) => pair.userId)],
+            [
+              pairs.map((pair) => pair.pageId),
+              pairs.map((pair) => pair.userId),
+              pairs.map((pair) => pair.sessionToken),
+            ],
           )
           .then(
             (result) =>
               new Map(
                 result.rows.map((row) => [
-                  `${row.page_id}:${row.user_id}`,
-                  clientPermission(row.permission ?? undefined) ?? null,
+                  `${row.page_id}:${row.user_id}:${row.session_token ?? ''}`,
+                  {
+                    permission: clientPermission(row.permission ?? undefined) ?? null,
+                    accessRevision: row.access_revision,
+                  },
                 ]),
               ),
           );
   const anonymousPromise =
     anonymousIds.length === 0
-      ? Promise.resolve(new Map<string, SharePermission | null>())
+      ? Promise.resolve(new Map<string, PermissionState>())
       : pool
-          .query<{ page_id: string; permission: string | null }>(
+          .query<{ page_id: string; permission: string | null; access_revision: string }>(
             `with requested as (
                select distinct unnest($1::uuid[]) as page_id
              )
-             select requested.page_id, access.permission
+             select requested.page_id, access.permission,
+                    get_page_access_revision(requested.page_id)::text as access_revision
              from requested
              left join lateral (
                with page_parent as (
@@ -332,7 +474,7 @@ export async function revalidateActivePageConnections(
                  where s.entity_type = 'page'
                    and s.entity_id = requested.page_id
                    and s.token is not null
-                   and (s.expires_at is null or s.expires_at > now())
+                   and (s.expires_at is null or s.expires_at > statement_timestamp())
                    and exists (select 1 from page_parent where is_public = true)
                  union all
                  select s.permission, 2 as src
@@ -341,7 +483,7 @@ export async function revalidateActivePageConnections(
                    on f.id = s.entity_id and f.is_public = true and f.is_deleted = false
                  where s.entity_type = 'folder'
                    and s.token is not null
-                   and (s.expires_at is null or s.expires_at > now())
+                   and (s.expires_at is null or s.expires_at > statement_timestamp())
                    and s.entity_id in (
                      select ancestor_id
                      from folder_closure fc
@@ -363,17 +505,67 @@ export async function revalidateActivePageConnections(
               new Map(
                 result.rows.map((row) => [
                   row.page_id,
-                  clientPermission(row.permission ?? undefined) ?? null,
+                  {
+                    permission: clientPermission(row.permission ?? undefined) ?? null,
+                    accessRevision: row.access_revision,
+                  },
                 ]),
               ),
           );
 
-  const [authenticatedResult, anonymousResult] = await Promise.allSettled([
+  const metaSessions = new Map<string, { userId: string; sessionToken: string | null }>();
+  for (const { ctx } of metaCandidates) {
+    const userId = ctx.user?.id;
+    if (!userId) continue;
+    const sessionToken = ctx.sessionToken ?? null;
+    metaSessions.set(`${userId}:${sessionToken ?? ''}`, { userId, sessionToken });
+  }
+  const sessionRequests = Array.from(metaSessions.values());
+  const metaSessionPromise =
+    sessionRequests.length === 0
+      ? Promise.resolve(new Map<string, { valid: boolean; accessRevision: string }>())
+      : pool
+          .query<{
+            user_id: string;
+            session_token: string | null;
+            valid: boolean;
+            access_revision: string;
+          }>(
+            `with requested as (
+               select *
+               from unnest($1::uuid[], $2::text[]) as item(user_id, session_token)
+             )
+             select requested.user_id, requested.session_token,
+                    (requested.session_token is null or exists (
+                      select 1 from sessions
+                      where token = requested.session_token
+                        and user_id = requested.user_id
+                        and expires_at > statement_timestamp()
+                    )) as valid,
+                    coalesce((select max(version) from workspace_access_versions), 0)::text as access_revision
+             from requested`,
+            [
+              sessionRequests.map((request) => request.userId),
+              sessionRequests.map((request) => request.sessionToken),
+            ],
+          )
+          .then(
+            (result) =>
+              new Map(
+                result.rows.map((row) => [
+                  `${row.user_id}:${row.session_token ?? ''}`,
+                  { valid: row.valid, accessRevision: row.access_revision },
+                ]),
+              ),
+          );
+
+  const [authenticatedResult, anonymousResult, metaSessionResult] = await Promise.allSettled([
     authenticatedPromise,
     anonymousPromise,
+    metaSessionPromise,
   ]);
   let affectedCount = 0;
-  for (const { pageId, connection, ctx } of candidates) {
+  for (const { pageId, connection, ctx } of pageCandidates) {
     const user = ctx.user;
     if (!user) continue;
     const result = user.isAnonymous ? anonymousResult : authenticatedResult;
@@ -381,19 +573,35 @@ export async function revalidateActivePageConnections(
       logger.error(
         `[expiry] failed to revalidate ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}: ${result.reason}`,
       );
-      connection.close({ code: 4500, reason: 'Permission verification failed' });
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
       affectedCount++;
       continue;
     }
 
-    const permission = user.isAnonymous
-      ? (result.value as Map<string, SharePermission | null>).get(pageId)
-      : (result.value as Map<string, SharePermission | null>).get(`${pageId}:${user.id}`);
+    const state = user.isAnonymous
+      ? (result.value as Map<string, PermissionState>).get(pageId)
+      : (result.value as Map<string, PermissionState>).get(
+          `${pageId}:${user.id}:${ctx.sessionToken ?? ''}`,
+        );
+    if (!state) {
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
+      affectedCount++;
+      continue;
+    }
+    const previousPermission = ctx.permission;
+    if (!sendPermissionSnapshot(connection, ctx, state)) continue;
+    const permission = state.permission;
     if (!permission) {
       connection.sendStateless(
         JSON.stringify({ type: 'share_event', action: 'revoke' } satisfies StatelessShareMessage),
       );
-      connection.close({ code: 4401, reason: 'Access revoked' });
+      connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
       logger.info(
         `[expiry] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}`,
       );
@@ -402,9 +610,8 @@ export async function revalidateActivePageConnections(
     }
 
     const readOnly = permission === 'view';
-    if (connection.readOnly === readOnly && ctx.permission === permission) continue;
+    if (connection.readOnly === readOnly && previousPermission === permission) continue;
     connection.readOnly = readOnly;
-    (connection.context as Record<string, unknown>).permission = permission;
     connection.sendStateless(
       JSON.stringify({
         type: 'share_event',
@@ -412,6 +619,36 @@ export async function revalidateActivePageConnections(
         permission,
       } satisfies StatelessShareMessage),
     );
+    affectedCount++;
+  }
+
+  for (const { connection, ctx } of metaCandidates) {
+    const userId = ctx.user?.id;
+    if (!userId) continue;
+    if (metaSessionResult.status === 'rejected') {
+      logger.error(`[expiry] failed to revalidate metadata session for user=${userId}`);
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
+      affectedCount++;
+      continue;
+    }
+    const sessionState = metaSessionResult.value.get(`${userId}:${ctx.sessionToken ?? ''}`);
+    if (!sessionState) {
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
+      affectedCount++;
+      continue;
+    }
+    sendPermissionSnapshot(connection, ctx, {
+      permission: null,
+      accessRevision: sessionState.accessRevision,
+    });
+    if (sessionState.valid) continue;
+    connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.SESSION_EXPIRED });
     affectedCount++;
   }
 
@@ -451,7 +688,8 @@ async function applyShareEventToPage(
   if (isLinkShareEvent && pool) {
     try {
       const result = await pool.query(
-        'SELECT user_id, permission FROM get_page_base_permissions($1)',
+        `SELECT user_id, permission
+         FROM get_page_base_permissions_at($1, statement_timestamp())`,
         [pageId],
       );
       basePermissions = new Map(
@@ -473,7 +711,10 @@ async function applyShareEventToPage(
       `[share] base permissions unavailable for page ${pageId}, closing active connections`,
     );
     for (const connection of connections) {
-      connection.close({ code: 4500, reason: 'Permission verification failed' });
+      connection.close({
+        code: 4500,
+        reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+      });
     }
     return connections.length;
   }
@@ -511,7 +752,7 @@ async function applyShareEventToPage(
             ...(message !== undefined && { message }),
           } satisfies StatelessShareMessage),
         );
-        connection.close({ code: 4401, reason: 'Access revoked' });
+        connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
         logger.info(`[share] revoked link-only user=${ctx.user.id} on page ${pageId}`);
         affectedCount++;
         continue;
@@ -562,7 +803,8 @@ async function applyShareEventToPage(
       if (isTargeted && pool) {
         try {
           const permResult = await pool.query(
-            'SELECT permission FROM get_effective_page_permission($1, $2)',
+            `SELECT permission
+             FROM get_effective_page_permission_at($1, $2, statement_timestamp())`,
             [pageId, ctx.user.id],
           );
           const newPermission = clientPermission(
@@ -599,7 +841,7 @@ async function applyShareEventToPage(
           ...(message !== undefined && { message }),
         } satisfies StatelessShareMessage),
       );
-      connection.close({ code: 4401, reason: 'Access revoked' });
+      connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
       logger.info(
         `[share] revoked ${ctx.user.isAnonymous ? 'anonymous' : 'user'}=${ctx.user.id} on page ${pageId}`,
       );
@@ -668,6 +910,18 @@ export async function handleShareEvent(
   const metaUserIds = new Set(payload.metaUserIds ?? []);
   if (targetUserId) metaUserIds.add(targetUserId);
 
+  if (payload.metaOnly === true) {
+    // Link-provenance visits change dashboard/list visibility, but they do not
+    // change any already-open page connection's effective permission. Keep
+    // this notification targeted and bounded: only invalidate the named
+    // users' durable meta rooms, without folder fanout or page revalidation.
+    bumpShareAccessMetaVersion(server, metaUserIds);
+    logger.debug(
+      `[share] processed metadata-only invalidation for ${entityType} ${entityId}: ${metaUserIds.size} user(s)`,
+    );
+    return;
+  }
+
   try {
     // For folders, intersect the subtree with active page rooms before doing
     // any permission work. Inactive pages rebuild authorization from PostgreSQL
@@ -708,6 +962,8 @@ export async function handleShareEvent(
               message,
               targetUserId,
               metaUserIds,
+              action,
+              rawPermission,
             );
           }
           return;
@@ -731,8 +987,10 @@ export async function handleShareEvent(
                 pool,
                 logger,
                 message,
-                undefined,
+                targetUserId,
                 metaUserIds,
+                action,
+                rawPermission,
               )
             : action === 'recompute'
               ? await recomputePageConnections(
@@ -741,8 +999,10 @@ export async function handleShareEvent(
                   pool,
                   logger,
                   message,
-                  undefined,
+                  targetUserId,
                   metaUserIds,
+                  action,
+                  rawPermission,
                 )
               : await applyShareEventToPage(
                   server,
@@ -769,8 +1029,10 @@ export async function handleShareEvent(
         pool,
         logger,
         message,
-        undefined,
+        targetUserId,
         metaUserIds,
+        action,
+        rawPermission,
       );
       logger.info(
         `[share] processed recompute for page ${entityId}: ${affectedCount} connection(s) affected`,
@@ -868,42 +1130,69 @@ export async function handleWorkspaceEvent(
       return;
     }
 
-    let permissions: Map<string, SharePermission | null>;
+    let permissions: Map<string, PermissionState>;
     let permissionQueryFailed = false;
     try {
-      const permissionResult = await pool.query<{ page_id: string; permission: string | null }>(
+      const permissionResult = await pool.query<{
+        page_id: string;
+        permission: string | null;
+        access_revision: string;
+      }>(
         `WITH requested_pages AS (
          SELECT unnest($1::uuid[]) AS page_id
        )
-       SELECT requested_pages.page_id, access.permission
+       SELECT requested_pages.page_id, access.permission,
+              get_page_access_revision(requested_pages.page_id)::text AS access_revision
        FROM requested_pages
-       LEFT JOIN LATERAL get_effective_page_permission(requested_pages.page_id, $2) access ON true`,
+       LEFT JOIN LATERAL get_effective_page_permission_at(
+         requested_pages.page_id,
+         $2,
+         statement_timestamp()
+       ) access ON true`,
         [pageIds, memberId],
       );
       permissions = new Map(
         permissionResult.rows.map((row) => [
           row.page_id,
-          clientPermission(row.permission ?? undefined) ?? null,
+          {
+            permission: clientPermission(row.permission ?? undefined) ?? null,
+            accessRevision: row.access_revision,
+          },
         ]),
       );
     } catch (err) {
       permissionQueryFailed = true;
       logger.error(`[workspace] failed to batch permissions for user=${memberId}: ${err}`);
-      permissions = new Map(pageIds.map((pageId) => [pageId, null]));
+      permissions = new Map();
     }
 
     for (const pageId of pageIds) {
       const activeDoc = server.hocuspocus?.documents?.get(pageId) as Document | undefined;
       if (!activeDoc) continue;
-      const permission = permissions.get(pageId) ?? null;
+      const state = permissions.get(pageId);
 
       for (const connection of activeDoc.getConnections()) {
         const ctx = connection.context as ConnectionContext | undefined;
         if (ctx?.user?.id !== memberId) continue;
 
+        if (!state) {
+          connection.close({
+            code: 4500,
+            reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+          });
+          logger.warn(
+            `[workspace] could not verify user=${memberId} on page ${pageId} (${action})`,
+          );
+          continue;
+        }
+        if (!sendPermissionSnapshot(connection, ctx, state)) continue;
+        const permission = state.permission;
         if (!permission) {
           if (permissionQueryFailed) {
-            connection.close({ code: 4500, reason: 'Permission verification failed' });
+            connection.close({
+              code: 4500,
+              reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
+            });
             logger.warn(
               `[workspace] could not verify user=${memberId} on page ${pageId} (${action})`,
             );
@@ -915,7 +1204,7 @@ export async function handleWorkspaceEvent(
                 ...(message !== undefined && { message }),
               } satisfies StatelessShareMessage),
             );
-            connection.close({ code: 4401, reason: 'Access revoked' });
+            connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
             logger.info(`[workspace] revoked user=${memberId} on page ${pageId} (${action})`);
           }
           continue;

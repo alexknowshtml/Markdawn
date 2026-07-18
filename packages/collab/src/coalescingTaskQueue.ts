@@ -1,6 +1,7 @@
 export type CoalescingTaskQueueOptions<T> = {
   maxPending: number;
   getKey: (task: T) => string;
+  mergePending?: (existing: T, incoming: T) => T;
   handle: (task: T) => Promise<void>;
   handleOverflow: () => Promise<void>;
   onError: (error: unknown) => void;
@@ -97,7 +98,8 @@ export function createCoalescingTaskQueue<T>(
 
       const key = options.getKey(task);
       if (pending.has(key)) {
-        pending.set(key, task);
+        const existing = pending.get(key) as T;
+        pending.set(key, options.mergePending?.(existing, task) ?? task);
       } else if (overflowPending && !overflowRunning) {
         // The canonical refresh has not started, so it will include this task's
         // already-committed database state.

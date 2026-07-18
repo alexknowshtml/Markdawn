@@ -1,7 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('@hocuspocus/server', () => ({
+  Connection: class {
+    context = {};
+    document = { hasConnection: () => false };
+    close() {}
+    send() {}
+    sendCurrentAwareness() {}
+  },
+  MessageReceiver: class {
+    apply() {}
+  },
   Server: class {
+    hocuspocus = { documents: new Map() };
     webSocketServer = { options: {} };
     listen() {}
     destroy() {}

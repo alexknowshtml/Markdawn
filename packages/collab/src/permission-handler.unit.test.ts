@@ -29,7 +29,12 @@ function createLogger() {
 }
 
 function createConnection(overrides?: {
-  context?: { user?: { id: string; isAnonymous?: boolean }; permission?: string };
+  context?: {
+    user?: { id: string; isAnonymous?: boolean };
+    permission?: string;
+    accessRevision?: string;
+    sessionToken?: string;
+  };
   readOnly?: boolean;
 }) {
   return {
@@ -45,7 +50,7 @@ function createDocument(connections: ReturnType<typeof createConnection>[]) {
   return {
     getConnections: () => connections,
     transact: (callback: () => void) => callback(),
-    getMap: () => ({
+    getMap: (_name?: string) => ({
       get: (key: string) => accessVersions.get(key),
       set: (key: string, value: number) => accessVersions.set(key, value),
     }),
@@ -96,16 +101,24 @@ function createPool(
               return {
                 user_id: userId,
                 permission: entry?.permission ?? options?.defaultPermission ?? null,
+                access_revision: '100',
               };
             }),
           };
         }
         const entry = entries.find((item) => item.user_id === requestedUsers);
-        return { rows: [{ permission: entry?.permission ?? options?.defaultPermission ?? null }] };
+        return {
+          rows: [
+            {
+              permission: entry?.permission ?? options?.defaultPermission ?? null,
+              access_revision: '100',
+            },
+          ],
+        };
       }
       if (sql.includes('WITH page_parent')) {
         return {
-          rows: options?.anonymousPermission ? [{ permission: options.anonymousPermission }] : [],
+          rows: [{ permission: options?.anonymousPermission ?? null, access_revision: '100' }],
         };
       }
       return { rows: entries };
@@ -121,6 +134,210 @@ function privilegedEntry(userId: string, permission: string = 'view') {
 }
 
 describe('handleShareEvent', () => {
+  it('handles metadata-only provenance events without page or folder permission fanout', async () => {
+    const pageConnection = createConnection({
+      context: { user: { id: 'recipient' }, permission: 'view', accessRevision: '1' },
+      readOnly: true,
+    });
+    const pageDocument = createDocument([pageConnection]);
+    const metaDocument = createDocument([]);
+    const server = createServerWithDocuments(
+      new Map([
+        ['page-1', pageDocument],
+        ['page-meta:recipient', metaDocument],
+      ]),
+    );
+    const pool = { query: vi.fn() } as unknown as Pool;
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'folder',
+        entityId: 'folder-1',
+        targetUserId: 'recipient',
+        metaUserIds: ['recipient'],
+        metaOnly: true,
+      },
+      pool,
+      createLogger(),
+    );
+
+    expect(metaDocument.getMap('accessVersion').get('access')).toBe(1);
+    expect(pool.query).not.toHaveBeenCalled();
+    expect(pageConnection.sendStateless).not.toHaveBeenCalled();
+    expect(pageConnection.close).not.toHaveBeenCalled();
+    expect(pageConnection.readOnly).toBe(true);
+  });
+
+  it('suppresses an in-flight stale message and delivers the latest canonical targeted update', async () => {
+    const targetConnection = createConnection({
+      context: { user: { id: 'target-user' }, permission: 'view', accessRevision: '1' },
+      readOnly: true,
+    });
+    const otherConnection = createConnection({
+      context: { user: { id: 'other-user' }, permission: 'view', accessRevision: '1' },
+      readOnly: true,
+    });
+    const server = createServerWithDocuments(
+      new Map([[ACTIVE_PAGE_ID, createDocument([targetConnection, otherConnection])]]),
+    );
+    let releaseFirstQuery: (() => void) | undefined;
+    const firstQueryBarrier = new Promise<void>((resolve) => {
+      releaseFirstQuery = resolve;
+    });
+    let markFirstQueryStarted: (() => void) | undefined;
+    const firstQueryStarted = new Promise<void>((resolve) => {
+      markFirstQueryStarted = resolve;
+    });
+    let permissionQueryCount = 0;
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (!sql.includes('get_effective_page_permission')) return { rows: [] };
+      permissionQueryCount++;
+      if (permissionQueryCount === 1) {
+        markFirstQueryStarted?.();
+        await firstQueryBarrier;
+      }
+      const userIds = params?.[1] as string[];
+      return {
+        rows: userIds.map((userId) => ({
+          user_id: userId,
+          permission: 'edit',
+          access_revision: String(100 + permissionQueryCount),
+        })),
+      };
+    });
+    const pool = { query } as unknown as Pool;
+
+    const staleEvent = handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'grant',
+        entityType: 'page',
+        entityId: ACTIVE_PAGE_ID,
+        targetUserId: 'target-user',
+        permission: 'view',
+        message: 'View access granted',
+      },
+      pool,
+      createLogger(),
+    );
+    await firstQueryStarted;
+    releaseFirstQuery?.();
+    await staleEvent;
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'update',
+        entityType: 'page',
+        entityId: ACTIVE_PAGE_ID,
+        targetUserId: 'target-user',
+        permission: 'edit',
+        message: 'Edit access granted',
+      },
+      pool,
+      createLogger(),
+    );
+
+    const statelessMessages = targetConnection.sendStateless.mock.calls.map(
+      ([message]) => message as string,
+    );
+    expect(statelessMessages.some((message) => message.includes('View access granted'))).toBe(
+      false,
+    );
+    expect(statelessMessages).toContain(
+      JSON.stringify({
+        type: 'share_event',
+        action: 'update',
+        permission: 'edit',
+        message: 'Edit access granted',
+      }),
+    );
+    expect(targetConnection.readOnly).toBe(false);
+    expect(otherConnection.sendStateless).not.toHaveBeenCalled();
+    expect(otherConnection.readOnly).toBe(true);
+    for (const [, params] of query.mock.calls) {
+      expect(params?.[1]).toEqual(['target-user']);
+    }
+  });
+
+  it('keeps an equal-revision expiry downgrade when a pre-expiry query arrives late', async () => {
+    const connection = createConnection({
+      context: { user: { id: 'user-1' }, permission: 'edit', accessRevision: '100' },
+      readOnly: false,
+    });
+    const server = createServerWithDocuments(
+      new Map([[ACTIVE_PAGE_ID, createDocument([connection])]]),
+    );
+    let releasePreExpiry: (() => void) | undefined;
+    const preExpiryBarrier = new Promise<void>((resolve) => {
+      releasePreExpiry = resolve;
+    });
+    let markPreExpiryStarted: (() => void) | undefined;
+    const preExpiryStarted = new Promise<void>((resolve) => {
+      markPreExpiryStarted = resolve;
+    });
+    let permissionQueryCount = 0;
+    const pool = {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
+        if (!sql.includes('get_effective_page_permission')) return { rows: [] };
+        permissionQueryCount++;
+        const thisQuery = permissionQueryCount;
+        if (thisQuery === 1) {
+          markPreExpiryStarted?.();
+          await preExpiryBarrier;
+        }
+        const userIds = params?.[1] as string[];
+        return {
+          rows: userIds.map((userId) => ({
+            user_id: userId,
+            permission: thisQuery === 1 ? 'edit' : 'view',
+            access_revision: '100',
+          })),
+        };
+      }),
+    } as unknown as Pool;
+
+    const delayedPreExpiry = handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'page',
+        entityId: ACTIVE_PAGE_ID,
+        targetUserId: 'user-1',
+      },
+      pool,
+      createLogger(),
+    );
+    await preExpiryStarted;
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'recompute',
+        entityType: 'page',
+        entityId: ACTIVE_PAGE_ID,
+        targetUserId: 'user-1',
+      },
+      pool,
+      createLogger(),
+    );
+    releasePreExpiry?.();
+    await delayedPreExpiry;
+
+    expect(connection.context.permission).toBe('view');
+    expect(connection.context.accessRevision).toBe('100');
+    expect(connection.readOnly).toBe(true);
+    const permissionSnapshots = connection.sendStateless.mock.calls
+      .map(([message]) => JSON.parse(message as string) as { type: string; permission?: string })
+      .filter((message) => message.type === 'permission_snapshot');
+    expect(permissionSnapshots.at(-1)?.permission).toBe('view');
+  });
+
   it('does nothing when no active document exists', async () => {
     const logger = createLogger();
     const server = createServer(undefined);
@@ -604,9 +821,14 @@ describe('handleShareEvent', () => {
       logger,
     );
 
-    // effective = max('edit', 'view') = 'edit', readOnly unchanged, no notification sent
+    // The authoritative snapshot is sent even when the compatibility event is unnecessary.
     expect(invitedConn.readOnly).toBe(false);
-    expect(invitedConn.sendStateless).not.toHaveBeenCalled();
+    expect(invitedConn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"permission_snapshot"'),
+    );
+    expect(invitedConn.sendStateless).not.toHaveBeenCalledWith(
+      expect.stringContaining('"action":"update"'),
+    );
   });
 
   it('sends notification when effective permission changes for link share', async () => {
@@ -645,14 +867,18 @@ describe('handleShareEvent', () => {
       context: { user: { id: 'user-1' }, permission: 'edit' },
       readOnly: false,
     });
-    const doc = createDocument([conn]);
+    const otherConn = createConnection({
+      context: { user: { id: 'user-2' }, permission: 'view' },
+      readOnly: true,
+    });
+    const doc = createDocument([conn, otherConn]);
     const server = createServerWithDocuments(new Map([[ACTIVE_PAGE_ID, doc]]));
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('SELECT p.id FROM pages p')) {
         return { rows: [{ id: ACTIVE_PAGE_ID }] };
       }
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ user_id: 'user-1', permission: 'edit' }] };
+        return { rows: [{ user_id: 'user-1', permission: 'edit', access_revision: '101' }] };
       }
       return { rows: [] };
     });
@@ -674,7 +900,14 @@ describe('handleShareEvent', () => {
 
     expect(conn.readOnly).toBe(false);
     expect(conn.context.permission).toBe('edit');
-    expect(conn.sendStateless).not.toHaveBeenCalled();
+    expect(conn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"permission_snapshot"'),
+    );
+    expect(conn.sendStateless).not.toHaveBeenCalledWith(
+      expect.stringContaining('"action":"update"'),
+    );
+    expect(otherConn.sendStateless).not.toHaveBeenCalled();
+    expect(otherConn.readOnly).toBe(true);
     expect(query).toHaveBeenCalledWith(expect.stringContaining('p.id = ANY($2::uuid[])'), [
       'folder-1',
       [ACTIVE_PAGE_ID],
@@ -703,6 +936,7 @@ describe('handleShareEvent', () => {
           rows: userIds.map((userId) => ({
             user_id: userId,
             permission: userId === 'direct-user' ? 'edit' : null,
+            access_revision: '102',
           })),
         };
       }
@@ -728,7 +962,12 @@ describe('handleShareEvent', () => {
       expect.stringContaining('"action":"revoke"'),
     );
     expect(directConn.close).not.toHaveBeenCalled();
-    expect(directConn.sendStateless).not.toHaveBeenCalled();
+    expect(directConn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"type":"permission_snapshot"'),
+    );
+    expect(directConn.sendStateless).not.toHaveBeenCalledWith(
+      expect.stringContaining('"action":"update"'),
+    );
   });
 
   it('fails closed only for affected user connections when a folder lookup fails', async () => {
@@ -1109,11 +1348,21 @@ describe('revalidateActivePageConnections', () => {
       new Map([[pageId, createDocument([expiredConnection, anonymousConnection])]]),
     );
     const query = vi.fn(async (sql: string) => {
-      if (sql.includes('unnest($1::uuid[], $2::uuid[])')) {
-        return { rows: [{ page_id: pageId, user_id: userId, permission: null }] };
+      if (sql.includes('unnest($1::uuid[], $2::uuid[], $3::text[])')) {
+        return {
+          rows: [
+            {
+              page_id: pageId,
+              user_id: userId,
+              session_token: null,
+              permission: null,
+              access_revision: '103',
+            },
+          ],
+        };
       }
       if (sql.includes('with page_parent')) {
-        return { rows: [{ page_id: pageId, permission: 'edit' }] };
+        return { rows: [{ page_id: pageId, permission: 'edit', access_revision: '103' }] };
       }
       return { rows: [] };
     });
