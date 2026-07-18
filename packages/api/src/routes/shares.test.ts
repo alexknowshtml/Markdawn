@@ -421,6 +421,93 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       );
     });
 
+    it('reactivates an expired invite as a fresh recipient-facing grant', async () => {
+      const connectionString = process.env.DATABASE_URL;
+      if (!connectionString) throw new Error('DATABASE_URL is required');
+
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const page = await createTestPage(owner.id, { title: 'Reactivated plan' });
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, recipient_email,
+           permission, expires_at
+         ) values ('page', $1, $2, $3, $4, 'view', now() - interval '1 hour')`,
+        [page.id, owner.id, recipient.id, recipient.email],
+      );
+
+      const listener = new Client({ connectionString });
+      const payloads: string[] = [];
+      listener.on('notification', (notification) => {
+        if (notification.channel === 'share_event' && notification.payload) {
+          payloads.push(notification.payload);
+        }
+      });
+      await listener.connect();
+      await listener.query('listen share_event');
+
+      try {
+        const inviteRes = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Cookie: ownerSession.Cookie,
+          },
+          body: JSON.stringify({ email: recipient.email, permission: 'edit' }),
+        });
+
+        expect(inviteRes.status).toBe(200);
+        expect(await inviteRes.json()).toMatchObject({
+          message: `Invited ${recipient.email} as edit to Reactivated plan`,
+        });
+
+        const marker = `expired-invite-reactivation:${crypto.randomUUID()}`;
+        await query("select pg_notify('share_event', $1)", [marker]);
+        for (let attempt = 0; attempt < 100 && !payloads.includes(marker); attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        expect(payloads).toContain(marker);
+
+        const events = payloads.flatMap((payload) => {
+          if (payload === marker) return [];
+          try {
+            return [JSON.parse(payload) as Record<string, unknown>];
+          } catch {
+            return [];
+          }
+        });
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'share_event',
+            action: 'grant',
+            entityType: 'page',
+            entityId: page.id,
+            targetUserId: recipient.id,
+            permission: 'edit',
+          }),
+        );
+        expect(events).toContainEqual(
+          expect.objectContaining({
+            type: 'invite_received',
+            entityType: 'page',
+            entityId: page.id,
+            targetUserId: recipient.id,
+            permission: 'edit',
+          }),
+        );
+
+        const pageRes = await app.request(`/api/pages/${page.id}`, {
+          headers: { Cookie: recipientSession.Cookie },
+        });
+        expect(pageRes.status).toBe(200);
+      } finally {
+        await listener.end();
+      }
+    });
+
     it('respects expiration date on invites', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -441,12 +528,12 @@ describe('shares API — comprehensive sharing infrastructure', () => {
           expiresAt: new Date(Date.now() - 3600000).toISOString(),
         }),
       });
-      expect(inviteRes.status).toBe(200);
+      expect(inviteRes.status).toBe(400);
 
       const pageRes = await app.request(`/api/pages/${page.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(pageRes.status).toBe(403);
+      expect(pageRes.status).toBe(404);
     });
 
     it('enforces one public-link share record per entity', async () => {
@@ -497,7 +584,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const session = await createTestSession(owner.id);
       const page = await createTestPage(owner.id, { title: 'Public plan' });
 
-      const _linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -505,9 +592,11 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         },
         body: JSON.stringify({ permission: 'view' }),
       });
-      expect(_linkRes.status).toBe(200);
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
-      const publicRes = await app.request(`/api/pages/${page.id}`);
+      expect((await app.request(`/api/pages/${page.id}`)).status).toBe(404);
+      const publicRes = await app.request(`/api/pages/${page.id}?share=${link.token}`);
       expect(publicRes.status).toBe(200);
       expect((await publicRes.json()).title).toBe('Public plan');
 
@@ -523,6 +612,49 @@ describe('shares API — comprehensive sharing infrastructure', () => {
 
       const disabledPublicRes = await app.request(`/api/pages/${page.id}`);
       expect(disabledPublicRes.status).toBe(404);
+    });
+
+    it('rejects generic share mutations for public-link rows', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id, { title: 'Managed public link' });
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ permission: 'view' }),
+      });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
+      const linkRow = await query<{ id: string }>(
+        `select id from shares
+         where entity_type = 'page' and entity_id = $1 and token is not null`,
+        [page.id],
+      );
+      const shareId = linkRow.rows[0]?.id;
+      expect(shareId).toBeTruthy();
+
+      const genericUpdate = await app.request(`/api/shares/${shareId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ permission: 'admin' }),
+      });
+      expect(genericUpdate.status).toBe(400);
+      expect(await genericUpdate.json()).toMatchObject({
+        message: 'Public links must be managed through link settings',
+      });
+
+      const genericDelete = await app.request(`/api/shares/${shareId}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(genericDelete.status).toBe(400);
+      expect((await app.request(`/api/pages/${page.id}?share=${link.token}`)).status).toBe(200);
+      const stored = await query<{ permission: string }>(
+        'select permission from shares where id = $1',
+        [shareId],
+      );
+      expect(stored.rows[0]?.permission).toBe('view');
     });
 
     it('rejects invalid public link permissions', async () => {
@@ -570,7 +702,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       });
       expect(inviteRes.status).toBe(200);
 
-      const _linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -578,11 +710,17 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         },
         body: JSON.stringify({ permission: 'view' }),
       });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
       const accessRes = await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(accessRes.status).toBe(200);
+      expect(await accessRes.json()).toMatchObject({
+        recordedLinkAccess: true,
+        linkAccessSource: 'page',
+      });
 
       const summaryRes = await app.request(`/api/shares/entity/page/${page.id}`, {
         headers: { Cookie: ownerSession.Cookie },
@@ -611,6 +749,20 @@ describe('shares API — comprehensive sharing infrastructure', () => {
           isOwner: false,
         }),
       );
+
+      const directShareId = await getShareIdForRecipient(recipient.id);
+      const revokeRes = await app.request(`/api/shares/${directShareId}`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(revokeRes.status).toBe(200);
+
+      const treeAfterRevokeRes = await app.request('/api/pages/tree', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(treeAfterRevokeRes.status).toBe(200);
+      const treeAfterRevoke = (await treeAfterRevokeRes.json()) as Array<{ id: string }>;
+      expect(treeAfterRevoke.map((item) => item.id)).toContain(page.id);
     });
   });
 
@@ -698,9 +850,37 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(summaryRes.status).toBe(200);
       const summary = (await summaryRes.json()) as {
         accessors: Array<{ permission: string; email: string | null }>;
+        accessSources: Array<{
+          kind: string;
+          permission: string;
+          effectivePermission: string;
+          isWinning: boolean;
+          userId: string;
+          shareId: string | null;
+        }>;
       };
       const recipientAccessor = summary.accessors.find((a) => a.email === recipient.email);
       expect(recipientAccessor?.permission).toBe('admin');
+      expect(summary.accessSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'direct',
+            userId: recipient.id,
+            permission: 'view',
+            effectivePermission: 'admin',
+            isWinning: false,
+            shareId: expect.any(String),
+          }),
+          expect.objectContaining({
+            kind: 'folder',
+            userId: recipient.id,
+            permission: 'admin',
+            effectivePermission: 'admin',
+            isWinning: true,
+            shareId: expect.any(String),
+          }),
+        ]),
+      );
     });
 
     it('marks inherited folder access as read-only in child page summaries', async () => {
@@ -764,7 +944,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const restrictedPageRes = await app.request(`/api/pages/${page.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(restrictedPageRes.status).toBe(403);
+      expect(restrictedPageRes.status).toBe(404);
 
       const restoreRes = await app.request(`/api/shares/entity/page/${page.id}/inheritance`, {
         method: 'PATCH',
@@ -856,7 +1036,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const afterRevoke = await app.request(`/api/pages/${page.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(afterRevoke.status).toBe(403);
+      expect(afterRevoke.status).toBe(404);
     });
 
     it('updates permission level', async () => {
@@ -1066,7 +1246,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const session = await createTestSession(owner.id);
       const page = await createTestPage(owner.id, { title: 'Public doc' });
 
-      await app.request(`/api/shares/entity/page/${page.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1074,8 +1254,11 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         },
         body: JSON.stringify({ permission: 'view' }),
       });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
-      const publicRes = await app.request(`/api/pages/${page.id}`);
+      expect((await app.request(`/api/pages/${page.id}`)).status).toBe(404);
+      const publicRes = await app.request(`/api/pages/${page.id}?share=${link.token}`);
       expect(publicRes.status).toBe(200);
       expect((await publicRes.json()).title).toBe('Public doc');
     });
@@ -1086,7 +1269,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const session = await createTestSession(owner.id);
       const page = await createTestPage(owner.id);
 
-      await app.request(`/api/shares/entity/page/${page.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
         headers: {
           'Content-Type': 'application/json',
@@ -1094,6 +1277,8 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         },
         body: JSON.stringify({ permission: 'view' }),
       });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
@@ -1104,7 +1289,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'private' }),
       });
 
-      const publicRes = await app.request(`/api/pages/${page.id}`);
+      const publicRes = await app.request(`/api/pages/${page.id}?share=${link.token}`);
       expect(publicRes.status).toBe(404);
     });
 
@@ -1114,18 +1299,20 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const session = await createTestSession(owner.id);
       const page = await createTestPage(owner.id);
 
-      await app.request(`/api/shares/entity/page/${page.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
         body: JSON.stringify({ permission: 'view' }),
       });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
       await query(
         `UPDATE shares SET expires_at = now() - interval '1 hour'
          WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL`,
         [page.id],
       );
 
-      const publicRes = await app.request(`/api/pages/${page.id}`);
+      const publicRes = await app.request(`/api/pages/${page.id}?share=${link.token}`);
 
       expect(publicRes.status).toBe(404);
     });
@@ -1137,19 +1324,21 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const folder = await createTestFolder(owner.id);
       const page = await createTestPage(owner.id, { parentId: folder.id });
 
-      await app.request(`/api/shares/entity/folder/${folder.id}/link`, {
+      const linkRes = await app.request(`/api/shares/entity/folder/${folder.id}/link`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
         body: JSON.stringify({ permission: 'edit' }),
       });
+      expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
       await query(
         `UPDATE shares SET expires_at = now() - interval '1 hour'
          WHERE entity_type = 'folder' AND entity_id = $1 AND token IS NOT NULL`,
         [folder.id],
       );
 
-      expect((await app.request(`/api/folders/${folder.id}`)).status).toBe(404);
-      expect((await app.request(`/api/pages/${page.id}`)).status).toBe(404);
+      expect((await app.request(`/api/folders/${folder.id}?share=${link.token}`)).status).toBe(404);
+      expect((await app.request(`/api/pages/${page.id}?share=${link.token}`)).status).toBe(404);
     });
   });
 
@@ -1279,6 +1468,32 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(stored.rowCount).toBe(0);
     });
 
+    it.each([
+      ['past', new Date(Date.now() - 60_000).toISOString()],
+      ['current boundary', new Date().toISOString()],
+    ])('rejects a %s invitation expiration without creating an invite', async (_label, expiresAt) => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const page = await createTestPage(owner.id);
+
+      const res = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ email: recipient.email, permission: 'view', expiresAt }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({ code: 'EXPIRATION_NOT_FUTURE' });
+      const stored = await query(
+        `select id from shares
+         where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
+        [page.id, recipient.id],
+      );
+      expect(stored.rowCount).toBe(0);
+    });
+
     it('allows recipient to self-remove their access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -1307,7 +1522,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const after = await app.request(`/api/pages/${page.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(after.status).toBe(403);
+      expect(after.status).toBe(404);
     });
   });
 
@@ -1936,12 +2151,12 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const childFolderRes = await app.request(`/api/folders/${childFolder.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(childFolderRes.status).toBe(403);
+      expect(childFolderRes.status).toBe(404);
 
       const childPageRes = await app.request(`/api/pages/${childPage.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(childPageRes.status).toBe(403);
+      expect(childPageRes.status).toBe(404);
     });
 
     it('does not discover public-link entities in authenticated trees', async () => {
@@ -1997,7 +2212,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       expect(pages.map((page) => page.id)).not.toContain(nestedPage.id);
 
       const openFolderRes = await app.request(`/api/folders/${publicFolder.id}`, {
-        headers: { Cookie: strangerSession.Cookie },
+        headers: { Cookie: strangerSession.Cookie, 'x-share-token': folderToken },
       });
       expect(openFolderRes.status).toBe(200);
 
@@ -2021,7 +2236,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
 
       const openPageRes = await app.request(`/api/pages/${publicPage.id}/access`, {
         method: 'POST',
-        headers: { Cookie: strangerSession.Cookie },
+        headers: { Cookie: strangerSession.Cookie, 'x-share-token': pageToken },
       });
       expect(openPageRes.status).toBe(200);
       expect(await openPageRes.json()).toMatchObject({
@@ -2080,7 +2295,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       );
     });
 
-    it('shows inherited public-link permission in page accessor summaries', async () => {
+    it('discloses inherited public-page access without misattributing it to an invite', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
@@ -2104,13 +2319,44 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       });
       const data = (await res.json()) as {
         accessors: Array<{ userId: string; permission: string }>;
+        accessSources: Array<{
+          kind: string;
+          userId: string;
+          permission: string;
+          effectivePermission: string;
+          isWinning: boolean;
+        }>;
+        inheritedLinks: Array<{
+          entityId: string;
+          entityTitle: string;
+          permission: string;
+          token: string;
+          url: string;
+        }>;
       };
       expect(data.accessors).toContainEqual(
-        expect.objectContaining({ userId: recipient.id, permission: 'edit' }),
+        expect.objectContaining({ userId: recipient.id, permission: 'view' }),
+      );
+      expect(data.accessSources).toContainEqual(
+        expect.objectContaining({
+          kind: 'direct',
+          userId: recipient.id,
+          permission: 'view',
+          effectivePermission: 'edit',
+          isWinning: false,
+        }),
+      );
+      expect(data.inheritedLinks).toContainEqual(
+        expect.objectContaining({
+          entityId: folder.id,
+          permission: 'edit',
+          token: expect.any(String),
+          url: expect.stringContaining(folder.id),
+        }),
       );
     });
 
-    it('shows inherited public-link permission in folder accessor summaries', async () => {
+    it('discloses inherited public-folder access without misattributing it to an invite', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
@@ -2134,9 +2380,33 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       });
       const data = (await res.json()) as {
         accessors: Array<{ userId: string; permission: string }>;
+        accessSources: Array<{
+          kind: string;
+          userId: string;
+          permission: string;
+          effectivePermission: string;
+          isWinning: boolean;
+        }>;
+        inheritedLinks: Array<{ entityId: string; permission: string; token: string }>;
       };
       expect(data.accessors).toContainEqual(
-        expect.objectContaining({ userId: recipient.id, permission: 'edit' }),
+        expect.objectContaining({ userId: recipient.id, permission: 'view' }),
+      );
+      expect(data.accessSources).toContainEqual(
+        expect.objectContaining({
+          kind: 'direct',
+          userId: recipient.id,
+          permission: 'view',
+          effectivePermission: 'edit',
+          isWinning: false,
+        }),
+      );
+      expect(data.inheritedLinks).toContainEqual(
+        expect.objectContaining({
+          entityId: parent.id,
+          permission: 'edit',
+          token: expect.any(String),
+        }),
       );
     });
 
@@ -2366,15 +2636,16 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'edit' }),
       });
       expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       const openPageRes = await app.request(`/api/pages/${page.id}`, {
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(openPageRes.status).toBe(200);
 
       const accessRes = await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(accessRes.status).toBe(200);
 
@@ -2453,15 +2724,16 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'edit' }),
       });
       expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       const openPageRes = await app.request(`/api/pages/${page.id}`, {
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(openPageRes.status).toBe(200);
 
       const accessRes = await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(accessRes.status).toBe(200);
 
@@ -2575,11 +2847,19 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'view' }),
       });
       expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       const openRes = await app.request(`/api/folders/${folder.id}`, {
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(openRes.status).toBe(200);
+      const event = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_access_events
+         where folder_id = $1 and user_id = $2`,
+        [folder.id, recipient.id],
+      );
+      expect(event.rows[0]?.count).toBe('1');
 
       const res = await app.request('/api/shares/with-me', {
         headers: { Cookie: recipientSession.Cookie },
@@ -2619,9 +2899,10 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'view' }),
       });
       expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       const openRes = await app.request(`/api/folders/${folder.id}`, {
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(openRes.status).toBe(200);
 
@@ -2643,7 +2924,221 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       );
     });
 
-    it('with-me stores the source folder, not every page opened through a folder link', async () => {
+    it('requires an explicit folder visit before folder-link fallback survives revocation', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Folder fallback' });
+      const page = await createTestPage(owner.id, {
+        title: 'Page with two links',
+        parentId: folder.id,
+      });
+
+      const inviteRes = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+        body: JSON.stringify({ email: recipient.email, permission: 'edit' }),
+      });
+      expect(inviteRes.status).toBe(200);
+      let folderLinkToken = '';
+      let pageLinkToken = '';
+      for (const [entityType, entityId, permission] of [
+        ['folder', folder.id, 'view'],
+        ['page', page.id, 'edit'],
+      ] as const) {
+        const linkRes = await app.request(`/api/shares/entity/${entityType}/${entityId}/link`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission }),
+        });
+        expect(linkRes.status).toBe(200);
+        const link = (await linkRes.json()) as { token: string };
+        if (entityType === 'folder') folderLinkToken = link.token;
+        else pageLinkToken = link.token;
+      }
+
+      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': pageLinkToken },
+      });
+      expect(accessRes.status).toBe(200);
+      const recorded = await query<{ page_events: string; folder_events: string }>(
+        `select
+           (select count(*) from page_access_events where page_id = $1 and user_id = $3)::text as page_events,
+           (select count(*) from folder_access_events where folder_id = $2 and user_id = $3)::text as folder_events`,
+        [page.id, folder.id, recipient.id],
+      );
+      expect(recorded.rows[0]).toEqual({ page_events: '1', folder_events: '0' });
+
+      const openFolder = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': folderLinkToken },
+      });
+      expect(openFolder.status).toBe(200);
+      const folderEvent = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_access_events
+         where folder_id = $1 and user_id = $2`,
+        [folder.id, recipient.id],
+      );
+      expect(folderEvent.rows[0]?.count).toBe('1');
+
+      const disablePageLink = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+        body: JSON.stringify({ permission: 'private' }),
+      });
+      expect(disablePageLink.status).toBe(200);
+      const directShareId = await getShareIdForRecipient(recipient.id);
+      const revokeDirect = await app.request(`/api/shares/${directShareId}`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(revokeDirect.status).toBe(200);
+
+      const withMeRes = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(withMeRes.status).toBe(200);
+      const items = (await withMeRes.json()) as Array<{
+        entityId: string;
+        entityType: string;
+        source: string;
+      }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ entityId: folder.id, entityType: 'folder', source: 'link' }),
+      );
+      const pageRes = await app.request(`/api/pages/${page.id}`, {
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': folderLinkToken },
+      });
+      expect(pageRes.status).toBe(200);
+      expect((await pageRes.json()) as { userPermission: string }).toMatchObject({
+        userPermission: 'view',
+      });
+    });
+
+    it('records each folder link only after that exact folder is opened', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const ancestor = await createTestFolder(owner.id, { name: 'Ancestor fallback' });
+      const nearer = await createTestFolder(owner.id, {
+        name: 'Nearer link',
+        parentId: ancestor.id,
+      });
+
+      for (const [folderId, permission] of [
+        [ancestor.id, 'view'],
+        [nearer.id, 'edit'],
+      ] as const) {
+        const linkRes = await app.request(`/api/shares/entity/folder/${folderId}/link`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission }),
+        });
+        expect(linkRes.status).toBe(200);
+        const link = (await linkRes.json()) as { token: string };
+        const openRes = await app.request(`/api/folders/${folderId}`, {
+          headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
+        });
+        expect(openRes.status).toBe(200);
+      }
+      const recorded = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_access_events
+         where user_id = $1 and folder_id = any($2::uuid[])`,
+        [recipient.id, [ancestor.id, nearer.id]],
+      );
+      expect(recorded.rows[0]?.count).toBe('2');
+
+      const disableNearer = await app.request(`/api/shares/entity/folder/${nearer.id}/link`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+        body: JSON.stringify({ permission: 'private' }),
+      });
+      expect(disableNearer.status).toBe(200);
+
+      const withMeRes = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(withMeRes.status).toBe(200);
+      const items = (await withMeRes.json()) as Array<{
+        entityId: string;
+        entityType: string;
+        source: string;
+      }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ entityId: ancestor.id, entityType: 'folder', source: 'link' }),
+      );
+      expect(items).not.toContainEqual(expect.objectContaining({ entityId: nearer.id }));
+    });
+
+    it('does not surface expired link events through an unrelated workspace grant', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Expired linked folder' });
+      const page = await createTestPage(owner.id, { title: 'Expired linked page' });
+      await createTestWorkspaceMember(owner.id, recipient.id, 'viewer');
+
+      let folderLinkToken = '';
+      let pageLinkToken = '';
+      for (const [entityType, entityId] of [
+        ['folder', folder.id],
+        ['page', page.id],
+      ] as const) {
+        const linkRes = await app.request(`/api/shares/entity/${entityType}/${entityId}/link`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
+          body: JSON.stringify({ permission: 'view' }),
+        });
+        expect(linkRes.status).toBe(200);
+        const link = (await linkRes.json()) as { token: string };
+        if (entityType === 'folder') folderLinkToken = link.token;
+        else pageLinkToken = link.token;
+      }
+      expect(
+        (
+          await app.request(`/api/pages/${page.id}/access`, {
+            method: 'POST',
+            headers: { Cookie: recipientSession.Cookie, 'x-share-token': pageLinkToken },
+          })
+        ).status,
+      ).toBe(200);
+      expect(
+        (
+          await app.request(`/api/folders/${folder.id}`, {
+            headers: { Cookie: recipientSession.Cookie, 'x-share-token': folderLinkToken },
+          })
+        ).status,
+      ).toBe(200);
+
+      await query(
+        `update shares
+         set expires_at = now() - interval '1 second'
+         where token is not null and entity_id = any($1::uuid[])`,
+        [[page.id, folder.id]],
+      );
+
+      for (const endpoint of ['/api/shares/with-me', '/api/shares/with-me/tree']) {
+        const res = await app.request(endpoint, { headers: { Cookie: recipientSession.Cookie } });
+        expect(res.status).toBe(200);
+        const items = (await res.json()) as Array<{ entityId: string; source: string }>;
+        expect(items).not.toContainEqual(
+          expect.objectContaining({ entityId: page.id, source: 'link' }),
+        );
+        expect(items).not.toContainEqual(
+          expect.objectContaining({ entityId: folder.id, source: 'link' }),
+        );
+      }
+    });
+
+    it('with-me stores a folder link only after that exact folder is opened', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
@@ -2664,23 +3159,41 @@ describe('shares API — comprehensive sharing infrastructure', () => {
         body: JSON.stringify({ permission: 'edit' }),
       });
       expect(linkRes.status).toBe(200);
+      const link = (await linkRes.json()) as { token: string };
 
       const pageRes = await app.request(`/api/pages/${page.id}`, {
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(pageRes.status).toBe(200);
 
       const accessRes = await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: recipientSession.Cookie },
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
       });
       expect(accessRes.status).toBe(200);
 
-      const res = await app.request('/api/shares/with-me', {
+      let res = await app.request('/api/shares/with-me', {
         headers: { Cookie: recipientSession.Cookie },
       });
       expect(res.status).toBe(200);
-      const items = (await res.json()) as Array<{ title: string; entityType: string }>;
+      let items = (await res.json()) as Array<{ title: string; entityType: string }>;
+      expect(items).not.toContainEqual(
+        expect.objectContaining({ title: 'Linked Parent Folder', entityType: 'folder' }),
+      );
+      expect(items).not.toContainEqual(
+        expect.objectContaining({ title: 'Nested Link Page', entityType: 'page' }),
+      );
+
+      const folderRes = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': link.token },
+      });
+      expect(folderRes.status).toBe(200);
+
+      res = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      items = (await res.json()) as Array<{ title: string; entityType: string }>;
       expect(items).toContainEqual(
         expect.objectContaining({ title: 'Linked Parent Folder', entityType: 'folder' }),
       );
@@ -2793,7 +3306,7 @@ describe('shares API — comprehensive sharing infrastructure', () => {
       const subRes = await app.request(`/api/folders/${subFolder.id}`, {
         headers: { Cookie: subCreatorSession.Cookie },
       });
-      expect(subRes.status).toBe(403);
+      expect(subRes.status).toBe(404);
     });
 
     it('editor cannot delete page', async () => {

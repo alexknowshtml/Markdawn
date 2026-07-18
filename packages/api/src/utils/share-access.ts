@@ -41,7 +41,7 @@ export const ensurePageAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement = 'SELECT * FROM get_effective_page_permission($1, $2)';
+  const statement = 'SELECT * FROM get_effective_page_permission_at($1, $2, statement_timestamp())';
   const parameters = [pageId, userId];
   const result = executor
     ? await executeQuery(executor, statement, parameters)
@@ -74,7 +74,8 @@ export const ensureFolderAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement = 'SELECT * FROM get_effective_folder_permission($1, $2)';
+  const statement =
+    'SELECT * FROM get_effective_folder_permission_at($1, $2, statement_timestamp())';
   const parameters = [folderId, userId];
   const result = executor
     ? await executeQuery(executor, statement, parameters)
@@ -101,7 +102,7 @@ export const ensureFolderAccess = async (
   return { hasAccess: true, fullAccess: false, permission };
 };
 
-export const lockWorkspaceAccessMutation = async (
+export const lockWorkspaceAccess = async (
   executor: QueryExecutor,
   workspaceOwnerId: string,
 ): Promise<void> => {
@@ -110,11 +111,26 @@ export const lockWorkspaceAccessMutation = async (
   ]);
 };
 
-export const lockEntityAccessMutations = async (
+export const lockWorkspaceAccessMutation = async (
+  executor: QueryExecutor,
+  workspaceOwnerId: string,
+): Promise<void> => {
+  await lockWorkspaceAccess(executor, workspaceOwnerId);
+  await executeQuery(
+    executor,
+    `insert into workspace_access_versions (workspace_owner_id, version)
+     values ($1, nextval('workspace_access_revision_seq'))
+     on conflict (workspace_owner_id) do update
+     set version = nextval('workspace_access_revision_seq')`,
+    [workspaceOwnerId],
+  );
+};
+
+const resolveEntityOwnerIds = async (
   executor: QueryExecutor,
   entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
 ): Promise<string[]> => {
-  const ownerIds: string[] = [];
+  const resolvedOwnerIds: string[] = [];
   for (const { entityType, entityId } of entities) {
     const statement =
       entityType === 'page'
@@ -134,14 +150,71 @@ export const lockEntityAccessMutations = async (
     if (!row.owner_id) {
       throw new HTTPException(409, { message: 'Entity owner could not be determined' });
     }
-    ownerIds.push(row.owner_id);
+    resolvedOwnerIds.push(row.owner_id);
+  }
+  return resolvedOwnerIds;
+};
+
+const lockStableEntityAccess = async (
+  executor: QueryExecutor,
+  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+  additionalWorkspaceOwnerIds: readonly string[],
+  lockWorkspace: (executor: QueryExecutor, workspaceOwnerId: string) => Promise<void>,
+): Promise<string[]> => {
+  const ownerIds = await resolveEntityOwnerIds(executor, entities);
+  const lockedOwnerIds = [...new Set([...ownerIds, ...additionalWorkspaceOwnerIds])].sort();
+  for (const ownerId of lockedOwnerIds) {
+    await lockWorkspace(executor, ownerId);
   }
 
-  const uniqueOwnerIds = [...new Set(ownerIds)].sort();
-  for (const ownerId of uniqueOwnerIds) {
-    await lockWorkspaceAccessMutation(executor, ownerId);
+  // Supported organization routes never change an entity's workspace owner,
+  // but re-resolve after the advisory locks so a future route or direct SQL
+  // writer cannot make us continue under only a stale workspace key.
+  const currentOwnerIds = await resolveEntityOwnerIds(executor, entities);
+  const lockedOwnerIdSet = new Set(lockedOwnerIds);
+  if (currentOwnerIds.some((ownerId) => !lockedOwnerIdSet.has(ownerId))) {
+    throw new HTTPException(409, {
+      message: 'Entity workspace changed while acquiring access lock; retry the request',
+    });
   }
-  return ownerIds;
+  return currentOwnerIds;
+};
+
+export const lockEntityAccesses = async (
+  executor: QueryExecutor,
+  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+  additionalWorkspaceOwnerIds: readonly string[] = [],
+): Promise<string[]> => {
+  return lockStableEntityAccess(
+    executor,
+    entities,
+    additionalWorkspaceOwnerIds,
+    lockWorkspaceAccess,
+  );
+};
+
+export const lockEntityAccess = async (
+  executor: QueryExecutor,
+  entityType: ShareEntityType,
+  entityId: string,
+): Promise<string> => {
+  const ownerIds = await lockEntityAccesses(executor, [{ entityType, entityId }]);
+  const ownerId = ownerIds[0];
+  if (!ownerId) throw new Error('Entity access lock did not resolve an owner');
+  return ownerId;
+};
+
+export const lockEntityAccessMutations = async (
+  executor: QueryExecutor,
+  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+  additionalWorkspaceOwnerIds: readonly string[] = [],
+): Promise<string[]> => {
+  return lockStableEntityAccess(
+    executor,
+    entities,
+    additionalWorkspaceOwnerIds,
+    lockWorkspaceAccessMutation,
+  );
 };
 
 export const lockEntityAccessMutation = async (

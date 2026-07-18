@@ -1,41 +1,81 @@
-import type { ShareEntityType, ShareEventAction, SharePermission } from '@markdawn/shared';
+import {
+  getUnicodeCodePointLength,
+  type ShareEntityType,
+  type ShareEventAction,
+  type SharePermission,
+  truncateUnicodeCodePoints,
+} from '@markdawn/shared';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
 const MAX_NOTIFICATION_TEXT_LENGTH = 256;
+const MAX_META_USERS_PER_NOTIFICATION = 100;
 
 const boundedNotificationText = (value: string): string => {
-  if (value.length <= MAX_NOTIFICATION_TEXT_LENGTH) return value;
-  return `${value.slice(0, MAX_NOTIFICATION_TEXT_LENGTH - 1)}…`;
+  if (getUnicodeCodePointLength(value) <= MAX_NOTIFICATION_TEXT_LENGTH) return value;
+  return `${truncateUnicodeCodePoints(value, MAX_NOTIFICATION_TEXT_LENGTH - 1)}…`;
 };
 
-interface ShareEventBase {
+export interface ShareEventBase {
   entityType: ShareEntityType;
   entityId: string;
   permission?: SharePermission;
   targetUserId?: string;
   metaUserIds?: string[];
+  metaOnly?: boolean;
   entityTitle?: string;
   sharedByName?: string;
   message?: string;
 }
 
-function fireShareEvent(
+export function createShareEventPayloads(
+  action: ShareEventAction,
+  params: ShareEventBase,
+): string[] {
+  const uniqueMetaUserIds =
+    params.metaUserIds === undefined ? undefined : [...new Set(params.metaUserIds)];
+  const metaUserChunks: Array<string[] | undefined> = [];
+  if (uniqueMetaUserIds === undefined || uniqueMetaUserIds.length === 0) {
+    metaUserChunks.push(uniqueMetaUserIds);
+  } else {
+    for (
+      let index = 0;
+      index < uniqueMetaUserIds.length;
+      index += MAX_META_USERS_PER_NOTIFICATION
+    ) {
+      metaUserChunks.push(uniqueMetaUserIds.slice(index, index + MAX_META_USERS_PER_NOTIFICATION));
+    }
+  }
+
+  return metaUserChunks.map((metaUserIds, index) => {
+    const isMetaOnly = params.metaOnly === true || index > 0;
+    return JSON.stringify({
+      type: 'share_event',
+      action,
+      entityType: params.entityType,
+      entityId: params.entityId,
+      ...(!isMetaOnly && params.permission !== undefined && { permission: params.permission }),
+      ...(index === 0 &&
+        params.targetUserId !== undefined && {
+          targetUserId: params.targetUserId,
+        }),
+      ...(metaUserIds !== undefined && { metaUserIds }),
+      ...((params.metaOnly !== undefined || index > 0) && { metaOnly: isMetaOnly }),
+      ...(!isMetaOnly &&
+        params.message !== undefined && { message: boundedNotificationText(params.message) }),
+    });
+  });
+}
+
+async function fireShareEvent(
   action: ShareEventAction,
   params: ShareEventBase,
   executor: QueryExecutor = db,
-) {
-  const payload = {
-    type: 'share_event',
-    action,
-    entityType: params.entityType,
-    entityId: params.entityId,
-    ...(params.permission !== undefined && { permission: params.permission }),
-    ...(params.targetUserId !== undefined && { targetUserId: params.targetUserId }),
-    ...(params.metaUserIds !== undefined && { metaUserIds: [...new Set(params.metaUserIds)] }),
-    ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
-  };
-  return executeQuery(executor, "SELECT pg_notify('share_event', $1)", [JSON.stringify(payload)]);
+): Promise<void> {
+  const payloads = createShareEventPayloads(action, params);
+  for (const payload of payloads) {
+    await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [payload]);
+  }
 }
 
 export async function notifyShareGrant(
@@ -51,6 +91,7 @@ export async function notifyShareGrant(
       entityTitle: boundedNotificationText(params.entityTitle),
       sharedByName: boundedNotificationText(params.sharedByName),
       targetUserId: params.targetUserId,
+      ...(params.permission !== undefined && { permission: params.permission }),
       ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
     };
     await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [
