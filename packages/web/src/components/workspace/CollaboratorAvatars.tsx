@@ -1,4 +1,4 @@
-import type { EntityAccessor } from '@markdawn/shared';
+import type { CollaboratorDisplay, EntityAccessor } from '@markdawn/shared';
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getInitial } from '../../utils/avatar';
@@ -10,7 +10,12 @@ const ROLE_LABELS: Record<string, string> = {
   view: 'Viewer',
 };
 
-function formatCollabLabel(collab: EntityAccessor): string {
+function isDetailedAccessor(collab: CollaboratorDisplay): collab is EntityAccessor {
+  return 'userId' in collab;
+}
+
+function formatCollabLabel(collab: CollaboratorDisplay): string {
+  if (!isDetailedAccessor(collab)) return collab.name ?? 'Collaborator';
   const name = collab.name ?? collab.email ?? 'User';
   const role = collab.isOwner ? 'Owner' : (ROLE_LABELS[collab.permission] ?? collab.permission);
   return `${name} (${role})`;
@@ -25,11 +30,11 @@ export function formatItemDate(date: string | Date): string {
 }
 
 interface CollaboratorAvatarsProps {
-  collaborators: EntityAccessor[];
+  collaborators: CollaboratorDisplay[];
   max?: number;
 }
 
-function Avatar({ collab, label }: { collab: EntityAccessor; label: string }) {
+function Avatar({ collab, label }: { collab: CollaboratorDisplay; label: string }) {
   const anchorRef = useRef<HTMLDivElement>(null);
   const [showTooltip, setShowTooltip] = useState(false);
   const [tooltipStyle, setTooltipStyle] = useState<React.CSSProperties>({});
@@ -69,7 +74,7 @@ function Avatar({ collab, label }: { collab: EntityAccessor; label: string }) {
           />
         ) : (
           <span className="text-[9px] font-bold text-white">
-            {getInitial(collab.name ?? collab.email ?? 'U')}
+            {getInitial(collab.name ?? (isDetailedAccessor(collab) ? collab.email : null) ?? 'U')}
           </span>
         )}
       </div>
@@ -140,7 +145,11 @@ export function CollaboratorAvatars({ collaborators, max = 3 }: CollaboratorAvat
   return (
     <div className="flex items-center -space-x-1.5">
       {visible.map((collab) => (
-        <Avatar key={collab.userId} collab={collab} label={formatCollabLabel(collab)} />
+        <Avatar
+          key={isDetailedAccessor(collab) ? collab.userId : collab.presenceId}
+          collab={collab}
+          label={formatCollabLabel(collab)}
+        />
       ))}
       {overflow > 0 && <OverflowBadge count={overflow} />}
     </div>

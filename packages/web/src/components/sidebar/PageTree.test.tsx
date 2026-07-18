@@ -1,5 +1,5 @@
 import type { FolderTreeNode, PageTreeNode, SharedNavigationItem } from '@markdawn/shared';
-import { screen } from '@testing-library/react';
+import { act, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkspaceMembership } from '../../hooks/use-workspace';
@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   shared: [] as SharedNavigationItem[],
   memberships: [] as WorkspaceMembership[],
   leaveWorkspace: vi.fn(),
+  updatePage: vi.fn(),
+  capturedRenameSave: null as (() => void) | null,
 }));
 
 vi.mock('../../contexts/ShareContext', () => ({
@@ -32,7 +34,7 @@ vi.mock('../../hooks/use-pages', () => ({
   usePageTree: () => ({ data: mocks.pages, isLoading: false, error: null }),
   useRecentPages: () => ({ data: [] }),
   useCreatePage: () => ({ mutateAsync: vi.fn() }),
-  useUpdatePage: () => ({ mutateAsync: vi.fn() }),
+  useUpdatePage: () => ({ mutate: mocks.updatePage, mutateAsync: vi.fn() }),
   useImportMarkdown: () => ({ mutateAsync: vi.fn() }),
 }));
 vi.mock('../../hooks/use-shared-with-me', () => ({
@@ -42,11 +44,47 @@ vi.mock('../../hooks/use-workspace', () => ({
   useWorkspaceMemberships: () => ({ data: mocks.memberships }),
   useLeaveWorkspace: () => ({ mutate: mocks.leaveWorkspace, isPending: false }),
 }));
-vi.mock('../../utils/entity-actions', () => ({
+vi.mock('../../utils/entity-actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/entity-actions')>()),
   useEntityDeletion: () => ({ handleDelete: vi.fn(), isPending: false }),
 }));
 vi.mock('./PageTreeRow', () => ({
-  PageTreeRow: ({ title }: { title: string }) => <div>{title}</div>,
+  PageTreeRow: ({
+    title,
+    onRename,
+    isEditing,
+    editTitle,
+    onEditChange,
+    onEditSave,
+  }: {
+    title: string;
+    onRename?: () => void;
+    isEditing?: boolean;
+    editTitle?: string;
+    onEditChange?: (value: string) => void;
+    onEditSave?: () => void;
+  }) => {
+    if (isEditing && onEditSave) mocks.capturedRenameSave = onEditSave;
+    return (
+      <div>
+        {isEditing ? (
+          <input
+            aria-label={`Rename ${title}`}
+            value={editTitle}
+            onChange={(event) => onEditChange?.(event.target.value)}
+            onBlur={onEditSave}
+          />
+        ) : (
+          <span>{title}</span>
+        )}
+        {onRename && (
+          <button type="button" onClick={onRename}>
+            Rename {title}
+          </button>
+        )}
+      </div>
+    );
+  },
 }));
 
 import { PageTree } from './PageTree';
@@ -67,6 +105,8 @@ describe('PageTree workspace navigation', () => {
     mocks.shared = [];
     mocks.memberships = [];
     mocks.leaveWorkspace.mockReset();
+    mocks.updatePage.mockReset();
+    mocks.capturedRenameSave = null;
   });
 
   it('groups visible workspace content under Shared With Me', () => {
@@ -143,5 +183,31 @@ describe('PageTree workspace navigation', () => {
       ownerId: 'workspace-1',
       memberId: 'current-user',
     });
+  });
+
+  it('cancels an active rename when edit access downgrades to view', async () => {
+    const user = userEvent.setup();
+    mocks.memberships = [membership('workspace-1', 'Alice')];
+    const editablePage = createMockPageTreeNode({
+      id: 'workspace-page',
+      title: 'Workspace page',
+      ownerId: 'workspace-1',
+      workspaceAccess: true,
+      userPermission: 'edit',
+    });
+    mocks.pages = [editablePage];
+    const rendered = render(<PageTree />);
+
+    await user.click(screen.getByRole('button', { name: 'Rename Workspace page' }));
+    expect(screen.getByRole('textbox', { name: 'Rename Workspace page' })).toBeInTheDocument();
+    const staleSave = mocks.capturedRenameSave;
+    expect(staleSave).not.toBeNull();
+
+    mocks.pages = [{ ...editablePage, userPermission: 'view' }];
+    rendered.rerender(<PageTree />);
+
+    expect(screen.queryByRole('textbox', { name: 'Rename Workspace page' })).toBeNull();
+    act(() => staleSave?.());
+    expect(mocks.updatePage).not.toHaveBeenCalled();
   });
 });

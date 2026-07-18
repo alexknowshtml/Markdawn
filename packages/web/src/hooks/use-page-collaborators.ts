@@ -1,10 +1,10 @@
-import type { EntityAccessor } from '@markdawn/shared';
+import type { CollaboratorDisplay } from '@markdawn/shared';
 import { useQuery } from '@tanstack/react-query';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
 const API_BASE = '/api';
 
-type CollaboratorsResponse = Record<string, EntityAccessor[]>;
+type CollaboratorsResponse = Record<string, CollaboratorDisplay[]>;
 
 async function fetchPageCollaborators(pageIds: string[]): Promise<CollaboratorsResponse> {
   if (pageIds.length === 0) return {};

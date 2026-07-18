@@ -1,6 +1,11 @@
-import { focusManager } from '@tanstack/react-query';
+import { focusManager, QueryClientProvider } from '@tanstack/react-query';
 import { act, renderHook, waitFor } from '@testing-library/react';
+import React, { type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  createIdentityLifecycle,
+  IdentityLifecycleProvider,
+} from '../contexts/IdentityLifecycleContext';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
@@ -24,6 +29,18 @@ import {
 } from './use-bulk-actions';
 import { useFavorites } from './use-favorites';
 import { usePageCollaborators } from './use-page-collaborators';
+
+function createIdentityWrapper(
+  queryClient: ReturnType<typeof createTestQueryClient>,
+  lifecycle: ReturnType<typeof createIdentityLifecycle>,
+) {
+  return ({ children }: { children: ReactNode }) =>
+    React.createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      React.createElement(IdentityLifecycleProvider, { lifecycle }, children),
+    );
+}
 
 describe('useBulkRemoveEntities', () => {
   let queryClient: ReturnType<typeof createTestQueryClient>;
@@ -72,13 +89,14 @@ describe('useBulkRemoveEntities', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/pages/shared-page/leave', {
       method: 'POST',
     });
-    expect(invalidateSpy).toHaveBeenCalledTimes(13);
+    expect(invalidateSpy).toHaveBeenCalledTimes(14);
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pageTree'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['folderTree'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspace-memberships'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['workspace-members'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shares'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pages', 'detail'] });
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tags'] });
     expect(toastMocks.showSuccessToast).toHaveBeenCalledOnce();
     expect(toastMocks.showSuccessToast).toHaveBeenCalledWith('Removed 4 items');
   });
@@ -103,7 +121,7 @@ describe('useBulkRemoveEntities', () => {
     });
 
     await waitFor(() => {
-      expect(cancelSpy).toHaveBeenCalledTimes(13);
+      expect(cancelSpy).toHaveBeenCalledTimes(14);
     });
     expect(isBulkRemovalInProgress()).toBe(true);
     expect(fetchMock).not.toHaveBeenCalled();
@@ -234,6 +252,68 @@ describe('useBulkRemoveEntities', () => {
       ],
       failedItems: [{ id: 'failed-page', type: 'page' }],
     });
+    expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+  });
+
+  it('does not start a later request group after its identity retires', async () => {
+    let finishOwnedDelete: (() => void) | undefined;
+    const ownedDelete = new Promise<{ ok: boolean }>((resolve) => {
+      finishOwnedDelete = () => resolve({ ok: true });
+    });
+    fetchMock.mockImplementation((url: string) => {
+      if (url === '/api/pages/owned-page') return ownedDelete;
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+    });
+    const lifecycle = createIdentityLifecycle();
+    const wrapper = createIdentityWrapper(queryClient, lifecycle);
+    const { result } = renderHook(() => useBulkRemoveEntities(), { wrapper });
+
+    act(() => {
+      result.current.mutate({
+        pageIdsToDelete: ['owned-page'],
+        folderIdsToDelete: [],
+        pageIdsToLeave: ['shared-page'],
+        folderIdsToLeave: [],
+      });
+    });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    lifecycle.retire();
+    finishOwnedDelete?.();
+    await waitFor(() => expect(result.current.isError).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/pages/shared-page/leave', {
+      method: 'POST',
+    });
+  });
+
+  it('does not show completion feedback after retiring during final refresh', async () => {
+    fetchMock.mockResolvedValue({ ok: true });
+    let finishRefresh: (() => void) | undefined;
+    const refresh = new Promise<void>((resolve) => {
+      finishRefresh = resolve;
+    });
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockReturnValue(refresh);
+    const lifecycle = createIdentityLifecycle();
+    const { result } = renderHook(() => useBulkRemoveEntities(), {
+      wrapper: createIdentityWrapper(queryClient, lifecycle),
+    });
+
+    act(() => {
+      result.current.mutate({
+        pageIdsToDelete: ['owned-page'],
+        folderIdsToDelete: [],
+        pageIdsToLeave: [],
+        folderIdsToLeave: [],
+      });
+    });
+    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledTimes(14));
+
+    lifecycle.retire();
+    finishRefresh?.();
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
     expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
   });
 });

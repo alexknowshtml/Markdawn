@@ -37,6 +37,7 @@ export function PageActions({ pageId, page }: PageActionsProps) {
         <button
           type="button"
           onClick={handleToggleFavorite}
+          aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
           className={`p-2 rounded-md transition-colors cursor-pointer ${
             isFavorite
               ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
@@ -52,6 +53,7 @@ export function PageActions({ pageId, page }: PageActionsProps) {
             <button
               type="button"
               onClick={() => setIsShareDialogOpen(true)}
+              aria-label="Share page"
               data-testid="page-share-btn"
               className="p-2 rounded-md transition-colors cursor-pointer text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >

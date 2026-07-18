@@ -10,8 +10,9 @@ import {
   Home,
   LogOut,
 } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import { useIdentityLifecycle, useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useIsBulkRemovalPending } from '../../hooks/use-bulk-actions';
 import { useFavorites } from '../../hooks/use-favorites';
@@ -27,7 +28,7 @@ import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
 import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { useStableValueWhile } from '../../hooks/useStableValue';
-import { useEntityDeletion } from '../../utils/entity-actions';
+import { canRenameEntity, useEntityDeletion } from '../../utils/entity-actions';
 import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
 import { showErrorToast } from '../../utils/toast';
 import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../../utils/url';
@@ -54,23 +55,46 @@ const collectSharedNavigationFolderIds = (items: SharedNavigationItem[]): string
 };
 
 export function PageTree() {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
+  const identityLifecycle = useIdentityLifecycle();
   const params = useParams();
   const activePageId = params.slugAndId ? extractUuidFromSlug(params.slugAndId) : undefined;
   const { isAnonymous } = useShareContext();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
 
-  const { data: refreshedPages, isLoading: isPagesLoading, error: pagesError } = usePageTree();
+  const {
+    data: refreshedPages,
+    isLoading: isPagesLoading,
+    error: pagesError,
+    refetch: refetchPages,
+  } = usePageTree();
   const {
     data: refreshedFolders,
     isLoading: isFoldersLoading,
     error: foldersError,
+    refetch: refetchFolders,
   } = useFolderTree();
-  const { data: refreshedFavorites } = useFavorites();
-  const { data: refreshedRecentPages } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
-  const { data: refreshedSharedNavigation } = useSharedWithMeTree();
-  const { data: refreshedWorkspaceMemberships } = useWorkspaceMemberships();
+  const {
+    data: refreshedFavorites,
+    error: favoritesError,
+    refetch: refetchFavorites,
+  } = useFavorites();
+  const {
+    data: refreshedRecentPages,
+    error: recentsError,
+    refetch: refetchRecents,
+  } = useRecentPages(SIDEBAR_PREVIEW_LIMIT);
+  const {
+    data: refreshedSharedNavigation,
+    error: sharedNavigationError,
+    refetch: refetchSharedNavigation,
+  } = useSharedWithMeTree();
+  const {
+    data: refreshedWorkspaceMemberships,
+    error: workspaceMembershipsError,
+    refetch: refetchWorkspaceMemberships,
+  } = useWorkspaceMemberships();
   const leaveWorkspaceMutation = useLeaveWorkspace();
   const isBulkRemovalPending = useIsBulkRemovalPending();
   const pages = useStableValueWhile(refreshedPages, isBulkRemovalPending);
@@ -121,16 +145,18 @@ export function PageTree() {
   const handleCreateRootPage = useCallback(async () => {
     try {
       const newPage = await createPageMutation.mutateAsync({});
+      if (!identityLifecycle.isActive()) return;
       navigate(buildPagePath(newPage.title, newPage.id));
       setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
-  }, [navigate, createPageMutation]);
+  }, [navigate, createPageMutation, identityLifecycle]);
 
   const handleCreateRootFolder = useCallback(async () => {
     try {
       const folder = await createFolderMutation.mutateAsync({});
+      if (!identityLifecycle.isActive()) return;
       setExpandedFolderIds((prev) => {
         const next = new Set(prev);
         next.add(folder.id);
@@ -140,7 +166,7 @@ export function PageTree() {
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
-  }, [createFolderMutation]);
+  }, [createFolderMutation, identityLifecycle]);
 
   useEffect(() => {
     const onCreateNote = () => {
@@ -162,6 +188,18 @@ export function PageTree() {
 
   const pageById = useMemo(() => new Map((pages ?? []).map((page) => [page.id, page])), [pages]);
 
+  const sharedNavigationByKey = useMemo(() => {
+    const map = new Map<string, SharedNavigationItem>();
+    const walk = (items: SharedNavigationItem[]) => {
+      for (const item of items) {
+        map.set(`${item.entityType}:${item.id}`, item);
+        if (item.entityType === 'folder') walk(item.children);
+      }
+    };
+    walk(sharedNavigation ?? []);
+    return map;
+  }, [sharedNavigation]);
+
   const folderById = useMemo(() => {
     const map = new Map<string, FolderTreeNode>();
     const walk = (nodes: FolderTreeNode[] | undefined) => {
@@ -173,6 +211,74 @@ export function PageTree() {
     walk(folders);
     return map;
   }, [folders]);
+
+  const renamePageById = useMemo(
+    () => new Map((refreshedPages ?? []).map((page) => [page.id, page])),
+    [refreshedPages],
+  );
+  const renameFolderById = useMemo(() => {
+    const map = new Map<string, FolderTreeNode>();
+    const walk = (nodes: FolderTreeNode[] | undefined) => {
+      for (const folder of nodes ?? []) {
+        map.set(folder.id, folder);
+        walk(folder.children);
+      }
+    };
+    walk(refreshedFolders);
+    return map;
+  }, [refreshedFolders]);
+  const renameSharedNavigationByKey = useMemo(() => {
+    const map = new Map<string, SharedNavigationItem>();
+    const walk = (items: SharedNavigationItem[]) => {
+      for (const item of items) {
+        map.set(`${item.entityType}:${item.id}`, item);
+        if (item.entityType === 'folder') walk(item.children);
+      }
+    };
+    walk(refreshedSharedNavigation ?? []);
+    return map;
+  }, [refreshedSharedNavigation]);
+
+  const getRenameCapability = useCallback(
+    (kind: 'page' | 'folder', id: string): { exists: boolean; allowed: boolean } => {
+      const treeEntity = kind === 'page' ? renamePageById.get(id) : renameFolderById.get(id);
+      const sharedEntity = renameSharedNavigationByKey.get(`${kind}:${id}`);
+      const candidates = [
+        ...(treeEntity ? [{ ...treeEntity, type: kind }] : []),
+        ...(sharedEntity
+          ? [
+              {
+                type: kind,
+                ownerId: sharedEntity.ownerId,
+                createdBy: sharedEntity.createdBy,
+                userPermission: sharedEntity.userPermission,
+              },
+            ]
+          : []),
+      ];
+      return {
+        exists: candidates.length > 0,
+        // If two live navigation queries momentarily disagree during a
+        // downgrade, fail closed until both reflect rename access.
+        allowed:
+          candidates.length > 0 &&
+          candidates.every((candidate) => canRenameEntity(candidate, currentUserId)),
+      };
+    },
+    [currentUserId, renameFolderById, renamePageById, renameSharedNavigationByKey],
+  );
+
+  const editingCapability = editingTarget
+    ? getRenameCapability(editingTarget.kind, editingTarget.id)
+    : { exists: false, allowed: false };
+  const renameCapabilityRef = useRef(getRenameCapability);
+  renameCapabilityRef.current = getRenameCapability;
+
+  useEffect(() => {
+    if (editingTarget && editingCapability.exists && !editingCapability.allowed) {
+      setEditingTarget(null);
+    }
+  }, [editingCapability.allowed, editingCapability.exists, editingTarget]);
 
   const ownedFolders = useMemo(() => {
     const filterOwned = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
@@ -294,6 +400,7 @@ export function PageTree() {
   const handleCreatePageInFolder = async (folderId: string) => {
     try {
       const newPage = await createPageMutation.mutateAsync({ parentId: folderId });
+      if (!identityLifecycle.isActive()) return;
       navigate(buildPagePath(newPage.title, newPage.id));
       setExpandedFolderIds((prev) => {
         const next = new Set(prev);
@@ -319,6 +426,7 @@ export function PageTree() {
       },
       { force: false },
     );
+    if (!identityLifecycle.isActive()) return;
     if (isViewingDeletedPage) {
       navigate('/app');
     }
@@ -336,6 +444,7 @@ export function PageTree() {
 
     try {
       const newPage = await importMarkdownMutation.mutateAsync({ file });
+      if (!identityLifecycle.isActive()) return;
       navigate(buildPagePath(newPage.title, newPage.id));
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -359,15 +468,21 @@ export function PageTree() {
   };
 
   const beginRenameFolder = (folder: FolderTreeNode) => {
+    if (!canRenameEntity({ ...folder, type: 'folder' }, currentUserId)) return;
     setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
   };
 
   const beginRenamePage = (page: PageTreeNode) => {
+    if (!canRenameEntity({ ...page, type: 'page' }, currentUserId)) return;
     setEditingTarget({ kind: 'page', id: page.id, value: page.title });
   };
 
   const saveRename = () => {
     if (!editingTarget) {
+      return;
+    }
+    if (!renameCapabilityRef.current(editingTarget.kind, editingTarget.id).allowed) {
+      setEditingTarget(null);
       return;
     }
     const trimmed = editingTarget.value.trim();
@@ -402,7 +517,10 @@ export function PageTree() {
     const childFolders = foldersByParent.get(folder.id) ?? [];
     const childPages = pagesByFolder.get(folder.id) ?? [];
     const isExpanded = expandedFolderIds.has(folder.id);
-    const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === folder.id;
+    const isEditingFolder =
+      editingCapability.allowed &&
+      editingTarget?.kind === 'folder' &&
+      editingTarget.id === folder.id;
 
     return (
       <div key={`folder-${folder.id}`}>
@@ -439,7 +557,10 @@ export function PageTree() {
           <>
             {childFolders.map((childFolder) => renderFolderBranch(childFolder, depth + 1))}
             {childPages.map((page) => {
-              const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === page.id;
+              const isEditingPage =
+                editingCapability.allowed &&
+                editingTarget?.kind === 'page' &&
+                editingTarget.id === page.id;
               return (
                 <PageTreeRow
                   key={page.id}
@@ -472,7 +593,8 @@ export function PageTree() {
   };
 
   const renderWorkspacePage = (page: PageTreeNode, depth = 0, sourceIsAdmin = false): ReactNode => {
-    const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === page.id;
+    const isEditingPage =
+      editingCapability.allowed && editingTarget?.kind === 'page' && editingTarget.id === page.id;
     const canRename = page.userPermission === 'edit' || page.userPermission === 'admin';
     return (
       <PageTreeRow
@@ -514,7 +636,10 @@ export function PageTree() {
       (page) => page.ownerId === workspaceOwnerId && page.workspaceAccess === true,
     );
     const isExpanded = expandedFolderIds.has(folder.id);
-    const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === folder.id;
+    const isEditingFolder =
+      editingCapability.allowed &&
+      editingTarget?.kind === 'folder' &&
+      editingTarget.id === folder.id;
     const isAdmin = folder.userPermission === 'admin';
 
     return (
@@ -565,7 +690,10 @@ export function PageTree() {
   ): ReactNode => {
     if (item.entityType === 'folder') {
       const isExpanded = expandedFolderIds.has(item.id);
-      const isEditingFolder = editingTarget?.kind === 'folder' && editingTarget.id === item.id;
+      const isEditingFolder =
+        editingCapability.allowed &&
+        editingTarget?.kind === 'folder' &&
+        editingTarget.id === item.id;
       const canCreateChild = item.userPermission === 'admin';
       return (
         <div key={`shared-folder-${item.id}`}>
@@ -618,7 +746,8 @@ export function PageTree() {
       );
     }
 
-    const isEditingPage = editingTarget?.kind === 'page' && editingTarget.id === item.id;
+    const isEditingPage =
+      editingCapability.allowed && editingTarget?.kind === 'page' && editingTarget.id === item.id;
     return (
       <PageTreeRow
         key={`shared-page-${item.id}`}
@@ -643,7 +772,19 @@ export function PageTree() {
             shareSource: item.source,
           });
         }}
-        onRename={() => setEditingTarget({ kind: 'page', id: item.id, value: item.title })}
+        onRename={
+          canRenameEntity(
+            {
+              type: 'page',
+              ownerId: item.ownerId,
+              createdBy: item.createdBy,
+              userPermission: item.userPermission,
+            },
+            currentUserId,
+          )
+            ? () => setEditingTarget({ kind: 'page', id: item.id, value: item.title })
+            : undefined
+        }
         isEditing={isEditingPage}
         editTitle={isEditingPage ? editingTarget.value : item.title}
         onEditChange={(value) => setEditingTarget({ kind: 'page', id: item.id, value })}
@@ -696,10 +837,36 @@ export function PageTree() {
     );
   }
 
-  if (pagesError || foldersError) {
+  if (
+    pagesError ||
+    foldersError ||
+    favoritesError ||
+    recentsError ||
+    sharedNavigationError ||
+    workspaceMembershipsError
+  ) {
     return (
-      <div className="m-4 p-3 text-sm text-red-500 bg-zinc-100 dark:bg-zinc-800/50 rounded-md border border-red-200 dark:border-red-900/30">
-        Failed to load notes
+      <div
+        role="alert"
+        className="m-4 space-y-2 rounded-md border border-red-200 bg-zinc-100 p-3 text-sm text-red-500 dark:border-red-900/30 dark:bg-zinc-800/50"
+      >
+        <p>Failed to load navigation.</p>
+        <button
+          type="button"
+          onClick={() => {
+            void Promise.all([
+              refetchPages(),
+              refetchFolders(),
+              refetchFavorites(),
+              refetchRecents(),
+              refetchSharedNavigation(),
+              refetchWorkspaceMemberships(),
+            ]);
+          }}
+          className="rounded border border-red-200 px-2 py-1 text-xs hover:bg-red-50 dark:border-red-900/40 dark:hover:bg-red-950/30 cursor-pointer"
+        >
+          Retry
+        </button>
       </div>
     );
   }
@@ -795,8 +962,18 @@ export function PageTree() {
                   const isFolder = fav.entityType === 'folder';
                   const favPage = isFolder ? undefined : pageById.get(fav.entityId);
                   const favFolder = isFolder ? folderById.get(fav.entityId) : undefined;
+                  const sharedItem = sharedNavigationByKey.get(`${fav.entityType}:${fav.entityId}`);
+                  const shareSource =
+                    sharedItem?.source ??
+                    (favPage?.workspaceAccess === true || favFolder?.workspaceAccess === true
+                      ? 'workspace'
+                      : undefined);
                   const childFolders = favFolder?.children.length ?? 0;
                   const childPages = pagesByFolder.get(fav.entityId)?.length ?? 0;
+                  const isEditing =
+                    editingCapability.allowed &&
+                    editingTarget?.kind === fav.entityType &&
+                    editingTarget.id === fav.entityId;
                   return (
                     <PageTreeRow
                       key={`${fav.entityType}-${fav.entityId}`}
@@ -806,6 +983,7 @@ export function PageTree() {
                       ownerId={fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId ?? null}
                       createdBy={favPage?.createdBy ?? favFolder?.createdBy ?? null}
                       userPermission={favPage?.userPermission ?? favFolder?.userPermission ?? null}
+                      {...(shareSource ? { shareSource } : {})}
                       canMove={
                         (fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId) === currentUserId
                       }
@@ -831,6 +1009,13 @@ export function PageTree() {
                             ? () => beginRenameFolder(favFolder)
                             : undefined
                       }
+                      isEditing={isEditing}
+                      editTitle={isEditing ? editingTarget.value : fav.title}
+                      onEditChange={(value) =>
+                        setEditingTarget({ kind: fav.entityType, id: fav.entityId, value })
+                      }
+                      onEditSave={saveRename}
+                      onEditKeyDown={onRenameKeyDown}
                     />
                   );
                 })}
@@ -858,6 +1043,14 @@ export function PageTree() {
               <div className="space-y-0.5">
                 {visibleRecentPages.map((page) => {
                   const treePage = pageById.get(page.id);
+                  const sharedItem = sharedNavigationByKey.get(`page:${page.id}`);
+                  const shareSource =
+                    sharedItem?.source ??
+                    (treePage?.workspaceAccess === true ? 'workspace' : undefined);
+                  const isEditing =
+                    editingCapability.allowed &&
+                    editingTarget?.kind === 'page' &&
+                    editingTarget.id === page.id;
                   return (
                     <PageTreeRow
                       key={page.id}
@@ -867,11 +1060,19 @@ export function PageTree() {
                       ownerId={page.ownerId}
                       createdBy={page.createdBy}
                       userPermission={treePage?.userPermission ?? null}
+                      {...(shareSource ? { shareSource } : {})}
                       canMove={page.ownerId === currentUserId}
                       isActive={activePageId === page.id}
                       isFavorite={isFavoriteEntity('page', page.id)}
                       onDelete={() => handleDeletePage(page.id)}
                       onRename={treePage ? () => beginRenamePage(treePage) : undefined}
+                      isEditing={isEditing}
+                      editTitle={isEditing ? editingTarget.value : page.title}
+                      onEditChange={(value) =>
+                        setEditingTarget({ kind: 'page', id: page.id, value })
+                      }
+                      onEditSave={saveRename}
+                      onEditKeyDown={onRenameKeyDown}
                     />
                   );
                 })}
@@ -989,7 +1190,9 @@ export function PageTree() {
               {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
               {rootPages.map((page) => {
                 const isEditingPage =
-                  editingTarget?.kind === 'page' && editingTarget.id === page.id;
+                  editingCapability.allowed &&
+                  editingTarget?.kind === 'page' &&
+                  editingTarget.id === page.id;
                 return (
                   <PageTreeRow
                     key={page.id}

@@ -3,7 +3,7 @@ import clsx from 'clsx';
 import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { buildPagePath } from '../../utils/url';
 import { PageContextMenu } from '../ui/PageContextMenu';
 
@@ -64,7 +64,7 @@ export function PageTreeRow({
   isDragTarget = false,
   isFolder = false,
 }: PageTreeRowProps) {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
 
@@ -108,6 +108,7 @@ export function PageTreeRow({
       onClick={handleNavigate}
       onKeyDown={(e) => {
         if (isEditing) return;
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           handleNavigate();
@@ -175,7 +176,7 @@ export function PageTreeRow({
             'absolute right-1 z-20 flex items-center gap-0.5 transition-opacity',
             isMenuOpen
               ? 'opacity-100 pointer-events-auto'
-              : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto',
+              : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-focus-within:opacity-100 group-focus-within:pointer-events-auto',
           )}
         >
           {onCreateChild && (

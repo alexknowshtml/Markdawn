@@ -1,6 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
+import { consumeSelfLeave } from './leave-page';
 
 const toastMocks = vi.hoisted(() => ({
   showSuccessToast: vi.fn(),
@@ -12,7 +13,24 @@ vi.mock('./toast', () => ({
   showInfoToast: vi.fn(),
 }));
 
-import { useBulkLeaveEntities, useEntityDeletion } from './entity-actions';
+import { canRenameEntity, useBulkLeaveEntities, useEntityDeletion } from './entity-actions';
+
+describe('canRenameEntity', () => {
+  it.each([
+    ['owner page', { type: 'page' as const, ownerId: 'user-1' }, true],
+    ['owner folder', { type: 'folder' as const, ownerId: 'user-1' }, true],
+    ['editable page', { type: 'page' as const, userPermission: 'edit' as const }, true],
+    ['editable folder', { type: 'folder' as const, userPermission: 'edit' as const }, false],
+    ['admin folder', { type: 'folder' as const, userPermission: 'admin' as const }, true],
+    ['view-only page', { type: 'page' as const, userPermission: 'view' as const }, false],
+  ])('%s has the expected rename capability', (_label, entity, expected) => {
+    expect(canRenameEntity(entity, 'user-1')).toBe(expected);
+  });
+
+  it('fails closed when no current user is resolved', () => {
+    expect(canRenameEntity({ type: 'page', userPermission: 'admin' }, undefined)).toBe(false);
+  });
+});
 
 describe('useBulkLeaveEntities', () => {
   let queryClient: ReturnType<typeof createTestQueryClient>;
@@ -116,6 +134,29 @@ describe('useBulkLeaveEntities', () => {
       result.current.handleDelete({ id: 'page-1', type: 'page', ownerId: 'owner-1' }),
     ).rejects.toThrow('Invalid delete page response');
     expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
+  });
+
+  it('clears self-leave coordination when a direct page leave fails', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: false,
+      json: () => Promise.resolve({ message: 'Leave failed' }),
+    });
+    const { result } = renderHook(
+      () => useEntityDeletion({ entityType: 'page', currentUserId: 'user-1' }),
+      { wrapper: createWrapper(queryClient) },
+    );
+
+    await expect(
+      result.current.handleDelete({
+        id: 'shared-page',
+        type: 'page',
+        ownerId: 'owner-1',
+        userPermission: 'view',
+        shareSource: 'direct',
+      }),
+    ).rejects.toThrow('Leave failed');
+
+    expect(consumeSelfLeave('shared-page')).toBe(false);
   });
 
   it('refreshes navigation after some leave requests succeed and another fails', async () => {

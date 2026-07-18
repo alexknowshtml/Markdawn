@@ -1,5 +1,6 @@
 import type { ShareEntityType } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 
 const API_BASE = '/api';
@@ -48,10 +49,11 @@ async function removeFavorite(entityType: ShareEntityType, entityId: string): Pr
   }
 }
 
-export function useFavorites() {
+export function useFavorites({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['favorites'],
     queryFn: () => fetchFavorites(),
+    enabled,
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
     refetchOnReconnect: () => !isBulkRemovalInProgress(),
@@ -70,6 +72,7 @@ type ToggleFavoriteVariables = {
 
 export function useToggleFavorite() {
   const queryClient = useQueryClient();
+  const identityLifecycle = useIdentityLifecycle();
 
   return useMutation({
     mutationFn: async ({
@@ -78,6 +81,9 @@ export function useToggleFavorite() {
       pageId,
       isFavorite,
     }: ToggleFavoriteVariables) => {
+      if (!identityLifecycle.isActive()) {
+        throw new Error('Identity retired before favorite update');
+      }
       const id = entityId ?? pageId;
       if (!id) {
         throw new Error('entityId is required');
@@ -101,6 +107,9 @@ export function useToggleFavorite() {
       if (!id) return { previousFavorites: undefined };
 
       await queryClient.cancelQueries({ queryKey: ['favorites'] });
+      if (!identityLifecycle.isActive()) {
+        throw new Error('Identity retired during favorite update');
+      }
       const previousFavorites = queryClient.getQueryData<Favorite[]>(['favorites']);
       const key = `${entityType}:${id}`;
       queryClient.setQueryData<Favorite[]>(['favorites'], (old) => {

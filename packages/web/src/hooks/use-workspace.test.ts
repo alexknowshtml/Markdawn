@@ -55,6 +55,7 @@ describe('useLeaveWorkspace', () => {
       ['folderTree'],
       ['pages', 'recent'],
       ['favorites'],
+      ['tags'],
     ]) {
       expect(invalidateSpy).toHaveBeenCalledWith({ queryKey });
     }

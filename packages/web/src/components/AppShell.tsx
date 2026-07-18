@@ -112,7 +112,7 @@ export function AppShell() {
         </>
       )}
 
-      {isMobileMenuOpen && (
+      {!isAnonymous && isMobileMenuOpen && (
         <div className="md:hidden fixed inset-0 z-50 flex">
           <button
             type="button"
@@ -139,23 +139,25 @@ export function AppShell() {
       )}
 
       <main className="flex min-w-0 flex-1 flex-col h-full overflow-hidden relative">
-        <div className="md:hidden flex items-center h-14 px-4 border-b border-zinc-200/50 dark:border-zinc-800/50 bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xl flex-shrink-0 z-10 sticky top-0">
-          <button
-            type="button"
-            onClick={() => setIsMobileMenuOpen(true)}
-            className="p-2 -ml-2 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
-            aria-label="Open menu"
-          >
-            <Menu size={20} />
-          </button>
-        </div>
+        {!isAnonymous && (
+          <div className="md:hidden flex items-center h-14 px-4 border-b border-zinc-200/50 dark:border-zinc-800/50 bg-white/70 dark:bg-zinc-950/70 backdrop-blur-xl flex-shrink-0 z-10 sticky top-0">
+            <button
+              type="button"
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="p-2 -ml-2 text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 rounded-xl hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors cursor-pointer"
+              aria-label="Open menu"
+            >
+              <Menu size={20} />
+            </button>
+          </div>
+        )}
 
         <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto scroll-smooth pb-8">
           <div className="mx-auto min-h-full w-full min-w-0 max-w-4xl p-6 md:p-12 animate-fade-in">
             <Outlet />
           </div>
         </div>
-        <CommandPalette />
+        {!isAnonymous && <CommandPalette />}
       </main>
     </div>
   );

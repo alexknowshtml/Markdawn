@@ -40,6 +40,60 @@ async function deleteFolder(folderId: string, force?: boolean): Promise<void> {
   }
 }
 
+async function fetchTrashFolders(): Promise<Folder[]> {
+  const res = await fetch(`${API_BASE}/folders/trash`);
+  if (!res.ok) {
+    throw new Error('Failed to fetch trash folders');
+  }
+  return res.json();
+}
+
+export type RestoreFolderResult = Folder & {
+  restoredFolders: number;
+  restoredPages: number;
+};
+
+export type DeleteFolderTrashResult = {
+  deleted: true;
+  folders: number;
+  pages: number;
+};
+
+async function restoreFolder(folderId: string): Promise<RestoreFolderResult> {
+  const res = await fetch(`${API_BASE}/folders/${folderId}/restore`, {
+    method: 'PATCH',
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to restore folder' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
+async function permanentDeleteFolder(folderId: string): Promise<DeleteFolderTrashResult> {
+  const res = await fetch(`${API_BASE}/folders/${folderId}/permanent`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const error = await res
+      .json()
+      .catch(() => ({ message: 'Failed to permanently delete folder' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
+async function emptyFolderTrash(): Promise<DeleteFolderTrashResult> {
+  const res = await fetch(`${API_BASE}/folders/trash/empty-all`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({ message: 'Failed to empty folder trash' }));
+    throw new Error(error.message);
+  }
+  return res.json();
+}
+
 export type DeleteFolderResponse = {
   requiresForce?: boolean;
   childFolders?: number;
@@ -64,10 +118,11 @@ async function updateFolder(
   return res.json();
 }
 
-export function useFolderTree() {
+export function useFolderTree({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['folderTree'],
     queryFn: () => fetchFolderTree(),
+    enabled,
     staleTime: 0,
     refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
     refetchOnReconnect: () => !isBulkRemovalInProgress(),
@@ -95,8 +150,72 @@ export function useDeleteFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       showSuccessToast('Moved to trash');
     },
+  });
+}
+
+export function useTrashFolders() {
+  return useQuery({
+    queryKey: ['trashFolders'],
+    queryFn: () => fetchTrashFolders(),
+    refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
+    refetchOnReconnect: () => !isBulkRemovalInProgress(),
+  });
+}
+
+export function useRestoreFolder() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (folderId: string) => restoreFolder(folderId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      showSuccessToast('Folder restored');
+    },
+    meta: { errorMessage: 'Failed to restore folder' },
+  });
+}
+
+export function usePermanentDeleteFolder() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (folderId: string) => permanentDeleteFolder(folderId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      showSuccessToast('Folder permanently deleted');
+    },
+    meta: { errorMessage: 'Failed to permanently delete folder' },
+  });
+}
+
+export function useEmptyFolderTrash({ silent = false }: { silent?: boolean } = {}) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => emptyFolderTrash(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
+      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      if (!silent) {
+        showSuccessToast('Trash emptied');
+      }
+    },
+    meta: { errorMessage: 'Failed to empty trash' },
   });
 }
 
@@ -110,9 +229,12 @@ export function useUpdateFolder() {
       folderId: string;
       updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string };
     }) => updateFolder(folderId, updates),
-    onSuccess: () => {
+    onSuccess: (_folder, { folderId }) => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail', folderId] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
       showSuccessToast('Folder updated');
     },
   });

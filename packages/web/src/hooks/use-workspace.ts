@@ -46,10 +46,11 @@ async function fetchWorkspaceMemberships(): Promise<WorkspaceMembership[]> {
   return res.json();
 }
 
-export function useWorkspaceMemberships() {
+export function useWorkspaceMemberships({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['workspace-memberships'],
     queryFn: fetchWorkspaceMemberships,
+    enabled,
     staleTime: 1000 * 60,
     refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
     refetchOnReconnect: () => !isBulkRemovalInProgress(),
@@ -64,9 +65,12 @@ export const WORKSPACE_ACCESS_QUERY_KEYS = [
   ['folderTree'],
   ['pages', 'recent'],
   ['favorites'],
+  ['tags'],
   ['shares'],
   ['pageCollaborators'],
   ['folderCollaborators'],
+  ['pages', 'detail'],
+  ['folders', 'detail'],
 ] as const;
 
 export function invalidateWorkspaceAccessQueries(queryClient: QueryClient): void {

@@ -1,4 +1,5 @@
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { beginBulkRemoval } from '../utils/bulkRemovalState';
 import { leaveEntity, useBulkLeaveEntities } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
@@ -74,12 +75,16 @@ const BULK_REMOVAL_QUERY_KEYS = [
   ['pages', 'detail'],
   ['folders', 'detail'],
   ['favorites'],
+  ['tags'],
   ['shares'],
   ['pageCollaborators'],
   ['folderCollaborators'],
 ] as const;
 
-async function removeEntities(input: BulkRemovalInput): Promise<BulkRemovalResult> {
+async function removeEntities(
+  input: BulkRemovalInput,
+  isIdentityActive: () => boolean,
+): Promise<BulkRemovalResult> {
   const operationGroups: BulkRemovalOperation[][] = [
     input.pageIdsToDelete.map((id) => ({ id, type: 'page', run: () => deletePage(id) })),
     input.folderIdsToDelete.map((id) => ({ id, type: 'folder', run: () => deleteFolder(id) })),
@@ -95,6 +100,10 @@ async function removeEntities(input: BulkRemovalInput): Promise<BulkRemovalResul
   // Preserve the existing per-entity-type request concurrency while delaying
   // all cache refreshes and user feedback until every group has settled.
   for (const operations of operationGroups) {
+    // Each fetch captures the browser's cookie when it starts. Do not let a
+    // mixed bulk operation begin a later request group after another identity
+    // has taken over the tab.
+    if (!isIdentityActive()) throw new Error('Identity retired during bulk removal');
     const settled = await Promise.allSettled(operations.map((operation) => operation.run()));
     settled.forEach((operationResult, index) => {
       const operation = operations[index];
@@ -115,9 +124,10 @@ export function useIsBulkRemovalPending(): boolean {
 
 export function useBulkRemoveEntities() {
   const queryClient = useQueryClient();
+  const identityLifecycle = useIdentityLifecycle();
   return useMutation({
     mutationKey: BULK_REMOVAL_MUTATION_KEY,
-    mutationFn: removeEntities,
+    mutationFn: (input: BulkRemovalInput) => removeEntities(input, identityLifecycle.isActive),
     onMutate: async () => {
       const endBulkRemoval = beginBulkRemoval();
       try {
@@ -135,6 +145,7 @@ export function useBulkRemoveEntities() {
         await Promise.all(
           BULK_REMOVAL_QUERY_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
         );
+        if (!identityLifecycle.isActive()) return;
         if (result) {
           const removedCount = result.removedItems.length;
           const suffix = removedCount === 1 ? 'item' : 'items';

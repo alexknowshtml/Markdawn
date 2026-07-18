@@ -16,7 +16,7 @@ const ROLE_LABELS = { viewer: 'Viewer', editor: 'Editor', admin: 'Admin' } as co
 export function WorkspaceMembersPanel() {
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
-  const { data: members, isLoading } = useWorkspaceMembers();
+  const { data: members, isLoading, error, refetch } = useWorkspaceMembers();
   const inviteMutation = useInviteToWorkspace();
   const changeRoleMutation = useChangeMemberRole();
   const removeMemberMutation = useRemoveWorkspaceMember();
@@ -33,6 +33,29 @@ export function WorkspaceMembersPanel() {
 
   if (isLoading) {
     return <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading members...</p>;
+  }
+
+  if (error && !members) {
+    return (
+      <div
+        role="alert"
+        className="rounded-xl border border-red-200 bg-red-50 p-4 dark:border-red-900/40 dark:bg-red-950/20"
+      >
+        <p className="text-sm font-medium text-red-700 dark:text-red-300">
+          Workspace members couldn&apos;t be loaded.
+        </p>
+        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+          No membership changes have been made.
+        </p>
+        <button
+          type="button"
+          onClick={() => void refetch()}
+          className="mt-3 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-900/50 dark:text-red-300 dark:hover:bg-red-950/40 cursor-pointer"
+        >
+          Retry
+        </button>
+      </div>
+    );
   }
 
   const memberList = members ?? [];

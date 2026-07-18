@@ -28,6 +28,12 @@ export function markSelfLeave(pageId: string): void {
   selfLeaveTimestamp = Date.now();
 }
 
+/** Clear identity-scoped leave coordination when the active user changes. */
+export function resetSelfLeaveState(): void {
+  selfLeavePageId = null;
+  selfLeaveTimestamp = 0;
+}
+
 /**
  * Check whether a revoke event was self-initiated.
  * Returns true once per self-leave (consumes the flag).
@@ -35,8 +41,7 @@ export function markSelfLeave(pageId: string): void {
  */
 export function consumeSelfLeave(pageId: string): boolean {
   if (selfLeavePageId === pageId && Date.now() - selfLeaveTimestamp < SELF_LEAVE_WINDOW_MS) {
-    selfLeavePageId = null;
-    selfLeaveTimestamp = 0;
+    resetSelfLeaveState();
     return true;
   }
   return false;

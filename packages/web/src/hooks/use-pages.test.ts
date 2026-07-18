@@ -394,6 +394,7 @@ describe('useRestorePage', () => {
   });
 
   it('restores a trashed page', async () => {
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     fetchMock.mockResolvedValueOnce({
       ok: true,
       json: () => Promise.resolve({ id: 'p1', title: 'Restored' }),
@@ -413,6 +414,7 @@ describe('useRestorePage', () => {
       '/api/pages/p1/restore',
       expect.objectContaining({ method: 'PATCH' }),
     );
+    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['favorites'] });
   });
 });
 

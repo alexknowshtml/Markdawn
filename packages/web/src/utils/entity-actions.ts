@@ -1,6 +1,6 @@
 import type { ShareEntityType, SharePermission } from '@markdawn/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { markSelfLeave } from './leave-page';
+import { consumeSelfLeave, markSelfLeave } from './leave-page';
 import { showSuccessToast } from './toast';
 
 const API_BASE = '/api';
@@ -65,8 +65,20 @@ export interface OwnedEntity {
   createdBy?: string | null | undefined;
 }
 
+export interface RenameableEntity extends OwnedEntity {
+  type: ShareEntityType;
+  userPermission?: SharePermission | null | undefined;
+}
+
 export function isOwnedByUser(entity: OwnedEntity, userId: string): boolean {
   return (entity.ownerId ?? entity.createdBy) === userId;
+}
+
+/** Pages can be renamed by editors; folders require administrative access. */
+export function canRenameEntity(entity: RenameableEntity, userId?: string): boolean {
+  if (!userId) return false;
+  const isAdmin = isOwnedByUser(entity, userId) || entity.userPermission === 'admin';
+  return entity.type === 'page' ? isAdmin || entity.userPermission === 'edit' : isAdmin;
 }
 
 /**
@@ -222,7 +234,12 @@ export function useEntityDeletion({
     if (entity.type === 'page') {
       markSelfLeave(entity.id);
     }
-    await leaveMutation.mutateAsync(entity.id);
+    try {
+      await leaveMutation.mutateAsync(entity.id);
+    } catch (error) {
+      if (entity.type === 'page') consumeSelfLeave(entity.id);
+      throw error;
+    }
     return { deleted: true as const };
   };
 

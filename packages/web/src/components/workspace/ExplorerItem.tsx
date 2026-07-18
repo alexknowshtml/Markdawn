@@ -1,4 +1,4 @@
-import type { EntityAccessor, SharePermission } from '@markdawn/shared';
+import type { CollaboratorDisplay, SharePermission } from '@markdawn/shared';
 import clsx from 'clsx';
 import { Check, FileText, Folder } from 'lucide-react';
 import type React from 'react';
@@ -22,7 +22,7 @@ export interface ExplorerItemData {
   shareSource?: 'direct' | 'link' | 'workspace' | undefined;
   canMove?: boolean | undefined;
   activityAt?: string | Date | undefined;
-  collaborators?: EntityAccessor[];
+  collaborators?: CollaboratorDisplay[];
 }
 
 interface ExplorerItemProps {
@@ -38,7 +38,7 @@ interface ExplorerItemProps {
   onEditChange?: (value: string) => void;
   onEditSave?: () => void;
   onEditKeyDown?: (e: React.KeyboardEvent) => void;
-  collaborators?: EntityAccessor[];
+  collaborators?: CollaboratorDisplay[];
   canSelect?: boolean;
   showCheckboxes?: boolean;
   showContextMenu?: boolean;
@@ -105,6 +105,7 @@ export function ExplorerItem({
         onMouseLeave={() => setIsHovered(false)}
         onKeyDown={(e) => {
           if (isEditing) return;
+          if (e.target !== e.currentTarget) return;
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault();
             handleClick(e);
@@ -173,7 +174,7 @@ export function ExplorerItem({
             <PageContextMenu
               item={item}
               isFavorite={isFavorite}
-              triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+              triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
               onRename={onRename}
             />
           </div>
@@ -197,6 +198,7 @@ export function ExplorerItem({
       onClick={handleClick}
       onKeyDown={(e) => {
         if (isEditing) return;
+        if (e.target !== e.currentTarget) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
           handleClick(e);
@@ -225,7 +227,7 @@ export function ExplorerItem({
           <PageContextMenu
             item={item}
             isFavorite={isFavorite}
-            triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 cursor-pointer"
+            triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
             onRename={onRename}
           />
         </div>

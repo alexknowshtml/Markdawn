@@ -161,20 +161,22 @@ function updatePageInTree(
   return changed ? next : nodes;
 }
 
-export function usePageTree() {
+export function usePageTree({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['pageTree'],
     queryFn: () => fetchPageTree(),
+    enabled,
     staleTime: 0,
     refetchOnWindowFocus: () => !isBulkRemovalInProgress(),
     refetchOnReconnect: () => !isBulkRemovalInProgress(),
   });
 }
 
-export function useRecentPages(limit = 8) {
+export function useRecentPages(limit = 8, { enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['pages', 'recent', limit],
     queryFn: () => fetchRecentPages(limit),
+    enabled,
     staleTime: 0,
     refetchOnWindowFocus: false,
     refetchOnReconnect: () => !isBulkRemovalInProgress(),
@@ -214,6 +216,9 @@ export function useUpdatePage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
+      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      queryClient.invalidateQueries({ queryKey: ['shares'] });
       if (!silent) {
         showSuccessToast('Page updated');
       }
@@ -254,6 +259,7 @@ export function useRestorePage() {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+      queryClient.invalidateQueries({ queryKey: ['favorites'] });
       showSuccessToast('Page restored');
     },
     meta: { errorMessage: 'Failed to restore page' },
@@ -274,7 +280,7 @@ export function usePermanentDeletePage() {
   });
 }
 
-export function useEmptyTrash() {
+export function useEmptyTrash({ silent = false }: { silent?: boolean } = {}) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => emptyTrash(),
@@ -282,7 +288,9 @@ export function useEmptyTrash() {
       queryClient.invalidateQueries({ queryKey: ['trashPages'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      showSuccessToast('Trash emptied');
+      if (!silent) {
+        showSuccessToast('Trash emptied');
+      }
     },
     meta: { errorMessage: 'Failed to empty trash' },
   });
@@ -322,8 +330,8 @@ export function useImportMarkdown() {
   });
 }
 
-export function usePages() {
-  const query = usePageTree();
+export function usePages({ enabled = true }: { enabled?: boolean } = {}) {
+  const query = usePageTree({ enabled });
   const pages = useMemo(() => {
     const result: Page[] = [];
     const walk = (nodes: PageTreeNode[] | undefined) => {

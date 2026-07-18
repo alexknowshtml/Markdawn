@@ -1,6 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
-import { AppProviders } from './components/AppProviders';
 import { AppShell } from './components/AppShell';
+import { AuthIdentityBoundary } from './components/auth/AuthIdentityBoundary';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { ShareablePageRoute } from './components/auth/ShareablePageRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -18,54 +18,50 @@ function App() {
     <ErrorBoundary>
       <div className="bg-white dark:bg-zinc-950 min-h-screen text-zinc-900 dark:text-zinc-50">
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<Login />} />
+          <AuthIdentityBoundary>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/login" element={<Login />} />
 
-            <Route
-              path="/app"
-              element={
-                <ProtectedRoute>
-                  <AppProviders>
+              <Route
+                path="/app"
+                element={
+                  <ProtectedRoute>
                     <AppShell />
-                  </AppProviders>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path="settings" element={<Settings />} />
-              <Route path="trash" element={<Trash />} />
-              <Route path="shared-with-me" element={<SharedWithMe />} />
-            </Route>
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="trash" element={<Trash />} />
+                <Route path="shared-with-me" element={<SharedWithMe />} />
+              </Route>
 
-            <Route
-              path="/app/:slugAndId"
-              element={
-                <ShareablePageRoute entityType="page">
-                  <AppProviders>
+              <Route
+                path="/app/:slugAndId"
+                element={
+                  <ShareablePageRoute entityType="page">
                     <AppShell />
-                  </AppProviders>
-                </ShareablePageRoute>
-              }
-            >
-              <Route index element={<PageEntry />} />
-            </Route>
+                  </ShareablePageRoute>
+                }
+              >
+                <Route index element={<PageEntry />} />
+              </Route>
 
-            <Route
-              path="/app/folder/:slugAndId"
-              element={
-                <ShareablePageRoute entityType="folder">
-                  <AppProviders>
+              <Route
+                path="/app/folder/:slugAndId"
+                element={
+                  <ShareablePageRoute entityType="folder">
                     <AppShell />
-                  </AppProviders>
-                </ShareablePageRoute>
-              }
-            >
-              <Route index element={<FolderEntry />} />
-            </Route>
+                  </ShareablePageRoute>
+                }
+              >
+                <Route index element={<FolderEntry />} />
+              </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </AuthIdentityBoundary>
         </BrowserRouter>
       </div>
     </ErrorBoundary>

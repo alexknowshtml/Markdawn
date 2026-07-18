@@ -1,4 +1,4 @@
-import type { FolderTreeNode, SharedWithMeItem } from '@markdawn/shared';
+import type { CollaboratorDisplay, FolderTreeNode, SharedWithMeItem } from '@markdawn/shared';
 import {
   ChevronDown,
   ChevronRight,
@@ -10,11 +10,12 @@ import {
   List,
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { ExplorerItem, type ExplorerItemData } from '../components/workspace/ExplorerItem';
 import { MoveDialog } from '../components/workspace/MoveDialog';
 import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
 import { useClipboard } from '../contexts/ClipboardContext';
+import { useIdentityLifecycle, useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useSelection } from '../contexts/SelectionContext';
 import {
   BulkRemovalError,
@@ -32,7 +33,7 @@ import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
 import { useStableValueWhile } from '../hooks/useStableValue';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
-import { preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
+import { canRenameEntity, preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
 import { hasInitialQueryError } from '../utils/queryState';
 import { showSuccessToast } from '../utils/toast';
@@ -82,7 +83,8 @@ const sharedItemToExplorerItem = (item: SharedWithMeItem): DashboardItem => ({
 });
 
 export default function HomeView() {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
+  const identityLifecycle = useIdentityLifecycle();
   const [searchParams, setSearchParams] = useSearchParams();
   const activeFilter = normalizeFilter(searchParams.get('filter'));
 
@@ -104,8 +106,12 @@ export default function HomeView() {
     error: sharedError,
     refetch: refetchSharedWithMe,
   } = useSharedWithMe();
-  const { data: workspaceMemberships } = useWorkspaceMemberships();
-  const { data: favorites } = useFavorites();
+  const {
+    data: workspaceMemberships,
+    error: workspaceMembershipsError,
+    refetch: refetchWorkspaceMemberships,
+  } = useWorkspaceMemberships();
+  const { data: favorites, error: favoritesError, refetch: refetchFavorites } = useFavorites();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
 
@@ -139,8 +145,13 @@ export default function HomeView() {
 
   const filterOutSelf = useMemo(
     () =>
-      <T extends { userId?: string }>(collaborators: T[]): T[] =>
-        currentUserId ? collaborators.filter((c) => c.userId !== currentUserId) : collaborators,
+      (collaborators: CollaboratorDisplay[]): CollaboratorDisplay[] =>
+        currentUserId
+          ? collaborators.filter(
+              (collaborator) =>
+                !('userId' in collaborator) || collaborator.userId !== currentUserId,
+            )
+          : collaborators,
     [currentUserId],
   );
 
@@ -336,6 +347,20 @@ export default function HomeView() {
     [filteredBaseItems, collaboratorsMap, folderCollaboratorsMap],
   );
   const allItems = useStableValueWhile(refreshedItems, bulkRemoveMutation.isPending);
+  const editingItem = editingTarget
+    ? refreshedItems.find(
+        (item) => item.type === editingTarget.kind && item.id === editingTarget.id,
+      )
+    : undefined;
+  const canRenameEditingTarget = editingItem ? canRenameEntity(editingItem, currentUserId) : false;
+  const renameCapabilityRef = useRef({ items: refreshedItems, currentUserId });
+  renameCapabilityRef.current = { items: refreshedItems, currentUserId };
+
+  useEffect(() => {
+    if (editingTarget && editingItem && !canRenameEditingTarget) {
+      setEditingTarget(null);
+    }
+  }, [canRenameEditingTarget, editingItem, editingTarget]);
 
   const hasSelection = selection.selectedCount > 0;
 
@@ -356,6 +381,7 @@ export default function HomeView() {
   const handleCreateFolder = async () => {
     try {
       const folder = await createFolderMutation.mutateAsync({});
+      if (!identityLifecycle.isActive()) return;
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -385,11 +411,24 @@ export default function HomeView() {
   };
 
   const handleRenameItem = (item: ExplorerItemData) => {
-    setEditingTarget({ kind: item.type, id: item.id, value: item.title });
+    const { items, currentUserId: latestUserId } = renameCapabilityRef.current;
+    const currentItem = items.find(
+      (candidate) => candidate.type === item.type && candidate.id === item.id,
+    );
+    if (!currentItem || !canRenameEntity(currentItem, latestUserId)) return;
+    setEditingTarget({ kind: currentItem.type, id: currentItem.id, value: currentItem.title });
   };
 
   const handleSaveRename = () => {
     if (!editingTarget) return;
+    const { items, currentUserId: latestUserId } = renameCapabilityRef.current;
+    const currentItem = items.find(
+      (item) => item.type === editingTarget.kind && item.id === editingTarget.id,
+    );
+    if (!currentItem || !canRenameEntity(currentItem, latestUserId)) {
+      setEditingTarget(null);
+      return;
+    }
     const trimmed = editingTarget.value.trim();
     const onSettled = () => setEditingTarget(null);
     if (editingTarget.kind === 'folder') {
@@ -471,8 +510,10 @@ export default function HomeView() {
           .filter((item) => item.type === 'folder' && canLeaveItem(item))
           .map((item) => item.id),
       });
+      if (!identityLifecycle.isActive()) return;
       for (const item of result.removedItems) selection.deselect(item.id);
     } catch (error) {
+      if (!identityLifecycle.isActive()) return;
       if (!(error instanceof BulkRemovalError)) throw error;
       // The mutation cache reports the aggregate failure. At this UI boundary,
       // only successful removals are deselected so failed items remain retryable.
@@ -506,11 +547,13 @@ export default function HomeView() {
           pageIds: pageIdsToMove,
           parentId: targetFolderId,
         });
+      if (!identityLifecycle.isActive()) return;
       if (folderIdsToMove.length > 0)
         await bulkMoveFoldersMutation.mutateAsync({
           folderIds: folderIdsToMove,
           parentId: targetFolderId,
         });
+      if (!identityLifecycle.isActive()) return;
       selection.clear();
       setMoveDialogOpen(false);
     } catch {
@@ -525,6 +568,7 @@ export default function HomeView() {
     try {
       if (clipboard.state.action === 'copy') {
         for (const item of clipboard.state.items) {
+          if (!identityLifecycle.isActive()) return;
           if (item.type === 'page') {
             await copyPageMutation.mutateAsync({
               pageId: item.id,
@@ -536,6 +580,7 @@ export default function HomeView() {
               parentId: currentParentId,
             });
           }
+          if (!identityLifecycle.isActive()) return;
         }
         showSuccessToast('Pasted');
       } else if (clipboard.state.action === 'cut') {
@@ -550,11 +595,13 @@ export default function HomeView() {
             pageIds: pageIdsToMove,
             parentId: currentParentId,
           });
+        if (!identityLifecycle.isActive()) return;
         if (folderIdsToMove.length > 0)
           await bulkMoveFoldersMutation.mutateAsync({
             folderIds: folderIdsToMove,
             parentId: currentParentId,
           });
+        if (!identityLifecycle.isActive()) return;
         clipboard.clear();
         showSuccessToast('Moved');
       }
@@ -568,6 +615,8 @@ export default function HomeView() {
     { data: pages, error: pagesError },
     { data: folders, error: foldersError },
     { data: sharedWithMe, error: sharedError },
+    { data: workspaceMemberships, error: workspaceMembershipsError },
+    { data: favorites, error: favoritesError },
   ]);
   const heading = FILTERS.find((filter) => filter.value === activeFilter)?.label ?? 'All';
   const emptyMessage =
@@ -700,8 +749,16 @@ export default function HomeView() {
           <span>Failed to load items.</span>
           <button
             type="button"
-            onClick={() => refetchPages()}
-            className="px-3 py-1 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded text-sm transition-colors"
+            onClick={() => {
+              void Promise.all([
+                refetchPages(),
+                refetchFolders(),
+                refetchSharedWithMe(),
+                refetchWorkspaceMemberships(),
+                refetchFavorites(),
+              ]);
+            }}
+            className="px-3 py-1 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 rounded text-sm transition-colors cursor-pointer"
           >
             Retry
           </button>
@@ -744,8 +801,14 @@ export default function HomeView() {
                     selection.toggle({ id: item.id, type: item.type });
                   }}
                   onNavigate={(e) => handleItemClick(item, index, e)}
-                  onRename={() => handleRenameItem(item)}
-                  isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                  {...(canRenameEntity(item, currentUserId)
+                    ? { onRename: () => handleRenameItem(item) }
+                    : {})}
+                  isEditing={
+                    canRenameEditingTarget &&
+                    editingTarget?.kind === item.type &&
+                    editingTarget.id === item.id
+                  }
                   editValue={editingTarget?.value ?? ''}
                   onEditChange={(value) =>
                     setEditingTarget((prev) => (prev ? { ...prev, value } : null))
@@ -783,8 +846,14 @@ export default function HomeView() {
                       selection.toggle({ id: item.id, type: item.type });
                     }}
                     onNavigate={(e) => handleItemClick(item, index, e)}
-                    onRename={() => handleRenameItem(item)}
-                    isEditing={editingTarget?.kind === item.type && editingTarget.id === item.id}
+                    {...(canRenameEntity(item, currentUserId)
+                      ? { onRename: () => handleRenameItem(item) }
+                      : {})}
+                    isEditing={
+                      canRenameEditingTarget &&
+                      editingTarget?.kind === item.type &&
+                      editingTarget.id === item.id
+                    }
                     editValue={editingTarget?.value ?? ''}
                     onEditChange={(value) =>
                       setEditingTarget((prev) => (prev ? { ...prev, value } : null))

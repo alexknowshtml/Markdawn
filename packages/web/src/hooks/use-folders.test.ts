@@ -8,7 +8,16 @@ vi.mock('../utils/toast', () => ({
   showInfoToast: vi.fn(),
 }));
 
-import { useCreateFolder, useDeleteFolder, useFolderTree, useUpdateFolder } from './use-folders';
+import {
+  useCreateFolder,
+  useDeleteFolder,
+  useEmptyFolderTrash,
+  useFolderTree,
+  usePermanentDeleteFolder,
+  useRestoreFolder,
+  useTrashFolders,
+  useUpdateFolder,
+} from './use-folders';
 
 describe('useFolderTree', () => {
   let queryClient: ReturnType<typeof createTestQueryClient>;
@@ -62,6 +71,94 @@ describe('useFolderTree', () => {
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
     });
+  });
+});
+
+describe('folder Trash hooks', () => {
+  let queryClient: ReturnType<typeof createTestQueryClient>;
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    queryClient = createTestQueryClient();
+    fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    queryClient.clear();
+  });
+
+  it('fetches deleted folders', async () => {
+    const folders = [{ id: 'f1', name: 'Deleted folder', isDeleted: true }];
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(folders) });
+
+    const { result } = renderHook(() => useTrashFolders(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/folders/trash');
+    expect(result.current.data).toEqual(folders);
+  });
+
+  it('restores a deleted folder subtree', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({ id: 'f1', name: 'Restored', restoredFolders: 2, restoredPages: 1 }),
+    });
+
+    const { result } = renderHook(() => useRestoreFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate('f1');
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/folders/f1/restore',
+      expect.objectContaining({ method: 'PATCH' }),
+    );
+  });
+
+  it('permanently deletes a trashed folder subtree', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ deleted: true, folders: 2, pages: 1 }),
+    });
+
+    const { result } = renderHook(() => usePermanentDeleteFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate('f1');
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/folders/f1/permanent',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+
+  it('empties all trashed folder subtrees', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ deleted: true, folders: 2, pages: 1 }),
+    });
+
+    const { result } = renderHook(() => useEmptyFolderTrash(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate();
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/folders/trash/empty-all',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
   });
 });
 
