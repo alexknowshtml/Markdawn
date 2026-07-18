@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import {
   type AnyPgColumn,
+  bigint,
   boolean,
   check,
   customType,
@@ -92,6 +93,13 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
+export const workspaceAccessVersions = pgTable('workspace_access_versions', {
+  workspaceOwnerId: uuid('workspace_owner_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  version: bigint('version', { mode: 'bigint' }).notNull().default(0n),
+});
+
 export const shares = pgTable(
   'shares',
   {
@@ -105,7 +113,7 @@ export const shares = pgTable(
     recipientEmail: text('recipient_email'),
     permission: text('permission').notNull().default('view').$type<'view' | 'edit' | 'admin'>(),
     token: text('token').unique(),
-    expiresAt: timestamp('expires_at'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },
@@ -122,6 +130,10 @@ export const shares = pgTable(
     linkUnique: uniqueIndex('shares_link_unique')
       .on(table.entityType, table.entityId)
       .where(sql`${table.token} is not null`),
+    publicLinkPermission: check(
+      'shares_public_link_permission_check',
+      sql`${table.token} is null or ${table.permission} in ('view', 'edit')`,
+    ),
   }),
 );
 
@@ -168,6 +180,8 @@ export const folders = pgTable(
     isDeleted: boolean('is_deleted').default(false),
 
     deletedAt: timestamp('deleted_at'),
+
+    deletionBatchId: uuid('deletion_batch_id'),
 
     isPublic: boolean('is_public').default(false),
 
@@ -231,6 +245,7 @@ export const pages = pgTable(
     id: uuid('id').defaultRandom().primaryKey(),
     parentId: uuid('parent_id').references(() => folders.id, { onDelete: 'cascade' }),
     title: text('title').notNull().default('Untitled'),
+    titleRevision: bigint('title_revision', { mode: 'bigint' }).notNull().default(0n),
     titleSearch: tsvector('title_search'),
     contentSearch: text('content_search'),
     icon: text('icon'),
@@ -261,9 +276,12 @@ export const pages = pgTable(
     isDeleted: boolean('is_deleted').default(false),
 
     deletedAt: timestamp('deleted_at'),
+
+    deletionBatchId: uuid('deletion_batch_id'),
   },
   (table) => ({
     titleSearchIdx: index('pages_title_search_idx').using('gin', table.titleSearch),
+    titleLength: check('pages_title_length_check', sql`char_length(${table.title}) <= 250`),
     positionNumeric: check(
       'pages_position_numeric_check',
       sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,
@@ -271,18 +289,27 @@ export const pages = pgTable(
   }),
 );
 
-export const pageVersions = pgTable('page_versions', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
-  content: customType<{ data: unknown; notNull: true; default: false }>({
-    dataType() {
-      return 'jsonb';
-    },
-  })('content').notNull(),
-  title: text('title'),
-  createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const pageVersions = pgTable(
+  'page_versions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    content: customType<{ data: unknown; notNull: true; default: false }>({
+      dataType() {
+        return 'jsonb';
+      },
+    })('content').notNull(),
+    title: text('title'),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    titleLength: check(
+      'page_versions_title_length_check',
+      sql`${table.title} is null or char_length(${table.title}) <= 250`,
+    ),
+  }),
+);
 
 export const userFavorites = pgTable(
   'user_favorites',
@@ -444,6 +471,21 @@ export const uploads = pgTable('uploads', {
     .notNull(),
   createdAt: timestamp('created_at').defaultNow(),
 });
+
+export const uploadDeletionQueue = pgTable(
+  'upload_deletion_queue',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    filename: text('filename').notNull().unique(),
+    attempts: integer('attempts').default(0).notNull(),
+    lastError: text('last_error'),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    updatedAtIdx: index('upload_deletion_queue_updated_at_id_idx').on(table.updatedAt, table.id),
+  }),
+);
 
 export const uploadPageRefs = pgTable(
   'upload_page_refs',

@@ -119,6 +119,168 @@ describe('Drizzle v1 migration history', () => {
     expect(migrationSql).toContain('FOR SHARE');
   });
 
+  it('repairs active descendants left below legacy deleted folders', () => {
+    const remediationMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_remediate_deleted_folder_descendants'),
+    );
+    expect(remediationMigration, 'deleted descendant remediation is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(remediationMigration ?? '');
+    expect(migrationSql).toContain('nearest_deleted_ancestor');
+    expect(migrationSql).toContain('UPDATE folders descendant');
+    expect(migrationSql).toContain('UPDATE pages page');
+    expect(migrationSql).toContain('ORDER BY descendant.id, path.depth ASC');
+    expect(migrationSql).toContain('deletion_batch_id = nearest.deletion_batch_id');
+  });
+
+  it('converts absolute share expirations from the historical UTC convention', () => {
+    const expirationMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_convert_share_expirations_to_timestamptz'),
+    );
+    expect(expirationMigration, 'share expiration timezone migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(expirationMigration ?? '');
+    expect(migrationSql).toContain('SET DATA TYPE timestamp with time zone');
+    expect(migrationSql).toContain(`USING "expires_at" AT TIME ZONE 'UTC'`);
+
+    const snapshot = readFileSync(
+      resolve(drizzleDir, expirationMigration ?? '', 'snapshot.json'),
+      'utf8',
+    );
+    expect(snapshot).toContain('timestamp with time zone');
+  });
+
+  it('evaluates canonical permission wrappers at statement time', () => {
+    const statementTimeMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_use_statement_time_for_permission_wrappers'),
+    );
+    expect(statementTimeMigration, 'statement-time permission migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(statementTimeMigration ?? '');
+    const wrappers = [
+      'get_effective_page_permission',
+      'get_effective_folder_permission',
+      'get_page_base_permissions',
+      'get_accessible_page_ids',
+    ];
+
+    for (const wrapper of wrappers) {
+      expect(migrationSql).toContain(`CREATE OR REPLACE FUNCTION ${wrapper}(`);
+      expect(migrationSql).toContain(`FROM ${wrapper}_at(`);
+    }
+
+    expect(migrationSql.match(/statement_timestamp\(\)/g)).toHaveLength(wrappers.length);
+    expect(migrationSql).not.toMatch(/\bNOW\(\)/i);
+  });
+
+  it('invalidates legacy folder-link provenance before enabling folder enumeration', () => {
+    const enumerationMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enumerable_folder_ids'),
+    );
+    expect(enumerationMigration, 'enumerable folder migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(enumerationMigration ?? '');
+    const provenanceReset = migrationSql.indexOf('DELETE FROM "folder_access_events"');
+    expect(provenanceReset).toBeGreaterThan(-1);
+    expect(provenanceReset).toBeLessThan(
+      migrationSql.indexOf('CREATE OR REPLACE FUNCTION get_enumerable_folder_ids_at'),
+    );
+  });
+
+  it('repairs legacy page titles before enforcing the collaboration limit', () => {
+    const titleMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enforce_page_title_length'),
+    );
+    expect(titleMigration, 'page title migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(titleMigration ?? '');
+    const remediation = migrationSql.indexOf('SET "title" = left("title", 250)');
+    const constraint = migrationSql.indexOf('ADD CONSTRAINT "pages_title_length_check"');
+    expect(remediation).toBeGreaterThan(-1);
+    expect(migrationSql).toContain('"title_search" = to_tsvector');
+    expect(constraint).toBeGreaterThan(remediation);
+  });
+
+  it('repairs legacy admin links before enforcing public-link permissions', () => {
+    const linkMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enforce_public_link_permissions'),
+    );
+    expect(linkMigration, 'public link permission migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(linkMigration ?? '');
+    const remediation = migrationSql.indexOf('WHERE "token" IS NOT NULL');
+    const constraint = migrationSql.indexOf('ADD CONSTRAINT "shares_public_link_permission_check"');
+    expect(remediation).toBeGreaterThan(-1);
+    expect(migrationSql).toContain('UPDATE "page_access_events"');
+    expect(migrationSql).toContain('UPDATE "folder_access_events"');
+    expect(constraint).toBeGreaterThan(remediation);
+  });
+
+  it('repairs legacy version titles before enforcing the snapshot limit', () => {
+    const versionTitleMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enforce_page_version_title_length'),
+    );
+    expect(versionTitleMigration, 'page version title migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(versionTitleMigration ?? '');
+    const remediation = migrationSql.indexOf('SET "title" = left("title", 250)');
+    const constraint = migrationSql.indexOf('ADD CONSTRAINT "page_versions_title_length_check"');
+    expect(remediation).toBeGreaterThan(-1);
+    expect(constraint).toBeGreaterThan(remediation);
+
+    const snapshot = readFileSync(
+      resolve(drizzleDir, versionTitleMigration ?? '', 'snapshot.json'),
+      'utf8',
+    );
+    expect(snapshot).toContain('page_versions_title_length_check');
+  });
+
+  it('installs durable globally ordered workspace access revisions', () => {
+    const revisionMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_add_workspace_access_versions'),
+    );
+    expect(revisionMigration, 'workspace access revision migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(revisionMigration ?? '');
+    const table = migrationSql.indexOf('CREATE TABLE "workspace_access_versions"');
+    const sequence = migrationSql.indexOf('CREATE SEQUENCE "workspace_access_revision_seq"');
+    const backfill = migrationSql.indexOf('INSERT INTO "workspace_access_versions"');
+    const revisionFunction = migrationSql.indexOf('FUNCTION get_page_access_revision');
+    expect(table).toBeGreaterThan(-1);
+    expect(sequence).toBeGreaterThan(table);
+    expect(backfill).toBeGreaterThan(sequence);
+    expect(revisionFunction).toBeGreaterThan(backfill);
+    expect(migrationSql).toContain('SELECT MAX(version) FROM workspace_access_versions');
+  });
+
+  it('adds a dedicated monotonic page title revision', () => {
+    const titleRevisionMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_add_page_title_revision'),
+    );
+    expect(titleRevisionMigration, 'page title revision migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(titleRevisionMigration ?? '');
+    expect(migrationSql).toContain('ADD COLUMN "title_revision" bigint DEFAULT 0 NOT NULL');
+    const snapshot = readFileSync(
+      resolve(drizzleDir, titleRevisionMigration ?? '', 'snapshot.json'),
+      'utf8',
+    );
+    expect(snapshot).toContain('title_revision');
+  });
+
+  it('enforces title revision monotonicity inside PostgreSQL', () => {
+    const triggerMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_enforce_page_title_revision'),
+    );
+    expect(triggerMigration, 'page title revision trigger migration is missing').toBeDefined();
+
+    const migrationSql = readMigrationSql(triggerMigration ?? '');
+    expect(migrationSql).toContain('FUNCTION "enforce_page_title_revision"');
+    expect(migrationSql).toContain('NEW."title" IS DISTINCT FROM OLD."title"');
+    expect(migrationSql).toContain('NEW."title_revision" <= OLD."title_revision"');
+    expect(migrationSql).toContain('BEFORE UPDATE OF "title", "title_revision" ON "pages"');
+  });
+
   it('does not reintroduce the legacy access restriction column', () => {
     const migrationDirs = listMigrationDirs();
     const migrationText = migrationDirs.map(readMigrationSql).join('\n');
