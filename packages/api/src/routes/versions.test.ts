@@ -1,3 +1,4 @@
+import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { describe, expect, it } from 'vitest';
 import {
   createTestApp,
@@ -97,6 +98,31 @@ describe('versions API', () => {
       expect(res.status).toBe(400);
     });
 
+    it('normalizes blank titles and rejects titles above the page limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+
+      const blankRes = await app.request(`/api/pages/${page.id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: '   ' }),
+      });
+      expect(blankRes.status).toBe(200);
+      expect(await blankRes.json()).toMatchObject({ title: 'Untitled' });
+
+      const oversizedRes = await app.request(`/api/pages/${page.id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: 'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1) }),
+      });
+      expect(oversizedRes.status).toBe(400);
+      expect(await oversizedRes.json()).toMatchObject({
+        message: `Title must be ${MAX_PAGE_TITLE_LENGTH} characters or fewer`,
+      });
+    });
+
     it('returns 404 for non-existent page', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -152,6 +178,22 @@ describe('versions API', () => {
       );
 
       expect(res.status).toBe(404);
+    });
+
+    it('normalizes a legacy blank version title when restoring', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id, { title: 'Original' });
+      const version = await createTestVersion(page.id, user.id, { title: '   ' });
+
+      const res = await app.request(`/api/pages/${page.id}/versions/${version.id}/restore`, {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ title: 'Untitled' });
     });
 
     it('returns 404 for non-existent page', async () => {

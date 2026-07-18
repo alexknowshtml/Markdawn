@@ -1,4 +1,5 @@
 import { Hono } from 'hono';
+import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 
@@ -10,6 +11,7 @@ type SearchRow = {
 };
 
 const searchRoute = new Hono();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 searchRoute.use('*', requireAuth);
 
@@ -41,6 +43,9 @@ searchRoute.get('/', async (c) => {
   const createdAfter = c.req.query('createdAfter');
   const createdBefore = c.req.query('createdBefore');
   const parentId = c.req.query('parentId');
+  if (parentId && parentId !== 'root' && !UUID_PATTERN.test(parentId)) {
+    throw new HTTPException(400, { message: 'parentId must be a valid UUID or root' });
+  }
   const searchPattern = `%${textQuery}%`;
 
   const filters: string[] = [];
@@ -60,9 +65,15 @@ searchRoute.get('/', async (c) => {
   }
 
   if (parentId === 'root') {
-    filters.push('p.parent_id is null');
+    filters.push(`(
+      p.parent_id is null
+      or p.parent_id not in (select folder_id from get_enumerable_folder_ids($1))
+    )`);
   } else if (parentId) {
-    filters.push(`p.parent_id = $${paramIndex}`);
+    filters.push(`(
+      p.parent_id = $${paramIndex}
+      and $${paramIndex}::uuid in (select folder_id from get_enumerable_folder_ids($1))
+    )`);
     params.push(parentId);
     paramIndex += 1;
   }
@@ -93,11 +104,23 @@ searchRoute.get('/', async (c) => {
       ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
     from pages p
     left join lateral (
-      select array_agg(f.name order by fc.depth desc) as breadcrumb
-      from folder_closure fc
-      join folders f on f.id = fc.ancestor_id
-      where fc.descendant_id = p.parent_id
-        and fc.depth > 0
+      with recursive visible_path as (
+        select f.id, f.parent_id, f.name, 0 as depth
+        from folders f
+        where f.id = p.parent_id
+          and f.is_deleted = false
+          and f.id in (select folder_id from get_enumerable_folder_ids($1))
+
+        union all
+
+        select parent.id, parent.parent_id, parent.name, child.depth + 1
+        from visible_path child
+        join folders parent on parent.id = child.parent_id
+        where parent.is_deleted = false
+          and parent.id in (select folder_id from get_enumerable_folder_ids($1))
+      )
+      select array_agg(name order by depth desc) as breadcrumb
+      from visible_path
     ) breadcrumbs on true
     where p.is_deleted = false
       and p.id in (select page_id from get_accessible_page_ids($1))

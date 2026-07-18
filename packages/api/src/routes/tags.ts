@@ -36,7 +36,14 @@ tagsRoute.get('/pages', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    `select p.id, p.title, p.icon, p.parent_id as "parentId"
+    `select p.id,
+            p.title,
+            p.icon,
+            case
+              when p.parent_id in (select folder_id from get_enumerable_folder_ids($2))
+                then p.parent_id
+              else null
+            end as "parentId"
      from pages p
      join connections c on c.source_id = p.id
      where c.target_slug = $1

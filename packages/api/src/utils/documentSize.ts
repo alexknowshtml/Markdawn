@@ -1,4 +1,8 @@
 import { MAX_YDOC_BYTES } from '@markdawn/shared';
+import {
+  encodedYDocHasTargetIdAttributes,
+  stripWikiLinkTargetIds,
+} from '@markdawn/shared/yjs-helpers';
 import { HTTPException } from 'hono/http-exception';
 import * as Y from 'yjs';
 
@@ -30,10 +34,17 @@ export function prepareCopiedYdoc(value: Uint8Array | null, title: string): Buff
   try {
     const document = new Y.Doc();
     Y.applyUpdate(document, value);
+    if (document.store.pendingStructs !== null || document.store.pendingDs !== null) {
+      throw new Error('Source document contains unresolved updates');
+    }
+    stripWikiLinkTargetIds(document);
     const titleText = document.getText('title');
     if (titleText.length > 0) titleText.delete(0, titleText.length);
     titleText.insert(0, title);
     const copied = Buffer.from(Y.encodeStateAsUpdate(document));
+    if (encodedYDocHasTargetIdAttributes(copied)) {
+      throw new Error('Source document contains forbidden wiki-link target metadata');
+    }
     ensureYdocSize(copied);
     return copied;
   } catch (error) {

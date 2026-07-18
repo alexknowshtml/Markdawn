@@ -285,6 +285,7 @@ describe('markdownToYjsState', () => {
         expect(link.nodeName).toBe('wikiLink');
         expect(link.getAttribute('path')).toBe('My Page');
         expect(link.getAttribute('label')).toBe('My Page');
+        expect(link.getAttribute('targetId')).toBeUndefined();
       }
     });
 

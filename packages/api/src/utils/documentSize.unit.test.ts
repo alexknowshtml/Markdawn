@@ -50,6 +50,37 @@ describe('document size validation', () => {
     expect(decoded.getText('title').toString()).toBe('Copy of Original');
   });
 
+  it('removes legacy wiki-link target IDs from copied canonical state', () => {
+    const hiddenTargetId = '11111111-1111-1111-1111-111111111111';
+    const source = new Y.Doc();
+    const link = new Y.XmlElement('wikiLink');
+    link.setAttribute('targetId', hiddenTargetId);
+    link.setAttribute('path', 'Private roadmap');
+    source.getXmlFragment('prosemirror').push([link]);
+
+    const copied = prepareCopiedYdoc(Y.encodeStateAsUpdate(source), 'Copy');
+
+    expect(copied).not.toBeNull();
+    const copiedDocument = new Y.Doc();
+    Y.applyUpdate(copiedDocument, new Uint8Array(copied ?? []));
+    const copiedLink = copiedDocument.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
+    expect(copiedLink.getAttribute('targetId')).toBeUndefined();
+    expect(copiedLink.getAttribute('path')).toBe('Private roadmap');
+    expect(Buffer.from(copied ?? []).includes(Buffer.from(hiddenTargetId))).toBe(false);
+  });
+
+  it('rejects targetId metadata in an unsupported alternate XML root', () => {
+    const hiddenTargetId = '22222222-2222-2222-2222-222222222222';
+    const source = new Y.Doc();
+    const link = new Y.XmlElement('wikiLink');
+    link.setAttribute('targetId', hiddenTargetId);
+    source.getXmlFragment('alternate').push([link]);
+
+    expect(() => prepareCopiedYdoc(Y.encodeStateAsUpdate(source), 'Copy')).toThrow(
+      expect.objectContaining({ status: 422 }),
+    );
+  });
+
   it('rejects malformed source documents instead of copying inaccessible state', () => {
     try {
       prepareCopiedYdoc(new Uint8Array([1, 2, 3]), 'Copy');

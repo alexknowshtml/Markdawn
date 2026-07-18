@@ -3,12 +3,11 @@ import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensurePageAccess, lockEntityAccessMutation } from '../utils/share-access';
+import { ensurePageAccess, lockEntityAccess } from '../utils/share-access';
 
 type UserRow = {
   id: string;
   name: string;
-  email: string;
   avatar_url: string | null;
 };
 
@@ -22,7 +21,6 @@ type CommentRow = {
   created_at: Date | null;
   updated_at: Date | null;
   user_name: string;
-  user_email: string;
   user_avatar_url: string | null;
 };
 
@@ -33,14 +31,12 @@ type ReplyRow = {
   content: string;
   created_at: Date | null;
   user_name: string;
-  user_email: string;
   user_avatar_url: string | null;
 };
 
 type CommentUser = {
   id: string;
   name: string;
-  email: string;
   avatarUrl: string | null;
 };
 
@@ -71,10 +67,9 @@ const commentsRoute = new Hono();
 commentsRoute.use('*', requireAuth);
 
 const getUserById = async (userId: string) => {
-  const result = await query(
-    'select id, name, email, avatar_url from users where id = $1 limit 1',
-    [userId],
-  );
+  const result = await query('select id, name, avatar_url from users where id = $1 limit 1', [
+    userId,
+  ]);
   return (result.rows[0] as UserRow | undefined) ?? null;
 };
 
@@ -85,76 +80,75 @@ const ensurePageExists = async (pageId: string) => {
 
 commentsRoute.get(':pageId/comments', async (c) => {
   const pageId = c.req.param('pageId');
-  if (!(await ensurePageExists(pageId))) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  return db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
 
-  const commentsResult = await query(
-    'select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc',
-    [pageId],
-  );
-
-  const commentRows = commentsResult.rows as CommentRow[];
-  const commentIds = commentRows.map((row) => row.id);
-  const repliesByComment = new Map<string, CommentReply[]>();
-
-  if (commentIds.length > 0) {
-    const repliesResult = await query(
-      'select r.id, r.comment_id, r.user_id, r.content, r.created_at, u.name as user_name, u.email as user_email, u.avatar_url as user_avatar_url from comment_replies r join users u on u.id = r.user_id where r.comment_id = any($1) order by r.created_at asc',
-      [commentIds],
+    const commentsResult = await executeQuery(
+      tx,
+      'select c.id, c.page_id, c.user_id, c.content, c.anchor_block_id, c.resolved, c.created_at, c.updated_at, u.name as user_name, u.avatar_url as user_avatar_url from comments c join users u on u.id = c.user_id where c.page_id = $1 order by c.created_at asc',
+      [pageId],
     );
 
-    const replyRows = repliesResult.rows as ReplyRow[];
-    for (const row of replyRows) {
-      if (!row.comment_id || !row.user_id) {
-        continue;
+    const commentRows = commentsResult.rows as CommentRow[];
+    const commentIds = commentRows.map((row) => row.id);
+    const repliesByComment = new Map<string, CommentReply[]>();
+
+    if (commentIds.length > 0) {
+      const repliesResult = await executeQuery(
+        tx,
+        'select r.id, r.comment_id, r.user_id, r.content, r.created_at, u.name as user_name, u.avatar_url as user_avatar_url from comment_replies r join users u on u.id = r.user_id where r.comment_id = any($1) order by r.created_at asc',
+        [commentIds],
+      );
+
+      const replyRows = repliesResult.rows as ReplyRow[];
+      for (const row of replyRows) {
+        if (!row.comment_id || !row.user_id) {
+          continue;
+        }
+        const list = repliesByComment.get(row.comment_id) ?? [];
+        list.push({
+          id: row.id,
+          commentId: row.comment_id,
+          userId: row.user_id,
+          content: row.content,
+          createdAt: row.created_at ?? null,
+          user: {
+            id: row.user_id,
+            name: row.user_name,
+            avatarUrl: row.user_avatar_url ?? null,
+          },
+        });
+        repliesByComment.set(row.comment_id, list);
       }
-      const list = repliesByComment.get(row.comment_id) ?? [];
-      list.push({
+    }
+
+    const comments: CommentWithReplies[] = commentRows.map((row) => {
+      if (!row.user_id || !row.page_id) {
+        throw new HTTPException(500, { message: 'Invalid comment data' });
+      }
+
+      return {
         id: row.id,
-        commentId: row.comment_id,
+        pageId: row.page_id,
         userId: row.user_id,
         content: row.content,
+        anchorBlockId: row.anchor_block_id ?? null,
+        resolved: row.resolved ?? false,
         createdAt: row.created_at ?? null,
+        updatedAt: row.updated_at ?? null,
         user: {
           id: row.user_id,
           name: row.user_name,
-          email: row.user_email,
           avatarUrl: row.user_avatar_url ?? null,
         },
-      });
-      repliesByComment.set(row.comment_id, list);
-    }
-  }
+        replies: repliesByComment.get(row.id) ?? [],
+      };
+    });
 
-  const comments: CommentWithReplies[] = commentRows.map((row) => {
-    if (!row.user_id || !row.page_id) {
-      throw new HTTPException(500, { message: 'Invalid comment data' });
-    }
-
-    return {
-      id: row.id,
-      pageId: row.page_id,
-      userId: row.user_id,
-      content: row.content,
-      anchorBlockId: row.anchor_block_id ?? null,
-      resolved: row.resolved ?? false,
-      createdAt: row.created_at ?? null,
-      updatedAt: row.updated_at ?? null,
-      user: {
-        id: row.user_id,
-        name: row.user_name,
-        email: row.user_email,
-        avatarUrl: row.user_avatar_url ?? null,
-      },
-      replies: repliesByComment.get(row.id) ?? [],
-    };
+    return c.json(comments);
   });
-
-  return c.json(comments);
 });
 
 // POST /:pageId/comments - Create a new comment
@@ -178,7 +172,7 @@ commentsRoute.post(':pageId/comments', async (c) => {
   }
 
   const result = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     return executeQuery(
       tx,
@@ -204,7 +198,6 @@ commentsRoute.post(':pageId/comments', async (c) => {
     user: {
       id: currentUser.id,
       name: currentUser.name,
-      email: currentUser.email,
       avatarUrl: currentUser.avatar_url ?? null,
     },
     replies: [],
@@ -233,7 +226,7 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
   }
 
   const result = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,
@@ -265,7 +258,6 @@ commentsRoute.post(':pageId/comments/:commentId/replies', async (c) => {
     user: {
       id: currentUser.id,
       name: currentUser.name,
-      email: currentUser.email,
       avatarUrl: currentUser.avatar_url ?? null,
     },
   });
@@ -285,7 +277,7 @@ commentsRoute.patch(':pageId/comments/:commentId', async (c) => {
   const { content, resolved } = await c.req.json();
 
   const result = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,
@@ -365,7 +357,7 @@ commentsRoute.delete(':pageId/comments/:commentId', async (c) => {
   await ensurePageAccess(pageId, user.id, 'edit');
 
   await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     const commentResult = await executeQuery(
       tx,

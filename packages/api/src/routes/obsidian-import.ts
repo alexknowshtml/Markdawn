@@ -4,7 +4,8 @@ import path from 'node:path';
 import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
@@ -16,7 +17,6 @@ import {
 import {
   markdownToYjsState,
   normalizeWikilinkLookupKey,
-  resolveWikilinkTargets,
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
 import {
@@ -25,7 +25,11 @@ import {
   isMarkdownFile,
   parseFrontmatter,
 } from '../utils/obsidian-parsers';
+import { normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition } from '../utils/position';
+import { lockWorkspaceAccess, lockWorkspaceAccessMutation } from '../utils/share-access';
+import { notifyShareRecompute } from '../utils/share-notify';
+import { getEntityMetaUserIds } from '../utils/shareRecipients';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 const obsidianImportRoute = new Hono();
@@ -200,6 +204,7 @@ obsidianImportRoute.post('/', async (c) => {
   }
 
   const folderPathToId = new Map<string, string>();
+  let notificationRoot: { entityType: 'folder' | 'page'; entityId: string } | null = null;
   const uniqueDirs = new Set<string>();
 
   for (const file of files) {
@@ -226,16 +231,27 @@ obsidianImportRoute.post('/', async (c) => {
       const name = parts[parts.length - 1] ?? '';
       const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
       const parentId = parentPath ? (folderPathToId.get(parentPath) ?? null) : null;
+      if (parentPath && !parentId) {
+        throw new Error(`Parent folder "${parentPath}" was not created`);
+      }
 
-      const nextPosition = await getNextPosition('folders', parentId, user.id);
-
-      const insertResult = await query(
-        'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
-        [parentId, name, nextPosition, user.id],
-      );
+      const insertResult = await db.transaction(async (tx) => {
+        await lockWorkspaceAccessMutation(tx, user.id);
+        const nextPosition = await getNextPosition('folders', parentId, user.id, tx);
+        return executeQuery(
+          tx,
+          'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
+          [parentId, name, nextPosition, user.id],
+        );
+      });
 
       if (insertResult.rowCount && insertResult.rowCount > 0) {
-        folderPathToId.set(dirPath, insertResult.rows[0]?.id);
+        const createdFolderId = insertResult.rows[0]?.id;
+        if (typeof createdFolderId !== 'string') {
+          throw new Error('Failed to create folder');
+        }
+        folderPathToId.set(dirPath, createdFolderId);
+        notificationRoot ??= { entityType: 'folder', entityId: createdFolderId };
         result.foldersCreated++;
       }
     } catch (err) {
@@ -305,57 +321,60 @@ obsidianImportRoute.post('/', async (c) => {
 
       const { frontmatter, body, tags, title: frontmatterTitle } = parseFrontmatter(file.content);
       const fileName = path.basename(file.path, '.md');
-      const title = frontmatterTitle || fileName;
+      const title = normalizePageTitle(frontmatterTitle || fileName);
 
       const dir = path.dirname(file.path);
-      const parentId =
-        dir !== '.' && dir !== '/' ? (folderPathToId.get(dir.replace(/\\/g, '/')) ?? null) : null;
+      const normalizedDir = dir.replace(/\\/g, '/');
+      const hasParentDirectory = dir !== '.' && dir !== '/';
+      const parentId = hasParentDirectory ? (folderPathToId.get(normalizedDir) ?? null) : null;
+      if (hasParentDirectory && !parentId) {
+        throw new Error(`Parent folder "${normalizedDir}" was not created`);
+      }
 
       const processedBody = processMarkdownContent(body, imagePathToUrl);
       const contentForEditor = stripLeadingH1(processedBody, title);
       const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
       ensureYdocSize(ydocBuffer);
-      // Store for deferred targetId resolution after all pages are known
-      pageYdocs.set(file.path, ydocBuffer);
+      const pageTagSlugs = new Set([
+        ...tags.map((tag) => normalizeTagSlug(tag)).filter(Boolean),
+        ...extractInlineTags(file.content),
+      ]);
 
-      const nextPosition = await getNextPosition('pages', parentId, user.id);
-
-      const insertResult = hasPropertiesColumn
-        ? await query(
-            `insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
-             values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *`,
-            [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)],
-          )
-        : await query(
-            `insert into pages (parent_id, title, title_search, position, created_by, ydoc)
-             values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *`,
-            [parentId, title, nextPosition, user.id, ydocBuffer],
-          );
-
-      if (insertResult.rowCount && insertResult.rowCount > 0) {
-        const pageId = insertResult.rows[0]?.id;
-        if (typeof pageId !== 'string') {
+      const pageId = await db.transaction(async (tx) => {
+        await lockWorkspaceAccessMutation(tx, user.id);
+        const nextPosition = await getNextPosition('pages', parentId, user.id, tx);
+        const insertResult = hasPropertiesColumn
+          ? await executeQuery(
+              tx,
+              `insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
+               values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *`,
+              [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)],
+            )
+          : await executeQuery(
+              tx,
+              `insert into pages (parent_id, title, title_search, position, created_by, ydoc)
+               values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *`,
+              [parentId, title, nextPosition, user.id, ydocBuffer],
+            );
+        const insertedPageId = insertResult.rows[0]?.id;
+        if (typeof insertedPageId !== 'string') {
           throw new Error('Failed to create page');
         }
-        pagePathToId.set(file.path, pageId);
 
         for (const [url, uploadId] of urlToUploadId) {
           if (!processedBody.includes(url)) continue;
-          await query(
+          await executeQuery(
+            tx,
             `insert into upload_page_refs (upload_id, page_id)
              values ($1, $2)
              on conflict (upload_id, page_id) do nothing`,
-            [uploadId, pageId],
+            [uploadId, insertedPageId],
           );
         }
 
-        const pageTagSlugs = new Set([
-          ...tags.map((tag) => normalizeTagSlug(tag)).filter(Boolean),
-          ...extractInlineTags(file.content),
-        ]);
-
         for (const tagSlug of pageTagSlugs) {
-          await query(
+          await executeQuery(
+            tx,
             `insert into connections (
                source_type, source_id, target_type, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
@@ -363,87 +382,128 @@ obsidianImportRoute.post('/', async (c) => {
              values ('page', $1, 'tag', $2, $2, 'tag', $2, 1, now())
              on conflict (source_type, source_id, target_type, target_slug, connection_type)
              do update set updated_at = now(), occurrence_count = excluded.occurrence_count`,
-            [pageId, tagSlug],
+            [insertedPageId, tagSlug],
           );
         }
 
-        result.pagesCreated++;
-      }
+        return insertedPageId;
+      });
+
+      // Store only committed pages for deferred DB connection resolution. A failure
+      // while creating refs or tags rolls the page back instead of returning a
+      // partial import that is absent from the result counters.
+      pagePathToId.set(file.path, pageId);
+      pageYdocs.set(file.path, ydocBuffer);
+      notificationRoot ??= { entityType: 'page', entityId: pageId };
+      result.pagesCreated++;
     } catch (err) {
       result.errors.push(`Failed to create page "${file.path}": ${(err as Error).message}`);
     }
   }
 
-  const workspacePageLookup = await getUniqueWorkspacePageLookup(user.id);
+  // Imported pages become visible before every file in a large vault has been
+  // processed. Resolve each committed page under the workspace lock, re-read
+  // its current Yjs state with a row lock, and write connections in the same
+  // transaction. This preserves any edit that landed after page creation and
+  // prevents a late resolver from mutating a page that was moved to Trash.
+  for (const file of markdownFiles) {
+    const fileContent = file.content;
+    if (!fileContent) continue;
+    const pageId = pagePathToId.get(file.path);
+    const originalYdoc = pageYdocs.get(file.path);
+    if (!pageId || !originalYdoc) continue;
 
-  if (hasConnectionsTable) {
-    for (const file of markdownFiles) {
-      try {
-        if (!file.content) continue;
+    try {
+      const backlinksCreated = await db.transaction(async (tx) => {
+        await lockWorkspaceAccess(tx, user.id);
+        const pageResult = await executeQuery<{ ydoc: Buffer | null }>(
+          tx,
+          `select ydoc
+           from pages
+           where id = $1 and is_deleted = false
+           for update`,
+          [pageId],
+        );
+        const storedYdoc = pageResult.rows[0]?.ydoc;
+        if (!storedYdoc) {
+          throw new Error('Imported page is no longer active');
+        }
 
-        const pageId = pagePathToId.get(file.path);
-        if (!pageId) continue;
+        const workspacePageLookup = await getUniqueWorkspacePageLookup(user.id, user.id, tx);
+        const currentYdoc = Buffer.from(storedYdoc);
+        const pageWasEdited = !currentYdoc.equals(originalYdoc);
+        let createdBacklinks = 0;
 
-        const wikilinks = extractWikilinks(file.content);
-        const embeds = extractEmbedLinks(file.content);
-        const allLinks = [...wikilinks, ...embeds];
+        // Do not index the original markdown after a user has already changed
+        // the page. The current Yjs state is preserved and the collaboration
+        // indexer remains authoritative for that newer content.
+        if (hasConnectionsTable && !pageWasEdited) {
+          const wikilinks = extractWikilinks(fileContent);
+          const embeds = extractEmbedLinks(fileContent);
+          const allLinks = [...wikilinks, ...embeds];
 
-        for (const link of allLinks) {
-          if (link.isEmbed && isImageFile(link.page)) continue;
+          for (const link of allLinks) {
+            if (link.isEmbed && isImageFile(link.page)) continue;
 
-          const targetTitleLower = normalizeWikilinkLookupKey(link.page);
-          const targetPageId = workspacePageLookup.get(targetTitleLower) ?? null;
-          const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
+            const targetTitleLower = normalizeWikilinkLookupKey(link.page);
+            const targetPageId = workspacePageLookup.get(targetTitleLower) ?? null;
+            const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
 
-          await query(
-            `insert into connections (
-               source_type, source_id, target_type, target_id, target_slug,
-               target_label, connection_type, link_text, occurrence_count, updated_at
-             )
-             values ('page', $1, 'page', $2, $3, $4, $5, $6, 1, now())
-             on conflict (source_type, source_id, target_type, target_slug, connection_type)
-             do update set
-               target_id = excluded.target_id,
-               target_label = excluded.target_label,
-               link_text = excluded.link_text,
-               occurrence_count = connections.occurrence_count + 1,
-               updated_at = now()`,
-            [
-              pageId,
-              targetPageId,
-              targetTitleLower,
-              link.page,
-              connectionType,
-              link.alias || link.page,
-            ],
-          );
+            await executeQuery(
+              tx,
+              `insert into connections (
+                 source_type, source_id, target_type, target_id, target_slug,
+                 target_label, connection_type, link_text, occurrence_count, updated_at
+               )
+               values ('page', $1, 'page', $2, $3, $4, $5, $6, 1, now())
+               on conflict (source_type, source_id, target_type, target_slug, connection_type)
+               do update set
+                 target_id = excluded.target_id,
+                 target_label = excluded.target_label,
+                 link_text = excluded.link_text,
+                 occurrence_count = connections.occurrence_count + 1,
+                 updated_at = now()`,
+              [
+                pageId,
+                targetPageId,
+                targetTitleLower,
+                link.page,
+                connectionType,
+                link.alias || link.page,
+              ],
+            );
 
-          if (targetPageId) {
-            result.backlinksCreated++;
+            if (targetPageId) createdBacklinks += 1;
           }
         }
-      } catch (err) {
-        result.errors.push(
-          `Failed to index backlinks for "${file.path}": ${(err as Error).message}`,
-        );
-      }
+
+        return createdBacklinks;
+      });
+      result.backlinksCreated += backlinksCreated;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      result.errors.push(`Failed to resolve links for "${file.path}": ${message}`);
     }
   }
 
-  // Resolve links only when a title or explicit path is unique in this workspace.
-  if (workspacePageLookup.size > 0) {
-    for (const [filePath, pageId] of pagePathToId) {
-      const rawYdoc = pageYdocs.get(filePath);
-      if (!rawYdoc) continue;
-      try {
-        const resolved = Buffer.from(resolveWikilinkTargets(rawYdoc, workspacePageLookup));
-        ensureYdocSize(resolved);
-        await query('update pages set ydoc = $1 where id = $2', [resolved, pageId]);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        result.errors.push(`Failed to resolve links for "${filePath}": ${message}`);
-      }
-    }
+  if (notificationRoot) {
+    await db.transaction(async (tx) => {
+      await lockWorkspaceAccessMutation(tx, user.id);
+      const metaUserIds = await getEntityMetaUserIds(
+        tx,
+        notificationRoot.entityType,
+        notificationRoot.entityId,
+      );
+      await notifyShareRecompute(
+        {
+          entityType: notificationRoot.entityType,
+          entityId: notificationRoot.entityId,
+          metaUserIds,
+          metaOnly: true,
+        },
+        tx,
+      );
+    });
   }
 
   return c.json(result, 201);

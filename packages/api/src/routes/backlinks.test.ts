@@ -131,7 +131,13 @@ describe('backlinks API', () => {
       const body = await res.json();
       expect(Array.isArray(body)).toBe(true);
       expect(body.length).toBeGreaterThanOrEqual(1);
-      expect(body[0].targetPageId).toBe(page2.id);
+      expect(body[0]).toEqual(
+        expect.objectContaining({
+          targetPageId: page2.id,
+          targetTitle: 'Target',
+          targetPageTitle: 'Target',
+        }),
+      );
     });
 
     it('returns 400 when pageId is missing', async () => {
@@ -153,7 +159,23 @@ describe('backlinks API', () => {
       const recipientSession = await createTestSession(recipient.id);
       const sharedSource = await createTestPage(owner.id, { title: 'Shared Source' });
       const privateTarget = await createTestPage(owner.id, { title: 'Private Target' });
-      await createTestPageLink(sharedSource.id, privateTarget.id);
+      const privateLink = await createTestPageLink(sharedSource.id, privateTarget.id);
+      await query(
+        `update connections
+         set target_label = 'Resolver Canonical Private Title', link_text = 'Authored Alias'
+         where id = $1`,
+        [privateLink.id],
+      );
+      await query(
+        `insert into connections (
+           source_type, source_id, target_type, target_slug, target_label,
+           connection_type, link_text
+         ) values (
+           'page', $1, 'page', 'unresolved-candidate', 'Unresolved Candidate',
+           'wikilink', 'Authored Alias'
+         )`,
+        [sharedSource.id],
+      );
       await addPageShare(sharedSource.id, recipient.id);
 
       const res = await app.request(`/api/backlinks/outgoing?pageId=${sharedSource.id}`, {
@@ -161,13 +183,22 @@ describe('backlinks API', () => {
       });
 
       expect(res.status).toBe(200);
-      expect(await res.json()).toContainEqual(
-        expect.objectContaining({
-          targetPageId: null,
-          targetPageTitle: null,
-          targetPageIcon: null,
-        }),
-      );
+      const body = await res.json();
+      expect(body).toHaveLength(2);
+      for (const link of body) {
+        expect(link).toEqual(
+          expect.objectContaining({
+            targetPageId: null,
+            targetTitle: 'Authored Alias',
+            linkText: 'Authored Alias',
+            targetPageTitle: null,
+            targetPageIcon: null,
+          }),
+        );
+      }
+      expect(JSON.stringify(body)).not.toContain('Private Target');
+      expect(JSON.stringify(body)).not.toContain('Resolver Canonical Private Title');
+      expect(JSON.stringify(body)).not.toContain('Unresolved Candidate');
     });
   });
 

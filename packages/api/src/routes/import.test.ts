@@ -1,4 +1,4 @@
-import { MAX_YDOC_BYTES } from '@markdawn/shared';
+import { MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
 import { query } from '../db/query';
@@ -74,7 +74,30 @@ Body text`;
       expect(body.title).toBe('Frontmatter Title');
     });
 
-    it('resolves wiki links only within the importing user workspace', async () => {
+    it('rejects an imported title above the collaboration title limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const title = 'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1);
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([`---\ntitle: ${title}\n---\n\nBody`], 'note.md', { type: 'text/markdown' }),
+      );
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(400);
+      expect(await res.json()).toMatchObject({
+        message: `Title must be ${MAX_PAGE_TITLE_LENGTH} characters or fewer`,
+      });
+    });
+
+    it('stores imported wiki links as authored paths without target IDs', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const otherOwner = await createTestUser();
@@ -101,12 +124,64 @@ Body text`;
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
       );
-      expect(connections).toContainEqual(
-        expect.objectContaining({ targetId: ownTarget.id, targetSlug: 'roadmap' }),
-      );
+      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'roadmap' }));
+      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(ownTarget.id))).toBe(false);
     });
 
-    it('prefers exact workspace paths and leaves ambiguous titles unresolved', async () => {
+    it('never embeds visible or hidden target IDs when importing into a shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const importer = await createTestUser();
+      const session = await createTestSession(importer.id);
+      const sharedFolder = await createTestFolder(owner.id, { name: 'Shared' });
+      const visibleTarget = await createTestPage(owner.id, {
+        title: 'Visible in shared folder',
+        parentId: sharedFolder.id,
+      });
+      const hiddenTarget = await createTestPage(owner.id, { title: 'Hidden owner page' });
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'admin')`,
+        [sharedFolder.id, owner.id, importer.id],
+      );
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File(
+          ['# Imported\n\n[[Visible in shared folder]] and [[Hidden owner page]]'],
+          'imported.md',
+          { type: 'text/markdown' },
+        ),
+      );
+
+      const res = await app.request(`/api/import/markdown?parentId=${sharedFolder.id}`, {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(201);
+      const imported = (await res.json()) as { id: string };
+      const ydocResult = await query<{ ydoc: Buffer }>('select ydoc from pages where id = $1', [
+        imported.id,
+      ]);
+      const connections = extractConnectionsFromYDoc(
+        new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
+      );
+      expect(connections).toContainEqual(
+        expect.objectContaining({ targetSlug: 'visible in shared folder' }),
+      );
+      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
+      expect(
+        connections.find((connection) => connection.targetSlug === 'hidden owner page')?.targetId,
+      ).toBeUndefined();
+      expect(connections.some((connection) => connection.targetId === hiddenTarget.id)).toBe(false);
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(false);
+    });
+
+    it('preserves explicit paths without embedding duplicate-title target IDs', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
@@ -140,11 +215,10 @@ Body text`;
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
       );
-      expect(connections).toContainEqual(
-        expect.objectContaining({ targetSlug: 'plans/roadmap', targetId: pathTarget.id }),
-      );
+      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'plans/roadmap' }));
       const ambiguous = connections.find((connection) => connection.targetSlug === 'roadmap');
       expect(ambiguous?.targetId).toBeUndefined();
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(pathTarget.id))).toBe(false);
     });
 
     it('rejects oversized markdown before creating a page', async () => {

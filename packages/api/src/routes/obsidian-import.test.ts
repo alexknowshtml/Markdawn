@@ -1,5 +1,7 @@
-import { MAX_YDOC_BYTES } from '@markdawn/shared';
+import { MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
+import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
+import { query } from '../db/query';
 import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
 describe('obsidian import API', () => {
@@ -51,6 +53,25 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.pagesCreated).toBeGreaterThanOrEqual(1);
+    });
+
+    it('reports an over-limit filename without creating an invalid page', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const res = await app.request('/api/import/obsidian', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: [{ path: `${'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1)}.md`, content: 'Body' }],
+        }),
+      });
+
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({
+        pagesCreated: 0,
+        errors: [expect.stringContaining(`Title must be ${MAX_PAGE_TITLE_LENGTH}`)],
+      });
     });
 
     it('reports oversized markdown without creating an inaccessible page', async () => {
@@ -190,6 +211,28 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.backlinksCreated).toBeGreaterThanOrEqual(1);
+
+      const importedPages = await query<{ id: string; title: string; ydoc: Buffer }>(
+        `select id, title, ydoc
+         from pages
+         where created_by = $1 and title in ('Page A', 'Page B')`,
+        [user.id],
+      );
+      const pageA = importedPages.rows.find((page) => page.title === 'Page A');
+      const pageB = importedPages.rows.find((page) => page.title === 'Page B');
+      expect(pageA).toBeDefined();
+      expect(pageB).toBeDefined();
+      const connections = extractConnectionsFromYDoc(new Uint8Array(pageA?.ydoc ?? []));
+      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'page b' }));
+      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
+      const indexed = await query<{ target_id: string | null; target_slug: string }>(
+        `select target_id, target_slug
+         from connections
+         where source_type = 'page' and source_id = $1 and target_slug = 'page b'`,
+        [pageA?.id],
+      );
+      expect(indexed.rows).toContainEqual({ target_id: pageB?.id, target_slug: 'page b' });
+      expect(pageA?.ydoc.includes(Buffer.from(pageB?.id ?? ''))).toBe(false);
     });
 
     it('handles invalid body gracefully', async () => {

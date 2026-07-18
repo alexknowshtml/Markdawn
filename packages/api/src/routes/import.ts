@@ -4,18 +4,20 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import type { pages } from '../db';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
-import {
-  createYjsDocWithTitle,
-  resolveWikilinkTargets,
-  stripLeadingH1,
-} from '../utils/markdown-to-yjs';
+import { createYjsDocWithTitle, stripLeadingH1 } from '../utils/markdown-to-yjs';
+import { normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition } from '../utils/position';
-import { ensureFolderAccess, lockEntityAccessMutation } from '../utils/share-access';
-import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
+import {
+  ensureFolderAccess,
+  lockEntityAccessMutation,
+  lockWorkspaceAccessMutation,
+} from '../utils/share-access';
+import { notifyShareRecompute } from '../utils/share-notify';
+import { getEntityMetaUserIds } from '../utils/shareRecipients';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -177,18 +179,8 @@ importRoute.post('/markdown', async (c) => {
 
   const user = c.get('user') as { id: string };
 
-  let destinationOwnerId = user.id;
   if (parentId) {
     await ensureFolderAccess(parentId, user.id, 'admin');
-    const ownerResult = await query<{ owner_id: string }>(
-      'select get_root_folder_owner($1) as owner_id',
-      [parentId],
-    );
-    const ownerId = ownerResult.rows[0]?.owner_id;
-    if (!ownerId) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
-    destinationOwnerId = ownerId;
   }
 
   let formData: FormData;
@@ -211,40 +203,55 @@ importRoute.post('/markdown', async (c) => {
   const content = await file.text();
 
   const { title: frontmatterTitle, body, properties } = parseFrontmatter(content);
-  const title = frontmatterTitle || file.name.replace(/\.md$/, '');
+  const title = normalizePageTitle(frontmatterTitle || file.name.replace(/\.md$/, ''));
 
   await mkdir(uploadsDir, { recursive: true });
 
   const { result: processedContent } = processMarkdownImages(body, []);
   const contentForEditor = stripLeadingH1(processedContent, title);
-  let ydocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
-
-  // Resolve only unique titles in the destination workspace. This prevents
-  // imported links from binding to similarly named pages owned by other users.
-  const pageLookup = await getUniqueWorkspacePageLookup(destinationOwnerId);
-  if (pageLookup.size > 0) {
-    ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
-  }
-  ensureYdocSize(ydocBuffer);
+  const unresolvedYdocBuffer = Buffer.from(createYjsDocWithTitle(title, contentForEditor));
+  ensureYdocSize(unresolvedYdocBuffer);
 
   const hasProperties = Object.keys(properties).length > 0;
   const insertResult = await db.transaction(async (tx) => {
     if (parentId) {
       await lockEntityAccessMutation(tx, 'folder', parentId);
       await ensureFolderAccess(parentId, user.id, 'admin', tx);
+    } else {
+      await lockWorkspaceAccessMutation(tx, user.id);
     }
+
+    // Keep only the authored path in shared content. Target IDs are resolved
+    // by the collaboration indexer under the writer's current permissions.
+    const ydocBuffer = unresolvedYdocBuffer;
+    ensureYdocSize(ydocBuffer);
+
     const nextPosition = await getNextPosition('pages', parentId, user.id, tx);
-    return hasProperties
-      ? executeQuery(
+    const result = hasProperties
+      ? await executeQuery(
           tx,
           "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
           [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
         )
-      : executeQuery(
+      : await executeQuery(
           tx,
           "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
           [parentId, title, nextPosition, user.id, ydocBuffer],
         );
+    const createdPageId = result.rows[0]?.id as string | undefined;
+    if (createdPageId) {
+      const metaUserIds = await getEntityMetaUserIds(tx, 'page', createdPageId);
+      await notifyShareRecompute(
+        {
+          entityType: 'page',
+          entityId: createdPageId,
+          metaUserIds,
+          metaOnly: true,
+        },
+        tx,
+      );
+    }
+    return result;
   });
 
   if (insertResult.rowCount === 0) {

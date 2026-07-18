@@ -3,6 +3,8 @@ import {
   createTestApp,
   createTestComment,
   createTestPage,
+  createTestPublicShare,
+  createTestReply,
   createTestSession,
   createTestUser,
   createTestWorkspaceMember,
@@ -45,6 +47,62 @@ describe('comments API', () => {
 
       expect(res.status).toBe(404);
     });
+
+    it('does not expose comment or reply emails to a signed-in public-link visitor', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser({
+        email: 'private-comment-author@example.com',
+        name: 'Comment Author',
+      });
+      const replyAuthor = await createTestUser({
+        email: 'private-reply-author@example.com',
+        name: 'Reply Author',
+      });
+      const visitor = await createTestUser();
+      const visitorSession = await createTestSession(visitor.id);
+      const page = await createTestPage(owner.id, { title: 'Public comments' });
+      const comment = await createTestComment(page.id, owner.id);
+      const reply = await createTestReply(comment.id, replyAuthor.id);
+      const link = await createTestPublicShare(page.id);
+
+      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: visitorSession.Cookie, 'x-share-token': link.token },
+      });
+      expect(accessRes.status).toBe(200);
+
+      const res = await app.request(`/api/pages/${page.id}/comments`, {
+        headers: { Cookie: visitorSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as Array<{
+        userId: string;
+        user: Record<string, unknown>;
+        replies: Array<{ id: string; userId: string; user: Record<string, unknown> }>;
+      }>;
+
+      expect(body).toHaveLength(1);
+      expect(body[0]).toMatchObject({
+        userId: owner.id,
+        user: { id: owner.id, name: owner.name, avatarUrl: null },
+        replies: [
+          {
+            id: reply.id,
+            userId: replyAuthor.id,
+            user: { id: replyAuthor.id, name: replyAuthor.name, avatarUrl: null },
+          },
+        ],
+      });
+      expect(Object.keys(body[0]?.user ?? {}).sort()).toEqual(['avatarUrl', 'id', 'name']);
+      expect(Object.keys(body[0]?.replies[0]?.user ?? {}).sort()).toEqual([
+        'avatarUrl',
+        'id',
+        'name',
+      ]);
+      const encoded = JSON.stringify(body);
+      expect(encoded).not.toContain(owner.email);
+      expect(encoded).not.toContain(replyAuthor.email);
+    });
   });
 
   describe('POST /api/pages/:pageId/comments', () => {
@@ -67,6 +125,7 @@ describe('comments API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.content).toBe('Great page!');
+      expect(body.user).not.toHaveProperty('email');
     });
 
     it('allows viewers to read comments but denies comment mutations', async () => {
@@ -152,6 +211,7 @@ describe('comments API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.content).toBe('A reply');
+      expect(body.user).not.toHaveProperty('email');
     });
   });
 

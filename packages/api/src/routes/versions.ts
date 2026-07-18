@@ -3,7 +3,8 @@ import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-import { ensurePageAccess, lockEntityAccessMutation } from '../utils/share-access';
+import { normalizePageTitle } from '../utils/pageTitle';
+import { ensurePageAccess, lockEntityAccess } from '../utils/share-access';
 
 type VersionRow = {
   id: string;
@@ -24,29 +25,27 @@ const ensurePageExists = async (pageId: string) => {
 
 versionsRoute.get(':pageId/versions', async (c) => {
   const pageId = c.req.param('pageId');
-  const exists = await ensurePageExists(pageId);
-
-  if (!exists) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensurePageAccess(pageId, user.id);
+  return db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'page', pageId);
+    await ensurePageAccess(pageId, user.id, 'view', tx);
 
-  const versionsResult = await query(
-    'select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = $1 order by pv.created_at desc',
-    [pageId],
-  );
+    const versionsResult = await executeQuery(
+      tx,
+      'select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = $1 order by pv.created_at desc',
+      [pageId],
+    );
 
-  const versions = (versionsResult.rows as VersionRow[]).map((row) => ({
-    id: row.id,
-    pageId: row.page_id ?? pageId,
-    title: row.title ?? null,
-    createdAt: row.created_at ?? null,
-    createdByName: row.created_by_name ?? null,
-  }));
+    const versions = (versionsResult.rows as VersionRow[]).map((row) => ({
+      id: row.id,
+      pageId: row.page_id ?? pageId,
+      title: row.title ?? null,
+      createdAt: row.created_at ?? null,
+      createdByName: row.created_by_name ?? null,
+    }));
 
-  return c.json(versions);
+    return c.json(versions);
+  });
 });
 
 versionsRoute.post(':pageId/versions', async (c) => {
@@ -66,14 +65,15 @@ versionsRoute.post(':pageId/versions', async (c) => {
   if (!title || typeof title !== 'string') {
     throw new HTTPException(400, { message: 'title is required' });
   }
+  const normalizedTitle = normalizePageTitle(title);
 
   const result = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     return executeQuery(
       tx,
       "insert into page_versions (page_id, content, title, created_by) values ($1, '{}'::jsonb, $2, $3) returning id, page_id, title, created_at",
-      [pageId, title.trim(), user.id],
+      [pageId, normalizedTitle, user.id],
     );
   });
 
@@ -113,14 +113,22 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
     throw new HTTPException(404, { message: 'Version not found' });
   }
 
-  const versionTitle = (versionResult.rows[0] as { title: string | null }).title ?? null;
+  const versionTitle = normalizePageTitle(
+    (versionResult.rows[0] as { title: string | null }).title ?? '',
+  );
 
   const updateResult = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
+    await lockEntityAccess(tx, 'page', pageId);
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     const result = await executeQuery(
       tx,
-      "update pages set title = $1, title_search = to_tsvector('english', $1), updated_at = now() where id = $2 returning id, title",
+      `update pages
+       set title_revision = title_revision + case when title is distinct from $1 then 1 else 0 end,
+           title = $1,
+           title_search = to_tsvector('english', $1),
+           updated_at = now()
+       where id = $2
+       returning id, title`,
       [versionTitle, pageId],
     );
     await executeQuery(tx, 'select pg_notify($1, $2)', [

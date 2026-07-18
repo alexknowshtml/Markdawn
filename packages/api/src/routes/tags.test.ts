@@ -95,6 +95,67 @@ describe('tags API', () => {
       expect(await editorRes.json()).not.toContainEqual(expect.objectContaining({ id: page.id }));
     });
 
+    it('redacts a hidden parent until the folder becomes enumerable', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const recipientSession = await createTestSession(recipient.id);
+      const hiddenParent = await createTestFolder(owner.id, { name: 'Hidden Tag Parent' });
+      const hiddenParentToken = crypto.randomUUID();
+      await query('update folders set is_public = true, public_token = $1 where id = $2', [
+        hiddenParentToken,
+        hiddenParent.id,
+      ]);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $2, 'view', $3)`,
+        [hiddenParent.id, owner.id, hiddenParentToken],
+      );
+      const page = await createTestPage(owner.id, {
+        title: 'Tagged Direct Share',
+        parentId: hiddenParent.id,
+      });
+      await createTagConnection(page.id, 'hidden-parent');
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, recipient.id],
+      );
+
+      let res = await app.request('/api/tags/pages?tagId=%23hidden-parent', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      let body = (await res.json()) as Array<{ id: string; parentId: string | null }>;
+      expect(body).toContainEqual(expect.objectContaining({ id: page.id, parentId: null }));
+      expect(JSON.stringify(body)).not.toContain(hiddenParent.id);
+
+      const recordedFolderAccess = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_access_events
+         where folder_id = $1 and user_id = $2`,
+        [hiddenParent.id, recipient.id],
+      );
+      expect(recordedFolderAccess.rows[0]?.count).toBe('0');
+
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')`,
+        [hiddenParent.id, owner.id, recipient.id],
+      );
+
+      res = await app.request('/api/tags/pages?tagId=%23hidden-parent', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      body = (await res.json()) as Array<{ id: string; parentId: string | null }>;
+      expect(body).toContainEqual(
+        expect.objectContaining({ id: page.id, parentId: hiddenParent.id }),
+      );
+    });
+
     it('returns 400 when tagId is missing', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
