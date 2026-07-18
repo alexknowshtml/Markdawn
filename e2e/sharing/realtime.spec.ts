@@ -4,6 +4,7 @@ import {
   type BrowserContext,
   expect,
   test,
+  type WebSocketRoute,
 } from '@playwright/test';
 import { API_URL } from '../fixtures';
 
@@ -18,6 +19,14 @@ type EntityResult = {
 
 type ShareSummary = {
   accessors: Array<{ shareId?: string | null; userId: string }>;
+  accessSources?: Array<{
+    kind: 'owner' | 'direct' | 'folder' | 'workspace';
+    shareId: string | null;
+    userId: string;
+    permission: 'view' | 'edit' | 'admin';
+    effectivePermission: 'view' | 'edit' | 'admin';
+    isWinning: boolean;
+  }>;
 };
 
 const webHostname = new URL(process.env.BASE_URL ?? 'http://localhost:5173').hostname;
@@ -78,8 +87,242 @@ async function getDirectShareId(
   return shareId;
 }
 
+async function waitForPersistedMarkdown(
+  ownerApi: APIRequestContext,
+  pageId: string,
+  expectedContent: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const response = await ownerApi.get(`/api/pages/${pageId}/export/markdown`);
+        return response.ok() ? response.text() : '';
+      },
+      {
+        message: 'expected the collaborative document to be persisted before reloading',
+        timeout: 15_000,
+      },
+    )
+    .toContain(expectedContent);
+}
+
 test.describe('sharing realtime propagation', () => {
   test.setTimeout(120_000);
+
+  test('keeps direct edit through a View-folder move and cleanly falls back live', async ({
+    browser,
+    request,
+    playwright,
+  }) => {
+    const owner = await createUser(request, 'Sharing Primitive Owner');
+    const recipient = await createUser(request, 'Sharing Primitive Recipient');
+    const recipientEmail = `e2e-${recipient.userId.slice(0, 8)}@example.com`;
+    const ownerApi = await playwright.request.newContext({
+      baseURL: API_URL,
+      extraHTTPHeaders: { Cookie: `better-auth.session_token=${owner.cookie}` },
+    });
+    const ownerContext = await createAuthenticatedContext(browser, owner);
+    const recipientContext = await createAuthenticatedContext(browser, recipient);
+
+    try {
+      const folder = await createEntity(ownerApi, '/api/folders', {
+        name: `Primitive View folder ${Date.now()}`,
+      });
+      const sharedPage = await createEntity(ownerApi, '/api/pages', {
+        title: `Primitive moved page ${Date.now()}`,
+      });
+      const ownerPage = await ownerContext.newPage();
+      const recipientPage = await recipientContext.newPage();
+      const initialContent = `PRIMITIVE-CONTENT-${sharedPage.id.slice(0, 8)}`;
+
+      await ownerPage.goto(`/app/page-${sharedPage.id}`);
+      const ownerEditor = ownerPage.locator('.ProseMirror');
+      await expect(ownerEditor).toHaveAttribute('contenteditable', 'true');
+      await ownerEditor.click();
+      await ownerPage.keyboard.type(initialContent);
+      // Poll the export path so the reload proves the baseline came from
+      // PostgreSQL before any permission transition is attempted.
+      await waitForPersistedMarkdown(ownerApi, sharedPage.id, initialContent);
+      await ownerPage.reload();
+      await expect(ownerPage.locator('.ProseMirror')).toContainText(initialContent, {
+        timeout: 15_000,
+      });
+
+      expect(
+        (
+          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/invite`, {
+            data: { email: recipientEmail, permission: 'edit' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      expect(
+        (
+          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/invite`, {
+            data: { email: recipientEmail, permission: 'view' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      expect(
+        (
+          await ownerApi.patch(`/api/pages/${sharedPage.id}/move`, {
+            data: { parentId: folder.id },
+          })
+        ).ok(),
+      ).toBeTruthy();
+
+      await recipientPage.goto(`/app/page-${sharedPage.id}`);
+      const recipientEditor = recipientPage.locator('.ProseMirror');
+      await expect(recipientEditor).toContainText(initialContent, { timeout: 15_000 });
+      await expect(recipientEditor).toHaveAttribute('contenteditable', 'true');
+
+      const summaryResponse = await ownerApi.get(`/api/shares/entity/page/${sharedPage.id}`);
+      expect(summaryResponse.ok()).toBeTruthy();
+      const summary = (await summaryResponse.json()) as ShareSummary;
+      const recipientSources = (summary.accessSources ?? []).filter(
+        (source) => source.userId === recipient.userId,
+      );
+      expect(recipientSources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'direct',
+            permission: 'edit',
+            effectivePermission: 'edit',
+            isWinning: true,
+          }),
+          expect.objectContaining({
+            kind: 'folder',
+            permission: 'view',
+            effectivePermission: 'edit',
+            isWinning: false,
+          }),
+        ]),
+      );
+
+      // A restriction blocks the ancestor source, never the direct grant.
+      expect(
+        (
+          await ownerApi.patch(`/api/shares/entity/page/${sharedPage.id}/inheritance`, {
+            data: { policy: 'restricted' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      await expect(recipientEditor).toHaveAttribute('contenteditable', 'true');
+      expect(
+        (
+          await ownerApi.patch(`/api/shares/entity/page/${sharedPage.id}/inheritance`, {
+            data: { policy: 'inherit' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+
+      const directShareId = await getDirectShareId(
+        ownerApi,
+        'page',
+        sharedPage.id,
+        recipient.userId,
+      );
+      expect((await ownerApi.delete(`/api/shares/${directShareId}`)).ok()).toBeTruthy();
+      await expect(recipientEditor).toHaveAttribute('contenteditable', 'false', {
+        timeout: 10_000,
+      });
+      await expect(recipientEditor).toContainText(initialContent);
+
+      // A view-only peer leaving must not evict or blank the owner's room.
+      await recipientPage.goto('/app');
+      await expect(ownerPage.locator('.ProseMirror')).toContainText(initialContent);
+      const postDisconnectContent = '-OWNER-AFTER-VIEWER-LEFT';
+      await ownerPage.locator('.ProseMirror').click();
+      await ownerPage.keyboard.press('End');
+      await ownerPage.keyboard.type(postDisconnectContent);
+      await waitForPersistedMarkdown(
+        ownerApi,
+        sharedPage.id,
+        `${initialContent}${postDisconnectContent}`,
+      );
+      await ownerPage.reload();
+      await expect(ownerPage.locator('.ProseMirror')).toContainText(
+        `${initialContent}${postDisconnectContent}`,
+        { timeout: 15_000 },
+      );
+
+      // Re-promotion must reconnect to the canonical non-blank document.
+      expect(
+        (
+          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/invite`, {
+            data: { email: recipientEmail, permission: 'edit' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      await recipientPage.goto(`/app/page-${sharedPage.id}`);
+      await expect(recipientPage.locator('.ProseMirror')).toHaveAttribute(
+        'contenteditable',
+        'true',
+      );
+      await expect(recipientPage.locator('.ProseMirror')).toContainText(
+        `${initialContent}${postDisconnectContent}`,
+      );
+    } finally {
+      await ownerContext.close();
+      await recipientContext.close();
+      await ownerApi.dispose();
+    }
+  });
+
+  test('records a first authenticated folder-link visit and retains it after direct revocation', async ({
+    browser,
+    request,
+    playwright,
+  }) => {
+    const owner = await createUser(request, 'Public Folder Owner');
+    const recipient = await createUser(request, 'Public Folder Visitor');
+    const recipientEmail = `e2e-${recipient.userId.slice(0, 8)}@example.com`;
+    const ownerApi = await playwright.request.newContext({
+      baseURL: API_URL,
+      extraHTTPHeaders: { Cookie: `better-auth.session_token=${owner.cookie}` },
+    });
+    const recipientContext = await createAuthenticatedContext(browser, recipient);
+
+    try {
+      const folderName = `First public folder ${Date.now()}`;
+      const childTitle = `First public child ${Date.now()}`;
+      const folder = await createEntity(ownerApi, '/api/folders', { name: folderName });
+      await createEntity(ownerApi, '/api/pages', {
+        title: childTitle,
+        parentId: folder.id,
+      });
+      expect(
+        (
+          await ownerApi.patch(`/api/shares/entity/folder/${folder.id}/link`, {
+            data: { permission: 'view' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+
+      const recipientPage = await recipientContext.newPage();
+      await recipientPage.goto(`/app/folder/public-${folder.id}`);
+      await expect(recipientPage.getByText(childTitle, { exact: true })).toBeVisible();
+
+      expect(
+        (
+          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/invite`, {
+            data: { email: recipientEmail, permission: 'edit' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+      const directShareId = await getDirectShareId(ownerApi, 'folder', folder.id, recipient.userId);
+      expect((await ownerApi.delete(`/api/shares/${directShareId}`)).ok()).toBeTruthy();
+
+      await recipientPage.goto('/app/shared-with-me');
+      await expect(recipientPage.getByText(folderName, { exact: true }).first()).toBeVisible({
+        timeout: 15_000,
+      });
+      await recipientPage.getByText(folderName, { exact: true }).first().click();
+      await expect(recipientPage.getByText(childTitle, { exact: true }).first()).toBeVisible();
+    } finally {
+      await recipientContext.close();
+      await ownerApi.dispose();
+    }
+  });
 
   test('refreshes invitations, permission fallback, folder revocation, and open share lists', async ({
     browser,
@@ -205,6 +448,86 @@ test.describe('sharing realtime propagation', () => {
     }
   });
 
+  test('evicts stale anonymous content when reconnect authentication is denied', async ({
+    browser,
+    request,
+    playwright,
+  }) => {
+    const owner = await createUser(request, 'Reconnect Revocation Owner');
+    const ownerApi = await playwright.request.newContext({
+      baseURL: API_URL,
+      extraHTTPHeaders: { Cookie: `better-auth.session_token=${owner.cookie}` },
+    });
+    const anonymousContext = await browser.newContext({
+      storageState: { cookies: [], origins: [] },
+    });
+    let holdCollabReconnects = false;
+    const connectedCollabRoutes: WebSocketRoute[] = [];
+    const heldCollabRoutes: WebSocketRoute[] = [];
+    await anonymousContext.routeWebSocket('**/collab', (route) => {
+      if (holdCollabReconnects) {
+        heldCollabRoutes.push(route);
+        return;
+      }
+      connectedCollabRoutes.push(route);
+      route.connectToServer();
+    });
+
+    try {
+      const confidentialTitle = `Offline confidential ${Date.now()}`;
+      const publicPage = await createEntity(ownerApi, '/api/pages', {
+        title: confidentialTitle,
+      });
+      expect(
+        (
+          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/link`, {
+            data: { permission: 'edit' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+
+      const anonymousPage = await anonymousContext.newPage();
+      await anonymousPage.goto(`/app/page-${publicPage.id}`);
+      const anonymousEditor = anonymousPage.locator('.ProseMirror');
+      await expect(anonymousPage.locator('[data-testid="page-title"]')).toHaveValue(
+        confidentialTitle,
+      );
+      await expect(anonymousEditor).toHaveAttribute('contenteditable', 'true');
+
+      // Cut only the collaboration transport and hold its automatic reconnect.
+      // HTTP stays online and cached, so the next authoritative page signal is
+      // the collaboration server denying authentication after the revoke.
+      holdCollabReconnects = true;
+      const collabRoute = connectedCollabRoutes.at(-1);
+      if (!collabRoute) throw new Error('Expected an active collaboration WebSocket');
+      await collabRoute.close({ code: 1012, reason: 'E2E collaboration outage' });
+      await expect(anonymousEditor).toHaveAttribute('contenteditable', 'false', {
+        timeout: 10_000,
+      });
+      await expect.poll(() => heldCollabRoutes.length, { timeout: 10_000 }).toBeGreaterThan(0);
+      expect(
+        (
+          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/link`, {
+            data: { permission: 'private' },
+          })
+        ).ok(),
+      ).toBeTruthy();
+
+      holdCollabReconnects = false;
+      await Promise.all(
+        heldCollabRoutes
+          .splice(0)
+          .map((route) => route.close({ code: 1012, reason: 'Resume after E2E outage' })),
+      );
+      await expect(anonymousEditor).toHaveCount(0, { timeout: 15_000 });
+      await expect(anonymousPage).toHaveURL(/\/login\/?$/, { timeout: 15_000 });
+      await expect(anonymousPage.getByRole('heading', { name: 'Log In' })).toBeVisible();
+    } finally {
+      await anonymousContext.close();
+      await ownerApi.dispose();
+    }
+  });
+
   test('refreshes recursive deletion and workspace leave, and persists anonymous titles', async ({
     browser,
     request,
@@ -229,8 +552,12 @@ test.describe('sharing realtime propagation', () => {
     try {
       const ownerPage = await ownerContext.newPage();
       const anonymousPage = await anonymousContext.newPage();
+      const deletedFolder = await createEntity(ownerApi, '/api/folders', {
+        name: `Deleted folder ${Date.now()}`,
+      });
       const publicPage = await createEntity(ownerApi, '/api/pages', {
         title: `Anonymous title ${Date.now()}`,
+        parentId: deletedFolder.id,
       });
       expect(
         (
@@ -265,26 +592,23 @@ test.describe('sharing realtime propagation', () => {
       const storedPage = await ownerApi.get(`/api/pages/${publicPage.id}`);
       expect((await storedPage.json()) as { title: string }).toMatchObject({ title: nextTitle });
 
-      const deletedFolder = await createEntity(ownerApi, '/api/folders', {
-        name: `Deleted folder ${Date.now()}`,
-      });
-      const deletedPage = await createEntity(ownerApi, '/api/pages', {
-        title: `Deleted child ${Date.now()}`,
-        parentId: deletedFolder.id,
-      });
-      await ownerPage.goto(`/app/page-${deletedPage.id}`);
-      await expect(ownerPage.locator('.ProseMirror')).toBeVisible();
       expect(
         (await ownerApi.delete(`/api/folders/${deletedFolder.id}?force=true`)).ok(),
       ).toBeTruthy();
       await expect(ownerPage.locator('.ProseMirror')).toHaveCount(0, { timeout: 10_000 });
+      await expect(anonymousPage.locator('.ProseMirror')).toHaveCount(0, { timeout: 10_000 });
       await expect
         .poll(async () => {
           const redirected = /\/app\/?$/.test(ownerPage.url());
-          const missing = await ownerPage.getByText('Page not found.', { exact: true }).isVisible();
+          const missing = await ownerPage.getByText('Page not found', { exact: true }).isVisible();
           return redirected || missing;
         })
         .toBe(true);
+      // Anonymous users are sent through /app, then the auth boundary lands
+      // them on login. The editor assertion above is the content-eviction
+      // guarantee; this URL assertion proves the old public route is gone.
+      await expect(anonymousPage).toHaveURL(/\/login\/?$/, { timeout: 10_000 });
+      await expect(anonymousPage.getByRole('heading', { name: 'Log In' })).toBeVisible();
 
       expect(
         (
