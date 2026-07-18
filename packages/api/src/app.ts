@@ -18,6 +18,7 @@ import sharesRoute from './routes/shares';
 import tagsRoute from './routes/tags';
 import templatesRoute from './routes/templates';
 import testSetupRoute from './routes/test-setup';
+import trashRoute from './routes/trash';
 import uploadsRoute from './routes/uploads';
 import versionsRoute from './routes/versions';
 import workspaceRoute from './routes/workspace';
@@ -71,6 +72,7 @@ export async function createApp() {
 
   app.route('/api/folders', foldersPublicRoute);
   app.route('/api/folders', foldersRoute);
+  app.route('/api/trash', trashRoute);
 
   // workspaces API removed
 
