@@ -2,6 +2,7 @@ import { Copy, Download, Edit2, FolderInput, Share, Star, Trash2 } from 'lucide-
 import type React from 'react';
 import { useState } from 'react';
 import { useClipboard } from '../../contexts/ClipboardContext';
+import { useIdentityLifecycle } from '../../contexts/IdentityLifecycleContext';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useBulkMoveFolders, useBulkMovePages } from '../../hooks/use-bulk-actions';
 import { useToggleFavorite } from '../../hooks/use-favorites';
@@ -9,6 +10,7 @@ import { useFolderTree } from '../../hooks/use-folders';
 import { useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import {
+  canRenameEntity,
   isOwnedByUser,
   preservesEffectiveOwnerAtRoot,
   useEntityDeletion,
@@ -53,6 +55,7 @@ export function PageContextMenu({
   onDelete,
   onMutated,
 }: PageContextMenuProps) {
+  const identityLifecycle = useIdentityLifecycle();
   const clipboard = useClipboard();
   const { isAnonymous } = useShareContext();
   const { data: session } = useAuth();
@@ -78,8 +81,7 @@ export function PageContextMenu({
 
   const isOwned = currentUserId ? isOwnedByUser(item, currentUserId) : false;
   const isAdmin = isOwned || item.userPermission === 'admin';
-  const canEditContent = isAdmin || item.userPermission === 'edit';
-  const canRename = item.type === 'page' ? canEditContent : isAdmin;
+  const canRename = canRenameEntity(item, currentUserId);
   const canLeave = !isOwned && (item.shareSource === 'direct' || item.shareSource === 'link');
   const canMove = item.canMove ?? isAdmin;
   const hasWorkspaceRootAccess =
@@ -118,6 +120,7 @@ export function PageContextMenu({
       const res = await fetch(`/api/pages/${item.id}/export/markdown`);
       if (!res.ok) throw new Error('Failed to export');
       const blob = await res.blob();
+      if (!identityLifecycle.isActive()) return;
       const disposition = res.headers.get('content-disposition');
       const match = disposition?.match(/filename="?([^";]+)"?/i);
       const filename = match?.[1] ?? `${item.title || 'page'}.md`;
@@ -131,6 +134,7 @@ export function PageContextMenu({
       URL.revokeObjectURL(url);
       showSuccessToast('Exported to markdown');
     } catch {
+      if (!identityLifecycle.isActive()) return;
       showErrorToast('Failed to export note');
     }
   };
@@ -165,8 +169,10 @@ export function PageContextMenu({
     if (item.type === 'page') markSelfLeave(item.id);
     try {
       await leaveMutation.mutateAsync(item.id);
+      if (!identityLifecycle.isActive()) return;
       onMutated?.();
     } catch {
+      if (!identityLifecycle.isActive()) return;
       if (item.type === 'page') consumeSelfLeave(item.id);
       // Error toast handled globally by MutationCache.onError
     }

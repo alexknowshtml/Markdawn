@@ -22,7 +22,7 @@ function buildWikiNode(wikiLinkType: NodeType, source: string): ProseNode {
   const heading = match?.[2] ?? '';
   const label = match?.[3] ?? (path ? (heading ? `${path}#${heading}` : path) : `#${heading}`);
 
-  return wikiLinkType.create({ targetId: '', path, heading, label });
+  return wikiLinkType.create({ path, heading, label });
 }
 
 function splitInlineText(

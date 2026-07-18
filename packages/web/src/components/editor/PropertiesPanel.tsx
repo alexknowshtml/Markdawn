@@ -100,6 +100,7 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
     }, [inputValue, suggestions, tags]);
 
     const addTag = (tag: string) => {
+      if (readOnly) return;
       const name = cleanTagName(tag);
       const identity = tagIdentity(name);
       if (identity && !tags.some((existing) => tagIdentity(existing) === identity)) {
@@ -109,10 +110,12 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
     };
 
     const removeTag = (tagToRemove: string) => {
+      if (readOnly) return;
       onChange(tags.filter((t) => t !== tagToRemove));
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (readOnly) return;
       if (e.key === 'ArrowDown') {
         if (filteredSuggestions.length > 0) {
           e.preventDefault();
@@ -250,6 +253,15 @@ function PropertyKeySelector({
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
+    if (readOnly && isEditing) {
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+      blurTimeoutRef.current = null;
+      hasInteracted.current = false;
+      setIsEditing(false);
+    }
+  }, [isEditing, readOnly, setIsEditing]);
+
+  useEffect(() => {
     return () => {
       if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);
@@ -283,11 +295,13 @@ function PropertyKeySelector({
   }, [isEditing, currentKey, suggestions]);
 
   const handleSelect = (key: string) => {
+    if (readOnly) return;
     onSelect(key);
     setIsEditing(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (readOnly) return;
     if (e.key === 'ArrowDown') {
       if (totalItems > 0) {
         e.preventDefault();
@@ -314,7 +328,7 @@ function PropertyKeySelector({
     }
   };
 
-  if (!isEditing) {
+  if (readOnly || !isEditing) {
     const IconComponent = getIconForKey(currentKey);
     return (
       <button
@@ -346,8 +360,9 @@ function PropertyKeySelector({
         }}
         onKeyDown={handleKeyDown}
         onBlur={() => {
+          if (readOnly) return;
           blurTimeoutRef.current = setTimeout(() => {
-            if (inputRef.current) {
+            if (inputRef.current && !readOnly) {
               handleSelect(inputValue.trim() || currentKey);
             }
           }, 150);
@@ -430,6 +445,7 @@ function SortablePropertyRow({
   const readOnly = useIsReadOnly();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
+    disabled: readOnly,
   });
 
   const [isEditingValue, setIsEditingValue] = useState(false);
@@ -442,6 +458,8 @@ function SortablePropertyRow({
   const tagEditorRef = useRef<HTMLInputElement>(null);
   const [isEditingKey, setIsEditingKey] = useState(isNew ?? false);
   const valueSavePending = useRef(false);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -450,6 +468,11 @@ function SortablePropertyRow({
   };
 
   const handleValueSave = (nextValue?: unknown) => {
+    if (readOnlyRef.current) {
+      setIsEditingValue(false);
+      setTempValue(Array.isArray(item.value) ? item.value.join(', ') : String(item.value ?? ''));
+      return;
+    }
     if (valueSavePending.current) return;
     setIsEditingValue(false);
     const finalValue = nextValue !== undefined ? nextValue : tempValue.trim();
@@ -458,6 +481,15 @@ function SortablePropertyRow({
       onUpdate(item.id, finalValue);
     }
   };
+
+  useEffect(() => {
+    if (readOnly) {
+      valueSavePending.current = false;
+      setIsEditingValue(false);
+      setIsEditingKey(false);
+      setTempValue(Array.isArray(item.value) ? item.value.join(', ') : String(item.value ?? ''));
+    }
+  }, [item.value, readOnly]);
 
   useEffect(() => {
     if (isEditingValue) {
@@ -470,6 +502,7 @@ function SortablePropertyRow({
 
   const handleKeySelect = useCallback(
     (newKey: string) => {
+      if (readOnlyRef.current) return;
       onRename(item.id, newKey);
       // Auto-focus the value area after selecting a property key
       const isTag = newKey.toLowerCase() === 'tags' || newKey.toLowerCase() === 'tag';
@@ -518,7 +551,9 @@ function SortablePropertyRow({
             ref={tagEditorRef}
             tags={Array.isArray(item.value) ? (item.value as string[]) : []}
             suggestions={tagSuggestions}
-            onChange={(newTags) => onUpdate(item.id, newTags)}
+            onChange={(newTags) => {
+              if (!readOnlyRef.current) onUpdate(item.id, newTags);
+            }}
             onSuggestionsOpen={refreshTags}
           />
         ) : isEditingValue ? (
@@ -604,6 +639,8 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   const [items, setItems] = useState<PropertyItem[]>([]);
   const [newPropertyId, setNewPropertyId] = useState<string | null>(null);
   const updatePage = useUpdatePage();
+  const panelReadOnlyRef = useRef(readOnly);
+  panelReadOnlyRef.current = readOnly;
 
   // Sync internal items with props while preserving order
   useEffect(() => {
@@ -650,6 +687,12 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
     });
   }, [properties]);
 
+  useEffect(() => {
+    if (!readOnly) return;
+    setNewPropertyId(null);
+    setItems(Object.entries(properties ?? {}).map(([key, value]) => ({ id: key, key, value })));
+  }, [properties, readOnly]);
+
   const {
     allKeys: propertyKeySuggestions,
     allTags: tagSuggestions,
@@ -665,6 +708,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
 
   const persistChanges = useCallback(
     (newItems: PropertyItem[]) => {
+      if (panelReadOnlyRef.current) return;
       const nextProperties: Record<string, unknown> = {};
       for (const item of newItems) {
         const key = item.key.trim();
@@ -687,6 +731,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
+    if (panelReadOnlyRef.current) return;
     const { active, over } = event;
 
     if (over && active.id !== over.id) {
@@ -701,6 +746,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   };
 
   const updateProperty = (id: string, value: unknown) => {
+    if (panelReadOnlyRef.current) return;
     setItems((prev) => {
       const next = prev.map((it) => (it.id === id ? { ...it, value } : it));
       persistChanges(next);
@@ -709,6 +755,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   };
 
   const deleteProperty = (id: string) => {
+    if (panelReadOnlyRef.current) return;
     setItems((prev) => {
       const next = prev.filter((it) => it.id !== id);
       persistChanges(next);
@@ -717,6 +764,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   };
 
   const renameProperty = (id: string, newKey: string) => {
+    if (panelReadOnlyRef.current) return;
     setItems((currentItems) => {
       if (!newKey || currentItems.some((it) => it.id !== id && it.key === newKey)) {
         return [...currentItems]; // Trigger re-render to revert invalid input
@@ -729,6 +777,7 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
   };
 
   const addProperty = () => {
+    if (panelReadOnlyRef.current) return;
     const newId = `new-${Math.random().toString(36).slice(2, 11)}`;
     setItems((prev) => [...prev, { id: newId, key: '', value: '' }]);
     setNewPropertyId(newId);
@@ -785,7 +834,8 @@ export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
       {!isCollapsed && (
         <div className="space-y-1">
           <DndContext
-            sensors={sensors}
+            key={readOnly ? 'read-only' : 'editable'}
+            sensors={readOnly ? [] : sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >

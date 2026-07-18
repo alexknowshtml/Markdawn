@@ -1,6 +1,6 @@
 import { FileText, Filter } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { buildPagePath } from '../../utils/url';
 import { EmptyState } from '../EmptyState';
 
@@ -13,7 +13,7 @@ type SearchResult = {
 };
 
 export function SearchDialog() {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');

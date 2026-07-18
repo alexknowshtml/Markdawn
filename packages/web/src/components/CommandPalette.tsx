@@ -1,6 +1,6 @@
 import { FileText, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useShortcut, useShortcutScope } from '../contexts/KeyboardShortcutContext';
 import { useCreatePage } from '../hooks/use-pages';
 import { buildPagePath } from '../utils/url';
@@ -14,7 +14,7 @@ type SearchResult = {
 };
 
 export function CommandPalette() {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
@@ -226,7 +226,7 @@ export function CommandPalette() {
                 <button
                   type="button"
                   onClick={() => {
-                    navigate('/app?tab=trash');
+                    navigate('/app/trash');
                     closeDialog();
                   }}
                   className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"

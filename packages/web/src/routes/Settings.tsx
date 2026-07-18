@@ -4,10 +4,12 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ObsidianImportDialog } from '../components/import/ObsidianImportDialog';
 import { WorkspaceMembersPanel } from '../components/workspace/WorkspaceMembersPanel';
+import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { showErrorToast, showSuccessToast } from '../utils/toast';
 
 export default function Settings() {
   const queryClient = useQueryClient();
+  const identityLifecycle = useIdentityLifecycle();
   const [showImportDialog, setShowImportDialog] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
@@ -17,6 +19,7 @@ export default function Settings() {
       const res = await fetch('/api/pages/export');
       if (!res.ok) throw new Error('Failed to export');
       const blob = await res.blob();
+      if (!identityLifecycle.isActive()) return;
       const disposition = res.headers.get('content-disposition');
       const match = disposition?.match(/filename="?([^";]+)"?/i);
       const filename = match?.[1] ?? 'pages-export.zip';
@@ -30,6 +33,7 @@ export default function Settings() {
       URL.revokeObjectURL(url);
       showSuccessToast('Pages exported');
     } catch {
+      if (!identityLifecycle.isActive()) return;
       showErrorToast('Failed to export pages');
     } finally {
       setIsExporting(false);

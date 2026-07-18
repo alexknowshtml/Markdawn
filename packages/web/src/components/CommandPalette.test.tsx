@@ -161,6 +161,10 @@ describe('CommandPalette', () => {
     await waitFor(() => {
       expect(screen.getByText('Go to Trash')).toBeInTheDocument();
     });
+
+    await user.click(screen.getByText('Go to Trash'));
+
+    expect(mockNavigate).toHaveBeenCalledWith('/app/trash');
   });
 
   it('has no accessibility violations when open', async () => {

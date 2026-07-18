@@ -1,7 +1,7 @@
 import { FloatingPortal } from '@floating-ui/react';
 import { MoreHorizontal } from 'lucide-react';
 import type { ReactNode } from 'react';
-import { useEffect, useId } from 'react';
+import { useEffect, useId, useRef } from 'react';
 import { useKebabMenu } from '../../hooks/useKebabMenu';
 
 export type KebabMenuItem = {
@@ -33,10 +33,22 @@ export function KebabMenu({
 }: KebabMenuProps) {
   const kebab = useKebabMenu();
   const menuId = useId();
+  const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     onOpenChange?.(kebab.isMounted);
   }, [kebab.isMounted, onOpenChange]);
+
+  useEffect(() => {
+    if (!kebab.isMounted) return;
+    window.requestAnimationFrame(() => itemRefs.current[0]?.focus());
+  }, [kebab.isMounted]);
+
+  const focusItem = (index: number) => {
+    if (items.length === 0) return;
+    const normalized = (index + items.length) % items.length;
+    itemRefs.current[normalized]?.focus();
+  };
 
   return (
     <>
@@ -65,9 +77,12 @@ export function KebabMenu({
               aria-labelledby={menuId}
               className={menuClassName ?? defaultMenuClass}
             >
-              {items.map((item) => (
+              {items.map((item, index) => (
                 <button
                   key={item.label}
+                  ref={(element) => {
+                    itemRefs.current[index] = element;
+                  }}
                   type="button"
                   role="menuitem"
                   disabled={item.disabled}
@@ -75,6 +90,20 @@ export function KebabMenu({
                     e.stopPropagation();
                     kebab.close();
                     item.onClick();
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                      event.preventDefault();
+                      focusItem(index + (event.key === 'ArrowDown' ? 1 : -1));
+                    } else if (event.key === 'Home' || event.key === 'End') {
+                      event.preventDefault();
+                      focusItem(event.key === 'Home' ? 0 : items.length - 1);
+                    } else if (event.key === 'Escape') {
+                      event.preventDefault();
+                      kebab.close();
+                      const reference = kebab.refs.domReference.current;
+                      if (reference instanceof HTMLElement) reference.focus();
+                    }
                   }}
                   className={`${defaultMenuItemClass} ${item.className ?? ''}`}
                 >

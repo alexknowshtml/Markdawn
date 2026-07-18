@@ -1,6 +1,7 @@
 import { directoryOpen } from 'browser-fs-access';
 import { AlertCircle, CheckCircle, FileText, FolderOpen, Image, Loader2, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import { useIdentityLifecycle } from '../../contexts/IdentityLifecycleContext';
 
 interface VaultFile {
   path: string;
@@ -73,6 +74,7 @@ function extractFrontmatterTags(content: string, tagSet: Set<string>): void {
 }
 
 export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialogProps) {
+  const identityLifecycle = useIdentityLifecycle();
   const [step, setStep] = useState<'select' | 'preview' | 'uploading' | 'done' | 'error'>('select');
   const [files, setFiles] = useState<VaultFile[]>([]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -90,6 +92,7 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
   const scanVault = useCallback(async () => {
     try {
       const dirHandle = await directoryOpen({ recursive: true });
+      if (!identityLifecycle.isActive()) return;
       const scannedFiles: VaultFile[] = [];
       const tags = new Set<string>();
       let noteCount = 0;
@@ -109,6 +112,7 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
           : null;
 
       for (let i = 0; i < (dirHandle as unknown as File[]).length; i++) {
+        if (!identityLifecycle.isActive()) return;
         const file = (dirHandle as unknown as File[])[i];
         if (!file) continue;
         let relativePath = allPaths[i] ?? '';
@@ -124,6 +128,7 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
         if (file.name.endsWith('.md')) {
           if (dir) folderPaths.add(dir);
           const content = await file.text();
+          if (!identityLifecycle.isActive()) return;
           scannedFiles.push({ path: relativePath, content });
           noteCount++;
 
@@ -158,6 +163,7 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
             reader.onerror = reject;
             reader.readAsDataURL(file);
           });
+          if (!identityLifecycle.isActive()) return;
           scannedFiles.push({
             path: relativePath,
             data: base64,
@@ -176,14 +182,16 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
       });
       setStep('preview');
     } catch (err) {
+      if (!identityLifecycle.isActive()) return;
       if ((err as Error).name !== 'AbortError') {
         setError((err as Error).message || 'Failed to read vault');
         setStep('error');
       }
     }
-  }, []);
+  }, [identityLifecycle]);
 
   const startImport = useCallback(async () => {
+    if (!identityLifecycle.isActive()) return;
     setStep('uploading');
     setProgress(0);
 
@@ -196,23 +204,27 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
         credentials: 'include',
         body: JSON.stringify({ files }),
       });
+      if (!identityLifecycle.isActive()) return;
 
       setProgress(100);
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ message: 'Import failed' }));
+        if (!identityLifecycle.isActive()) return;
         throw new Error(errData.message || 'Import failed');
       }
 
       const data = await res.json();
+      if (!identityLifecycle.isActive()) return;
       setResult(data);
       setStep('done');
       onSuccess();
     } catch (err) {
+      if (!identityLifecycle.isActive()) return;
       setError((err as Error).message);
       setStep('error');
     }
-  }, [files, onSuccess]);
+  }, [files, identityLifecycle, onSuccess]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 backdrop-blur-sm px-4">

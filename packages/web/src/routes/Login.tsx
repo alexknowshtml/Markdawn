@@ -1,7 +1,9 @@
 import { HeaderActions } from '../components/HeaderActions';
+import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { authClient } from '../lib/auth-client';
 
 export default function Login() {
+  const identityLifecycle = useIdentityLifecycle();
   const handleSocialSignIn = (provider: 'github' | 'google') => async () => {
     try {
       await authClient.signIn.social({
@@ -10,6 +12,7 @@ export default function Login() {
         errorCallbackURL: '/login',
       });
     } catch {
+      if (!identityLifecycle.isActive()) return;
       window.location.assign('/login');
     }
   };

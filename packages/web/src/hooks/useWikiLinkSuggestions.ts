@@ -24,7 +24,7 @@ export function useWikiLinkSuggestions(
 ) {
   const createPageMutation = useCreatePage();
   const { data: session } = useAuth();
-  const { data: accessiblePages = [] } = usePages();
+  const { data: accessiblePages = [] } = usePages({ enabled: !!session?.user });
   const sourceOwnerId = accessiblePages.find((page) => page.id === sourcePageId)?.ownerId;
   const allPages = useMemo(() => {
     if (!sourceOwnerId) return [];
@@ -91,7 +91,6 @@ export function useWikiLinkSuggestions(
                 start,
                 end,
                 wikiLinkNode.create({
-                  targetId: page.id,
                   path: page.title,
                   label: page.title,
                 }),

@@ -8,7 +8,8 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
+import { useTrashFolders } from '../hooks/use-folders';
 import { useTrashPages } from '../hooks/use-pages';
 import { useAuth } from '../hooks/useAuth';
 import { authClient } from '../lib/auth-client';
@@ -28,11 +29,13 @@ export function ProfilePill({
   isActuallyCollapsed,
   onToggleCollapsed,
 }: ProfilePillProps) {
-  const navigate = useNavigate();
+  const navigate = useIdentityNavigate();
 
   const { data: session } = useAuth();
 
   const { data: trashPages } = useTrashPages();
+  const { data: trashFolders } = useTrashFolders();
+  const hasTrashItems = (trashPages?.length ?? 0) + (trashFolders?.length ?? 0) > 0;
 
   const handleSignOut = async () => {
     await authClient.signOut({
@@ -125,7 +128,7 @@ export function ProfilePill({
               className="relative p-2 text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-xl hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
             >
               <Trash2 size={18} />
-              {trashPages && trashPages.length > 0 && (
+              {hasTrashItems && (
                 <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-zinc-900 dark:bg-white shadow-sm" />
               )}
             </button>
