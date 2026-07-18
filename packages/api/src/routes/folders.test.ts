@@ -1,5 +1,8 @@
+import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
+import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
-import { query } from '../db/query';
+import { db } from '../db/connection';
+import { executeQuery, query } from '../db/query';
 import {
   createTestApp,
   createTestFolder,
@@ -8,6 +11,90 @@ import {
   createTestUser,
   createTestWorkspaceMember,
 } from '../test-utils';
+import { lockWorkspaceAccessMutation } from '../utils/share-access';
+
+async function readWorkspaceAccessVersion(workspaceOwnerId: string): Promise<string> {
+  const result = await query<{ version: string }>(
+    `select coalesce((
+       select version::text from workspace_access_versions where workspace_owner_id = $1
+     ), '0') as version`,
+    [workspaceOwnerId],
+  );
+  return result.rows[0]?.version ?? '0';
+}
+
+async function waitForBlockedRequests(blockerPid: number, minimumCount: number): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const result = await query<{ count: string }>(
+      `select count(*)::text as count
+       from pg_stat_activity
+       where $1 = any(pg_blocking_pids(pid))`,
+      [blockerPid],
+    );
+    if (Number(result.rows[0]?.count ?? 0) >= minimumCount) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`Timed out waiting for ${minimumCount} blocked trash requests`);
+}
+
+const PRIVATE_FOLDER_DETAIL_FIELDS = [
+  'parentId',
+  'parent_id',
+  'createdBy',
+  'created_by',
+  'ownerId',
+  'owner_id',
+  'publicToken',
+  'public_token',
+  'isDeleted',
+  'is_deleted',
+  'deletedAt',
+  'deleted_at',
+  'inheritancePolicy',
+  'inheritance_policy',
+] as const;
+
+function expectFolderFieldsAbsent(value: Record<string, unknown>, fields: readonly string[]): void {
+  for (const field of fields) {
+    expect(Object.hasOwn(value, field), `expected ${field} to be absent`).toBe(false);
+  }
+}
+
+type FolderShareEventNotification = {
+  type: 'share_event';
+  action: string;
+  entityType: 'page' | 'folder';
+  entityId: string;
+  targetUserId?: string;
+  metaUserIds?: string[];
+  metaOnly?: boolean;
+};
+
+async function flushFolderShareEventNotifications(
+  payloads: string[],
+): Promise<FolderShareEventNotification[]> {
+  const marker = `test-notification-marker:${crypto.randomUUID()}`;
+  await query("select pg_notify('share_event', $1)", [marker]);
+
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const markerIndex = payloads.indexOf(marker);
+    if (markerIndex >= 0) {
+      const batch = payloads.splice(0, markerIndex + 1).slice(0, -1);
+      return batch.flatMap((payload) => {
+        try {
+          const parsed = JSON.parse(payload) as Partial<FolderShareEventNotification>;
+          return parsed.type === 'share_event' && parsed.entityId
+            ? [parsed as FolderShareEventNotification]
+            : [];
+        } catch {
+          return [];
+        }
+      });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out flushing folder share event notifications');
+}
 
 describe('folders API', () => {
   describe('auth guard', () => {
@@ -173,6 +260,7 @@ describe('folders API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
       const folder = await createTestFolder(user.id, { name: 'Specific' });
+      const revisionBefore = await readWorkspaceAccessVersion(user.id);
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         headers: { Cookie: session.Cookie },
@@ -181,6 +269,73 @@ describe('folders API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe('Specific');
+      expect(await readWorkspaceAccessVersion(user.id)).toBe(revisionBefore);
+    });
+
+    it('orders a queued revoke before a later authenticated folder read', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const viewerSession = await createTestSession(viewer.id);
+      const folder = await createTestFolder(owner.id, { name: 'Revoke read race' });
+      const share = await query<{ id: string }>(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')
+         returning id`,
+        [folder.id, owner.id, viewer.id],
+      );
+      const shareId = share.rows[0]?.id;
+      if (!shareId) throw new Error('Failed to create test share');
+
+      let releaseBlocker = (): void => undefined;
+      const blockerRelease = new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      let signalBlockerReady = (_pid: number): void => undefined;
+      const blockerReady = new Promise<number>((resolve) => {
+        signalBlockerReady = resolve;
+      });
+      const blocker = db.transaction(async (tx) => {
+        await lockWorkspaceAccessMutation(tx, owner.id);
+        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pid = pidResult.rows[0]?.pid;
+        if (pid === undefined) throw new Error('Failed to resolve blocker PID');
+        signalBlockerReady(pid);
+        await blockerRelease;
+      });
+      const blockerPid = await blockerReady;
+      const revokePromise = Promise.resolve(
+        app.request(`/api/shares/${shareId}`, {
+          method: 'DELETE',
+          headers: { Cookie: ownerSession.Cookie },
+        }),
+      );
+      let readPromise: Promise<Response> | null = null;
+
+      try {
+        await waitForBlockedRequests(blockerPid, 1);
+        const queuedRead = Promise.resolve(
+          app.request(`/api/folders/${folder.id}`, {
+            headers: { Cookie: viewerSession.Cookie },
+          }),
+        );
+        readPromise = queuedRead;
+        await waitForBlockedRequests(blockerPid, 2);
+        releaseBlocker();
+
+        const revokeResponse = await revokePromise;
+        const readResponse = await queuedRead;
+        expect(revokeResponse.status).toBe(200);
+        // The public-capable route is registered first and intentionally hides
+        // a now-private folder after the account grant disappears.
+        expect(readResponse.status).toBe(404);
+      } finally {
+        releaseBlocker();
+        await blocker;
+        await Promise.allSettled([revokePromise, ...(readPromise ? [readPromise] : [])]);
+      }
     });
 
     it('returns 404 for non-existent folder', async () => {
@@ -200,6 +355,10 @@ describe('folders API', () => {
       const owner = await createTestUser();
       const folder = await createTestFolder(owner.id, { name: 'Public Folder' });
       const page = await createTestPage(owner.id, { parentId: folder.id, title: 'Child Page' });
+      const childFolder = await createTestFolder(owner.id, {
+        parentId: folder.id,
+        name: 'Child Folder',
+      });
       const token = crypto.randomUUID();
 
       await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
@@ -211,14 +370,153 @@ describe('folders API', () => {
          VALUES ('folder', $1, $2, 'view', $3)`,
         [folder.id, owner.id, token],
       );
+      const revisionBefore = await query<{ version: string }>(
+        `select coalesce((
+           select version::text from workspace_access_versions where workspace_owner_id = $1
+         ), '0') as version`,
+        [owner.id],
+      );
 
-      const res = await app.request(`/api/folders/${folder.id}`);
+      expect((await app.request(`/api/folders/${folder.id}`)).status).toBe(404);
+      expect(
+        (await app.request(`/api/folders/${folder.id}?share=${crypto.randomUUID()}`)).status,
+      ).toBe(404);
+
+      const res = await app.request(`/api/folders/${folder.id}?share=${token}`);
 
       expect(res.status).toBe(200);
-      const body = await res.json();
+      const body = (await res.json()) as Record<string, unknown> & {
+        pages: Record<string, unknown>[];
+        folders: Record<string, unknown>[];
+      };
       expect(body.name).toBe('Public Folder');
       expect(body.linkPermission).toBe('view');
-      expect(body.pages.some((p: { id: string }) => p.id === page.id)).toBe(true);
+      const publicPage = body.pages.find((item) => item.id === page.id);
+      const publicChildFolder = body.folders.find((item) => item.id === childFolder.id);
+      expect(publicPage).toBeDefined();
+      expect(publicChildFolder).toBeDefined();
+      expectFolderFieldsAbsent(body, PRIVATE_FOLDER_DETAIL_FIELDS);
+      expectFolderFieldsAbsent(publicPage ?? {}, PRIVATE_FOLDER_DETAIL_FIELDS);
+      expectFolderFieldsAbsent(publicChildFolder ?? {}, PRIVATE_FOLDER_DETAIL_FIELDS);
+
+      expect((await app.request(`/api/folders/${folder.id}?share=${token}`)).status).toBe(200);
+      const revisionAfter = await query<{ version: string }>(
+        `select coalesce((
+           select version::text from workspace_access_versions where workspace_owner_id = $1
+         ), '0') as version`,
+        [owner.id],
+      );
+      expect(revisionAfter.rows[0]?.version).toBe(revisionBefore.rows[0]?.version);
+    });
+
+    it('returns minimal link-only DTOs and keeps provenance reads revision-neutral', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const visitor = await createTestUser();
+      const visitorSession = await createTestSession(visitor.id);
+      const folder = await createTestFolder(owner.id, { name: 'Signed public folder' });
+      const page = await createTestPage(owner.id, { parentId: folder.id, title: 'Signed child' });
+      const childFolder = await createTestFolder(owner.id, {
+        parentId: folder.id,
+        name: 'Signed folder child',
+      });
+      const token = crypto.randomUUID();
+      await query('update folders set is_public = true, public_token = $1 where id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
+      const readVersion = async (): Promise<string> => {
+        const result = await query<{ version: string }>(
+          `select coalesce((
+             select version::text from workspace_access_versions where workspace_owner_id = $1
+           ), '0') as version`,
+          [owner.id],
+        );
+        return result.rows[0]?.version ?? '0';
+      };
+      const before = await readVersion();
+
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const response = await app.request(`/api/folders/${folder.id}`, {
+          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+        });
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as Record<string, unknown> & {
+          pages: Record<string, unknown>[];
+          folders: Record<string, unknown>[];
+        };
+        expectFolderFieldsAbsent(body, PRIVATE_FOLDER_DETAIL_FIELDS);
+        expectFolderFieldsAbsent(
+          body.pages.find((item) => item.id === page.id) ?? {},
+          PRIVATE_FOLDER_DETAIL_FIELDS,
+        );
+        expectFolderFieldsAbsent(
+          body.folders.find((item) => item.id === childFolder.id) ?? {},
+          PRIVATE_FOLDER_DETAIL_FIELDS,
+        );
+      }
+      expect(await readVersion()).toBe(before);
+      const provenance = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_access_events
+         where folder_id = $1 and user_id = $2 and token = $3`,
+        [folder.id, visitor.id, token],
+      );
+      expect(provenance.rows[0]?.count).toBe('1');
+    });
+
+    it('returns an explicit authenticated folder DTO for an account source', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const viewerSession = await createTestSession(viewer.id);
+      const folder = await createTestFolder(owner.id, { name: 'Account folder' });
+      const child = await createTestPage(owner.id, { parentId: folder.id, title: 'Account child' });
+      const token = crypto.randomUUID();
+      await query('update folders set is_public = true, public_token = $1 where id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission, token
+         ) values
+           ('folder', $1, $2, $3, 'view', null),
+           ('folder', $1, $2, null, 'edit', $4)`,
+        [folder.id, owner.id, viewer.id, token],
+      );
+
+      const response = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: viewerSession.Cookie },
+      });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown> & {
+        pages: Record<string, unknown>[];
+      };
+      expect(body).toMatchObject({
+        id: folder.id,
+        createdBy: owner.id,
+        ownerId: owner.id,
+        userPermission: 'edit',
+      });
+      expect(body.pages).toContainEqual(
+        expect.objectContaining({ id: child.id, createdBy: owner.id, ownerId: owner.id }),
+      );
+      expectFolderFieldsAbsent(body, [
+        'created_by',
+        'owner_id',
+        'publicToken',
+        'public_token',
+        'isDeleted',
+        'is_deleted',
+        'deletedAt',
+        'deleted_at',
+      ]);
     });
 
     it('allows anonymous access to descendant folders through an ancestor folder link', async () => {
@@ -238,7 +536,7 @@ describe('folders API', () => {
         [parent.id, owner.id, token],
       );
 
-      const res = await app.request(`/api/folders/${child.id}`);
+      const res = await app.request(`/api/folders/${child.id}?share=${token}`);
 
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -254,6 +552,7 @@ describe('folders API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
       const folder = await createTestFolder(user.id, { name: 'Old' });
+      const revisionBefore = await readWorkspaceAccessVersion(user.id);
 
       const res = await app.request(`/api/folders/${folder.id}`, {
         method: 'PATCH',
@@ -262,12 +561,34 @@ describe('folders API', () => {
           Cookie: session.Cookie,
           Origin: 'http://localhost:5173',
         },
-        body: JSON.stringify({ name: 'Updated' }),
+        body: JSON.stringify({ name: 'Updated', position: '42' }),
       });
 
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe('Updated');
+      expect(body.position).toBe('42');
+      expect(await readWorkspaceAccessVersion(user.id)).toBe(revisionBefore);
+    });
+
+    it('advances the access revision when the parent changes', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id);
+      const destination = await createTestFolder(owner.id);
+      const revisionBefore = await readWorkspaceAccessVersion(owner.id);
+
+      const response = await app.request(`/api/folders/${folder.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: destination.id }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(BigInt(await readWorkspaceAccessVersion(owner.id))).toBeGreaterThan(
+        BigInt(revisionBefore),
+      );
     });
 
     it('rejects a non-numeric folder position', async () => {
@@ -527,6 +848,35 @@ describe('folders API', () => {
       expect(privateCopy.rowCount).toBe(0);
     });
 
+    it('keeps recursively copied page titles within the collaboration title limit', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const folder = await createTestFolder(owner.id, { name: 'Copy source' });
+      const sourceTitle = 'x'.repeat(MAX_PAGE_TITLE_LENGTH);
+      await createTestPage(owner.id, { parentId: folder.id, title: sourceTitle });
+
+      const res = await app.request(`/api/folders/${folder.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: null }),
+      });
+
+      expect(res.status).toBe(201);
+      const copiedPage = await query<{ title: string }>(
+        `select title
+         from pages
+         where title like 'Copy of %' and created_by = $1
+         order by created_at desc
+         limit 1`,
+        [owner.id],
+      );
+      expect(copiedPage.rows[0]?.title).toHaveLength(MAX_PAGE_TITLE_LENGTH);
+      expect(copiedPage.rows[0]?.title).toBe(
+        `Copy of ${sourceTitle}`.slice(0, MAX_PAGE_TITLE_LENGTH),
+      );
+    });
+
     it('returns 404 for non-existent folder', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -543,6 +893,144 @@ describe('folders API', () => {
       });
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('public-link provenance', () => {
+    it('preserves link navigation when a stronger direct folder grant is revoked', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const recipientSession = await createTestSession(recipient.id);
+      const folder = await createTestFolder(owner.id, { name: 'Public fallback folder' });
+      const token = crypto.randomUUID();
+      const invite = await query<{ id: string }>(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('folder', $1, $2, $3, 'edit') returning id`,
+        [folder.id, owner.id, recipient.id],
+      );
+      await query('update folders set is_public = true, public_token = $1 where id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
+
+      const openRes = await app.request(`/api/folders/${folder.id}`, {
+        headers: { Cookie: recipientSession.Cookie, 'x-share-token': token },
+      });
+      expect(openRes.status).toBe(200);
+
+      const revokeRes = await app.request(`/api/shares/${invite.rows[0]?.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(revokeRes.status).toBe(200);
+
+      const withMeRes = await app.request('/api/shares/with-me', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(withMeRes.status).toBe(200);
+      const items = (await withMeRes.json()) as Array<{
+        entityId: string;
+        entityType: string;
+        source: string;
+      }>;
+      expect(items).toContainEqual(
+        expect.objectContaining({ entityType: 'folder', entityId: folder.id, source: 'link' }),
+      );
+    });
+
+    it('notifies on first visit and event-only leave without refreshing metadata noisily', async () => {
+      const connectionString = process.env.DATABASE_URL;
+      if (!connectionString) throw new Error('DATABASE_URL is required');
+
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const visitor = await createTestUser();
+      const visitorSession = await createTestSession(visitor.id);
+      const folder = await createTestFolder(owner.id, { name: 'Notification provenance' });
+      const token = crypto.randomUUID();
+      await query('update folders set is_public = true, public_token = $1 where id = $2', [
+        token,
+        folder.id,
+      ]);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $2, 'view', $3)`,
+        [folder.id, owner.id, token],
+      );
+
+      const listener = new Client({ connectionString });
+      const payloads: string[] = [];
+      listener.on('notification', (notification) => {
+        if (notification.channel === 'share_event' && notification.payload) {
+          payloads.push(notification.payload);
+        }
+      });
+      await listener.connect();
+      await listener.query('listen share_event');
+
+      try {
+        const firstVisit = await app.request(`/api/folders/${folder.id}`, {
+          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+        });
+        expect(firstVisit.status).toBe(200);
+        const firstNotifications = (await flushFolderShareEventNotifications(payloads)).filter(
+          (payload) => payload.targetUserId === visitor.id,
+        );
+        expect(firstNotifications).toEqual([
+          expect.objectContaining({
+            action: 'recompute',
+            entityType: 'folder',
+            entityId: folder.id,
+            targetUserId: visitor.id,
+            metaUserIds: [visitor.id],
+            metaOnly: true,
+          }),
+        ]);
+
+        const repeatVisit = await app.request(`/api/folders/${folder.id}`, {
+          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+        });
+        expect(repeatVisit.status).toBe(200);
+        const repeatNotifications = (await flushFolderShareEventNotifications(payloads)).filter(
+          (payload) => payload.targetUserId === visitor.id,
+        );
+        expect(repeatNotifications).toEqual([]);
+
+        const leaveResponse = await app.request(`/api/folders/${folder.id}/leave`, {
+          method: 'POST',
+          headers: { Cookie: visitorSession.Cookie },
+        });
+        expect(leaveResponse.status).toBe(200);
+        const leaveNotifications = (await flushFolderShareEventNotifications(payloads)).filter(
+          (payload) => payload.targetUserId === visitor.id,
+        );
+        expect(leaveNotifications).toEqual([
+          expect.objectContaining({
+            action: 'revoke',
+            entityType: 'folder',
+            entityId: folder.id,
+            targetUserId: visitor.id,
+            metaUserIds: [owner.id],
+          }),
+        ]);
+
+        const storedEvents = await query<{ count: string }>(
+          `select count(*)::text as count
+           from folder_access_events
+           where folder_id = $1 and user_id = $2`,
+          [folder.id, visitor.id],
+        );
+        expect(storedEvents.rows[0]?.count).toBe('0');
+      } finally {
+        await listener.end();
+      }
     });
   });
 
@@ -675,6 +1163,361 @@ describe('folders API', () => {
       });
 
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe('folder Trash lifecycle', () => {
+    it('lists a deleted subtree once and restores the deletion batch', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const root = await createTestFolder(owner.id, { name: 'Trash Root' });
+      const child = await createTestFolder(owner.id, { name: 'Trash Child', parentId: root.id });
+      const page = await createTestPage(owner.id, { title: 'Trash Page', parentId: child.id });
+
+      const deleteRes = await app.request(`/api/folders/${root.id}?force=true`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(deleteRes.status).toBe(200);
+      const deletionBatch = await query<{ deletion_batch_id: string | null }>(
+        `select deletion_batch_id from folders where id = $1
+         union all
+         select deletion_batch_id from folders where id = $2
+         union all
+         select deletion_batch_id from pages where id = $3`,
+        [root.id, child.id, page.id],
+      );
+      const batchIds = deletionBatch.rows.map((row) => row.deletion_batch_id);
+      expect(batchIds.every((batchId) => batchId !== null)).toBe(true);
+      expect(new Set(batchIds).size).toBe(1);
+
+      const trashRes = await app.request('/api/folders/trash', {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(trashRes.status).toBe(200);
+      const trash = (await trashRes.json()) as Array<{ id: string; name: string }>;
+      expect(trash).toContainEqual(expect.objectContaining({ id: root.id, name: 'Trash Root' }));
+      expect(trash).not.toContainEqual(expect.objectContaining({ id: child.id }));
+
+      const restoreRes = await app.request(`/api/folders/${root.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(restoreRes.status).toBe(200);
+      expect(await restoreRes.json()).toMatchObject({
+        id: root.id,
+        restoredFolders: 2,
+        restoredPages: 1,
+      });
+
+      const restoredFolders = await query<{ id: string; is_deleted: boolean }>(
+        'select id, is_deleted from folders where id = any($1::uuid[]) order by id',
+        [[root.id, child.id]],
+      );
+      expect(restoredFolders.rows.every((row) => row.is_deleted === false)).toBe(true);
+      const restoredPage = await query<{ is_deleted: boolean }>(
+        'select is_deleted from pages where id = $1',
+        [page.id],
+      );
+      expect(restoredPage.rows[0]?.is_deleted).toBe(false);
+    });
+
+    it('leaves an independently trashed descendant deleted when restoring its parent', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const root = await createTestFolder(owner.id, { name: 'Parent' });
+      const child = await createTestFolder(owner.id, {
+        name: 'Already deleted',
+        parentId: root.id,
+      });
+
+      const childDeleteRes = await app.request(`/api/folders/${child.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(childDeleteRes.status).toBe(200);
+      const childBatch = await query<{ deletion_batch_id: string | null }>(
+        'select deletion_batch_id from folders where id = $1',
+        [child.id],
+      );
+      const rootDeleteRes = await app.request(`/api/folders/${root.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(rootDeleteRes.status).toBe(200);
+      const rootBatch = await query<{ deletion_batch_id: string | null }>(
+        'select deletion_batch_id from folders where id = $1',
+        [root.id],
+      );
+      expect(rootBatch.rows[0]?.deletion_batch_id).toBeTruthy();
+      expect(rootBatch.rows[0]?.deletion_batch_id).not.toBe(childBatch.rows[0]?.deletion_batch_id);
+
+      const restoreRes = await app.request(`/api/folders/${root.id}/restore`, {
+        method: 'PATCH',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(restoreRes.status).toBe(200);
+      expect(await restoreRes.json()).toMatchObject({ restoredFolders: 1, restoredPages: 0 });
+
+      const storedChild = await query<{ is_deleted: boolean }>(
+        'select is_deleted from folders where id = $1',
+        [child.id],
+      );
+      expect(storedChild.rows[0]?.is_deleted).toBe(true);
+    });
+
+    it('requires Trash and ownership before permanent deletion', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const admin = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const adminSession = await createTestSession(admin.id);
+      const folder = await createTestFolder(owner.id);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('folder', $1, $2, $3, 'admin')`,
+        [folder.id, owner.id, admin.id],
+      );
+
+      const activePurge = await app.request(`/api/folders/${folder.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(activePurge.status).toBe(409);
+      const activeAdminPurge = await app.request(`/api/folders/${folder.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: adminSession.Cookie },
+      });
+      expect(activeAdminPurge.status).toBe(403);
+
+      const deleteRes = await app.request(`/api/folders/${folder.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: adminSession.Cookie },
+      });
+      expect(deleteRes.status).toBe(200);
+      const adminPurge = await app.request(`/api/folders/${folder.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: adminSession.Cookie },
+      });
+      expect(adminPurge.status).toBe(403);
+      const ownerPurge = await app.request(`/api/folders/${folder.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(ownerPurge.status).toBe(200);
+    });
+
+    it('purges subtree shares, link access records, and favorites', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const root = await createTestFolder(owner.id);
+      const child = await createTestFolder(owner.id, { parentId: root.id });
+      const page = await createTestPage(owner.id, { parentId: child.id });
+      const folderToken = crypto.randomUUID();
+      const pageToken = crypto.randomUUID();
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $3, 'view', $4), ('page', $2, $3, 'view', $5)`,
+        [child.id, page.id, owner.id, folderToken, pageToken],
+      );
+      await query(
+        `insert into folder_access_events (folder_id, user_id, source, token, permission)
+         values ($1, $2, 'link', $3, 'view')`,
+        [child.id, recipient.id, folderToken],
+      );
+      await query(
+        `insert into page_access_events (page_id, user_id, source, token, permission)
+         values ($1, $2, 'link', $3, 'view')`,
+        [page.id, recipient.id, pageToken],
+      );
+      await query(
+        `insert into user_favorites (user_id, entity_type, entity_id)
+         values ($1, 'folder', $2), ($1, 'page', $3)`,
+        [recipient.id, child.id, page.id],
+      );
+
+      await app.request(`/api/folders/${root.id}?force=true`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      const purgeRes = await app.request(`/api/folders/${root.id}/permanent`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(purgeRes.status).toBe(200);
+      expect(await purgeRes.json()).toMatchObject({ deleted: true, folders: 2, pages: 1 });
+
+      const leftovers = await query<{
+        shares: string;
+        folder_events: string;
+        page_events: string;
+        favorites: string;
+      }>(
+        `select
+           (select count(*) from shares where entity_id = any($1::uuid[]))::text as shares,
+           (select count(*) from folder_access_events where folder_id = any($1::uuid[]))::text as folder_events,
+           (select count(*) from page_access_events where page_id = $2)::text as page_events,
+           (select count(*) from user_favorites where entity_id = any($1::uuid[]))::text as favorites`,
+        [[root.id, child.id, page.id], page.id],
+      );
+      expect(leftovers.rows[0]).toEqual({
+        shares: '0',
+        folder_events: '0',
+        page_events: '0',
+        favorites: '0',
+      });
+    });
+
+    it('serializes descendant restore before ancestor purge without stripping survivor metadata', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const root = await createTestFolder(owner.id, { name: 'Purged root' });
+      const child = await createTestFolder(owner.id, {
+        name: 'Restored child',
+        parentId: root.id,
+      });
+      const page = await createTestPage(owner.id, { parentId: child.id });
+      const folderToken = crypto.randomUUID();
+      const pageToken = crypto.randomUUID();
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, permission, token)
+         values ('folder', $1, $3, 'view', $4), ('page', $2, $3, 'view', $5)`,
+        [child.id, page.id, owner.id, folderToken, pageToken],
+      );
+      await query(
+        `insert into folder_access_events (folder_id, user_id, source, token, permission)
+         values ($1, $2, 'link', $3, 'view')`,
+        [child.id, recipient.id, folderToken],
+      );
+      await query(
+        `insert into page_access_events (page_id, user_id, source, token, permission)
+         values ($1, $2, 'link', $3, 'view')`,
+        [page.id, recipient.id, pageToken],
+      );
+      await query(
+        `insert into user_favorites (user_id, entity_type, entity_id)
+         values ($1, 'folder', $2), ($1, 'page', $3)`,
+        [recipient.id, child.id, page.id],
+      );
+
+      const trashRes = await app.request(`/api/folders/${root.id}?force=true`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(trashRes.status).toBe(200);
+
+      let releaseBlocker = (): void => undefined;
+      let reportBlockerPid = (_pid: number): void => undefined;
+      const blockerReleased = new Promise<void>((resolve) => {
+        releaseBlocker = resolve;
+      });
+      const blockerReady = new Promise<number>((resolve) => {
+        reportBlockerPid = resolve;
+      });
+      const blocker = db.transaction(async (tx) => {
+        await lockWorkspaceAccessMutation(tx, owner.id);
+        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pid = pidResult.rows[0]?.pid;
+        if (!pid) throw new Error('Failed to resolve trash lock blocker PID');
+        reportBlockerPid(pid);
+        await blockerReleased;
+      });
+
+      const blockerPid = await blockerReady;
+      const restorePromise = Promise.resolve(
+        app.request(`/api/folders/${child.id}/restore`, {
+          method: 'PATCH',
+          headers: { Cookie: session.Cookie },
+        }),
+      );
+      let purgePromise: Promise<Response> | null = null;
+      let orchestrationError: unknown = null;
+      try {
+        await waitForBlockedRequests(blockerPid, 1);
+        purgePromise = Promise.resolve(
+          app.request(`/api/folders/${root.id}/permanent`, {
+            method: 'DELETE',
+            headers: { Cookie: session.Cookie },
+          }),
+        );
+        await waitForBlockedRequests(blockerPid, 2);
+      } catch (error) {
+        orchestrationError = error;
+      } finally {
+        releaseBlocker();
+        await blocker;
+      }
+      if (orchestrationError) {
+        await restorePromise;
+        if (purgePromise) await purgePromise;
+        throw orchestrationError;
+      }
+      if (!purgePromise) throw new Error('Purge request was not started');
+
+      const [restoreRes, purgeRes] = await Promise.all([restorePromise, purgePromise]);
+      expect(restoreRes.status).toBe(200);
+      expect(purgeRes.status).toBe(200);
+
+      const survivors = await query<{
+        child_deleted: boolean;
+        child_parent: string | null;
+        page_deleted: boolean;
+        shares: string;
+        folder_events: string;
+        page_events: string;
+        favorites: string;
+      }>(
+        `select
+           child.is_deleted as child_deleted,
+           child.parent_id as child_parent,
+           page.is_deleted as page_deleted,
+           (select count(*) from shares where entity_id = any($1::uuid[]))::text as shares,
+           (select count(*) from folder_access_events where folder_id = $2)::text as folder_events,
+           (select count(*) from page_access_events where page_id = $3)::text as page_events,
+           (select count(*) from user_favorites where entity_id = any($1::uuid[]))::text as favorites
+         from folders child
+         join pages page on page.id = $3
+         where child.id = $2`,
+        [[child.id, page.id], child.id, page.id],
+      );
+      expect(survivors.rows[0]).toEqual({
+        child_deleted: false,
+        child_parent: null,
+        page_deleted: false,
+        shares: '2',
+        folder_events: '1',
+        page_events: '1',
+        favorites: '2',
+      });
+    });
+
+    it('empties all top-level folder trash roots', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const first = await createTestFolder(owner.id);
+      const second = await createTestFolder(owner.id);
+      await app.request(`/api/folders/${first.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      await app.request(`/api/folders/${second.id}`, {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+
+      const emptyRes = await app.request('/api/folders/trash/empty-all', {
+        method: 'DELETE',
+        headers: { Cookie: session.Cookie },
+      });
+      expect(emptyRes.status).toBe(200);
+      expect(await emptyRes.json()).toMatchObject({ deleted: true, folders: 2, pages: 0 });
     });
   });
 });
