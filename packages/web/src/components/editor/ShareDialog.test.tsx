@@ -7,7 +7,7 @@ import { consumeSelfLeave } from '../../utils/leave-page';
 
 const mocks = vi.hoisted(() => ({
   summary: null as ShareSummary | null,
-  removeShare: vi.fn(),
+  removeGrant: vi.fn(),
 }));
 
 vi.mock('../../hooks/useAuth', () => ({
@@ -15,14 +15,14 @@ vi.mock('../../hooks/useAuth', () => ({
 }));
 vi.mock('../../hooks/use-share', () => ({
   useShareSummary: () => ({ data: mocks.summary, isLoading: false, error: null, refetch: vi.fn() }),
-  useUpdateLinkPermission: () => ({ mutate: vi.fn(), isPending: false }),
+  useUpdatePublicPermission: () => ({ mutate: vi.fn(), isPending: false }),
   useUpdateInheritancePolicy: () => ({ mutate: vi.fn(), isPending: false }),
-  useInviteToEntity: () => ({ mutate: vi.fn(), isPending: false }),
-  useRemoveShare: () => ({ mutate: mocks.removeShare, isPending: false }),
-  useUpdateSharePermission: () => ({ mutate: vi.fn(), isPending: false }),
+  useGrantEntityAccess: () => ({ mutate: vi.fn(), isPending: false }),
+  useRemoveGrant: () => ({ mutate: mocks.removeGrant, isPending: false }),
+  useUpdateGrantPermission: () => ({ mutate: vi.fn(), isPending: false }),
 }));
 
-import { PublicShareDialog } from './PublicShareDialog';
+import { ShareDialog } from './ShareDialog';
 
 function adminSummary(): ShareSummary {
   return {
@@ -32,12 +32,12 @@ function adminSummary(): ShareSummary {
       title: 'Shared page',
       ownerId: 'owner-1',
     },
-    link: { permission: 'private', token: null, url: null },
+    publicAccess: { permission: 'private', url: '/app/shared-page-page-1' },
     inheritance: { policy: 'inherit' },
-    invites: [],
+    grants: [],
     accessors: [
       {
-        shareId: null,
+        grantId: null,
         userId: 'owner-1',
         name: 'Owner',
         email: 'owner@example.com',
@@ -47,30 +47,30 @@ function adminSummary(): ShareSummary {
         isOwner: true,
       },
       {
-        shareId: 'share-self',
+        grantId: 'share-self',
         userId: 'current-admin',
         name: 'Current Admin',
         email: 'admin@example.com',
         avatarUrl: null,
         permission: 'admin',
-        source: 'Direct Invite',
+        source: 'Direct Grant',
         isOwner: false,
       },
       {
-        shareId: 'share-other-admin',
+        grantId: 'share-other-admin',
         userId: 'other-admin',
         name: 'Other Admin',
         email: 'other@example.com',
         avatarUrl: null,
         permission: 'admin',
-        source: 'Direct Invite',
+        source: 'Direct Grant',
         isOwner: false,
       },
     ],
     accessSources: [
       {
         kind: 'owner',
-        shareId: null,
+        grantId: null,
         userId: 'owner-1',
         name: 'Owner',
         email: 'owner@example.com',
@@ -83,7 +83,7 @@ function adminSummary(): ShareSummary {
       },
       {
         kind: 'direct',
-        shareId: 'share-self',
+        grantId: 'share-self',
         userId: 'current-admin',
         name: 'Current Admin',
         email: 'admin@example.com',
@@ -96,7 +96,7 @@ function adminSummary(): ShareSummary {
       },
       {
         kind: 'direct',
-        shareId: 'share-other-admin',
+        grantId: 'share-other-admin',
         userId: 'other-admin',
         name: 'Other Admin',
         email: 'other@example.com',
@@ -108,7 +108,7 @@ function adminSummary(): ShareSummary {
         isManageable: true,
       },
     ],
-    inheritedLinks: [],
+    inheritedPublicAccess: [],
     userPermission: 'admin',
     capabilities: {
       canEdit: true,
@@ -121,21 +121,21 @@ function adminSummary(): ShareSummary {
   };
 }
 
-describe('PublicShareDialog admin self-removal', () => {
+describe('ShareDialog admin self-removal', () => {
   beforeEach(() => {
     mocks.summary = adminSummary();
-    mocks.removeShare.mockReset();
+    mocks.removeGrant.mockReset();
   });
 
   afterEach(() => {
     consumeSelfLeave('page-1');
   });
 
-  it('lets a directly invited admin leave without granting control over another admin', async () => {
+  it('lets a directly granted admin leave without controlling another admin', async () => {
     const summary = adminSummary();
     summary.accessSources.push({
       kind: 'folder',
-      shareId: 'ancestor-folder-share',
+      grantId: 'ancestor-folder-share',
       userId: 'current-admin',
       name: 'Current Admin',
       email: 'admin@example.com',
@@ -152,7 +152,7 @@ describe('PublicShareDialog admin self-removal', () => {
     const user = userEvent.setup();
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(
-      <PublicShareDialog
+      <ShareDialog
         entityType="page"
         entityId="page-1"
         title="Shared page"
@@ -167,7 +167,7 @@ describe('PublicShareDialog admin self-removal', () => {
 
     await user.click(screen.getByRole('button', { name: 'Leave' }));
 
-    expect(mocks.removeShare).toHaveBeenCalledWith('share-self', expect.any(Object));
+    expect(mocks.removeGrant).toHaveBeenCalledWith('share-self', expect.any(Object));
   });
 
   it('does not let a user remove an inherited folder grant from a child page', () => {
@@ -178,7 +178,7 @@ describe('PublicShareDialog admin self-removal', () => {
       ownerSource,
       {
         kind: 'folder',
-        shareId: 'ancestor-folder-share',
+        grantId: 'ancestor-folder-share',
         userId: 'current-admin',
         name: 'Current Admin',
         email: 'admin@example.com',
@@ -195,7 +195,7 @@ describe('PublicShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <PublicShareDialog
+      <ShareDialog
         entityType="page"
         entityId="page-1"
         title="Shared page"
@@ -206,7 +206,7 @@ describe('PublicShareDialog admin self-removal', () => {
 
     expect(screen.getByText('via Parent Folder')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
-    expect(mocks.removeShare).not.toHaveBeenCalled();
+    expect(mocks.removeGrant).not.toHaveBeenCalled();
   });
 
   it('shows winning and fallback account sources independently', () => {
@@ -217,7 +217,7 @@ describe('PublicShareDialog admin self-removal', () => {
       ownerSource,
       {
         kind: 'direct',
-        shareId: 'latent-direct',
+        grantId: 'latent-direct',
         userId: 'recipient-1',
         name: 'Recipient',
         email: 'recipient@example.com',
@@ -230,7 +230,7 @@ describe('PublicShareDialog admin self-removal', () => {
       },
       {
         kind: 'folder',
-        shareId: 'folder-share',
+        grantId: 'folder-share',
         userId: 'recipient-1',
         name: 'Recipient',
         email: 'recipient@example.com',
@@ -247,7 +247,7 @@ describe('PublicShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <PublicShareDialog
+      <ShareDialog
         entityType="page"
         entityId="page-1"
         title="Shared page"
@@ -257,27 +257,26 @@ describe('PublicShareDialog admin self-removal', () => {
     );
 
     expect(screen.getAllByText('Recipient')).toHaveLength(2);
-    expect(screen.getByText('Direct Invite')).toBeInTheDocument();
+    expect(screen.getByText('Direct Grant')).toBeInTheDocument();
     expect(screen.getByText('· Fallback')).toBeInTheDocument();
     expect(screen.getByText('via Project Folder')).toBeInTheDocument();
     expect(screen.getByText('· Effective')).toBeInTheDocument();
   });
 
-  it('discloses inherited public link access when the direct link is restricted', () => {
+  it('discloses inherited public access when direct public access is restricted', () => {
     const summary = adminSummary();
-    summary.inheritedLinks = [
+    summary.inheritedPublicAccess = [
       {
         entityId: 'folder-1',
         entityTitle: 'Public Folder',
         permission: 'edit',
-        token: 'token',
         url: '/app/folder/public-folder-folder-1',
       },
     ];
     mocks.summary = summary;
 
     render(
-      <PublicShareDialog
+      <ShareDialog
         entityType="page"
         entityId="page-1"
         title="Shared page"
@@ -286,25 +285,22 @@ describe('PublicShareDialog admin self-removal', () => {
       />,
     );
 
-    expect(screen.getByText('Direct link access')).toBeInTheDocument();
-    expect(screen.getByText('Inherited public link access')).toBeInTheDocument();
+    expect(screen.getByText('Public access')).toBeInTheDocument();
+    expect(screen.getByText('Inherited public access')).toBeInTheDocument();
     expect(screen.getByText('Anyone can edit')).toBeInTheDocument();
   });
 
-  it('names the dialog, inheritance switch, invite input, and selected link choice', () => {
+  it('names the dialog, inheritance switch, grant input, and public access choice', () => {
     render(
-      <PublicShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.getByRole('dialog', { name: 'Share Shared page' })).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Restrict inherited access' })).not.toBeChecked();
-    expect(screen.getByRole('textbox', { name: 'Email address to invite' })).toBeInTheDocument();
-    expect(screen.getByRole('group', { name: 'Direct link access' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('textbox', { name: "Existing user's email address" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Public access' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Restricted', pressed: true })).toBeInTheDocument();
   });
 });

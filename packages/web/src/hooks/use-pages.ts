@@ -1,6 +1,7 @@
 import type { Page, PageTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
+import { useShareContext } from '../contexts/ShareContext';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { useLeaveEntity } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
@@ -28,8 +29,13 @@ async function createPage(parentId?: string, title?: string): Promise<Page> {
   return res.json();
 }
 
-async function updatePage(pageId: string, updates: Partial<Page>): Promise<Page> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}`, {
+async function updatePage(
+  pageId: string,
+  updates: Partial<Page>,
+  useGuestEndpoint: boolean,
+): Promise<Page> {
+  const suffix = useGuestEndpoint ? '/metadata' : '';
+  const res = await fetch(`${API_BASE}/pages/${pageId}${suffix}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(updates),
@@ -191,6 +197,7 @@ export function useCreatePage() {
     onSuccess: (_newPage, { silent }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       if (!silent) {
         showSuccessToast('Page created');
       }
@@ -200,6 +207,7 @@ export function useCreatePage() {
 
 export function useUpdatePage() {
   const queryClient = useQueryClient();
+  const { isAnonymous } = useShareContext();
   return useMutation({
     mutationFn: ({
       pageId,
@@ -208,7 +216,7 @@ export function useUpdatePage() {
       pageId: string;
       updates: Partial<Page>;
       silent?: boolean;
-    }) => updatePage(pageId, updates),
+    }) => updatePage(pageId, updates, isAnonymous),
     onSuccess: (_, { pageId, updates, silent }) => {
       queryClient.setQueryData<PageTreeNode[]>(['pageTree'], (pages) =>
         updatePageInTree(pages, pageId, updates),

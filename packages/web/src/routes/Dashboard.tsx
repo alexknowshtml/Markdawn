@@ -476,7 +476,7 @@ export default function HomeView() {
   const canAdminItem = (item: (typeof selectedItems)[number]) =>
     item.ownerId === currentUserId || item.userPermission === 'admin';
   const canLeaveItem = (item: (typeof selectedItems)[number]) =>
-    !canAdminItem(item) && (item.shareSource === 'direct' || item.shareSource === 'link');
+    !canAdminItem(item) && (item.shareSource === 'direct' || item.shareSource === 'public');
   const selectedOwnerIds = new Set(selectedItems.map((item) => item.ownerId));
   const selectedOwnerId = selectedOwnerIds.size === 1 ? selectedItems[0]?.ownerId : undefined;
   const canMoveSelection =

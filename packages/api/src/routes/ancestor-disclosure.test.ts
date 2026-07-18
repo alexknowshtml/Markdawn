@@ -10,7 +10,7 @@ import {
 
 type Permission = 'view' | 'edit' | 'admin';
 
-async function addInvite(
+async function addGrant(
   entityType: 'page' | 'folder',
   entityId: string,
   ownerId: string,
@@ -25,32 +25,20 @@ async function addInvite(
   );
 }
 
-async function enableFolderLink(folderId: string, ownerId: string): Promise<string> {
-  const token = crypto.randomUUID();
-  await query('update folders set is_public = true, public_token = $1 where id = $2', [
-    token,
-    folderId,
-  ]);
-  await query(
-    `insert into shares (entity_type, entity_id, shared_by, permission, token)
-     values ('folder', $1, $2, 'view', $3)`,
-    [folderId, ownerId, token],
-  );
-  return token;
+async function enableFolderPublicAccess(folderId: string): Promise<void> {
+  await query("update folders set public_permission = 'view' where id = $1", [folderId]);
 }
 
 function expectHiddenParent(
   value: Record<string, unknown>,
   parentId: string,
   parentName: string,
-  parentToken: string,
 ): void {
   expect(value.parentId).toBeNull();
   expect(Object.hasOwn(value, 'parent_id')).toBe(false);
   const encoded = JSON.stringify(value);
   expect(encoded).not.toContain(parentId);
   expect(encoded).not.toContain(parentName);
-  expect(encoded).not.toContain(parentToken);
 }
 
 function findFolderNode(nodes: unknown, folderId: string): Record<string, unknown> | undefined {
@@ -85,9 +73,9 @@ describe.each([
       parentId: hiddenParent.id,
       title: `Hidden sibling ${permission}`,
     });
-    const parentToken = await enableFolderLink(hiddenParent.id, owner.id);
-    await addInvite('page', page.id, owner.id, recipient.id, permission);
-    await addInvite('folder', hiddenParent.id, owner.id, inheritedViewer.id, 'view');
+    await enableFolderPublicAccess(hiddenParent.id);
+    await addGrant('page', page.id, owner.id, recipient.id, permission);
+    await addGrant('folder', hiddenParent.id, owner.id, inheritedViewer.id, 'view');
 
     const detailRes = await app.request(`/api/pages/${page.id}`, {
       headers: { Cookie: recipientSession.Cookie },
@@ -97,7 +85,6 @@ describe.each([
       (await detailRes.json()) as Record<string, unknown>,
       hiddenParent.id,
       hiddenParent.name,
-      parentToken,
     );
 
     const accessRes = await app.request(`/api/pages/${page.id}/access`, {
@@ -106,12 +93,11 @@ describe.each([
     });
     expect(accessRes.status).toBe(200);
     expect(await accessRes.json()).toMatchObject({
-      recordedLinkAccess: false,
-      linkAccessSource: null,
+      ok: true,
     });
     const hiddenParentEvents = await query<{ count: string }>(
       `select count(*)::text as count
-         from folder_access_events
+         from folder_public_access_visits
          where folder_id = $1 and user_id = $2`,
       [hiddenParent.id, recipient.id],
     );
@@ -123,7 +109,7 @@ describe.each([
     const tree = (await treeRes.json()) as Array<Record<string, unknown>>;
     const pageNode = tree.find((node) => node.id === page.id);
     expect(pageNode).toBeDefined();
-    expectHiddenParent(pageNode ?? {}, hiddenParent.id, hiddenParent.name, parentToken);
+    expectHiddenParent(pageNode ?? {}, hiddenParent.id, hiddenParent.name);
     expect(tree.some((node) => node.id === sibling.id)).toBe(false);
 
     if (permission !== 'view') {
@@ -137,7 +123,6 @@ describe.each([
         (await updateRes.json()) as Record<string, unknown>,
         hiddenParent.id,
         hiddenParent.name,
-        parentToken,
       );
     }
 
@@ -148,14 +133,14 @@ describe.each([
       expect(summaryRes.status).toBe(200);
       const summary = (await summaryRes.json()) as {
         accessSources: Array<Record<string, unknown>>;
-        inheritedLinks: unknown[];
+        inheritedPublicAccess: unknown[];
       };
-      expect(summary.inheritedLinks).toEqual([]);
+      expect(summary.inheritedPublicAccess).toEqual([]);
       expect(summary.accessSources).toContainEqual(
         expect.objectContaining({
           kind: 'folder',
           userId: inheritedViewer.id,
-          shareId: null,
+          grantId: null,
         }),
       );
       const folderSource = summary.accessSources.find(
@@ -164,16 +149,11 @@ describe.each([
       expect(folderSource).toBeDefined();
       expect(Object.hasOwn(folderSource ?? {}, 'folderId')).toBe(false);
       expect(Object.hasOwn(folderSource ?? {}, 'folderName')).toBe(false);
-      expectHiddenParent(
-        { parentId: null, summary },
-        hiddenParent.id,
-        hiddenParent.name,
-        parentToken,
-      );
+      expectHiddenParent({ parentId: null, summary }, hiddenParent.id, hiddenParent.name);
     }
 
     const explicitFolderRes = await app.request(`/api/folders/${hiddenParent.id}`, {
-      headers: { Cookie: recipientSession.Cookie, 'x-share-token': parentToken },
+      headers: { Cookie: recipientSession.Cookie },
     });
     expect(explicitFolderRes.status).toBe(200);
 
@@ -210,8 +190,8 @@ describe.each([
       name: `Hidden folder sibling ${permission}`,
       parentId: hiddenParent.id,
     });
-    const parentToken = await enableFolderLink(hiddenParent.id, owner.id);
-    await addInvite('folder', folder.id, owner.id, recipient.id, permission);
+    await enableFolderPublicAccess(hiddenParent.id);
+    await addGrant('folder', folder.id, owner.id, recipient.id, permission);
 
     const detailRes = await app.request(`/api/folders/${folder.id}`, {
       headers: { Cookie: recipientSession.Cookie },
@@ -221,11 +201,10 @@ describe.each([
       (await detailRes.json()) as Record<string, unknown>,
       hiddenParent.id,
       hiddenParent.name,
-      parentToken,
     );
     const hiddenParentEvents = await query<{ count: string }>(
       `select count(*)::text as count
-         from folder_access_events
+         from folder_public_access_visits
          where folder_id = $1 and user_id = $2`,
       [hiddenParent.id, recipient.id],
     );
@@ -237,7 +216,7 @@ describe.each([
     const tree = await treeRes.json();
     const folderNode = findFolderNode(tree, folder.id);
     expect(folderNode).toBeDefined();
-    expectHiddenParent(folderNode ?? {}, hiddenParent.id, hiddenParent.name, parentToken);
+    expectHiddenParent(folderNode ?? {}, hiddenParent.id, hiddenParent.name);
     expect(findFolderNode(tree, sibling.id)).toBeUndefined();
 
     if (permission === 'admin') {
@@ -251,19 +230,17 @@ describe.each([
         (await updateRes.json()) as Record<string, unknown>,
         hiddenParent.id,
         hiddenParent.name,
-        parentToken,
       );
 
       const summaryRes = await app.request(`/api/shares/entity/folder/${folder.id}`, {
         headers: { Cookie: recipientSession.Cookie },
       });
-      const summary = (await summaryRes.json()) as { inheritedLinks: unknown[] };
-      expect(summary.inheritedLinks).toEqual([]);
-      expect(JSON.stringify(summary)).not.toContain(parentToken);
+      const summary = (await summaryRes.json()) as { inheritedPublicAccess: unknown[] };
+      expect(summary.inheritedPublicAccess).toEqual([]);
     }
 
     const explicitFolderRes = await app.request(`/api/folders/${hiddenParent.id}`, {
-      headers: { Cookie: recipientSession.Cookie, 'x-share-token': parentToken },
+      headers: { Cookie: recipientSession.Cookie },
     });
     expect(explicitFolderRes.status).toBe(200);
     const detailAfterVisit = await app.request(`/api/folders/${folder.id}`, {
@@ -290,7 +267,7 @@ describe('enumerable parent disclosure', () => {
       title: 'Enumerable Page',
       parentId: child.id,
     });
-    await addInvite('folder', parent.id, owner.id, recipient.id, 'view');
+    await addGrant('folder', parent.id, owner.id, recipient.id, 'view');
 
     const pageRes = await app.request(`/api/pages/${page.id}`, {
       headers: { Cookie: recipientSession.Cookie },

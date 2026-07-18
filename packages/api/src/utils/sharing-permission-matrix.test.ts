@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { query } from '../db/query';
 import {
   decideSharingPermission,
-  type OracleLinkPermission,
   type OraclePermission,
+  type OraclePublicPermission,
 } from '../test-support/sharingOracle';
 
 const roles: readonly OraclePermission[] = [null, 'view', 'edit', 'admin'];
-const links: readonly OracleLinkPermission[] = [null, 'view', 'edit'];
+const publicPermissions: readonly OraclePublicPermission[] = [null, 'view', 'edit'];
 
 type RoleVector = {
   index: number;
@@ -25,9 +25,9 @@ type Structure = {
   parentId: string;
   targetFolderId: string;
   pageId: string;
-  targetLink: OracleLinkPermission;
-  parentLink: OracleLinkPermission;
-  grandparentLink: OracleLinkPermission;
+  targetPublic: OraclePublicPermission;
+  parentPublic: OraclePublicPermission;
+  grandparentPublic: OraclePublicPermission;
   boundaryBits: number;
 };
 
@@ -35,9 +35,8 @@ type ShareSeed = {
   entityType: 'page' | 'folder';
   entityId: string;
   ownerId: string;
-  recipientId: string | null;
+  recipientId: string;
   permission: Exclude<OraclePermission, null>;
-  token: string | null;
 };
 
 const roleAt = (vector: number, axis: number): OraclePermission =>
@@ -56,11 +55,11 @@ async function insertShares(shares: readonly ShareSeed[]): Promise<void> {
     await query(
       `
         INSERT INTO shares (
-          entity_type, entity_id, shared_by, recipient_user_id, permission, token
+          entity_type, entity_id, shared_by, recipient_user_id, permission
         )
         SELECT *
         FROM UNNEST(
-          $1::text[], $2::uuid[], $3::uuid[], $4::uuid[], $5::text[], $6::text[]
+          $1::text[], $2::uuid[], $3::uuid[], $4::uuid[], $5::text[]
         )
       `,
       [
@@ -69,7 +68,6 @@ async function insertShares(shares: readonly ShareSeed[]): Promise<void> {
         batch.map((share) => share.ownerId),
         batch.map((share) => share.recipientId),
         batch.map((share) => share.permission),
-        batch.map((share) => share.token),
       ],
     );
   }
@@ -79,9 +77,9 @@ describe('sharing SQL permission matrix', () => {
   it('matches the independent oracle for all 110,592 depth-two page and folder cells', async () => {
     const structures: Structure[] = [];
     let structureIndex = 0;
-    for (const targetLink of links) {
-      for (const parentLink of links) {
-        for (const grandparentLink of links) {
+    for (const targetPublic of publicPermissions) {
+      for (const parentPublic of publicPermissions) {
+        for (const grandparentPublic of publicPermissions) {
           for (let boundaryBits = 0; boundaryBits < 8; boundaryBits += 1) {
             structures.push({
               index: structureIndex,
@@ -90,9 +88,9 @@ describe('sharing SQL permission matrix', () => {
               parentId: crypto.randomUUID(),
               targetFolderId: crypto.randomUUID(),
               pageId: crypto.randomUUID(),
-              targetLink,
-              parentLink,
-              grandparentLink,
+              targetPublic,
+              parentPublic,
+              grandparentPublic,
               boundaryBits,
             });
             structureIndex += 1;
@@ -131,11 +129,11 @@ describe('sharing SQL permission matrix', () => {
     await query(
       `
           INSERT INTO folders (
-            id, parent_id, name, created_by, inheritance_policy, is_public, public_token
+            id, parent_id, name, created_by, inheritance_policy, public_permission
           )
           SELECT *
           FROM UNNEST(
-            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::boolean[], $7::text[]
+            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::text[]
           )
         `,
       [
@@ -146,20 +144,17 @@ describe('sharing SQL permission matrix', () => {
         structures.map((structure) =>
           (structure.boundaryBits & 4) !== 0 ? 'restricted' : 'inherit',
         ),
-        structures.map((structure) => structure.grandparentLink !== null),
-        structures.map((structure) =>
-          structure.grandparentLink === null ? null : `matrix-grand-link-${structure.index}`,
-        ),
+        structures.map((structure) => structure.grandparentPublic),
       ],
     );
     await query(
       `
           INSERT INTO folders (
-            id, parent_id, name, created_by, inheritance_policy, is_public, public_token
+            id, parent_id, name, created_by, inheritance_policy, public_permission
           )
           SELECT *
           FROM UNNEST(
-            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::boolean[], $7::text[]
+            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::text[]
           )
         `,
       [
@@ -170,20 +165,17 @@ describe('sharing SQL permission matrix', () => {
         structures.map((structure) =>
           (structure.boundaryBits & 2) !== 0 ? 'restricted' : 'inherit',
         ),
-        structures.map((structure) => structure.parentLink !== null),
-        structures.map((structure) =>
-          structure.parentLink === null ? null : `matrix-parent-link-${structure.index}`,
-        ),
+        structures.map((structure) => structure.parentPublic),
       ],
     );
     await query(
       `
           INSERT INTO pages (
-            id, parent_id, title, created_by, inheritance_policy, is_public, public_token
+            id, parent_id, title, created_by, inheritance_policy, public_permission
           )
           SELECT *
           FROM UNNEST(
-            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::boolean[], $7::text[]
+            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::text[]
           )
         `,
       [
@@ -194,20 +186,17 @@ describe('sharing SQL permission matrix', () => {
         structures.map((structure) =>
           (structure.boundaryBits & 1) !== 0 ? 'restricted' : 'inherit',
         ),
-        structures.map((structure) => structure.targetLink !== null),
-        structures.map((structure) =>
-          structure.targetLink === null ? null : `matrix-page-link-${structure.index}`,
-        ),
+        structures.map((structure) => structure.targetPublic),
       ],
     );
     await query(
       `
           INSERT INTO folders (
-            id, parent_id, name, created_by, inheritance_policy, is_public, public_token
+            id, parent_id, name, created_by, inheritance_policy, public_permission
           )
           SELECT *
           FROM UNNEST(
-            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::boolean[], $7::text[]
+            $1::uuid[], $2::uuid[], $3::text[], $4::uuid[], $5::text[], $6::text[]
           )
         `,
       [
@@ -218,10 +207,7 @@ describe('sharing SQL permission matrix', () => {
         structures.map((structure) =>
           (structure.boundaryBits & 1) !== 0 ? 'restricted' : 'inherit',
         ),
-        structures.map((structure) => structure.targetLink !== null),
-        structures.map((structure) =>
-          structure.targetLink === null ? null : `matrix-target-folder-link-${structure.index}`,
-        ),
+        structures.map((structure) => structure.targetPublic),
       ],
     );
 
@@ -255,45 +241,6 @@ describe('sharing SQL permission matrix', () => {
 
     const shares: ShareSeed[] = [];
     for (const structure of structures) {
-      if (structure.targetLink !== null) {
-        shares.push({
-          entityType: 'page',
-          entityId: structure.pageId,
-          ownerId: structure.ownerId,
-          recipientId: null,
-          permission: structure.targetLink,
-          token: `matrix-page-link-${structure.index}`,
-        });
-        shares.push({
-          entityType: 'folder',
-          entityId: structure.targetFolderId,
-          ownerId: structure.ownerId,
-          recipientId: null,
-          permission: structure.targetLink,
-          token: `matrix-target-folder-link-${structure.index}`,
-        });
-      }
-      if (structure.parentLink !== null) {
-        shares.push({
-          entityType: 'folder',
-          entityId: structure.parentId,
-          ownerId: structure.ownerId,
-          recipientId: null,
-          permission: structure.parentLink,
-          token: `matrix-parent-link-${structure.index}`,
-        });
-      }
-      if (structure.grandparentLink !== null) {
-        shares.push({
-          entityType: 'folder',
-          entityId: structure.grandparentId,
-          ownerId: structure.ownerId,
-          recipientId: null,
-          permission: structure.grandparentLink,
-          token: `matrix-grand-link-${structure.index}`,
-        });
-      }
-
       for (const vector of roleVectors) {
         if (vector.target !== null) {
           shares.push({
@@ -302,7 +249,6 @@ describe('sharing SQL permission matrix', () => {
             ownerId: structure.ownerId,
             recipientId: vector.userId,
             permission: vector.target,
-            token: null,
           });
           shares.push({
             entityType: 'folder',
@@ -310,7 +256,6 @@ describe('sharing SQL permission matrix', () => {
             ownerId: structure.ownerId,
             recipientId: vector.userId,
             permission: vector.target,
-            token: null,
           });
         }
         if (vector.parent !== null) {
@@ -320,7 +265,6 @@ describe('sharing SQL permission matrix', () => {
             ownerId: structure.ownerId,
             recipientId: vector.userId,
             permission: vector.parent,
-            token: null,
           });
         }
         if (vector.grandparent !== null) {
@@ -330,7 +274,6 @@ describe('sharing SQL permission matrix', () => {
             ownerId: structure.ownerId,
             recipientId: vector.userId,
             permission: vector.grandparent,
-            token: null,
           });
         }
       }
@@ -401,17 +344,17 @@ describe('sharing SQL permission matrix', () => {
         nodes: [
           {
             grant: vector.target,
-            link: structure.targetLink,
+            publicAccess: structure.targetPublic,
             restricted: (structure.boundaryBits & 1) !== 0,
           },
           {
             grant: vector.parent,
-            link: structure.parentLink,
+            publicAccess: structure.parentPublic,
             restricted: (structure.boundaryBits & 2) !== 0,
           },
           {
             grant: vector.grandparent,
-            link: structure.grandparentLink,
+            publicAccess: structure.grandparentPublic,
             restricted: (structure.boundaryBits & 4) !== 0,
           },
         ],
@@ -435,17 +378,17 @@ describe('sharing SQL permission matrix', () => {
         nodes: [
           {
             grant: vector.target,
-            link: structure.targetLink,
+            publicAccess: structure.targetPublic,
             restricted: (structure.boundaryBits & 1) !== 0,
           },
           {
             grant: vector.parent,
-            link: structure.parentLink,
+            publicAccess: structure.parentPublic,
             restricted: (structure.boundaryBits & 2) !== 0,
           },
           {
             grant: vector.grandparent,
-            link: structure.grandparentLink,
+            publicAccess: structure.grandparentPublic,
             restricted: (structure.boundaryBits & 4) !== 0,
           },
         ],

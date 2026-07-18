@@ -39,7 +39,7 @@ vi.mock('../../utils/entity-actions', async (importOriginal) => {
     useLeaveEntity: () => ({ mutateAsync: mocks.leaveEntity, isPending: false }),
   };
 });
-vi.mock('../editor/PublicShareDialog', () => ({ PublicShareDialog: () => null }));
+vi.mock('../editor/ShareDialog', () => ({ ShareDialog: () => null }));
 vi.mock('../workspace/MoveDialog', () => ({
   MoveDialog: (props: unknown) => {
     mocks.moveDialogProps(props);
@@ -69,13 +69,15 @@ function renderMenu({
   createdBy,
   anonymous = false,
   entityType = 'page',
+  onCopy,
 }: {
   permission?: Permission | undefined;
   ownerId?: string | undefined;
-  shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+  shareSource?: 'direct' | 'public' | 'workspace' | undefined;
   createdBy?: string | undefined;
   anonymous?: boolean | undefined;
   entityType?: 'page' | 'folder';
+  onCopy?: (() => void) | undefined;
 }) {
   mocks.useAuth.mockReturnValue({
     data: anonymous ? { user: null } : { user: { id: 'current-user' } },
@@ -95,13 +97,14 @@ function renderMenu({
           ...(createdBy ? { createdBy } : {}),
         }}
         onRename={vi.fn()}
+        {...(onCopy ? { onCopy } : {})}
       />
     </ClipboardProvider>,
   );
 }
 
 function labels(): string[] {
-  return screen.getAllByRole('button').map((button) => button.textContent ?? '');
+  return screen.queryAllByRole('button').map((button) => button.textContent ?? '');
 }
 
 describe('PageContextMenu permissions', () => {
@@ -119,12 +122,24 @@ describe('PageContextMenu permissions', () => {
   });
 
   it('hides signed-in-only actions from anonymous viewers and editors', () => {
-    renderMenu({ permission: 'edit', shareSource: 'link', anonymous: true });
+    renderMenu({ permission: 'edit', shareSource: 'public', anonymous: true });
 
     expect(labels()).not.toContain('Copy');
     expect(labels()).not.toContain('Export');
     expect(labels()).not.toContain('Move');
     expect(labels()).not.toContain('Delete');
+    expect(labels()).not.toContain('Favorite');
+    expect(labels()).not.toContain('Share');
+  });
+
+  it('offers an immediate copy action to a guest when the destination allows it', async () => {
+    const user = userEvent.setup();
+    const onCopy = vi.fn();
+    renderMenu({ permission: 'edit', shareSource: 'public', anonymous: true, onCopy });
+
+    expect(labels()).toEqual(['Copy']);
+    await user.click(screen.getByRole('button', { name: 'Copy' }));
+    expect(onCopy).toHaveBeenCalledOnce();
   });
 
   it.each([
@@ -164,7 +179,7 @@ describe('PageContextMenu permissions', () => {
 
   it.each([
     'direct',
-    'link',
+    'public',
   ] as const)('lets a directly shared viewer leave via %s access', async (shareSource) => {
     const user = userEvent.setup();
     renderMenu({ permission: 'view', shareSource });

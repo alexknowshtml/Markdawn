@@ -96,7 +96,7 @@ describe('form control semantics', () => {
         <ChoiceGroup
           value={value}
           onChange={setValue}
-          ariaLabel="Direct link access"
+          ariaLabel="Public access"
           options={[
             { value: 'private', label: 'Restricted' },
             { value: 'view', label: 'Anyone Can View' },
@@ -106,7 +106,7 @@ describe('form control semantics', () => {
     }
 
     render(<Harness />);
-    const group = screen.getByRole('group', { name: 'Direct link access' });
+    const group = screen.getByRole('group', { name: 'Public access' });
     const restricted = screen.getByRole('button', { name: 'Restricted', pressed: true });
     expect(group).toContainElement(restricted);
     restricted.focus();

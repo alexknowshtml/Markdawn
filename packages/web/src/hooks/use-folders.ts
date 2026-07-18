@@ -137,6 +137,7 @@ export function useCreateFolder() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       showSuccessToast('Folder created');
     },
   });

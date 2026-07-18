@@ -8,10 +8,10 @@ import {
   createTestUser,
 } from '../test-utils';
 
-async function addPageShare(pageId: string, recipientUserId: string, permission = 'view') {
+async function addPageGrant(pageId: string, recipientUserId: string, permission = 'view') {
   await query(
-    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
-     VALUES ('page', $1, $2, $3, NULL)`,
+    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission)
+     VALUES ('page', $1, $2, $3)`,
     [pageId, recipientUserId, permission],
   );
 }
@@ -96,7 +96,7 @@ describe('backlinks API', () => {
       const privateSource = await createTestPage(owner.id, { title: 'Private Source' });
       const sharedTarget = await createTestPage(owner.id, { title: 'Shared Target' });
       await createTestPageLink(privateSource.id, sharedTarget.id);
-      await addPageShare(sharedTarget.id, recipient.id);
+      await addPageGrant(sharedTarget.id, recipient.id);
 
       const ownerRes = await app.request(`/api/backlinks?pageId=${sharedTarget.id}`, {
         headers: { Cookie: ownerSession.Cookie },
@@ -176,7 +176,7 @@ describe('backlinks API', () => {
          )`,
         [sharedSource.id],
       );
-      await addPageShare(sharedSource.id, recipient.id);
+      await addPageGrant(sharedSource.id, recipient.id);
 
       const res = await app.request(`/api/backlinks/outgoing?pageId=${sharedSource.id}`, {
         headers: { Cookie: recipientSession.Cookie },

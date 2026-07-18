@@ -3,18 +3,18 @@ import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import {
   decideSharingPermission,
-  type OracleLinkPermission,
   type OraclePermission,
+  type OraclePublicPermission,
 } from '../test-support/sharingOracle';
 import { createTestFolder, createTestPage, createTestUser } from '../test-utils';
 
 const roles: readonly OraclePermission[] = [null, 'view', 'edit', 'admin'];
-const links: readonly OracleLinkPermission[] = [null, 'view', 'edit'];
+const publicPermissions: readonly OraclePublicPermission[] = [null, 'view', 'edit'];
 
 type MutableWorld = {
   workspace: OraclePermission;
   grants: [OraclePermission, OraclePermission, OraclePermission];
-  links: [OracleLinkPermission, OracleLinkPermission, OracleLinkPermission];
+  publicAccess: [OraclePublicPermission, OraclePublicPermission, OraclePublicPermission];
   restricted: [boolean, boolean, boolean];
 };
 
@@ -50,7 +50,7 @@ describe('seeded sharing state machine', () => {
       const world: MutableWorld = {
         workspace: null,
         grants: [null, null, null],
-        links: [null, null, null],
+        publicAccess: [null, null, null],
         restricted: [false, false, false],
       };
       const trace: string[] = [];
@@ -80,7 +80,7 @@ describe('seeded sharing state machine', () => {
           world.grants[nodeIndex] = permission;
           await query(
             `DELETE FROM shares
-             WHERE entity_type = $1 AND entity_id = $2 AND recipient_user_id = $3 AND token IS NULL`,
+             WHERE entity_type = $1 AND entity_id = $2 AND recipient_user_id = $3`,
             [entityTypes[nodeIndex], entityIds[nodeIndex], recipient.id],
           );
           if (permission !== null) {
@@ -94,32 +94,19 @@ describe('seeded sharing state machine', () => {
           trace.push(`grant[${nodeIndex}]=${permission ?? 'none'}`);
         } else if (axis >= 4 && axis <= 6) {
           const nodeIndex = axis - 4;
-          const permission = links[Math.floor(random() * links.length)] ?? null;
-          world.links[nodeIndex] = permission;
-          const token = `state-machine-${seed}-${nodeIndex}`;
+          const permission =
+            publicPermissions[Math.floor(random() * publicPermissions.length)] ?? null;
+          world.publicAccess[nodeIndex] = permission;
           await db.transaction(async (tx) => {
             await executeQuery(
               tx,
-              'DELETE FROM shares WHERE entity_type = $1 AND entity_id = $2 AND token IS NOT NULL',
-              [entityTypes[nodeIndex], entityIds[nodeIndex]],
-            );
-            await executeQuery(
-              tx,
               entityTypes[nodeIndex] === 'page'
-                ? 'UPDATE pages SET is_public = $1, public_token = $2 WHERE id = $3'
-                : 'UPDATE folders SET is_public = $1, public_token = $2 WHERE id = $3',
-              [permission !== null, permission === null ? null : token, entityIds[nodeIndex]],
+                ? 'UPDATE pages SET public_permission = $1 WHERE id = $2'
+                : 'UPDATE folders SET public_permission = $1 WHERE id = $2',
+              [permission, entityIds[nodeIndex]],
             );
-            if (permission !== null) {
-              await executeQuery(
-                tx,
-                `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-                 VALUES ($1, $2, $3, $4, $5)`,
-                [entityTypes[nodeIndex], entityIds[nodeIndex], owner.id, permission, token],
-              );
-            }
           });
-          trace.push(`link[${nodeIndex}]=${permission ?? 'none'}`);
+          trace.push(`publicAccess[${nodeIndex}]=${permission ?? 'none'}`);
         } else {
           const nodeIndex = axis - 7;
           const restricted = random() >= 0.5;
@@ -137,7 +124,7 @@ describe('seeded sharing state machine', () => {
           workspace: world.workspace,
           nodes: world.grants.map((grant, nodeIndex) => ({
             grant,
-            link: world.links[nodeIndex] ?? null,
+            publicAccess: world.publicAccess[nodeIndex] ?? null,
             restricted: world.restricted[nodeIndex] ?? false,
           })),
         });

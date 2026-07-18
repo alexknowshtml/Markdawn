@@ -7,7 +7,7 @@ import {
 } from './usePageMeta';
 
 describe('refreshPageMetaQueriesAfterSync', () => {
-  it('replaces an older initial request before it can hide a startup invitation', async () => {
+  it('replaces an older initial request before it can hide a startup grant', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -20,7 +20,7 @@ describe('refreshPageMetaQueriesAfterSync', () => {
             resolveInitialRequest = resolve;
           }),
       )
-      .mockResolvedValueOnce(['new invitation']);
+      .mockResolvedValueOnce(['new grant']);
     const observer = new QueryObserver(queryClient, {
       queryKey: ['shared-with-me'],
       queryFn,
@@ -31,11 +31,11 @@ describe('refreshPageMetaQueriesAfterSync', () => {
     await refreshPageMetaQueriesAfterSync(queryClient);
 
     expect(queryFn).toHaveBeenCalledTimes(2);
-    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new invitation']);
+    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new grant']);
 
     resolveInitialRequest?.(['older empty result']);
     await Promise.resolve();
-    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new invitation']);
+    expect(queryClient.getQueryData(['shared-with-me'])).toEqual(['new grant']);
 
     unsubscribe();
     queryClient.clear();
@@ -74,7 +74,7 @@ describe('parsePageMetaStatelessMessage', () => {
     });
   });
 
-  it('accepts share access and invitation events', () => {
+  it('accepts share access and grant events', () => {
     expect(
       parsePageMetaStatelessMessage(
         JSON.stringify({
@@ -93,7 +93,7 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(
       parsePageMetaStatelessMessage(
         JSON.stringify({
-          type: 'invite_received',
+          type: 'grant_received',
           entityType: 'page',
           entityId: 'page-1',
           entityTitle: 'Shared page',
@@ -101,7 +101,7 @@ describe('parsePageMetaStatelessMessage', () => {
         }),
       ),
     ).toEqual({
-      type: 'invite_received',
+      type: 'grant_received',
       entityType: 'page',
       entityId: 'page-1',
       entityTitle: 'Shared page',
@@ -110,7 +110,7 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(
       parsePageMetaStatelessMessage(
         JSON.stringify({
-          type: 'invite_received',
+          type: 'grant_received',
           entityType: 'folder',
           entityId: 'folder-1',
           entityTitle: 'Shared folder',
@@ -119,7 +119,7 @@ describe('parsePageMetaStatelessMessage', () => {
         }),
       ),
     ).toEqual({
-      type: 'invite_received',
+      type: 'grant_received',
       entityType: 'folder',
       entityId: 'folder-1',
       entityTitle: 'Shared folder',
@@ -158,13 +158,13 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pages', 'detail'] });
   });
 
-  it('does not duplicate invitation refreshes already delivered by accessVersion', () => {
+  it('does not duplicate grant refreshes already delivered by accessVersion', () => {
     const queryClient = new QueryClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     applyPageMetaStatelessMessage(
       {
-        type: 'invite_received',
+        type: 'grant_received',
         entityType: 'page',
         entityId: 'page-1',
         entityTitle: 'Shared page',
@@ -178,13 +178,13 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
-  it('refreshes invitations from servers without accessVersion delivery', () => {
+  it('refreshes grants from servers without accessVersion delivery', () => {
     const queryClient = new QueryClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
 
     applyPageMetaStatelessMessage(
       {
-        type: 'invite_received',
+        type: 'grant_received',
         entityType: 'page',
         entityId: 'page-1',
         entityTitle: 'Shared page',
@@ -309,11 +309,11 @@ describe('parsePageMetaStatelessMessage', () => {
     expect(() =>
       parsePageMetaStatelessMessage(
         JSON.stringify({
-          type: 'invite_received',
+          type: 'grant_received',
           entityType: 'page',
           entityId: 'page-1',
         }),
       ),
-    ).toThrow('Malformed invitation event');
+    ).toThrow('Malformed grant event');
   });
 });

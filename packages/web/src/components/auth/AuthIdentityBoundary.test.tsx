@@ -9,7 +9,7 @@ import { useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { useSelection } from '../../contexts/SelectionContext';
 import { type Favorite, useToggleFavorite } from '../../hooks/use-favorites';
 import { useCreatePage } from '../../hooks/use-pages';
-import { useInviteToEntity } from '../../hooks/use-share';
+import { useGrantEntityAccess } from '../../hooks/use-share';
 import { createTestQueryClient } from '../../test-utils/render';
 import {
   beginBulkRemoval,
@@ -38,7 +38,7 @@ import { AuthIdentityBoundary } from './AuthIdentityBoundary';
 
 const identityClients = new Map<string, QueryClient>();
 let pendingFavoriteMutation: Promise<void> | null = null;
-let pendingInviteMutation: Promise<unknown> | null = null;
+let pendingGrantMutation: Promise<unknown> | null = null;
 let pendingCreateNavigation: Promise<void> | null = null;
 
 function useRecordIdentityClient() {
@@ -119,15 +119,15 @@ function DeferredFavoriteMutationChild() {
   );
 }
 
-function DeferredInviteMutationChild() {
+function DeferredGrantMutationChild() {
   useRecordIdentityClient();
-  const invite = useInviteToEntity();
+  const grant = useGrantEntityAccess();
 
   return (
     <button
       type="button"
       onClick={() => {
-        pendingInviteMutation = invite.mutateAsync(
+        pendingGrantMutation = grant.mutateAsync(
           {
             entityType: 'page',
             entityId: 'page-a',
@@ -138,7 +138,7 @@ function DeferredInviteMutationChild() {
         );
       }}
     >
-      Start invite mutation
+      Start grant mutation
     </button>
   );
 }
@@ -174,7 +174,7 @@ describe('AuthIdentityBoundary', () => {
     mocks.isRefetching = false;
     identityClients.clear();
     pendingFavoriteMutation = null;
-    pendingInviteMutation = null;
+    pendingGrantMutation = null;
     pendingCreateNavigation = null;
     mocks.lateNavigation.mockReset();
     resetSelfLeaveState();
@@ -417,13 +417,13 @@ describe('AuthIdentityBoundary', () => {
     expect(screen.queryByText('Failed to update favorite')).not.toBeInTheDocument();
   });
 
-  it('skips hook and per-call callbacks when an invite succeeds after identity retirement', async () => {
+  it('skips hook and per-call callbacks when a grant succeeds after identity retirement', async () => {
     const user = userEvent.setup();
-    let resolveInviteRequest: ((response: Response) => void) | undefined;
-    const inviteRequest = new Promise<Response>((resolve) => {
-      resolveInviteRequest = resolve;
+    let resolveGrantRequest: ((response: Response) => void) | undefined;
+    const grantRequest = new Promise<Response>((resolve) => {
+      resolveGrantRequest = resolve;
     });
-    const fetchMock = vi.fn(() => inviteRequest);
+    const fetchMock = vi.fn(() => grantRequest);
     vi.stubGlobal('fetch', fetchMock);
     const outerQueryClient = createTestQueryClient();
 
@@ -431,14 +431,14 @@ describe('AuthIdentityBoundary', () => {
       <ToastProvider>
         <QueryClientProvider client={outerQueryClient}>
           <AuthIdentityBoundary>
-            <DeferredInviteMutationChild />
+            <DeferredGrantMutationChild />
           </AuthIdentityBoundary>
         </QueryClientProvider>
       </ToastProvider>,
     );
 
-    const inviteButton = await screen.findByRole('button', { name: 'Start invite mutation' });
-    await user.click(inviteButton);
+    const grantButton = await screen.findByRole('button', { name: 'Start grant mutation' });
+    await user.click(grantButton);
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
     const userAQueryClient = identityClients.get('user-a');
     expect(userAQueryClient).toBeDefined();
@@ -450,25 +450,25 @@ describe('AuthIdentityBoundary', () => {
         <ToastProvider>
           <QueryClientProvider client={outerQueryClient}>
             <AuthIdentityBoundary>
-              <DeferredInviteMutationChild />
+              <DeferredGrantMutationChild />
             </AuthIdentityBoundary>
           </QueryClientProvider>
         </ToastProvider>,
       ),
     );
-    await screen.findByRole('button', { name: 'Start invite mutation' });
+    await screen.findByRole('button', { name: 'Start grant mutation' });
     const userBQueryClient = identityClients.get('user-b');
     expect(userBQueryClient).toBeDefined();
     const userBInvalidateSpy = vi.spyOn(userBQueryClient as QueryClient, 'invalidateQueries');
     userBQueryClient?.setQueryData(['shares', 'page', 'page-b'], { owner: 'user-b' });
 
     await act(async () => {
-      resolveInviteRequest?.({
+      resolveGrantRequest?.({
         ok: true,
-        json: () => Promise.resolve({ message: 'A invitation sent' }),
+        json: () => Promise.resolve({ message: 'Access granted to account A' }),
       } as Response);
-      await inviteRequest;
-      await pendingInviteMutation;
+      await grantRequest;
+      await pendingGrantMutation;
     });
 
     expect(userAInvalidateSpy).not.toHaveBeenCalled();
@@ -476,7 +476,7 @@ describe('AuthIdentityBoundary', () => {
     expect(userBQueryClient?.getQueryData(['shares', 'page', 'page-b'])).toEqual({
       owner: 'user-b',
     });
-    expect(screen.queryByText('A invitation sent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Access granted to account A')).not.toBeInTheDocument();
     expect(mocks.lateNavigation).not.toHaveBeenCalled();
   });
 
@@ -485,7 +485,7 @@ describe('AuthIdentityBoundary', () => {
     const fetchMock = vi.fn(() =>
       Promise.resolve({
         ok: true,
-        json: () => Promise.resolve({ message: 'Active invitation sent' }),
+        json: () => Promise.resolve({ message: 'Active account access granted' }),
       } as Response),
     );
     vi.stubGlobal('fetch', fetchMock);
@@ -495,22 +495,22 @@ describe('AuthIdentityBoundary', () => {
       <ToastProvider>
         <QueryClientProvider client={outerQueryClient}>
           <AuthIdentityBoundary>
-            <DeferredInviteMutationChild />
+            <DeferredGrantMutationChild />
           </AuthIdentityBoundary>
         </QueryClientProvider>
       </ToastProvider>,
     );
 
-    const inviteButton = await screen.findByRole('button', { name: 'Start invite mutation' });
+    const grantButton = await screen.findByRole('button', { name: 'Start grant mutation' });
     const activeQueryClient = identityClients.get('user-a');
     expect(activeQueryClient).toBeDefined();
     const invalidateSpy = vi.spyOn(activeQueryClient as QueryClient, 'invalidateQueries');
-    await user.click(inviteButton);
+    await user.click(grantButton);
     await act(async () => {
-      await pendingInviteMutation;
+      await pendingGrantMutation;
     });
 
-    expect(await screen.findByText('Active invitation sent')).toBeInTheDocument();
+    expect(await screen.findByText('Active account access granted')).toBeInTheDocument();
     expect(mocks.lateNavigation).toHaveBeenCalledWith('/app/a-private-page');
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['shares', 'page', 'page-a'] });
   });

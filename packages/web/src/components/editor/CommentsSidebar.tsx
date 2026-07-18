@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
+import { useShareContext } from '../../contexts/ShareContext';
 import {
   type Comment,
   useAddReply,
@@ -18,7 +19,6 @@ import {
   useDeleteComment,
   useUpdateComment,
 } from '../../hooks/use-comments';
-import { useAuth } from '../../hooks/useAuth';
 import { ConfirmDialog } from '../ConfirmDialog';
 
 interface CommentsSidebarProps {
@@ -30,8 +30,8 @@ interface CommentsSidebarProps {
 type FilterType = 'all' | 'open' | 'resolved';
 
 export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProps) {
-  const { data: session } = useAuth();
-  const { data: comments = [], isLoading } = useComments(pageId);
+  const { capabilities } = useShareContext();
+  const { data: comments = [], isLoading } = useComments(isOpen ? pageId : undefined);
   const createComment = useCreateComment(pageId);
   const addReply = useAddReply(pageId);
   const updateComment = useUpdateComment(pageId);
@@ -110,7 +110,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
 
   return (
     <>
-      <aside className="w-80 border-l border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900 h-full flex flex-col flex-shrink-0 z-40">
+      <aside className="fixed inset-y-0 right-0 z-40 flex w-full flex-col border-l border-zinc-200 bg-zinc-50 shadow-xl dark:border-zinc-800 dark:bg-zinc-900 sm:w-80">
         <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between bg-white dark:bg-zinc-900">
           <div className="flex items-center gap-2 text-zinc-900 dark:text-zinc-100 font-medium">
             <MessageSquare size={18} />
@@ -119,34 +119,42 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
           <button
             type="button"
             onClick={onClose}
-            className="p-1.5 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
+            aria-label="Close comments"
+            className="cursor-pointer p-1.5 text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors"
           >
             <X size={18} />
           </button>
         </div>
 
         <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900">
-          <form onSubmit={handleCreateComment} className="relative">
-            <textarea
-              value={newCommentText}
-              onChange={(e) => setNewCommentText(e.target.value)}
-              placeholder="Add a comment..."
-              className="w-full min-h-[80px] p-3 pr-10 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 dark:placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  handleCreateComment(e);
-                }
-              }}
-            />
-            <button
-              type="submit"
-              disabled={!newCommentText.trim() || createComment.isPending}
-              className="absolute bottom-3 right-3 p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-md disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
-            >
-              <Send size={16} />
-            </button>
-          </form>
+          {capabilities.canComment ? (
+            <form onSubmit={handleCreateComment} className="relative">
+              <textarea
+                value={newCommentText}
+                onChange={(e) => setNewCommentText(e.target.value)}
+                placeholder="Add a comment..."
+                className="w-full min-h-[80px] p-3 pr-10 bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700 rounded-lg text-sm text-zinc-900 dark:text-zinc-100 placeholder-zinc-500 dark:placeholder-zinc-400 focus:outline-none focus:ring-2 focus:ring-blue-500/50 resize-none"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleCreateComment(e);
+                  }
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!newCommentText.trim() || createComment.isPending}
+                aria-label="Add comment"
+                className="absolute bottom-3 right-3 cursor-pointer p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-md disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent transition-colors"
+              >
+                <Send size={16} />
+              </button>
+            </form>
+          ) : (
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">
+              View-only access can read comments but cannot add or change them.
+            </p>
+          )}
 
           <div className="flex items-center gap-1 mt-4 p-1 bg-zinc-100 dark:bg-zinc-800/50 rounded-lg">
             {(['all', 'open', 'resolved'] as const).map((f) => (
@@ -155,7 +163,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                 key={f}
                 onClick={() => setFilter(f)}
                 className={clsx(
-                  'flex-1 px-3 py-1.5 text-xs font-medium rounded-md capitalize transition-colors',
+                  'flex-1 cursor-pointer px-3 py-1.5 text-xs font-medium rounded-md capitalize transition-colors',
                   filter === f
                     ? 'bg-white dark:bg-zinc-700 text-zinc-900 dark:text-zinc-100 shadow-sm'
                     : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200',
@@ -189,9 +197,9 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
               >
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div className="flex items-center gap-2">
-                    {comment.user?.image ? (
+                    {comment.user?.avatarUrl ? (
                       <img
-                        src={comment.user.image}
+                        src={comment.user.avatarUrl}
                         alt={comment.user.name}
                         className="w-6 h-6 rounded-full"
                         referrerPolicy="no-referrer"
@@ -212,25 +220,27 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                   </div>
 
                   <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => toggleResolve(comment)}
-                      className={clsx(
-                        'p-1.5 rounded-md transition-colors',
-                        comment.resolved
-                          ? 'text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'
-                          : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700',
-                      )}
-                      title={comment.resolved ? 'Mark as unresolved' : 'Mark as resolved'}
-                    >
-                      {comment.resolved ? <CheckCircle2 size={16} /> : <Circle size={16} />}
-                    </button>
+                    {capabilities.canComment && (
+                      <button
+                        type="button"
+                        onClick={() => toggleResolve(comment)}
+                        className={clsx(
+                          'cursor-pointer p-1.5 rounded-md transition-colors',
+                          comment.resolved
+                            ? 'text-green-600 dark:text-green-400 hover:bg-green-50 dark:hover:bg-green-900/20'
+                            : 'text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-700',
+                        )}
+                        title={comment.resolved ? 'Mark as unresolved' : 'Mark as resolved'}
+                      >
+                        {comment.resolved ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                      </button>
+                    )}
 
-                    {session?.user?.id === comment.userId && (
+                    {capabilities.canComment && comment.isOwn && (
                       <button
                         type="button"
                         onClick={() => handleDelete(comment.id)}
-                        className="p-1.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-400 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                        className="cursor-pointer p-1.5 text-zinc-400 hover:text-red-600 dark:hover:text-red-400 rounded-md hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
                         title="Delete comment"
                       >
                         <Trash2 size={16} />
@@ -257,9 +267,9 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                         <CornerDownRight size={14} className="text-zinc-400 mt-1 flex-shrink-0" />
                         <div className="flex-1">
                           <div className="flex items-center gap-2 mb-1">
-                            {reply.user?.image ? (
+                            {reply.user?.avatarUrl ? (
                               <img
-                                src={reply.user.image}
+                                src={reply.user.avatarUrl}
                                 alt={reply.user.name}
                                 className="w-5 h-5 rounded-full"
                                 referrerPolicy="no-referrer"
@@ -285,7 +295,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                   </div>
                 )}
 
-                {!comment.resolved && (
+                {!comment.resolved && capabilities.canComment && (
                   <div className="mt-3">
                     {replyingTo === comment.id ? (
                       <form
@@ -315,14 +325,14 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                               setReplyingTo(null);
                               setReplyText('');
                             }}
-                            className="p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
+                            className="cursor-pointer p-1 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300"
                           >
                             <X size={14} />
                           </button>
                           <button
                             type="submit"
                             disabled={!replyText.trim() || addReply.isPending}
-                            className="p-1 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded disabled:opacity-50"
+                            className="cursor-pointer p-1 text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded disabled:cursor-default disabled:opacity-50"
                           >
                             <Send size={14} />
                           </button>
@@ -332,7 +342,7 @@ export function CommentsSidebar({ pageId, isOpen, onClose }: CommentsSidebarProp
                       <button
                         type="button"
                         onClick={() => setReplyingTo(comment.id)}
-                        className="text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
+                        className="cursor-pointer text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-200 transition-colors"
                       >
                         Reply
                       </button>

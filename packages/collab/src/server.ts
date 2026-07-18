@@ -35,7 +35,7 @@ import { parseCookies } from './utils';
 
 const META_ROOM_PREFIX = 'page-meta:';
 const DELETION_EVENT_QUEUE_LIMIT = 256;
-const INVITE_EVENT_QUEUE_LIMIT = 256;
+const GRANT_EVENT_QUEUE_LIMIT = 256;
 const PAGE_RENAME_EVENT_QUEUE_LIMIT = 256;
 const SHARE_EVENT_QUEUE_LIMIT = 256;
 const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
@@ -727,11 +727,11 @@ type ConnectionResolutionPrincipal = {
 
 /**
  * Payload received on the `share_event` pg_notify channel when a user receives
- * a new share invite. The collab server forwards this to the recipient's active
- * WebSocket connection so they see an invite notification toast.
+ * a new account grant. The collab server forwards this to the recipient's active
+ * WebSocket connection so they see a grant notification toast.
  */
-interface InviteReceivedPayload {
-  type: 'invite_received';
+interface GrantReceivedPayload {
+  type: 'grant_received';
   entityType: string;
   entityId: string;
   entityTitle: string;
@@ -768,16 +768,16 @@ async function rebuildPageMetaDocument(
             case
               when p.parent_id is null or exists (
                 select 1
-                from get_enumerable_folder_ids_at($1, statement_timestamp()) enumerable
+          from get_enumerable_folder_ids($1) enumerable
                 where enumerable.folder_id = p.parent_id
               ) then p.parent_id
               else null
             end as parent_id,
             p.position, access.permission
      from pages p
-     join lateral get_effective_page_permission_at(p.id, $1, statement_timestamp()) access on true
+       join lateral get_effective_page_permission(p.id, $1) access on true
      where p.is_deleted = false
-       and p.id in (select page_id from get_accessible_page_ids_at($1, statement_timestamp()))
+         and p.id in (select page_id from get_accessible_page_ids($1))
      order by p.position::numeric asc`,
     [userId],
   );
@@ -964,7 +964,7 @@ async function getPageMetaRecipients(
      cross join active_users
      where exists (
        select 1
-       from get_accessible_page_ids_at(active_users.user_id, statement_timestamp()) accessible
+             from get_accessible_page_ids(active_users.user_id) accessible
        where accessible.page_id = requested.page_id
      )`,
     [pageIds, candidateUserIds],
@@ -1006,26 +1006,24 @@ async function getDeletedPageMetaRecipientIds(
        select s.recipient_user_id
        from shares s
        where s.entity_type = 'page' and s.entity_id = $1
-         and s.recipient_user_id is not null and s.token is null
-         and (s.expires_at is null or s.expires_at > statement_timestamp())
+         and s.recipient_user_id is not null
        union
        select s.recipient_user_id
        from shares s
        join page_info pi on s.entity_id in (
          select ancestor_id from folder_closure where descendant_id = pi.parent_id
        )
-       where s.entity_type = 'folder' and s.recipient_user_id is not null and s.token is null
-         and (s.expires_at is null or s.expires_at > statement_timestamp())
+       where s.entity_type = 'folder' and s.recipient_user_id is not null
        union
        select wm.member_id
        from workspace_members wm
        join page_info pi on pi.owner_id = wm.workspace_owner_id
        union
-       select user_id from page_access_events where page_id = $1
+       select user_id from page_public_access_visits where page_id = $1
        union
-       select fae.user_id
-       from folder_access_events fae
-       join page_info pi on fae.folder_id in (
+       select visit.user_id
+       from folder_public_access_visits visit
+       join page_info pi on visit.folder_id in (
          select ancestor_id from folder_closure where descendant_id = pi.parent_id
        )
      )
@@ -1069,16 +1067,15 @@ async function getDeletedFolderMetaRecipientIds(
        from shares s
        where s.entity_type = 'folder'
          and s.entity_id in (select folder_id from related_folders)
-         and s.recipient_user_id is not null and s.token is null
-         and (s.expires_at is null or s.expires_at > statement_timestamp())
+         and s.recipient_user_id is not null
        union
        select wm.member_id
        from workspace_members wm
        join folder_info fi on fi.owner_id = wm.workspace_owner_id
        union
-       select fae.user_id
-       from folder_access_events fae
-       where fae.folder_id in (select folder_id from related_folders)
+       select visit.user_id
+       from folder_public_access_visits visit
+       where visit.folder_id in (select folder_id from related_folders)
      )
      select distinct user_id
      from recipients
@@ -1121,7 +1118,7 @@ async function updatePageMeta(
        from unnest($1::uuid[]) requested(user_id)
        where exists (
          select 1
-         from get_enumerable_folder_ids_at(requested.user_id, statement_timestamp()) enumerable
+             from get_enumerable_folder_ids(requested.user_id) enumerable
          where enumerable.folder_id = $2
        )`,
       [recipientIds, page.parent_id],
@@ -1280,43 +1277,7 @@ async function resolvePageTargets(
              where accessible.page_id = p.id
            )
          )
-         and (
-           not $4::boolean
-           or (
-             (
-               p.is_public = true
-               and exists (
-                 select 1
-                 from shares page_link
-                 where page_link.entity_type = 'page'
-                   and page_link.entity_id = p.id
-                   and page_link.token is not null
-                   and (
-                     page_link.expires_at is null
-                     or page_link.expires_at > statement_timestamp()
-                   )
-               )
-             )
-             or exists (
-               select 1
-               from folder_closure fc
-               join folders source_folder
-                 on source_folder.id = fc.ancestor_id
-                and source_folder.is_public = true
-                and source_folder.is_deleted = false
-               join shares folder_link
-                 on folder_link.entity_type = 'folder'
-                and folder_link.entity_id = source_folder.id
-                and folder_link.token is not null
-                and (
-                  folder_link.expires_at is null
-                  or folder_link.expires_at > statement_timestamp()
-                )
-               where fc.descendant_id = p.parent_id
-                 and not is_page_folder_inheritance_blocked(source_folder.id, p.id)
-             )
-           )
-         )`,
+         and (not $4::boolean or get_public_page_permission(p.id) is not null)`,
       [ids, ownerId, authenticatedUserIds, hasAnonymousPrincipal],
     );
     for (const row of result.rows) {
@@ -1343,43 +1304,7 @@ async function resolvePageTargets(
              where accessible.page_id = p.id
            )
          )
-         and (
-           not $4::boolean
-           or (
-             (
-               p.is_public = true
-               and exists (
-                 select 1
-                 from shares page_link
-                 where page_link.entity_type = 'page'
-                   and page_link.entity_id = p.id
-                   and page_link.token is not null
-                   and (
-                     page_link.expires_at is null
-                     or page_link.expires_at > statement_timestamp()
-                   )
-               )
-             )
-             or exists (
-               select 1
-               from folder_closure fc
-               join folders source_folder
-                 on source_folder.id = fc.ancestor_id
-                and source_folder.is_public = true
-                and source_folder.is_deleted = false
-               join shares folder_link
-                 on folder_link.entity_type = 'folder'
-                and folder_link.entity_id = source_folder.id
-                and folder_link.token is not null
-                and (
-                  folder_link.expires_at is null
-                  or folder_link.expires_at > statement_timestamp()
-                )
-               where fc.descendant_id = p.parent_id
-                 and not is_page_folder_inheritance_blocked(source_folder.id, p.id)
-             )
-           )
-         )
+         and (not $4::boolean or get_public_page_permission(p.id) is not null)
        group by lower(trim(p.title))
        having count(*) = 1`,
       [ownerId, titleSlugs, authenticatedUserIds, hasAnonymousPrincipal],
@@ -1402,31 +1327,11 @@ async function resolvePageTargets(
              from unnest($3::uuid[]) actor(user_id)
              where not exists (
                select 1
-               from get_enumerable_folder_ids_at(actor.user_id, statement_timestamp()) enumerable
+         from get_enumerable_folder_ids(actor.user_id) enumerable
                where enumerable.folder_id = f.id
              )
            )
-           and (
-             not $4::boolean
-             or exists (
-               select 1
-               from folder_closure fc
-               join folders source_folder
-                 on source_folder.id = fc.ancestor_id
-                and source_folder.is_public = true
-                and source_folder.is_deleted = false
-               join shares folder_link
-                 on folder_link.entity_type = 'folder'
-                and folder_link.entity_id = source_folder.id
-                and folder_link.token is not null
-                and (
-                  folder_link.expires_at is null
-                  or folder_link.expires_at > statement_timestamp()
-                )
-               where fc.descendant_id = f.id
-                 and not is_folder_inheritance_blocked(source_folder.id, f.id)
-             )
-           )
+           and (not $4::boolean or get_public_folder_permission(f.id) is not null)
        ),
        folder_paths as (
          select f.id, lower(trim(f.name))::text as folder_path
@@ -1456,43 +1361,7 @@ async function resolvePageTargets(
              where accessible.page_id = p.id
            )
          )
-         and (
-           not $4::boolean
-           or (
-             (
-               p.is_public = true
-               and exists (
-                 select 1
-                 from shares page_link
-                 where page_link.entity_type = 'page'
-                   and page_link.entity_id = p.id
-                   and page_link.token is not null
-                   and (
-                     page_link.expires_at is null
-                     or page_link.expires_at > statement_timestamp()
-                   )
-               )
-             )
-             or exists (
-               select 1
-               from folder_closure fc
-               join folders source_folder
-                 on source_folder.id = fc.ancestor_id
-                and source_folder.is_public = true
-                and source_folder.is_deleted = false
-               join shares folder_link
-                 on folder_link.entity_type = 'folder'
-                and folder_link.entity_id = source_folder.id
-                and folder_link.token is not null
-                and (
-                  folder_link.expires_at is null
-                  or folder_link.expires_at > statement_timestamp()
-                )
-               where fc.descendant_id = p.parent_id
-                 and not is_page_folder_inheritance_blocked(source_folder.id, p.id)
-             )
-           )
-         )
+         and (not $4::boolean or get_public_page_permission(p.id) is not null)
        group by paths.folder_path || '/' || lower(trim(p.title))
        having count(*) = 1`,
       [ownerId, pathSlugs, authenticatedUserIds, hasAnonymousPrincipal],
@@ -2357,7 +2226,6 @@ export function createCollabServer(config: CollabServerConfig) {
     permission?: EffectivePermission | null;
     accessRevision?: string;
     sessionToken?: string;
-    shareToken?: string;
     permissionCheck?: Promise<void>;
     deferInitialAwareness?: boolean;
     establishmentGate?: EstablishmentGate;
@@ -2586,7 +2454,7 @@ export function createCollabServer(config: CollabServerConfig) {
            exists(select 1 from pages where id = $1 and is_deleted = false) as page_exists,
            (
              select permission
-             from get_effective_page_permission_at($1, $2, statement_timestamp())
+          from get_effective_page_permission($1, $2)
              limit 1
            ) as permission,
            get_page_access_revision($1)::text as access_revision,
@@ -2630,53 +2498,19 @@ export function createCollabServer(config: CollabServerConfig) {
 
   async function assertAnonymousPageAccess(
     documentName: string,
-    shareToken: string | undefined,
     executor: PermissionQueryExecutor = pool,
   ): Promise<{ permission: EffectivePermission; accessRevision: string }> {
-    if (!shareToken) {
-      logger.debug(`[auth] anonymous denied: page ${documentName} missing link share token`);
-      throw new CollabAccessError();
-    }
     const shareResult = await runPermissionQuery(() =>
       executor.query<{ permission: string | null; access_revision: string }>(
-        `WITH page_parent AS (
-         SELECT parent_id, is_public
-         FROM pages
-         WHERE id = $1 AND is_deleted = false
-       )
-       SELECT (
-       SELECT permission FROM (
-          SELECT s.permission, 1 AS src
-          FROM shares s
-          WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.token IS NOT NULL
-            AND s.token = $2
-            AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-            AND EXISTS (SELECT 1 FROM page_parent WHERE is_public = true)
-         UNION ALL
-         SELECT s.permission, 2 AS src
-         FROM shares s
-          JOIN folders f ON f.id = s.entity_id AND f.is_public = true AND f.is_deleted = false
-           WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
-             AND s.token = $2
-             AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-            AND s.entity_id IN (
-              SELECT ancestor_id FROM folder_closure fc
-              JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-            )
-            AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)
-        ) perms
-       ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
-                src ASC
-       LIMIT 1
-        ) AS permission,
-        get_page_access_revision($1)::text AS access_revision`,
-        [documentName, shareToken],
+        `SELECT get_public_page_permission($1) AS permission,
+                get_page_access_revision($1)::text AS access_revision`,
+        [documentName],
       ),
     );
     const rawPermission = shareResult.rows[0]?.permission;
     const accessRevision = shareResult.rows[0]?.access_revision;
     if (rawPermission !== 'view' && rawPermission !== 'edit' && rawPermission !== 'admin') {
-      logger.debug(`[auth] anonymous denied: page ${documentName} has no valid link share`);
+      logger.debug(`[auth] anonymous denied: page ${documentName} is restricted`);
       throw new CollabAccessError(accessRevision);
     }
     if (!accessRevision) throw new CollabVerificationError('Missing access revision');
@@ -2844,7 +2678,7 @@ export function createCollabServer(config: CollabServerConfig) {
 
     try {
       const access = context.user.isAnonymous
-        ? await assertAnonymousPageAccess(documentName, context.shareToken, executor)
+        ? await assertAnonymousPageAccess(documentName, executor)
         : await assertPageAccess(documentName, context.user.id, executor, context.sessionToken);
       applyPagePermissionState(context, undefined, access);
       updateRevalidatedConnections(
@@ -2982,7 +2816,7 @@ export function createCollabServer(config: CollabServerConfig) {
     if (writers.size === 0) pendingWriters.delete(documentName);
   }
 
-  async function handleInviteReceived(payload: {
+  async function handleGrantReceived(payload: {
     entityType: string;
     entityId: string;
     entityTitle: string;
@@ -2992,7 +2826,7 @@ export function createCollabServer(config: CollabServerConfig) {
     message?: string;
   }): Promise<void> {
     if (!server.hocuspocus?.documents) {
-      logger.debug('[invite] no active documents, skipping');
+      logger.debug('[grant] no active documents, skipping');
       return;
     }
 
@@ -3002,7 +2836,7 @@ export function createCollabServer(config: CollabServerConfig) {
         payload.permission !== 'edit' &&
         payload.permission !== 'admin')
     ) {
-      logger.debug('[invite] malformed or legacy invite payload, skipping');
+      logger.debug('[grant] malformed grant payload, skipping');
       return;
     }
 
@@ -3021,9 +2855,7 @@ export function createCollabServer(config: CollabServerConfig) {
        where s.entity_type = $1
          and s.entity_id = $2
          and s.recipient_user_id = $3
-         and s.token is null
          and s.permission = $4
-         and (s.expires_at is null or s.expires_at > statement_timestamp())
          and ((s.entity_type = 'page' and p.id is not null)
            or (s.entity_type = 'folder' and f.id is not null))
        limit 1`,
@@ -3032,13 +2864,13 @@ export function createCollabServer(config: CollabServerConfig) {
     const grant = canonicalGrant.rows[0];
     if (!grant) {
       logger.debug(
-        `[invite] stale grant ignored for user=${payload.targetUserId} entity=${payload.entityType}:${payload.entityId}`,
+        `[grant] stale grant ignored for user=${payload.targetUserId} entity=${payload.entityType}:${payload.entityId}`,
       );
       return;
     }
 
-    const inviteMessage = JSON.stringify({
-      type: 'invite_received',
+    const grantMessage = JSON.stringify({
+      type: 'grant_received',
       entityType: payload.entityType,
       entityId: payload.entityId,
       entityTitle: grant.entity_title,
@@ -3051,13 +2883,13 @@ export function createCollabServer(config: CollabServerConfig) {
       | Document
       | undefined;
     for (const connection of metaDocument?.getConnections() ?? []) {
-      connection.sendStateless(inviteMessage);
+      connection.sendStateless(grantMessage);
       affectedCount++;
     }
 
     // The meta room is the normal global notification channel. During initial
     // application startup it may not be connected yet, so retain an active
-    // page connection as a fallback instead of dropping the invitation event.
+    // page connection as a fallback instead of dropping the grant event.
     if (affectedCount === 0) {
       for (const [documentName, doc] of server.hocuspocus.documents) {
         if (documentName.startsWith(META_ROOM_PREFIX)) continue;
@@ -3068,14 +2900,14 @@ export function createCollabServer(config: CollabServerConfig) {
             | { user?: { id: string; isAnonymous?: boolean } }
             | undefined;
           if (!ctx?.user || ctx.user.id !== payload.targetUserId) continue;
-          connection.sendStateless(inviteMessage);
+          connection.sendStateless(grantMessage);
           affectedCount++;
         }
       }
     }
 
     logger.info(
-      `[invite] sent invite_received to ${affectedCount} connection(s) for user=${payload.targetUserId}`,
+      `[grant] sent grant_received to ${affectedCount} connection(s) for user=${payload.targetUserId}`,
     );
   }
 
@@ -3104,15 +2936,9 @@ export function createCollabServer(config: CollabServerConfig) {
       }
 
       if (sessionToken.startsWith('anon:')) {
-        const anonymousParts = sessionToken.slice(5).split(':');
-        const anonymousId = anonymousParts[0] ?? '';
-        const shareToken = anonymousParts[1] ?? '';
-        if (
-          anonymousParts.length !== 2 ||
-          !UUID_REGEX.test(anonymousId) ||
-          !UUID_REGEX.test(shareToken)
-        ) {
-          logger.debug('[auth] anonymous token requires valid UUID identity and share token');
+        const anonymousId = sessionToken.slice(5);
+        if (!UUID_REGEX.test(anonymousId)) {
+          logger.debug('[auth] anonymous token requires a valid UUID identity');
           throw new Error('Forbidden');
         }
         if (!documentName || !UUID_REGEX.test(documentName)) {
@@ -3120,11 +2946,14 @@ export function createCollabServer(config: CollabServerConfig) {
           throw new Error('Forbidden');
         }
 
-        const { permission, accessRevision } = await assertAnonymousPageAccess(
-          documentName,
-          shareToken,
-        );
+        const { permission, accessRevision } = await assertAnonymousPageAccess(documentName);
         const anonymousName = getAnonymousName(anonymousId);
+        await pool.query(
+          `insert into guest_identities (id, name, created_at, last_seen_at)
+           values ($1, $2, now(), now())
+           on conflict (id) do update set last_seen_at = excluded.last_seen_at`,
+          [anonymousId, anonymousName],
+        );
 
         if (permission === 'view') {
           connectionConfig.readOnly = true;
@@ -3142,7 +2971,6 @@ export function createCollabServer(config: CollabServerConfig) {
           permission,
           accessRevision,
           sessionToken,
-          shareToken,
           deferInitialAwareness: true,
           establishmentGate: createEstablishmentGate(),
         };
@@ -3247,7 +3075,7 @@ export function createCollabServer(config: CollabServerConfig) {
           }
 
           const access = connectionUser.isAnonymous
-            ? await assertAnonymousPageAccess(documentName, connectionContext.shareToken)
+            ? await assertAnonymousPageAccess(documentName)
             : await assertPageAccess(
                 documentName,
                 connectionUser.id,
@@ -3457,7 +3285,7 @@ export function createCollabServer(config: CollabServerConfig) {
           await lockDocumentAccessMutation(documentName, client);
           titleRevision = await lockActivePage(documentName, client);
           const access = writerUser.isAnonymous
-            ? await assertAnonymousPageAccess(documentName, writer.shareToken, client)
+            ? await assertAnonymousPageAccess(documentName, client)
             : await assertPageAccess(documentName, writerUser.id, client, writer.sessionToken);
           const previousPermission = currentEffectivePermission(writer);
           const stateApplied = applyPagePermissionState(writer, connection, access);
@@ -3602,7 +3430,7 @@ export function createCollabServer(config: CollabServerConfig) {
         await lockDocumentAccessMutation(documentName, loadClient);
         await lockActivePage(documentName, loadClient);
         const access = contextUser.isAnonymous
-          ? await assertAnonymousPageAccess(documentName, loadContext.shareToken, loadClient)
+          ? await assertAnonymousPageAccess(documentName, loadClient)
           : await assertPageAccess(
               documentName,
               contextUser.id,
@@ -3909,19 +3737,19 @@ export function createCollabServer(config: CollabServerConfig) {
     onError: (error) => logger.error(`[listen] handleShareEvent failed: ${error}`),
   });
 
-  const inviteEventQueue = createCoalescingTaskQueue<InviteReceivedPayload>({
-    maxPending: INVITE_EVENT_QUEUE_LIMIT,
+  const grantEventQueue = createCoalescingTaskQueue<GrantReceivedPayload>({
+    maxPending: GRANT_EVENT_QUEUE_LIMIT,
     getKey: (payload) => `${payload.targetUserId}:${payload.entityType}:${payload.entityId}`,
-    handle: handleInviteReceived,
+    handle: handleGrantReceived,
     handleOverflow: async () => {
       logger.warn(
-        `[listen] invite event backlog exceeded ${INVITE_EVENT_QUEUE_LIMIT}; rebuilding active metadata rooms`,
+        `[listen] grant event backlog exceeded ${GRANT_EVENT_QUEUE_LIMIT}; rebuilding active metadata rooms`,
       );
       await rebuildActivePageMetaDocuments(server.hocuspocus, pool, logger, {
         reconcileTitles: false,
       });
     },
-    onError: (error) => logger.error(`[listen] handleInviteReceived failed: ${error}`),
+    onError: (error) => logger.error(`[listen] handleGrantReceived failed: ${error}`),
   });
 
   const workspaceEventQueue = createCoalescingTaskQueue<WorkspaceEventPayload>({
@@ -3966,7 +3794,9 @@ export function createCollabServer(config: CollabServerConfig) {
             }),
           ])
             .catch((error) => {
-              logger.error(`[expiry] active access and metadata reconciliation failed: ${error}`);
+              logger.error(
+                `[reconcile] active access and metadata reconciliation failed: ${error}`,
+              );
             })
             .finally(() => {
               permissionRevalidationTask = null;
@@ -3980,14 +3810,14 @@ export function createCollabServer(config: CollabServerConfig) {
     async value() {
       if (permissionRevalidationTimer) clearInterval(permissionRevalidationTimer);
       shareEventQueue.drainAndStop();
-      inviteEventQueue.drainAndStop();
+      grantEventQueue.drainAndStop();
       workspaceEventQueue.drainAndStop();
       await Promise.allSettled(
         Array.from(activeApplicationFences, (fence) => fence.complete(false, false)),
       );
       await Promise.all([
         shareEventQueue.waitForIdle(),
-        inviteEventQueue.waitForIdle(),
+        grantEventQueue.waitForIdle(),
         workspaceEventQueue.waitForIdle(),
         permissionRevalidationTask ?? Promise.resolve(),
       ]);
@@ -4133,15 +3963,15 @@ export function createCollabServer(config: CollabServerConfig) {
               pageRenameEventQueue.enqueue(payload.pageId);
             } else if (msg.channel === 'share_event') {
               logger.debug(`[listen] received share_event: ${msg.payload}`);
-              const payload: ShareEventPayload | InviteReceivedPayload = JSON.parse(
+              const payload: ShareEventPayload | GrantReceivedPayload = JSON.parse(
                 msg.payload ?? '{}',
               );
               if (!payload.entityId) {
                 logger.debug('[listen] share_event missing entityId, skipping');
                 return;
               }
-              if (payload.type === 'invite_received') {
-                inviteEventQueue.enqueue(payload);
+              if (payload.type === 'grant_received') {
+                grantEventQueue.enqueue(payload);
               } else {
                 shareEventQueue.enqueue(payload);
               }

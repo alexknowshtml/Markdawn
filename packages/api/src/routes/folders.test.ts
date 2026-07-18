@@ -44,8 +44,6 @@ const PRIVATE_FOLDER_DETAIL_FIELDS = [
   'created_by',
   'ownerId',
   'owner_id',
-  'publicToken',
-  'public_token',
   'isDeleted',
   'is_deleted',
   'deletedAt',
@@ -252,6 +250,56 @@ describe('folders API', () => {
 
       expect(res.status).toBe(403);
     });
+
+    it('lets a persistent guest create a folder beneath public Edit access', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const parent = await createTestFolder(owner.id);
+      const guestId = '33333333-3333-4333-8333-333333333333';
+      await query("update folders set public_permission = 'edit' where id = $1", [parent.id]);
+
+      const res = await app.request('/api/folders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `markdawn_anon_id=${guestId}`,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ parentId: parent.id, name: 'Guest folder' }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; parentId: string; name: string };
+      expect(body).toMatchObject({ parentId: parent.id, name: 'Guest folder' });
+      const stored = await query<{
+        created_by: string | null;
+        closure_depth: number;
+        guest_persisted: boolean;
+      }>(
+        `select folder.created_by, path.depth as closure_depth,
+                exists(select 1 from guest_identities where id = $3) as guest_persisted
+         from folders folder
+         join folder_closure path
+           on path.ancestor_id = $1 and path.descendant_id = folder.id
+         where folder.id = $2`,
+        [parent.id, body.id, guestId],
+      );
+      expect(stored.rows[0]).toEqual({
+        created_by: null,
+        closure_depth: 1,
+        guest_persisted: true,
+      });
+
+      const readResponse = await app.request(`/api/folders/${body.id}`, {
+        headers: { Cookie: `markdawn_anon_id=${guestId}` },
+      });
+      expect(readResponse.status).toBe(200);
+      expect(await readResponse.json()).toMatchObject({
+        id: body.id,
+        publicPermission: 'edit',
+        userPermission: 'edit',
+      });
+    });
   });
 
   describe('GET /api/folders/:id', () => {
@@ -307,7 +355,7 @@ describe('folders API', () => {
       });
       const blockerPid = await blockerReady;
       const revokePromise = Promise.resolve(
-        app.request(`/api/shares/${shareId}`, {
+        app.request(`/api/shares/grants/${shareId}`, {
           method: 'DELETE',
           headers: { Cookie: ownerSession.Cookie },
         }),
@@ -328,9 +376,9 @@ describe('folders API', () => {
         const revokeResponse = await revokePromise;
         const readResponse = await queuedRead;
         expect(revokeResponse.status).toBe(200);
-        // The public-capable route is registered first and intentionally hides
-        // a now-private folder after the account grant disappears.
-        expect(readResponse.status).toBe(404);
+        // Authenticated callers receive an explicit forbidden response once
+        // their account grant disappears.
+        expect(readResponse.status).toBe(403);
       } finally {
         releaseBlocker();
         await blocker;
@@ -359,17 +407,7 @@ describe('folders API', () => {
         parentId: folder.id,
         name: 'Child Folder',
       });
-      const token = crypto.randomUUID();
-
-      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
       const revisionBefore = await query<{ version: string }>(
         `select coalesce((
            select version::text from workspace_access_versions where workspace_owner_id = $1
@@ -377,12 +415,7 @@ describe('folders API', () => {
         [owner.id],
       );
 
-      expect((await app.request(`/api/folders/${folder.id}`)).status).toBe(404);
-      expect(
-        (await app.request(`/api/folders/${folder.id}?share=${crypto.randomUUID()}`)).status,
-      ).toBe(404);
-
-      const res = await app.request(`/api/folders/${folder.id}?share=${token}`);
+      const res = await app.request(`/api/folders/${folder.id}`);
 
       expect(res.status).toBe(200);
       const body = (await res.json()) as Record<string, unknown> & {
@@ -390,7 +423,7 @@ describe('folders API', () => {
         folders: Record<string, unknown>[];
       };
       expect(body.name).toBe('Public Folder');
-      expect(body.linkPermission).toBe('view');
+      expect(body.publicPermission).toBe('view');
       const publicPage = body.pages.find((item) => item.id === page.id);
       const publicChildFolder = body.folders.find((item) => item.id === childFolder.id);
       expect(publicPage).toBeDefined();
@@ -399,7 +432,7 @@ describe('folders API', () => {
       expectFolderFieldsAbsent(publicPage ?? {}, PRIVATE_FOLDER_DETAIL_FIELDS);
       expectFolderFieldsAbsent(publicChildFolder ?? {}, PRIVATE_FOLDER_DETAIL_FIELDS);
 
-      expect((await app.request(`/api/folders/${folder.id}?share=${token}`)).status).toBe(200);
+      expect((await app.request(`/api/folders/${folder.id}`)).status).toBe(200);
       const revisionAfter = await query<{ version: string }>(
         `select coalesce((
            select version::text from workspace_access_versions where workspace_owner_id = $1
@@ -409,7 +442,7 @@ describe('folders API', () => {
       expect(revisionAfter.rows[0]?.version).toBe(revisionBefore.rows[0]?.version);
     });
 
-    it('returns minimal link-only DTOs and keeps provenance reads revision-neutral', async () => {
+    it('returns minimal public DTOs and keeps visit reads revision-neutral', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const visitor = await createTestUser();
@@ -420,16 +453,7 @@ describe('folders API', () => {
         parentId: folder.id,
         name: 'Signed folder child',
       });
-      const token = crypto.randomUUID();
-      await query('update folders set is_public = true, public_token = $1 where id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
       const readVersion = async (): Promise<string> => {
         const result = await query<{ version: string }>(
           `select coalesce((
@@ -443,7 +467,7 @@ describe('folders API', () => {
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const response = await app.request(`/api/folders/${folder.id}`, {
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+          headers: { Cookie: visitorSession.Cookie },
         });
         expect(response.status).toBe(200);
         const body = (await response.json()) as Record<string, unknown> & {
@@ -461,13 +485,13 @@ describe('folders API', () => {
         );
       }
       expect(await readVersion()).toBe(before);
-      const provenance = await query<{ count: string }>(
+      const visits = await query<{ count: string }>(
         `select count(*)::text as count
-         from folder_access_events
-         where folder_id = $1 and user_id = $2 and token = $3`,
-        [folder.id, visitor.id, token],
+         from folder_public_access_visits
+         where folder_id = $1 and user_id = $2`,
+        [folder.id, visitor.id],
       );
-      expect(provenance.rows[0]?.count).toBe('1');
+      expect(visits.rows[0]?.count).toBe('1');
     });
 
     it('returns an explicit authenticated folder DTO for an account source', async () => {
@@ -477,18 +501,12 @@ describe('folders API', () => {
       const viewerSession = await createTestSession(viewer.id);
       const folder = await createTestFolder(owner.id, { name: 'Account folder' });
       const child = await createTestPage(owner.id, { parentId: folder.id, title: 'Account child' });
-      const token = crypto.randomUUID();
-      await query('update folders set is_public = true, public_token = $1 where id = $2', [
-        token,
-        folder.id,
-      ]);
+      await query("update folders set public_permission = 'edit' where id = $1", [folder.id]);
       await query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission, token
-         ) values
-           ('folder', $1, $2, $3, 'view', null),
-           ('folder', $1, $2, null, 'edit', $4)`,
-        [folder.id, owner.id, viewer.id, token],
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')`,
+        [folder.id, owner.id, viewer.id],
       );
 
       const response = await app.request(`/api/folders/${folder.id}`, {
@@ -510,8 +528,6 @@ describe('folders API', () => {
       expectFolderFieldsAbsent(body, [
         'created_by',
         'owner_id',
-        'publicToken',
-        'public_token',
         'isDeleted',
         'is_deleted',
         'deletedAt',
@@ -519,30 +535,19 @@ describe('folders API', () => {
       ]);
     });
 
-    it('allows anonymous access to descendant folders through an ancestor folder link', async () => {
+    it('allows anonymous access to descendant folders through ancestor public access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const parent = await createTestFolder(owner.id, { name: 'Public Parent' });
       const child = await createTestFolder(owner.id, { name: 'Public Child', parentId: parent.id });
-      const token = crypto.randomUUID();
+      await query("update folders set public_permission = 'view' where id = $1", [parent.id]);
 
-      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        parent.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('folder', $1, $2, 'view', $3)`,
-        [parent.id, owner.id, token],
-      );
-
-      const res = await app.request(`/api/folders/${child.id}?share=${token}`);
+      const res = await app.request(`/api/folders/${child.id}`);
 
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.name).toBe('Public Child');
-      expect(body.isPublic).toBe(true);
-      expect(body.linkPermission).toBe('view');
+      expect(body.publicPermission).toBe('view');
     });
   });
 
@@ -877,6 +882,56 @@ describe('folders API', () => {
       );
     });
 
+    it('lets a persistent guest copy an accessible subtree into a public Edit folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const destination = await createTestFolder(owner.id, { name: 'Public destination' });
+      const source = await createTestFolder(owner.id, {
+        parentId: destination.id,
+        name: 'Guest copy source',
+      });
+      await createTestPage(owner.id, { parentId: source.id, title: 'Nested page' });
+      const guestId = '55555555-5555-4555-8555-555555555555';
+      await query("update folders set public_permission = 'edit' where id = $1", [destination.id]);
+
+      const res = await app.request(`/api/folders/${source.id}/copy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `markdawn_anon_id=${guestId}`,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ parentId: destination.id }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; parentId: string; name: string };
+      expect(body).toMatchObject({
+        parentId: destination.id,
+        name: 'Copy of Guest copy source',
+      });
+      const copied = await query<{
+        folder_creator: string | null;
+        page_creator: string | null;
+        page_title: string;
+      }>(
+        `select folder.created_by as folder_creator,
+                page.created_by as page_creator,
+                page.title as page_title
+         from folders folder
+         join pages page on page.parent_id = folder.id
+         where folder.id = $1`,
+        [body.id],
+      );
+      expect(copied.rows).toEqual([
+        {
+          folder_creator: null,
+          page_creator: null,
+          page_title: 'Copy of Nested page',
+        },
+      ]);
+    });
+
     it('returns 404 for non-existent folder', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -896,36 +951,27 @@ describe('folders API', () => {
     });
   });
 
-  describe('public-link provenance', () => {
-    it('preserves link navigation when a stronger direct folder grant is revoked', async () => {
+  describe('public-visit provenance', () => {
+    it('preserves public navigation when a stronger direct folder grant is revoked', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const ownerSession = await createTestSession(owner.id);
       const recipientSession = await createTestSession(recipient.id);
       const folder = await createTestFolder(owner.id, { name: 'Public fallback folder' });
-      const token = crypto.randomUUID();
-      const invite = await query<{ id: string }>(
+      const grant = await query<{ id: string }>(
         `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
          values ('folder', $1, $2, $3, 'edit') returning id`,
         [folder.id, owner.id, recipient.id],
       );
-      await query('update folders set is_public = true, public_token = $1 where id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
 
       const openRes = await app.request(`/api/folders/${folder.id}`, {
-        headers: { Cookie: recipientSession.Cookie, 'x-share-token': token },
+        headers: { Cookie: recipientSession.Cookie },
       });
       expect(openRes.status).toBe(200);
 
-      const revokeRes = await app.request(`/api/shares/${invite.rows[0]?.id}`, {
+      const revokeRes = await app.request(`/api/shares/grants/${grant.rows[0]?.id}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
@@ -941,7 +987,7 @@ describe('folders API', () => {
         source: string;
       }>;
       expect(items).toContainEqual(
-        expect.objectContaining({ entityType: 'folder', entityId: folder.id, source: 'link' }),
+        expect.objectContaining({ entityType: 'folder', entityId: folder.id, source: 'public' }),
       );
     });
 
@@ -954,16 +1000,7 @@ describe('folders API', () => {
       const visitor = await createTestUser();
       const visitorSession = await createTestSession(visitor.id);
       const folder = await createTestFolder(owner.id, { name: 'Notification provenance' });
-      const token = crypto.randomUUID();
-      await query('update folders set is_public = true, public_token = $1 where id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
 
       const listener = new Client({ connectionString });
       const payloads: string[] = [];
@@ -977,7 +1014,7 @@ describe('folders API', () => {
 
       try {
         const firstVisit = await app.request(`/api/folders/${folder.id}`, {
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+          headers: { Cookie: visitorSession.Cookie },
         });
         expect(firstVisit.status).toBe(200);
         const firstNotifications = (await flushFolderShareEventNotifications(payloads)).filter(
@@ -995,7 +1032,7 @@ describe('folders API', () => {
         ]);
 
         const repeatVisit = await app.request(`/api/folders/${folder.id}`, {
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+          headers: { Cookie: visitorSession.Cookie },
         });
         expect(repeatVisit.status).toBe(200);
         const repeatNotifications = (await flushFolderShareEventNotifications(payloads)).filter(
@@ -1021,13 +1058,13 @@ describe('folders API', () => {
           }),
         ]);
 
-        const storedEvents = await query<{ count: string }>(
+        const storedVisits = await query<{ count: string }>(
           `select count(*)::text as count
-           from folder_access_events
+           from folder_public_access_visits
            where folder_id = $1 and user_id = $2`,
           [folder.id, visitor.id],
         );
-        expect(storedEvents.rows[0]?.count).toBe('0');
+        expect(storedVisits.rows[0]?.count).toBe('0');
       } finally {
         await listener.end();
       }
@@ -1309,7 +1346,7 @@ describe('folders API', () => {
       expect(ownerPurge.status).toBe(200);
     });
 
-    it('purges subtree shares, link access records, and favorites', async () => {
+    it('purges subtree grants, public visits, and favorites', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
@@ -1317,22 +1354,20 @@ describe('folders API', () => {
       const root = await createTestFolder(owner.id);
       const child = await createTestFolder(owner.id, { parentId: root.id });
       const page = await createTestPage(owner.id, { parentId: child.id });
-      const folderToken = crypto.randomUUID();
-      const pageToken = crypto.randomUUID();
       await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $3, 'view', $4), ('page', $2, $3, 'view', $5)`,
-        [child.id, page.id, owner.id, folderToken, pageToken],
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('folder', $1, $3, $4, 'view'), ('page', $2, $3, $4, 'view')`,
+        [child.id, page.id, owner.id, recipient.id],
       );
       await query(
-        `insert into folder_access_events (folder_id, user_id, source, token, permission)
-         values ($1, $2, 'link', $3, 'view')`,
-        [child.id, recipient.id, folderToken],
+        `insert into folder_public_access_visits (folder_id, user_id)
+         values ($1, $2)`,
+        [child.id, recipient.id],
       );
       await query(
-        `insert into page_access_events (page_id, user_id, source, token, permission)
-         values ($1, $2, 'link', $3, 'view')`,
-        [page.id, recipient.id, pageToken],
+        `insert into page_public_access_visits (page_id, user_id)
+         values ($1, $2)`,
+        [page.id, recipient.id],
       );
       await query(
         `insert into user_favorites (user_id, entity_type, entity_id)
@@ -1352,22 +1387,22 @@ describe('folders API', () => {
       expect(await purgeRes.json()).toMatchObject({ deleted: true, folders: 2, pages: 1 });
 
       const leftovers = await query<{
-        shares: string;
-        folder_events: string;
-        page_events: string;
+        grants: string;
+        folder_visits: string;
+        page_visits: string;
         favorites: string;
       }>(
         `select
-           (select count(*) from shares where entity_id = any($1::uuid[]))::text as shares,
-           (select count(*) from folder_access_events where folder_id = any($1::uuid[]))::text as folder_events,
-           (select count(*) from page_access_events where page_id = $2)::text as page_events,
+           (select count(*) from shares where entity_id = any($1::uuid[]))::text as grants,
+           (select count(*) from folder_public_access_visits where folder_id = any($1::uuid[]))::text as folder_visits,
+           (select count(*) from page_public_access_visits where page_id = $2)::text as page_visits,
            (select count(*) from user_favorites where entity_id = any($1::uuid[]))::text as favorites`,
         [[root.id, child.id, page.id], page.id],
       );
       expect(leftovers.rows[0]).toEqual({
-        shares: '0',
-        folder_events: '0',
-        page_events: '0',
+        grants: '0',
+        folder_visits: '0',
+        page_visits: '0',
         favorites: '0',
       });
     });
@@ -1383,22 +1418,20 @@ describe('folders API', () => {
         parentId: root.id,
       });
       const page = await createTestPage(owner.id, { parentId: child.id });
-      const folderToken = crypto.randomUUID();
-      const pageToken = crypto.randomUUID();
       await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $3, 'view', $4), ('page', $2, $3, 'view', $5)`,
-        [child.id, page.id, owner.id, folderToken, pageToken],
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('folder', $1, $3, $4, 'view'), ('page', $2, $3, $4, 'view')`,
+        [child.id, page.id, owner.id, recipient.id],
       );
       await query(
-        `insert into folder_access_events (folder_id, user_id, source, token, permission)
-         values ($1, $2, 'link', $3, 'view')`,
-        [child.id, recipient.id, folderToken],
+        `insert into folder_public_access_visits (folder_id, user_id)
+         values ($1, $2)`,
+        [child.id, recipient.id],
       );
       await query(
-        `insert into page_access_events (page_id, user_id, source, token, permission)
-         values ($1, $2, 'link', $3, 'view')`,
-        [page.id, recipient.id, pageToken],
+        `insert into page_public_access_visits (page_id, user_id)
+         values ($1, $2)`,
+        [page.id, recipient.id],
       );
       await query(
         `insert into user_favorites (user_id, entity_type, entity_id)
@@ -1468,18 +1501,18 @@ describe('folders API', () => {
         child_deleted: boolean;
         child_parent: string | null;
         page_deleted: boolean;
-        shares: string;
-        folder_events: string;
-        page_events: string;
+        grants: string;
+        folder_visits: string;
+        page_visits: string;
         favorites: string;
       }>(
         `select
            child.is_deleted as child_deleted,
            child.parent_id as child_parent,
            page.is_deleted as page_deleted,
-           (select count(*) from shares where entity_id = any($1::uuid[]))::text as shares,
-           (select count(*) from folder_access_events where folder_id = $2)::text as folder_events,
-           (select count(*) from page_access_events where page_id = $3)::text as page_events,
+           (select count(*) from shares where entity_id = any($1::uuid[]))::text as grants,
+           (select count(*) from folder_public_access_visits where folder_id = $2)::text as folder_visits,
+           (select count(*) from page_public_access_visits where page_id = $3)::text as page_visits,
            (select count(*) from user_favorites where entity_id = any($1::uuid[]))::text as favorites
          from folders child
          join pages page on page.id = $3
@@ -1490,9 +1523,9 @@ describe('folders API', () => {
         child_deleted: false,
         child_parent: null,
         page_deleted: false,
-        shares: '2',
-        folder_events: '1',
-        page_events: '1',
+        grants: '2',
+        folder_visits: '1',
+        page_visits: '1',
         favorites: '2',
       });
     });

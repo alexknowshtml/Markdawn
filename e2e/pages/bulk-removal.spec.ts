@@ -81,7 +81,7 @@ test('removes a mixed owned and shared selection with one progress state', async
       ['page', sharedPage.id],
       ['folder', sharedFolder.id],
     ] as const) {
-      const response = await ownerApi.post(`/api/shares/entity/${type}/${id}/invite`, {
+      const response = await ownerApi.post(`/api/shares/entity/${type}/${id}/grants`, {
         data: { email: recipientEmail, permission: 'view' },
       });
       expect(response.ok()).toBeTruthy();

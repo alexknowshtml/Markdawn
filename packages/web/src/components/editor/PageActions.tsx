@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
 import { Tooltip } from '../Tooltip';
-import { PublicShareDialog } from './PublicShareDialog';
+import { ShareDialog } from './ShareDialog';
 
 interface PageActionsProps {
   pageId: string;
@@ -61,7 +61,7 @@ export function PageActions({ pageId, page }: PageActionsProps) {
             </button>
           </Tooltip>
           {isShareDialogOpen && (
-            <PublicShareDialog
+            <ShareDialog
               entityType="page"
               entityId={page.id}
               title={page.title}

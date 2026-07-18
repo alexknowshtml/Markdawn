@@ -18,12 +18,12 @@ import type React from 'react';
 import { useState } from 'react';
 import { useIdentityLifecycle } from '../../contexts/IdentityLifecycleContext';
 import {
-  useInviteToEntity,
-  useRemoveShare,
+  useGrantEntityAccess,
+  useRemoveGrant,
   useShareSummary,
+  useUpdateGrantPermission,
   useUpdateInheritancePolicy,
-  useUpdateLinkPermission,
-  useUpdateSharePermission,
+  useUpdatePublicPermission,
 } from '../../hooks/use-share';
 import { useAuth } from '../../hooks/useAuth';
 import { getInitial } from '../../utils/avatar';
@@ -31,7 +31,7 @@ import { consumeSelfLeave, markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 import { ChoiceGroup, Dropdown, TextBox } from '../ui/FormControls';
 
-type PublicShareDialogProps = {
+type ShareDialogProps = {
   entityType: ShareEntityType;
   entityId: string;
   title: string;
@@ -40,7 +40,10 @@ type PublicShareDialogProps = {
   embedded?: boolean;
 };
 
-const permissionOptions: Array<{ value: SharePermission | 'private'; label: string }> = [
+const permissionOptions: Array<{
+  value: Exclude<SharePermission, 'admin'> | 'private';
+  label: string;
+}> = [
   { value: 'private', label: 'Restricted' },
   { value: 'view', label: 'Anyone Can View' },
   { value: 'edit', label: 'Anyone Can Edit' },
@@ -48,7 +51,7 @@ const permissionOptions: Array<{ value: SharePermission | 'private'; label: stri
 
 type AccessEntry = {
   key: string;
-  shareId: string | null;
+  grantId: string | null;
   id: string;
   name: string;
   avatarUrl: string | null;
@@ -56,23 +59,23 @@ type AccessEntry = {
   effectivePermission: SharePermission;
   isWinning: boolean;
   isManageable: boolean;
-  kind: 'owner' | 'direct' | 'folder' | 'workspace' | 'legacy';
+  kind: 'owner' | 'direct' | 'folder' | 'workspace';
   source: string;
   isOwner: boolean;
 };
 
-export function PublicShareDialog({
+export function ShareDialog({
   entityType,
   entityId,
   title,
   onClose,
   embedded = false,
-}: PublicShareDialogProps) {
+}: ShareDialogProps) {
   const identityLifecycle = useIdentityLifecycle();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const [email, setEmail] = useState('');
-  const [invitePermission, setInvitePermission] = useState<SharePermission>('view');
+  const [grantPermission, setGrantPermission] = useState<SharePermission>('view');
   const [copied, setCopied] = useState(false);
 
   const {
@@ -81,84 +84,70 @@ export function PublicShareDialog({
     error: summaryError,
     refetch: refetchSummary,
   } = useShareSummary(entityType, entityId);
-  const updateLinkMutation = useUpdateLinkPermission();
+  const updatePublicMutation = useUpdatePublicPermission();
   const updateInheritanceMutation = useUpdateInheritancePolicy();
-  const inviteMutation = useInviteToEntity();
-  const removeShareMutation = useRemoveShare();
-  const updatePermissionMutation = useUpdateSharePermission();
+  const grantMutation = useGrantEntityAccess();
+  const removeGrantMutation = useRemoveGrant();
+  const updateGrantPermissionMutation = useUpdateGrantPermission();
 
   const isOwner = summary?.entity.ownerId === currentUserId;
   const isAdmin = summary?.userPermission === 'admin';
-  const canInvite = isOwner || isAdmin;
+  const canGrant = isOwner || isAdmin;
   const isLimitedSummary = summary?.visibility === 'limited';
 
-  const accessEntries: AccessEntry[] =
-    summary?.accessSources && summary.accessSources.length > 0
-      ? summary.accessSources.map((source, index) => ({
-          key: `${source.kind}:${source.shareId ?? source.folderId ?? source.userId}:${index}`,
-          shareId: source.shareId,
-          id: source.userId,
-          name: source.name ?? source.email ?? 'Unknown user',
-          avatarUrl: source.avatarUrl ?? null,
-          permission: source.permission,
-          effectivePermission: source.effectivePermission,
-          isWinning: source.isWinning,
-          isManageable: source.isManageable,
-          kind: source.kind,
-          source:
-            source.kind === 'folder' ? `via ${source.folderName ?? 'shared folder'}` : source.kind,
-          isOwner: source.isOwner,
-        }))
-      : (summary?.accessors ?? []).map((accessor, index) => ({
-          key: `legacy:${accessor.shareId ?? accessor.userId}:${index}`,
-          shareId: accessor.shareId,
-          id: accessor.userId,
-          name: accessor.name ?? accessor.email ?? 'Unknown user',
-          avatarUrl: accessor.avatarUrl ?? null,
-          permission: accessor.permission,
-          effectivePermission: accessor.permission,
-          isWinning: true,
-          isManageable: accessor.shareId !== null,
-          kind: 'legacy',
-          source: accessor.source,
-          isOwner: accessor.isOwner,
-        }));
+  const accessEntries: AccessEntry[] = (summary?.accessSources ?? []).map((source, index) => ({
+    key: `${source.kind}:${source.grantId ?? source.folderId ?? source.userId}:${index}`,
+    grantId: source.grantId,
+    id: source.userId,
+    name: source.name ?? source.email ?? 'Unknown user',
+    avatarUrl: source.avatarUrl ?? null,
+    permission: source.permission,
+    effectivePermission: source.effectivePermission,
+    isWinning: source.isWinning,
+    isManageable: source.isManageable,
+    kind: source.kind,
+    source: source.kind === 'folder' ? `via ${source.folderName ?? 'shared folder'}` : source.kind,
+    isOwner: source.isOwner,
+  }));
 
-  const linkUrl = summary?.link.url ? `${window.location.origin}${summary.link.url}` : '';
-  const inheritedLinks = summary?.inheritedLinks ?? [];
-  const hasPublicLinkAccess = summary?.link.permission !== 'private' || inheritedLinks.length > 0;
+  const publicUrl = summary?.publicAccess.url
+    ? `${window.location.origin}${summary.publicAccess.url}`
+    : '';
+  const inheritedPublicAccess = summary?.inheritedPublicAccess ?? [];
+  const hasPublicAccess =
+    summary?.publicAccess.permission !== 'private' || inheritedPublicAccess.length > 0;
   const isRestricted = (summary?.inheritance?.policy ?? 'inherit') === 'restricted';
 
   const handleCopy = async () => {
-    if (!linkUrl) return;
+    if (!publicUrl) return;
     try {
-      await navigator.clipboard.writeText(linkUrl);
+      await navigator.clipboard.writeText(publicUrl);
       if (!identityLifecycle.isActive()) return;
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-      showSuccessToast('Link copied');
+      showSuccessToast('URL copied');
     } catch {
       if (!identityLifecycle.isActive()) return;
-      showErrorToast('Failed to copy link');
+      showErrorToast('Failed to copy URL');
     }
   };
 
-  const handleInvite = (event: React.FormEvent) => {
+  const handleGrant = (event: React.FormEvent) => {
     event.preventDefault();
     const trimmed = email.trim();
     if (!trimmed) return;
-    inviteMutation.mutate(
-      { entityType, entityId, email: trimmed, permission: invitePermission },
+    grantMutation.mutate(
+      { entityType, entityId, email: trimmed, permission: grantPermission },
       { onSuccess: () => setEmail('') },
     );
   };
 
-  const handleRemove = (shareId: string) => {
-    removeShareMutation.mutate(shareId);
+  const handleRemove = (grantId: string) => {
+    removeGrantMutation.mutate(grantId);
   };
 
   const handleToggleRestriction = () => {
-    if (!canInvite) return;
+    if (!canGrant) return;
     updateInheritanceMutation.mutate({
       entityType,
       entityId,
@@ -192,38 +181,33 @@ export function PublicShareDialog({
   const infoRole = useRole(infoContext, { role: 'tooltip' });
   const infoInteractions = useInteractions([infoHover, infoFocus, infoDismiss, infoRole]);
 
-  const [linkHelpOpen, setLinkHelpOpen] = useState(false);
+  const [accessHelpOpen, setAccessHelpOpen] = useState(false);
   const {
-    refs: linkHelpRefs,
-    floatingStyles: linkHelpFloatingStyles,
-    context: linkHelpContext,
+    refs: accessHelpRefs,
+    floatingStyles: accessHelpFloatingStyles,
+    context: accessHelpContext,
   } = useFloating({
-    open: linkHelpOpen,
-    onOpenChange: setLinkHelpOpen,
+    open: accessHelpOpen,
+    onOpenChange: setAccessHelpOpen,
     placement: 'top',
     middleware: [offset(4), flip(), shift({ padding: 8 })],
   });
-  const linkHelpHover = useHover(linkHelpContext, { move: false });
-  const linkHelpFocus = useFocus(linkHelpContext);
-  const linkHelpDismiss = useDismiss(linkHelpContext);
-  const linkHelpRole = useRole(linkHelpContext, { role: 'tooltip' });
-  const linkHelpInteractions = useInteractions([
-    linkHelpHover,
-    linkHelpFocus,
-    linkHelpDismiss,
-    linkHelpRole,
+  const accessHelpHover = useHover(accessHelpContext, { move: false });
+  const accessHelpFocus = useFocus(accessHelpContext);
+  const accessHelpDismiss = useDismiss(accessHelpContext);
+  const accessHelpRole = useRole(accessHelpContext, { role: 'tooltip' });
+  const accessHelpInteractions = useInteractions([
+    accessHelpHover,
+    accessHelpFocus,
+    accessHelpDismiss,
+    accessHelpRole,
   ]);
 
   const formatSource = (source: string, entry: AccessEntry) => {
     if (entry.isOwner) return 'Owner';
-    if (entry.kind === 'direct') return 'Direct Invite';
+    if (entry.kind === 'direct') return 'Direct Grant';
     if (entry.kind === 'folder') return source;
-    if (entry.kind === 'workspace') return 'Workspace Member';
-    if (source === 'Direct Invite' || source === 'Email') return 'Direct Invite';
-    if (source === 'Workspace Member' || source === 'workspace') return 'Workspace Member';
-    if (source === 'Link') return 'Link Share';
-    if (source.startsWith('via ')) return source;
-    return source;
+    return 'Workspace Member';
   };
 
   // ── Content rendered both floating and embedded ────────────────
@@ -249,10 +233,10 @@ export function PublicShareDialog({
       </div>
     ) : (
       <div className="space-y-0">
-        {canInvite && (
+        {canGrant && (
           <>
             <form
-              onSubmit={handleInvite}
+              onSubmit={handleGrant}
               onClick={(event) => event.stopPropagation()}
               onKeyDown={(event) => event.stopPropagation()}
               className="space-y-2"
@@ -263,7 +247,7 @@ export function PublicShareDialog({
                 </div>
                 <div className="min-w-0">
                   <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                    Invite access
+                    Grant access
                   </p>
                 </div>
               </div>
@@ -277,11 +261,11 @@ export function PublicShareDialog({
                     className="h-6"
                     inputClassName="h-6 py-0 text-sm"
                     data-testid="share-email-input"
-                    aria-label="Email address to invite"
+                    aria-label="Existing user's email address"
                   />
                   <Dropdown
-                    value={invitePermission}
-                    onChange={setInvitePermission}
+                    value={grantPermission}
+                    onChange={setGrantPermission}
                     options={[
                       { value: 'view', label: 'View' },
                       { value: 'edit', label: 'Edit' },
@@ -292,11 +276,11 @@ export function PublicShareDialog({
                   />
                   <button
                     type="submit"
-                    disabled={inviteMutation.isPending || !email.trim()}
-                    data-testid="share-invite-btn"
+                    disabled={grantMutation.isPending || !email.trim()}
+                    data-testid="share-grant-btn"
                     className="inline-flex h-6 items-center justify-center rounded-lg border border-zinc-200 bg-white px-2 text-[11px] font-medium text-zinc-700 transition-colors hover:bg-zinc-50 hover:border-zinc-300 disabled:cursor-default disabled:opacity-40 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:bg-zinc-900 dark:hover:border-zinc-700 cursor-pointer"
                   >
-                    Invite
+                    Add
                   </button>
                 </div>
               </div>
@@ -357,92 +341,90 @@ export function PublicShareDialog({
         <div className="space-y-2">
           <div className="flex min-w-0 items-center gap-2">
             <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
-              {hasPublicLinkAccess ? <Globe2 size={16} /> : <Lock size={16} />}
+              {hasPublicAccess ? <Globe2 size={16} /> : <Lock size={16} />}
             </div>
             <div className="min-w-0">
-              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
-                Direct link access
-              </p>
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Public access</p>
             </div>
           </div>
           <div
-            ref={!canInvite && !isLoading ? linkHelpRefs.setReference : undefined}
-            {...(!canInvite && !isLoading ? linkHelpInteractions.getReferenceProps() : {})}
-            data-testid="share-link-permissions"
+            ref={!canGrant && !isLoading ? accessHelpRefs.setReference : undefined}
+            {...(!canGrant && !isLoading ? accessHelpInteractions.getReferenceProps() : {})}
+            data-testid="share-public-access-permissions"
           >
             {isLimitedSummary ? (
               <p className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                Only admins can view link settings and sharing details.
+                Only admins can view public access settings and sharing details.
               </p>
             ) : (
               <ChoiceGroup
-                value={summary?.link.permission ?? 'private'}
+                value={summary?.publicAccess.permission ?? 'private'}
                 options={permissionOptions}
-                disabled={isLoading || !canInvite || updateLinkMutation.isPending}
+                disabled={isLoading || !canGrant || updatePublicMutation.isPending}
                 onChange={(permission) =>
-                  updateLinkMutation.mutate({
+                  updatePublicMutation.mutate({
                     entityType,
                     entityId,
                     permission,
                   })
                 }
                 className="w-full justify-between"
-                ariaLabel="Direct link access"
+                ariaLabel="Public access"
               />
             )}
-            {summary?.link.permission === 'edit' && (
+            {summary?.publicAccess.permission === 'edit' && (
               <p className="mt-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
-                No sign-in is required. Anyone who receives this link can change the content.
+                No sign-in is required. Anyone with this URL can make normal editor changes.
               </p>
             )}
-            {linkHelpOpen && !canInvite && !isLoading && (
+            {accessHelpOpen && !canGrant && !isLoading && (
               <FloatingPortal>
                 <div
-                  ref={linkHelpRefs.setFloating}
-                  style={linkHelpFloatingStyles}
-                  {...linkHelpInteractions.getFloatingProps()}
+                  ref={accessHelpRefs.setFloating}
+                  style={accessHelpFloatingStyles}
+                  {...accessHelpInteractions.getFloatingProps()}
                   className="z-[9999] max-w-[280px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
                 >
-                  You can see this link access, but you need admin access to change it.
+                  You can see public access, but you need admin access to change it.
                 </div>
               </FloatingPortal>
             )}
           </div>
-          {linkUrl && (
+          {publicUrl && (
             <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-950/40">
               <div className="flex items-center gap-2">
                 <div className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap text-[11px] text-zinc-500 [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden dark:text-zinc-400">
-                  {linkUrl}
+                  {publicUrl}
                 </div>
                 <button
                   type="button"
                   onClick={handleCopy}
-                  data-testid="share-copy-link-btn"
+                  data-testid="share-copy-url-btn"
                   className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-zinc-200 text-zinc-500 hover:bg-zinc-50 dark:border-zinc-800 dark:hover:bg-zinc-900 cursor-pointer"
-                  title="Copy link"
+                  title="Copy URL"
                 >
                   {copied ? <Check size={14} /> : <Copy size={14} />}
                 </button>
               </div>
             </div>
           )}
-          {inheritedLinks.length > 0 && (
+          {inheritedPublicAccess.length > 0 && (
             <div
-              data-testid="inherited-link-access"
+              data-testid="inherited-public-access"
               className="rounded-xl border border-blue-200 bg-blue-50 p-3 dark:border-blue-900/40 dark:bg-blue-950/20"
             >
               <p className="text-xs font-medium text-blue-800 dark:text-blue-200">
-                Inherited public link access
+                Inherited public access
               </p>
               <div className="mt-2 space-y-1.5">
-                {inheritedLinks.map((link) => (
+                {inheritedPublicAccess.map((access) => (
                   <div
-                    key={link.entityId}
+                    key={access.entityId}
                     className="flex items-center justify-between gap-3 text-[11px] text-blue-700 dark:text-blue-300"
                   >
-                    <span className="truncate">via {link.entityTitle}</span>
+                    <span className="truncate">via {access.entityTitle}</span>
                     <span className="shrink-0 font-medium">
-                      Anyone can {link.permission === 'edit' ? 'edit' : 'view'}
+                      Anyone can {access.permission === 'edit' ? 'edit' : 'view'}
                     </span>
                   </div>
                 ))}
@@ -492,7 +474,7 @@ export function PublicShareDialog({
                 const isTargetOwner = entry.isOwner;
                 const isTargetAdmin = entry.permission === 'admin';
                 const canChangePermission =
-                  canInvite &&
+                  canGrant &&
                   entry.isManageable &&
                   !isTargetOwner &&
                   !(summary?.userPermission === 'admin' && isTargetAdmin);
@@ -501,7 +483,7 @@ export function PublicShareDialog({
                     !isTargetOwner &&
                     entry.isManageable &&
                     entry.kind === 'direct' &&
-                    entry.shareId,
+                    entry.grantId,
                 );
 
                 return (
@@ -535,7 +517,7 @@ export function PublicShareDialog({
                     </div>
                     {entry.isOwner ? (
                       <span className="text-xs text-zinc-600 dark:text-zinc-300">Owner</span>
-                    ) : entry.shareId && canChangePermission ? (
+                    ) : entry.grantId && canChangePermission ? (
                       <Dropdown
                         value={entry.permission}
                         options={[
@@ -546,16 +528,16 @@ export function PublicShareDialog({
                         ]}
                         onChange={(permission) => {
                           if (permission === 'remove') {
-                            if (canSelfRemove && entry.shareId) {
+                            if (canSelfRemove && entry.grantId) {
                               if (window.confirm('Are you sure you want to leave?')) {
-                                handleRemove(entry.shareId);
+                                handleRemove(entry.grantId);
                               }
-                            } else if (entry.shareId) {
-                              handleRemove(entry.shareId);
+                            } else if (entry.grantId) {
+                              handleRemove(entry.grantId);
                             }
-                          } else if (entry.shareId) {
-                            updatePermissionMutation.mutate({
-                              shareId: entry.shareId,
+                          } else if (entry.grantId) {
+                            updateGrantPermissionMutation.mutate({
+                              grantId: entry.grantId,
                               permission,
                             });
                           }
@@ -563,13 +545,13 @@ export function PublicShareDialog({
                         className="w-fit"
                         triggerClassName="px-1.5 text-xs"
                       />
-                    ) : canSelfRemove && entry.shareId ? (
+                    ) : canSelfRemove && entry.grantId ? (
                       <button
                         type="button"
                         onClick={() => {
                           if (!window.confirm('Are you sure you want to leave?')) return;
                           if (entityType === 'page') markSelfLeave(entityId);
-                          removeShareMutation.mutate(entry.shareId as string, {
+                          removeGrantMutation.mutate(entry.grantId as string, {
                             onError: () => {
                               if (entityType === 'page') consumeSelfLeave(entityId);
                             },
@@ -640,7 +622,7 @@ export function PublicShareDialog({
                     Share {title || entityType}
                   </h2>
                   <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                    Invite people or create a link for this {entityType}.
+                    Grant account access or enable public access for this {entityType}.
                   </p>
                 </div>
                 <button

@@ -44,20 +44,20 @@ describe('sharing operation-order transitions', () => {
 
       for (const operation of order) {
         if (operation === 'direct') {
-          const response = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+          const response = await app.request(`/api/shares/entity/page/${page.id}/grants`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
             body: JSON.stringify({ email: recipient.email, permission: 'edit' }),
           });
-          expect(response.status, `${order.join(' -> ')} direct share`).toBe(200);
+          expect(response.status, `${order.join(' -> ')} direct grant`).toBe(200);
           hasDirect = true;
         } else if (operation === 'folder') {
-          const response = await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+          const response = await app.request(`/api/shares/entity/folder/${folder.id}/grants`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
             body: JSON.stringify({ email: recipient.email, permission: 'view' }),
           });
-          expect(response.status, `${order.join(' -> ')} folder share`).toBe(200);
+          expect(response.status, `${order.join(' -> ')} folder grant`).toBe(200);
           hasFolder = true;
         } else {
           const response = await app.request(`/api/pages/${page.id}/move`, {
@@ -84,7 +84,7 @@ describe('sharing operation-order transitions', () => {
       const directShareId = directShare.rows[0]?.id;
       if (!directShareId) throw new Error('Expected direct page share');
 
-      const revoke = await app.request(`/api/shares/${directShareId}`, {
+      const revoke = await app.request(`/api/shares/grants/${directShareId}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
@@ -99,7 +99,7 @@ describe('sharing operation-order transitions', () => {
       expect(restrict.status).toBe(200);
       expect(await effectivePagePermission(page.id, recipient.id)).toBeNull();
 
-      const directWhileRestricted = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+      const directWhileRestricted = await app.request(`/api/shares/entity/page/${page.id}/grants`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
         body: JSON.stringify({ email: recipient.email, permission: 'edit' }),

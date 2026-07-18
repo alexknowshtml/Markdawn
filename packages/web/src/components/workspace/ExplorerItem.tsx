@@ -19,7 +19,7 @@ export interface ExplorerItemData {
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
   userPermission?: SharePermission | null | undefined;
-  shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+  shareSource?: 'direct' | 'public' | 'workspace' | undefined;
   canMove?: boolean | undefined;
   activityAt?: string | Date | undefined;
   collaborators?: CollaboratorDisplay[];
@@ -33,6 +33,7 @@ interface ExplorerItemProps {
   onSelect: (e: React.MouseEvent | React.KeyboardEvent) => void;
   onNavigate: (e: React.MouseEvent | React.KeyboardEvent) => void;
   onRename?: () => void;
+  onCopy?: () => void;
   isEditing?: boolean;
   editValue?: string;
   onEditChange?: (value: string) => void;
@@ -52,6 +53,7 @@ export function ExplorerItem({
   onSelect,
   onNavigate,
   onRename = () => {},
+  onCopy,
   isEditing = false,
   editValue = '',
   onEditChange,
@@ -176,6 +178,7 @@ export function ExplorerItem({
               isFavorite={isFavorite}
               triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
               onRename={onRename}
+              {...(onCopy ? { onCopy } : {})}
             />
           </div>
         )}
@@ -229,6 +232,7 @@ export function ExplorerItem({
             isFavorite={isFavorite}
             triggerClassName="item-action p-1.5 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 transition-colors opacity-0 group-hover:opacity-100 focus:opacity-100 cursor-pointer"
             onRename={onRename}
+            {...(onCopy ? { onCopy } : {})}
           />
         </div>
       )}

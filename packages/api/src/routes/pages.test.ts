@@ -45,12 +45,13 @@ const PRIVATE_PAGE_DETAIL_FIELDS = [
   'created_by',
   'ownerId',
   'owner_id',
-  'publicToken',
-  'public_token',
   'isDeleted',
   'is_deleted',
   'deletedAt',
   'deleted_at',
+  'position',
+  'createdAt',
+  'created_at',
   'inheritancePolicy',
   'inheritance_policy',
   'ydoc',
@@ -62,93 +63,8 @@ function expectFieldsAbsent(value: Record<string, unknown>, fields: readonly str
   }
 }
 
-async function waitForBlockedPid(blockerPid: number): Promise<number> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const result = await query<{ pid: number }>(
-      `select pid
-       from pg_stat_activity
-       where $1 = any(pg_blocking_pids(pid))
-       order by pid
-       limit 1`,
-      [blockerPid],
-    );
-    const pid = result.rows[0]?.pid;
-    if (pid !== undefined) return pid;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('Timed out waiting for the public-link visit to block');
-}
-
-type BlockedExpiryTransaction = {
-  pid: number;
-  expires_at: string;
-  matching_advisory_lock: boolean;
-  started_before_expiry: boolean;
-};
-
-async function waitForBlockedExpiryTransaction(
-  blockerPid: number,
-  entityId: string,
-): Promise<BlockedExpiryTransaction> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    const result = await query<BlockedExpiryTransaction>(
-      `select activity.pid,
-              share.expires_at,
-              activity.xact_start < share.expires_at as started_before_expiry,
-              exists (
-                select 1
-                from pg_locks waiting
-                join pg_locks held
-                  on held.locktype = waiting.locktype
-                 and held.database is not distinct from waiting.database
-                 and held.classid is not distinct from waiting.classid
-                 and held.objid is not distinct from waiting.objid
-                 and held.objsubid is not distinct from waiting.objsubid
-                where waiting.pid = activity.pid
-                  and waiting.locktype = 'advisory'
-                  and waiting.granted = false
-                  and held.pid = $1
-                  and held.granted = true
-              ) as matching_advisory_lock
-       from pg_stat_activity activity
-       join shares share
-         on share.entity_type = 'page'
-        and share.entity_id = $2
-        and share.token is not null
-       where $1 = any(pg_blocking_pids(activity.pid))
-         and activity.xact_start is not null
-         and share.expires_at is not null
-       order by activity.pid
-       limit 1`,
-      [blockerPid, entityId],
-    );
-    const row = result.rows[0];
-    if (row?.matching_advisory_lock) return row;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('Timed out waiting for the page request on the exact workspace access lock');
-}
-
-async function waitForVisitDisableOrdering(
-  visitorPid: number,
-  pageId: string,
-): Promise<'disable-finished-first' | 'disable-waits-for-visit'> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const result = await query<{ is_public: boolean; disable_waiters: string }>(
-      `select p.is_public,
-              (select count(*)::text
-               from pg_stat_activity
-               where $1 = any(pg_blocking_pids(pid))) as disable_waiters
-       from pages p
-       where p.id = $2`,
-      [visitorPid, pageId],
-    );
-    const row = result.rows[0];
-    if (row?.is_public === false) return 'disable-finished-first';
-    if (Number(row?.disable_waiters ?? 0) >= 1) return 'disable-waits-for-visit';
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('Timed out waiting for public-link disable ordering');
+function guestCookie(id = crypto.randomUUID()): string {
+  return `markdawn_anon_id=${id}`;
 }
 
 type ShareEventNotification = {
@@ -185,10 +101,10 @@ async function flushShareEventNotifications(payloads: string[]): Promise<ShareEv
   throw new Error('Timed out flushing share event notifications');
 }
 
-async function addFolderShare(folderId: string, recipientUserId: string, permission = 'view') {
+async function addFolderGrant(folderId: string, recipientUserId: string, permission = 'view') {
   await query(
-    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
-     VALUES ('folder', $1, $2, $3, NULL)`,
+    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission)
+     VALUES ('folder', $1, $2, $3)`,
     [folderId, recipientUserId, permission],
   );
 }
@@ -344,12 +260,69 @@ describe('pages API', () => {
       const editor = await createTestUser();
       const session = await createTestSession(editor.id);
       const folder = await createTestFolder(owner.id);
-      await addFolderShare(folder.id, editor.id, 'edit');
+      await addFolderGrant(folder.id, editor.id, 'edit');
 
       const res = await app.request('/api/pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
         body: JSON.stringify({ title: 'Not allowed', parentId: folder.id }),
+      });
+
+      expect(res.status).toBe(403);
+    });
+
+    it('lets a persistent guest create a page inside a publicly editable folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      const guestId = '11111111-1111-4111-8111-111111111111';
+      await query("update folders set public_permission = 'edit' where id = $1", [folder.id]);
+
+      const res = await app.request('/api/pages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `markdawn_anon_id=${guestId}`,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ title: 'Guest child', parentId: folder.id }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; parentId: string; title: string };
+      expect(body).toMatchObject({ parentId: folder.id, title: 'Guest child' });
+      const stored = await query<{ created_by: string | null; guest_persisted: boolean }>(
+        `select page.created_by,
+                exists(select 1 from guest_identities where id = $2) as guest_persisted
+         from pages page where page.id = $1`,
+        [body.id, guestId],
+      );
+      expect(stored.rows[0]).toEqual({ created_by: null, guest_persisted: true });
+
+      const readResponse = await app.request(`/api/pages/${body.id}`, {
+        headers: { Cookie: `markdawn_anon_id=${guestId}` },
+      });
+      expect(readResponse.status).toBe(200);
+      expect(await readResponse.json()).toMatchObject({
+        id: body.id,
+        publicPermission: 'edit',
+        userPermission: 'edit',
+      });
+    });
+
+    it('does not let a guest create a page inside a public View folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
+
+      const res = await app.request('/api/pages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: 'markdawn_anon_id=22222222-2222-4222-8222-222222222222',
+        },
+        body: JSON.stringify({ parentId: folder.id }),
       });
 
       expect(res.status).toBe(403);
@@ -411,7 +384,7 @@ describe('pages API', () => {
         title: 'Page in Shared Folder',
         parentId: folder.id,
       });
-      await addFolderShare(folder.id, recipient.id, 'view');
+      await addFolderGrant(folder.id, recipient.id, 'view');
 
       const res = await app.request('/api/pages/tree', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
@@ -436,7 +409,7 @@ describe('pages API', () => {
         title: 'Page Under Shared Ancestor',
         parentId: childFolder.id,
       });
-      await addFolderShare(parentFolder.id, recipient.id, 'view');
+      await addFolderGrant(parentFolder.id, recipient.id, 'view');
 
       const res = await app.request('/api/pages/tree', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
@@ -457,7 +430,7 @@ describe('pages API', () => {
         title: 'Page in Shared Folder',
         parentId: folder.id,
       });
-      await addFolderShare(folder.id, recipient.id, 'view');
+      await addFolderGrant(folder.id, recipient.id, 'view');
 
       const res = await app.request('/api/pages/tree', {
         headers: { Cookie: session.Cookie, Origin: 'http://localhost:5173' },
@@ -466,6 +439,59 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.some((p: { id: string }) => p.id === page.id)).toBe(true);
+    });
+
+    it('does not enumerate independently public pages behind a visited folder boundary', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const visitor = await createTestUser();
+      const session = await createTestSession(visitor.id);
+      const root = await createTestFolder(owner.id, { name: 'Visited public root' });
+      const restrictedChild = await createTestFolder(owner.id, {
+        name: 'Restricted public child',
+        parentId: root.id,
+      });
+      const independentPage = await createTestPage(owner.id, {
+        title: 'Independent public page',
+        parentId: restrictedChild.id,
+      });
+      await query("update folders set public_permission = 'view' where id = $1", [root.id]);
+      await query("update folders set inheritance_policy = 'restricted' where id = $1", [
+        restrictedChild.id,
+      ]);
+      await query("update pages set public_permission = 'view' where id = $1", [
+        independentPage.id,
+      ]);
+
+      const rootVisit = await app.request(`/api/folders/${root.id}`, {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(rootVisit.status).toBe(200);
+
+      const beforePageVisit = await app.request('/api/pages/tree', {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(beforePageVisit.status).toBe(200);
+      expect(
+        ((await beforePageVisit.json()) as Array<{ id: string }>).some(
+          (page) => page.id === independentPage.id,
+        ),
+      ).toBe(false);
+
+      const pageVisit = await app.request(`/api/pages/${independentPage.id}`, {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(pageVisit.status).toBe(200);
+
+      const afterPageVisit = await app.request('/api/pages/tree', {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(afterPageVisit.status).toBe(200);
+      expect(
+        ((await afterPageVisit.json()) as Array<{ id: string }>).some(
+          (page) => page.id === independentPage.id,
+        ),
+      ).toBe(true);
     });
   });
 
@@ -643,281 +669,56 @@ describe('pages API', () => {
   });
 
   describe('POST /api/pages/:id/access', () => {
-    it('preserves public-link navigation when a stronger account grant is revoked', async () => {
+    it('records a signed-in public visit without token provenance', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const visitor = await createTestUser();
+      const visitorSession = await createTestSession(visitor.id);
+      const page = await createTestPage(owner.id, { title: 'Public visit' });
+      await query("update pages set public_permission = 'view' where id = $1", [page.id]);
+
+      const response = await app.request(`/api/pages/${page.id}/access`, {
+        method: 'POST',
+        headers: { Cookie: visitorSession.Cookie },
+      });
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      const visits = await query<{ count: string }>(
+        'select count(*)::text as count from page_public_access_visits where page_id = $1 and user_id = $2',
+        [page.id, visitor.id],
+      );
+      expect(visits.rows[0]?.count).toBe('1');
+    });
+
+    it('preserves a public visit after a stronger account grant is revoked', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const ownerSession = await createTestSession(owner.id);
       const recipientSession = await createTestSession(recipient.id);
       const page = await createTestPage(owner.id, { title: 'Public fallback' });
-      const token = crypto.randomUUID();
-      const invite = await query<{ id: string }>(
+      await query("update pages set public_permission = 'view' where id = $1", [page.id]);
+      const grant = await query<{ id: string }>(
         `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
          values ('page', $1, $2, $3, 'edit') returning id`,
         [page.id, owner.id, recipient.id],
       );
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, token],
-      );
 
-      const accessRes = await app.request(`/api/pages/${page.id}/access`, {
+      await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: recipientSession.Cookie, 'x-share-token': token },
+        headers: { Cookie: recipientSession.Cookie },
       });
-      expect(accessRes.status).toBe(200);
-      expect(await accessRes.json()).toMatchObject({
-        recordedLinkAccess: true,
-        linkAccessSource: 'page',
-      });
-
-      const revokeRes = await app.request(`/api/shares/${invite.rows[0]?.id}`, {
+      const revoke = await app.request(`/api/shares/grants/${grant.rows[0]?.id}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
-      expect(revokeRes.status).toBe(200);
-
-      const withMeRes = await app.request('/api/shares/with-me', {
+      expect(revoke.status).toBe(200);
+      const withMe = await app.request('/api/shares/with-me', {
         headers: { Cookie: recipientSession.Cookie },
       });
-      expect(withMeRes.status).toBe(200);
-      const items = (await withMeRes.json()) as Array<{
-        entityId: string;
-        entityType: string;
-        source: string;
-      }>;
-      expect(items).toContainEqual(
-        expect.objectContaining({ entityType: 'page', entityId: page.id, source: 'link' }),
-      );
-    });
-
-    it('records only page-scoped public provenance and notifies on first sight', async () => {
-      const connectionString = process.env.DATABASE_URL;
-      if (!connectionString) throw new Error('DATABASE_URL is required');
-
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const visitor = await createTestUser();
-      const visitorSession = await createTestSession(visitor.id);
-      const root = await createTestFolder(owner.id, { name: 'Public root' });
-      const nested = await createTestFolder(owner.id, {
-        name: 'Public nested',
-        parentId: root.id,
-      });
-      const page = await createTestPage(owner.id, {
-        parentId: nested.id,
-        title: 'All public fallbacks',
-      });
-      const rootToken = crypto.randomUUID();
-      const nestedToken = crypto.randomUUID();
-      const pageToken = crypto.randomUUID();
-
-      await query(
-        `update folders
-         set is_public = true,
-             public_token = case id when $1 then $2 else $3 end
-         where id = any($4::uuid[])`,
-        [root.id, rootToken, nestedToken, [root.id, nested.id]],
-      );
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        pageToken,
-        page.id,
+      expect(await withMe.json()).toEqual([
+        expect.objectContaining({ entityId: page.id, source: 'public' }),
       ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values
-           ('folder', $1, $4, 'view', $2),
-           ('folder', $3, $4, 'edit', $5),
-           ('page', $6, $4, 'view', $7)`,
-        [root.id, rootToken, nested.id, owner.id, nestedToken, page.id, pageToken],
-      );
-      const revisionBefore = await query<{ version: string }>(
-        `select coalesce((
-           select version::text from workspace_access_versions where workspace_owner_id = $1
-         ), '0') as version`,
-        [owner.id],
-      );
-
-      const listener = new Client({ connectionString });
-      const payloads: string[] = [];
-      listener.on('notification', (notification) => {
-        if (notification.channel === 'share_event' && notification.payload) {
-          payloads.push(notification.payload);
-        }
-      });
-      await listener.connect();
-      await listener.query('listen share_event');
-
-      try {
-        const firstVisit = await app.request(`/api/pages/${page.id}/access`, {
-          method: 'POST',
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': pageToken },
-        });
-        expect(firstVisit.status).toBe(200);
-        expect(await firstVisit.json()).toMatchObject({
-          recordedLinkAccess: true,
-          linkAccessSource: 'page',
-        });
-
-        const pageEvents = await query<{ token: string }>(
-          `select token from page_access_events
-           where page_id = $1 and user_id = $2 and source = 'link'`,
-          [page.id, visitor.id],
-        );
-        expect(pageEvents.rows.map((row) => row.token)).toEqual([pageToken]);
-
-        const folderEvents = await query<{ folder_id: string; token: string }>(
-          `select folder_id, token from folder_access_events
-           where user_id = $1 and folder_id = any($2::uuid[])
-           order by folder_id`,
-          [visitor.id, [root.id, nested.id]],
-        );
-        expect(folderEvents.rows).toEqual([]);
-
-        const firstNotifications = (await flushShareEventNotifications(payloads)).filter(
-          (payload) => payload.targetUserId === visitor.id,
-        );
-        expect(firstNotifications).toEqual([
-          expect.objectContaining({
-            action: 'recompute',
-            entityType: 'page',
-            entityId: page.id,
-            targetUserId: visitor.id,
-            metaUserIds: [visitor.id],
-            metaOnly: true,
-          }),
-        ]);
-
-        const repeatVisit = await app.request(`/api/pages/${page.id}/access`, {
-          method: 'POST',
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': pageToken },
-        });
-        expect(repeatVisit.status).toBe(200);
-        const repeatNotifications = (await flushShareEventNotifications(payloads)).filter(
-          (payload) => payload.targetUserId === visitor.id,
-        );
-        expect(repeatNotifications).toEqual([]);
-        const revisionAfter = await query<{ version: string }>(
-          `select coalesce((
-             select version::text from workspace_access_versions where workspace_owner_id = $1
-           ), '0') as version`,
-          [owner.id],
-        );
-        expect(revisionAfter.rows[0]?.version).toBe(revisionBefore.rows[0]?.version);
-      } finally {
-        await listener.end();
-      }
-    });
-
-    it('serializes a link visit before disable so stale provenance cannot reappear', async () => {
-      const connectionString = process.env.DATABASE_URL;
-      if (!connectionString) throw new Error('DATABASE_URL is required');
-
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const visitor = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
-      const visitorSession = await createTestSession(visitor.id);
-      const page = await createTestPage(owner.id, { title: 'Visit disable race' });
-      const token = crypto.randomUUID();
-      const suffix = crypto.randomUUID().replaceAll('-', '');
-      const functionName = `block_page_link_visit_${suffix}`;
-      const triggerName = `block_page_link_visit_trigger_${suffix}`;
-      const lockKey = `test-page-link-visit:${token}`;
-
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, token],
-      );
-      await query(
-        `create function ${functionName}() returns trigger language plpgsql as $$
-         begin
-           if new.token = '${token}' then
-             perform pg_advisory_xact_lock(hashtextextended('${lockKey}', 0));
-           end if;
-           return new;
-         end
-         $$`,
-      );
-      await query(
-        `create trigger ${triggerName}
-         before insert on page_access_events
-         for each row execute function ${functionName}()`,
-      );
-
-      const blocker = new Client({ connectionString });
-      let blockerTransactionOpen = false;
-      let accessPromise: Promise<Response> | null = null;
-      let disablePromise: Promise<Response> | null = null;
-      await blocker.connect();
-
-      try {
-        await blocker.query('begin');
-        blockerTransactionOpen = true;
-        const blockerPidResult = await blocker.query<{ pid: number }>(
-          'select pg_backend_pid() as pid',
-        );
-        const blockerPid = blockerPidResult.rows[0]?.pid;
-        if (blockerPid === undefined) throw new Error('Could not resolve blocker PID');
-        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [lockKey]);
-
-        const pendingAccess = Promise.resolve(
-          app.request(`/api/pages/${page.id}/access`, {
-            method: 'POST',
-            headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
-          }),
-        );
-        accessPromise = pendingAccess;
-        const visitorPid = await waitForBlockedPid(blockerPid);
-
-        const pendingDisable = Promise.resolve(
-          app.request(`/api/shares/entity/page/${page.id}/link`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
-            body: JSON.stringify({ permission: 'private' }),
-          }),
-        );
-        disablePromise = pendingDisable;
-        expect(await waitForVisitDisableOrdering(visitorPid, page.id)).toBe(
-          'disable-waits-for-visit',
-        );
-
-        await blocker.query('rollback');
-        blockerTransactionOpen = false;
-        const [accessResponse, disableResponse] = await Promise.all([
-          pendingAccess,
-          pendingDisable,
-        ]);
-        expect(accessResponse.status).toBe(200);
-        expect(disableResponse.status).toBe(200);
-
-        const staleEvents = await query<{ count: string }>(
-          `select count(*)::text as count
-           from page_access_events
-           where page_id = $1 and user_id = $2 and token = $3`,
-          [page.id, visitor.id, token],
-        );
-        expect(staleEvents.rows[0]?.count).toBe('0');
-      } finally {
-        if (blockerTransactionOpen) {
-          await blocker.query('rollback').catch(() => undefined);
-        }
-        if (accessPromise) await accessPromise.catch(() => undefined);
-        if (disablePromise) await disablePromise.catch(() => undefined);
-        await blocker.end();
-        await query(`drop trigger if exists ${triggerName} on page_access_events`);
-        await query(`drop function if exists ${functionName}()`);
-      }
     });
   });
 
@@ -970,7 +771,7 @@ describe('pages API', () => {
   });
 
   describe('GET /api/pages/:id public access', () => {
-    it('allows anonymous access to a page through a public ancestor folder link', async () => {
+    it('allows anonymous access through public ancestor folder access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const folder = await createTestFolder(owner.id);
@@ -978,49 +779,24 @@ describe('pages API', () => {
         parentId: folder.id,
         title: 'Inherited Public Page',
       });
-      const token = crypto.randomUUID();
+      await query("update folders set public_permission = 'view' where id = $1", [folder.id]);
 
-      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      const response = await app.request(`/api/pages/${page.id}`);
 
-      expect((await app.request(`/api/pages/${page.id}`)).status).toBe(404);
-      expect((await app.request(`/api/pages/${page.id}?share=${crypto.randomUUID()}`)).status).toBe(
-        404,
-      );
-
-      const res = await app.request(`/api/pages/${page.id}?share=${token}`);
-
-      expect(res.status).toBe(200);
-      const body = await res.json();
+      expect(response.status).toBe(200);
+      const body = await response.json();
       expect(body.title).toBe('Inherited Public Page');
-      expect(body.isPublic).toBe(true);
-      expect(body.linkPermission).toBe('view');
+      expect(body.publicPermission).toBe('view');
       expectFieldsAbsent(body as Record<string, unknown>, PRIVATE_PAGE_DETAIL_FIELDS);
     });
 
-    it('returns the minimal DTO to a signed-in link-only visitor without bumping revisions', async () => {
+    it('returns the minimal DTO to a signed-in public visitor without bumping revisions', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const visitor = await createTestUser();
       const visitorSession = await createTestSession(visitor.id);
-      const page = await createTestPage(owner.id, { title: 'Signed link-only page' });
-      const token = crypto.randomUUID();
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, token],
-      );
+      const page = await createTestPage(owner.id, { title: 'Signed public page' });
+      await query("update pages set public_permission = 'view' where id = $1", [page.id]);
       const readVersion = async (): Promise<string> => {
         const version = await query<{ version: string }>(
           `select coalesce((
@@ -1034,11 +810,11 @@ describe('pages API', () => {
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const response = await app.request(`/api/pages/${page.id}`, {
-          headers: { Cookie: visitorSession.Cookie, 'x-share-token': token },
+          headers: { Cookie: visitorSession.Cookie },
         });
         expect(response.status).toBe(200);
         const body = (await response.json()) as Record<string, unknown>;
-        expect(body).toMatchObject({ id: page.id, title: 'Signed link-only page' });
+        expect(body).toMatchObject({ id: page.id, title: 'Signed public page' });
         expectFieldsAbsent(body, PRIVATE_PAGE_DETAIL_FIELDS);
       }
       expect(await readVersion()).toBe(before);
@@ -1050,18 +826,12 @@ describe('pages API', () => {
       const viewer = await createTestUser();
       const viewerSession = await createTestSession(viewer.id);
       const page = await createTestPage(owner.id, { title: 'Account-source page' });
-      const token = crypto.randomUUID();
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        page.id,
-      ]);
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
       await query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission, token
-         ) values
-           ('page', $1, $2, $3, 'view', null),
-           ('page', $1, $2, null, 'edit', $4)`,
-        [page.id, owner.id, viewer.id, token],
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, viewer.id],
       );
 
       const response = await app.request(`/api/pages/${page.id}`, {
@@ -1078,8 +848,6 @@ describe('pages API', () => {
       expectFieldsAbsent(body, [
         'created_by',
         'owner_id',
-        'publicToken',
-        'public_token',
         'isDeleted',
         'is_deleted',
         'deletedAt',
@@ -1089,36 +857,56 @@ describe('pages API', () => {
     });
   });
 
+  describe('PATCH /api/pages/:id/metadata public access', () => {
+    it('returns a public-safe DTO after a guest metadata update', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const parent = await createTestFolder(owner.id, { name: 'Private parent details' });
+      const page = await createTestPage(owner.id, {
+        parentId: parent.id,
+        title: 'Guest metadata page',
+      });
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
+
+      const response = await app.request(`/api/pages/${page.id}/metadata`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
+        body: JSON.stringify({
+          icon: 'G',
+          coverType: 'color',
+          coverValue: 'blue',
+          properties: { status: 'public' },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as Record<string, unknown>;
+      expect(body).toMatchObject({
+        id: page.id,
+        title: 'Guest metadata page',
+        icon: 'G',
+        coverType: 'color',
+        coverValue: 'blue',
+        properties: { status: 'public' },
+      });
+      expect(Object.keys(body).sort()).toEqual(
+        ['coverType', 'coverValue', 'icon', 'id', 'properties', 'title', 'updatedAt'].sort(),
+      );
+      expectFieldsAbsent(body, PRIVATE_PAGE_DETAIL_FIELDS);
+    });
+  });
+
   describe('PATCH /api/pages/:id/title public access', () => {
-    it('renames a page through an anonymous edit link', async () => {
+    it('renames a page through anonymous public Edit access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const page = await createTestPage(owner.id, { title: 'Original title' });
-      const token = crypto.randomUUID();
-      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, token],
-      );
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
       const revisionBefore = await readWorkspaceAccessVersion(owner.id);
 
-      expect(
-        (
-          await app.request(`/api/pages/${page.id}/title`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title: 'Missing token' }),
-          })
-        ).status,
-      ).toBe(404);
-
-      const res = await app.request(`/api/pages/${page.id}/title?share=${token}`, {
+      const res = await app.request(`/api/pages/${page.id}/title`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
         body: JSON.stringify({ title: 'Anonymous title' }),
       });
 
@@ -1131,23 +919,14 @@ describe('pages API', () => {
       expect(await readWorkspaceAccessVersion(owner.id)).toBe(revisionBefore);
     });
 
-    it('rechecks an expiring edit link after waiting for the workspace access lock', async () => {
+    it('rechecks public Edit access after waiting for the workspace access lock', async () => {
       const connectionString = process.env.DATABASE_URL;
       if (!connectionString) throw new Error('DATABASE_URL is required');
 
       const app = await createTestApp();
       const owner = await createTestUser();
-      const page = await createTestPage(owner.id, { title: 'Before expiry' });
-      const token = crypto.randomUUID();
-      await query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, token],
-      );
+      const page = await createTestPage(owner.id, { title: 'Before revocation' });
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
 
       const blocker = new Client({ connectionString });
       let blockerTransactionOpen = false;
@@ -1161,47 +940,22 @@ describe('pages API', () => {
           'select pg_backend_pid() as pid',
         );
         const blockerPid = blockerPidResult.rows[0]?.pid;
-        if (blockerPid === undefined) throw new Error('Could not resolve page expiry blocker PID');
+        if (blockerPid === undefined) throw new Error('Could not resolve page access blocker PID');
         await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
           `workspace-access:${owner.id}`,
         ]);
 
-        const expiryResult = await query<{ expires_at: string }>(
-          `update shares
-           set expires_at = statement_timestamp() + interval '5 seconds'
-           where entity_type = 'page' and entity_id = $1 and token = $2
-           returning expires_at`,
-          [page.id, token],
-        );
-        const expiresAt = expiryResult.rows[0]?.expires_at;
-        if (!expiresAt) throw new Error('Could not set page link expiration');
-
         const pendingTitle = Promise.resolve(
           app.request(`/api/pages/${page.id}/title`, {
             method: 'PATCH',
-            headers: { 'Content-Type': 'application/json', 'x-share-token': token },
+            headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
             body: JSON.stringify({ title: 'Must not persist' }),
           }),
         );
         titlePromise = pendingTitle;
 
-        const blocked = await waitForBlockedExpiryTransaction(blockerPid, page.id);
-        expect(blocked.matching_advisory_lock).toBe(true);
-        expect(blocked.started_before_expiry).toBe(true);
-        expect(blocked.expires_at).toBe(expiresAt);
-
-        await blocker.query(
-          `select pg_sleep(
-             greatest(0, extract(epoch from ($1::timestamptz - statement_timestamp()))) + 0.05
-           )`,
-          [expiresAt],
-        );
-        const clockResult = await blocker.query<{ expired: boolean }>(
-          'select statement_timestamp() > $1::timestamptz as expired',
-          [expiresAt],
-        );
-        expect(clockResult.rows[0]?.expired).toBe(true);
-
+        await waitForWorkspaceLockWaiter(blockerPid);
+        await blocker.query('update pages set public_permission = null where id = $1', [page.id]);
         await blocker.query('commit');
         blockerTransactionOpen = false;
 
@@ -1210,7 +964,7 @@ describe('pages API', () => {
         const stored = await query<{ title: string }>('select title from pages where id = $1', [
           page.id,
         ]);
-        expect(stored.rows[0]?.title).toBe('Before expiry');
+        expect(stored.rows[0]?.title).toBe('Before revocation');
       } finally {
         if (blockerTransactionOpen) await blocker.query('rollback');
         await blocker.end();
@@ -1218,24 +972,15 @@ describe('pages API', () => {
       }
     });
 
-    it('rejects title changes through a view-only link', async () => {
+    it('rejects title changes through public View access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const page = await createTestPage(owner.id);
-      const token = crypto.randomUUID();
-      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, token],
-      );
+      await query("update pages set public_permission = 'view' where id = $1", [page.id]);
 
-      const res = await app.request(`/api/pages/${page.id}/title?share=${token}`, {
+      const res = await app.request(`/api/pages/${page.id}/title`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
         body: JSON.stringify({ title: 'Not allowed' }),
       });
 
@@ -1248,7 +993,7 @@ describe('pages API', () => {
 
       const res = await app.request('/api/pages/00000000-0000-0000-0000-000000000000/title', {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
         body: JSON.stringify({ title: 'T'.repeat(5_000) }),
       });
 
@@ -1256,24 +1001,15 @@ describe('pages API', () => {
       expect(await res.json()).toEqual({ message: 'Request body is too large' });
     });
 
-    it('rejects oversized titles through an anonymous edit link', async () => {
+    it('rejects oversized titles through anonymous public Edit access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const page = await createTestPage(owner.id);
-      const token = crypto.randomUUID();
-      await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, token],
-      );
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
 
-      const res = await app.request(`/api/pages/${page.id}/title?share=${token}`, {
+      const res = await app.request(`/api/pages/${page.id}/title`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
         body: JSON.stringify({ title: 'T'.repeat(251) }),
       });
 
@@ -1288,7 +1024,7 @@ describe('pages API', () => {
 
       const res = await app.request(`/api/pages/${page.id}/title`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
         body: JSON.stringify({ title: 'Not allowed' }),
       });
 
@@ -1667,7 +1403,7 @@ describe('pages API', () => {
         await blockerRelease;
       });
       const blockerPid = await blockerReady;
-      const revokePromise = app.request(`/api/shares/${shareId}`, {
+      const revokePromise = app.request(`/api/shares/grants/${shareId}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
@@ -1733,7 +1469,7 @@ describe('pages API', () => {
       expect(await readWorkspaceAccessVersion(user.id)).toBe(revisionBefore);
     });
 
-    it('does not embed any workspace page IDs for an edit-link importer', async () => {
+    it('does not embed any workspace page IDs for a public-access importer', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const importer = await createTestUser();
@@ -1742,18 +1478,7 @@ describe('pages API', () => {
       const visibleTarget = await createTestPage(owner.id, { title: 'Visible reference' });
       const hiddenTarget = await createTestPage(owner.id, { title: 'Private reference' });
       const hiddenDuplicate = await createTestPage(owner.id, { title: 'Visible reference' });
-      const token = crypto.randomUUID();
-
-      await query(`update pages set is_public = true, public_token = $1 where id = $2`, [
-        token,
-        destination.id,
-      ]);
-      await query(
-        `insert into shares (
-           entity_type, entity_id, shared_by, permission, token
-         ) values ('page', $1, $2, 'edit', $3)`,
-        [destination.id, owner.id, token],
-      );
+      await query("update pages set public_permission = 'edit' where id = $1", [destination.id]);
       await query(
         `insert into shares (
            entity_type, entity_id, shared_by, recipient_user_id, permission
@@ -1829,7 +1554,7 @@ describe('pages API', () => {
         await blockerRelease;
       });
       const blockerPid = await blockerReady;
-      const revokePromise = app.request(`/api/shares/${targetShareId}`, {
+      const revokePromise = app.request(`/api/shares/grants/${targetShareId}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
@@ -1986,6 +1711,40 @@ describe('pages API', () => {
       expect(copied.createdBy).toBe(viewer.id);
     });
 
+    it('lets a persistent guest duplicate a page inside a publicly editable folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(owner.id, {
+        parentId: folder.id,
+        title: 'Guest copy source',
+      });
+      const guestId = '44444444-4444-4444-8444-444444444444';
+      await query("update folders set public_permission = 'edit' where id = $1", [folder.id]);
+
+      const res = await app.request(`/api/pages/${page.id}/copy`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `markdawn_anon_id=${guestId}`,
+          Origin: 'http://localhost:5173',
+        },
+        body: JSON.stringify({ parentId: folder.id }),
+      });
+
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { id: string; parentId: string; title: string };
+      expect(body).toMatchObject({
+        parentId: folder.id,
+        title: 'Copy of Guest copy source',
+      });
+      const stored = await query<{ created_by: string | null }>(
+        'select created_by from pages where id = $1',
+        [body.id],
+      );
+      expect(stored.rows[0]?.created_by).toBeNull();
+    });
+
     it('returns 404 for non-existent page', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -2069,22 +1828,21 @@ describe('pages API', () => {
       expect(ownerPurgeRes.status).toBe(200);
     });
 
-    it('removes polymorphic sharing, access, and favorite metadata', async () => {
+    it('removes polymorphic grant, public-visit, and favorite metadata', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
       const session = await createTestSession(owner.id);
       const page = await createTestPage(owner.id);
-      const token = crypto.randomUUID();
       await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, token],
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, recipient.id],
       );
       await query(
-        `insert into page_access_events (page_id, user_id, source, token, permission)
-         values ($1, $2, 'link', $3, 'view')`,
-        [page.id, recipient.id, token],
+        `insert into page_public_access_visits (page_id, user_id)
+         values ($1, $2)`,
+        [page.id, recipient.id],
       );
       await query(
         `insert into user_favorites (user_id, entity_type, entity_id)
@@ -2102,14 +1860,14 @@ describe('pages API', () => {
       });
       expect(purgeRes.status).toBe(200);
 
-      const leftovers = await query<{ shares: string; events: string; favorites: string }>(
+      const leftovers = await query<{ grants: string; visits: string; favorites: string }>(
         `select
-           (select count(*) from shares where entity_type = 'page' and entity_id = $1)::text as shares,
-           (select count(*) from page_access_events where page_id = $1)::text as events,
+           (select count(*) from shares where entity_type = 'page' and entity_id = $1)::text as grants,
+           (select count(*) from page_public_access_visits where page_id = $1)::text as visits,
            (select count(*) from user_favorites where entity_type = 'page' and entity_id = $1)::text as favorites`,
         [page.id],
       );
-      expect(leftovers.rows[0]).toEqual({ shares: '0', events: '0', favorites: '0' });
+      expect(leftovers.rows[0]).toEqual({ grants: '0', visits: '0', favorites: '0' });
     });
 
     it('returns 404 for non-existent page', async () => {
@@ -2363,7 +2121,7 @@ describe('pages API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('removes share row for email-invited page', async () => {
+    it('removes an account grant for a page', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const recipient = await createTestUser();
@@ -2394,7 +2152,7 @@ describe('pages API', () => {
       expect(shareCheck.rowCount).toBe(0);
     });
 
-    it('removes link provenance and notifies both visitor access and owner metadata', async () => {
+    it('removes public-visit provenance and notifies visitor access and owner metadata', async () => {
       const connectionString = process.env.DATABASE_URL;
       if (!connectionString) throw new Error('DATABASE_URL is required');
 
@@ -2405,8 +2163,8 @@ describe('pages API', () => {
       const page = await createTestPage(owner.id);
 
       await query(
-        `INSERT INTO page_access_events (page_id, user_id, source, token, permission, first_seen_at, last_seen_at)
-         VALUES ($1, $2, 'link', 'test-token', 'view', now(), now())`,
+        `insert into page_public_access_visits (page_id, user_id, first_seen_at, last_seen_at)
+         values ($1, $2, now(), now())`,
         [page.id, user.id],
       );
 
@@ -2431,11 +2189,11 @@ describe('pages API', () => {
         expect(res.status).toBe(200);
         expect((await res.json()).ok).toBe(true);
 
-        const paeCheck = await query(
-          `SELECT id FROM page_access_events WHERE page_id = $1 AND user_id = $2`,
+        const visitCheck = await query(
+          `select id from page_public_access_visits where page_id = $1 and user_id = $2`,
           [page.id, user.id],
         );
-        expect(paeCheck.rowCount).toBe(0);
+        expect(visitCheck.rowCount).toBe(0);
 
         const notifications = await flushShareEventNotifications(payloads);
         expect(notifications).toContainEqual(
@@ -2452,7 +2210,7 @@ describe('pages API', () => {
       }
     });
 
-    it('rejects leave requests with no direct share or link-access record', async () => {
+    it('rejects leave requests with no direct grant or public-visit record', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const stranger = await createTestUser();

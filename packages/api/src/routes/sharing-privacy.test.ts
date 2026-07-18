@@ -40,18 +40,18 @@ describe('sharing identity privacy', () => {
       parentId: folder.id,
     });
 
-    const directInvite = await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+    const directGrant = await app.request(`/api/shares/entity/page/${page.id}/grants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
       body: JSON.stringify({ email: directEditor.email, permission: 'edit' }),
     });
-    expect(directInvite.status).toBe(200);
-    const inheritedInvite = await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
+    expect(directGrant.status).toBe(200);
+    const inheritedGrant = await app.request(`/api/shares/entity/folder/${folder.id}/grants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
       body: JSON.stringify({ email: inheritedViewer.email, permission: 'view' }),
     });
-    expect(inheritedInvite.status).toBe(200);
+    expect(inheritedGrant.status).toBe(200);
 
     for (const [session, permission] of [
       [editorSession.Cookie, 'edit'],
@@ -63,18 +63,18 @@ describe('sharing identity privacy', () => {
       expect(summaryRes.status).toBe(200);
       const summary = (await summaryRes.json()) as Record<string, unknown> & {
         entity: { ownerId: string | null };
-        link: { token: string | null; url: string | null };
+        publicAccess: { permission: string; url: string };
         userPermission: string;
       };
       expect(summary).toMatchObject({
         visibility: 'limited',
         userPermission: permission,
         entity: { ownerId: null },
-        link: { token: null, url: null },
-        invites: [],
+        publicAccess: { permission: 'private', url: expect.any(String) },
+        grants: [],
         accessors: [],
         accessSources: [],
-        inheritedLinks: [],
+        inheritedPublicAccess: [],
         permissionDetails: [],
         inheritedAccessors: [],
       });
@@ -88,16 +88,15 @@ describe('sharing identity privacy', () => {
       expect(encoded).not.toContain('Private topology name');
     }
 
-    const pagePresenceRes = await app.request(
-      `/api/shares/pages/collaborators?pageIds=${page.id}`,
-      { headers: { Cookie: editorSession.Cookie } },
-    );
+    const pagePresenceRes = await app.request(`/api/shares/pages/collaborators?ids=${page.id}`, {
+      headers: { Cookie: editorSession.Cookie },
+    });
     expect(pagePresenceRes.status).toBe(200);
     const pagePresence = (await pagePresenceRes.json()) as Record<string, unknown>;
     expectPresenceOnly(pagePresence[page.id]);
 
     const folderPresenceRes = await app.request(
-      `/api/shares/folders/collaborators?folderIds=${folder.id}`,
+      `/api/shares/folders/collaborators?ids=${folder.id}`,
       { headers: { Cookie: viewerSession.Cookie } },
     );
     expect(folderPresenceRes.status).toBe(200);
@@ -105,7 +104,7 @@ describe('sharing identity privacy', () => {
     expectPresenceOnly(folderPresence[folder.id]);
   });
 
-  it('does not expose identities or topology to a signed-in public-link visitor', async () => {
+  it('does not expose identities or topology to a signed-in public visitor', async () => {
     const app = await createTestApp();
     const owner = await createTestUser({ name: 'Public Owner Name' });
     const collaborator = await createTestUser({ name: 'Hidden Collaborator Name' });
@@ -114,21 +113,20 @@ describe('sharing identity privacy', () => {
     const visitorSession = await createTestSession(visitor.id);
     const page = await createTestPage(owner.id, { title: 'Public privacy page' });
 
-    await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+    await app.request(`/api/shares/entity/page/${page.id}/grants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
       body: JSON.stringify({ email: collaborator.email, permission: 'view' }),
     });
-    const linkRes = await app.request(`/api/shares/entity/page/${page.id}/link`, {
+    const publicAccessRes = await app.request(`/api/shares/entity/page/${page.id}/public-access`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
       body: JSON.stringify({ permission: 'view' }),
     });
-    expect(linkRes.status).toBe(200);
-    const link = (await linkRes.json()) as { token: string };
+    expect(publicAccessRes.status).toBe(200);
     const accessRes = await app.request(`/api/pages/${page.id}/access`, {
       method: 'POST',
-      headers: { Cookie: visitorSession.Cookie, 'x-share-token': link.token },
+      headers: { Cookie: visitorSession.Cookie },
     });
     expect(accessRes.status).toBe(200);
 
@@ -140,19 +138,18 @@ describe('sharing identity privacy', () => {
     expect(summary).toMatchObject({
       visibility: 'limited',
       userPermission: 'view',
-      link: { token: null, url: null },
+      publicAccess: { permission: 'view', url: expect.any(String) },
       accessors: [],
       accessSources: [],
-      inheritedLinks: [],
+      inheritedPublicAccess: [],
     });
     const encoded = JSON.stringify(summary);
     expect(encoded).not.toContain(owner.email);
     expect(encoded).not.toContain(collaborator.email);
     expect(encoded).not.toContain(owner.id);
     expect(encoded).not.toContain(collaborator.id);
-    expect(encoded).not.toContain(link.token);
 
-    const presenceRes = await app.request(`/api/shares/pages/collaborators?pageIds=${page.id}`, {
+    const presenceRes = await app.request(`/api/shares/pages/collaborators?ids=${page.id}`, {
       headers: { Cookie: visitorSession.Cookie },
     });
     expect(presenceRes.status).toBe(200);
@@ -168,7 +165,7 @@ describe('sharing identity privacy', () => {
     const ownerSession = await createTestSession(owner.id);
     const folder = await createTestFolder(owner.id);
     const page = await createTestPage(owner.id, { parentId: folder.id });
-    await app.request(`/api/shares/entity/page/${page.id}/invite`, {
+    await app.request(`/api/shares/entity/page/${page.id}/grants`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Cookie: ownerSession.Cookie },
       body: JSON.stringify({ email: recipient.email, permission: 'view' }),
@@ -179,23 +176,23 @@ describe('sharing identity privacy', () => {
     });
     const summary = (await summaryRes.json()) as {
       visibility: string;
-      invites: Array<{ id: string; recipientEmail: string }>;
-      accessSources: Array<{ userId: string; shareId: string | null; permission: string }>;
+      grants: Array<{ id: string; recipientEmail: string }>;
+      accessSources: Array<{ userId: string; grantId: string | null; permission: string }>;
     };
     expect(summary.visibility).toBe('full');
-    expect(summary.invites).toContainEqual(
+    expect(summary.grants).toContainEqual(
       expect.objectContaining({ id: expect.any(String), recipientEmail: recipient.email }),
     );
     expect(summary.accessSources).toContainEqual(
       expect.objectContaining({
         userId: recipient.id,
-        shareId: expect.any(String),
+        grantId: expect.any(String),
         permission: 'view',
       }),
     );
 
     const pageCollaboratorsRes = await app.request(
-      `/api/shares/pages/collaborators?pageIds=${page.id}`,
+      `/api/shares/pages/collaborators?ids=${page.id}`,
       { headers: { Cookie: ownerSession.Cookie } },
     );
     const pageCollaborators = (await pageCollaboratorsRes.json()) as Record<
@@ -206,14 +203,14 @@ describe('sharing identity privacy', () => {
       expect.objectContaining({
         userId: recipient.id,
         email: recipient.email,
-        shareId: expect.any(String),
+        grantId: expect.any(String),
         permission: 'view',
-        source: 'Email',
+        source: 'Direct grant',
       }),
     );
 
     const folderCollaboratorsRes = await app.request(
-      `/api/shares/folders/collaborators?folderIds=${folder.id}`,
+      `/api/shares/folders/collaborators?ids=${folder.id}`,
       { headers: { Cookie: ownerSession.Cookie } },
     );
     expect(folderCollaboratorsRes.status).toBe(200);
@@ -225,7 +222,7 @@ describe('sharing identity privacy', () => {
       expect.objectContaining({
         userId: owner.id,
         email: owner.email,
-        permission: 'edit',
+        permission: 'admin',
         source: 'Owner',
       }),
     );

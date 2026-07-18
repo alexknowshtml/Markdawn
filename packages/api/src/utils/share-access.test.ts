@@ -19,39 +19,20 @@ async function addShare(
   entityId: string,
   recipientUserId: string,
   permission: string,
-  overrides?: { token?: string | null },
 ) {
   await query(
-    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission, token)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [entityType, entityId, recipientUserId, permission, overrides?.token ?? null],
+    `INSERT INTO shares (entity_type, entity_id, recipient_user_id, permission)
+     VALUES ($1, $2, $3, $4)`,
+    [entityType, entityId, recipientUserId, permission],
   );
 }
 
-async function addLinkShare(pageId: string, permission: string) {
-  const token = crypto.randomUUID();
-  await query(
-    `INSERT INTO shares (entity_type, entity_id, permission, token)
-     VALUES ('page', $1, $2, $3)`,
-    [pageId, permission, token],
-  );
-  await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-    token,
-    pageId,
-  ]);
+async function addPublicPageAccess(pageId: string, permission: string) {
+  await query('UPDATE pages SET public_permission = $1 WHERE id = $2', [permission, pageId]);
 }
 
-async function addFolderLinkShare(folderId: string, permission: string) {
-  const token = crypto.randomUUID();
-  await query(
-    `INSERT INTO shares (entity_type, entity_id, permission, token)
-     VALUES ('folder', $1, $2, $3)`,
-    [folderId, permission, token],
-  );
-  await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-    token,
-    folderId,
-  ]);
+async function addPublicFolderAccess(folderId: string, permission: string) {
+  await query('UPDATE folders SET public_permission = $1 WHERE id = $2', [permission, folderId]);
 }
 
 describe('ensurePageAccess with workspace membership', () => {
@@ -86,7 +67,7 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
-  it('still grants direct invite access (regression)', async () => {
+  it('still grants direct grant access (regression)', async () => {
     const owner = await createTestUser();
     const recipient = await createTestUser();
     const page = await createTestPage(owner.id);
@@ -97,12 +78,12 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('view');
   });
 
-  it('prefers higher permission from direct invite over workspace membership', async () => {
+  it('prefers higher permission from direct grant over workspace membership', async () => {
     const owner = await createTestUser();
     const member = await createTestUser();
     const page = await createTestPage(owner.id);
     await addWorkspaceMember(owner.id, member.id);
-    // direct invite gives lower permission, workspace gives edit — highest wins
+    // direct grant gives lower permission, workspace gives edit — highest wins
     await addShare('page', page.id, member.id, 'view');
 
     const result = await ensurePageAccess(page.id, member.id, 'edit');
@@ -110,20 +91,20 @@ describe('ensurePageAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
-  it('still grants owner access when page has link share', async () => {
+  it('still grants owner access when page has public access', async () => {
     const owner = await createTestUser();
     const page = await createTestPage(owner.id);
-    await addLinkShare(page.id, 'edit');
+    await addPublicPageAccess(page.id, 'edit');
 
     const result = await ensurePageAccess(page.id, owner.id);
     expect(result.hasAccess).toBe(true);
   });
 
-  it('grants authenticated user access via public link', async () => {
+  it('grants authenticated user access via public access', async () => {
     const owner = await createTestUser();
     const stranger = await createTestUser();
     const page = await createTestPage(owner.id);
-    await addLinkShare(page.id, 'view');
+    await addPublicPageAccess(page.id, 'view');
 
     const result = await ensurePageAccess(page.id, stranger.id);
     expect(result.hasAccess).toBe(true);
@@ -154,7 +135,7 @@ describe('ensurePageAccess with workspace membership', () => {
     );
   });
 
-  it('keeps direct page invites when page inheritance is restricted', async () => {
+  it('keeps direct page grants when page inheritance is restricted', async () => {
     const owner = await createTestUser();
     const recipient = await createTestUser();
     const page = await createTestPage(owner.id);
@@ -179,19 +160,19 @@ describe('ensurePageAccess with workspace membership', () => {
     );
   });
 
-  it('blocks inherited public folder links when page inheritance is restricted', async () => {
+  it('blocks inherited public folder access when page inheritance is restricted', async () => {
     const owner = await createTestUser();
     const stranger = await createTestUser();
     const folder = await createTestFolder(owner.id);
     const page = await createTestPage(owner.id, { parentId: folder.id });
-    await addFolderLinkShare(folder.id, 'view');
+    await addPublicFolderAccess(folder.id, 'view');
     await query("UPDATE pages SET inheritance_policy = 'restricted' WHERE id = $1", [page.id]);
 
     await expect(ensurePageAccess(page.id, stranger.id)).rejects.toThrow(
       "You don't have access to this page",
     );
 
-    await addLinkShare(page.id, 'view');
+    await addPublicPageAccess(page.id, 'view');
     const result = await ensurePageAccess(page.id, stranger.id);
     expect(result.permission).toBe('view');
   });
@@ -228,7 +209,7 @@ describe('ensureFolderAccess with workspace membership', () => {
     expect(result.permission).toBe('edit');
   });
 
-  it('grants direct folder invite access', async () => {
+  it('grants direct folder access', async () => {
     const owner = await createTestUser();
     const recipient = await createTestUser();
     const folder = await createTestFolder(owner.id);

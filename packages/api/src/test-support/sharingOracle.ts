@@ -1,10 +1,10 @@
 export type OraclePermission = null | 'view' | 'edit' | 'admin';
-export type OracleLinkPermission = null | 'view' | 'edit';
+export type OraclePublicPermission = null | 'view' | 'edit';
 
 export interface OracleNode {
   /** Account grant directly attached to this node. Index 0 is the target. */
   grant: OraclePermission;
-  link: OracleLinkPermission;
+  publicAccess: OraclePublicPermission;
   /** A boundary blocks workspace and sources on nodes above this one. */
   restricted: boolean;
 }
@@ -16,7 +16,7 @@ export interface SharingOracleInput {
 }
 
 export interface OracleSource {
-  kind: 'workspace' | 'grant' | 'link';
+  kind: 'workspace' | 'grant' | 'public';
   nodeIndex: number | null;
   permission: Exclude<OraclePermission, null>;
 }
@@ -54,8 +54,8 @@ export function decideSharingPermission(input: SharingOracleInput): SharingOracl
     if (!blocked && node.grant !== null) {
       activeSources.push({ kind: 'grant', nodeIndex, permission: node.grant });
     }
-    if (!blocked && node.link !== null) {
-      activeSources.push({ kind: 'link', nodeIndex, permission: node.link });
+    if (!blocked && node.publicAccess !== null) {
+      activeSources.push({ kind: 'public', nodeIndex, permission: node.publicAccess });
     }
   });
 

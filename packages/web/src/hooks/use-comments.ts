@@ -4,15 +4,16 @@ import { showSuccessToast } from '../utils/toast';
 const API_BASE = '/api';
 
 export interface CommentUser {
-  id: string;
+  id: string | null;
   name: string;
-  image: string | null;
+  avatarUrl: string | null;
 }
 
 export interface CommentReply {
   id: string;
   commentId: string;
-  userId: string;
+  userId: string | null;
+  isOwn: boolean;
   content: string;
   createdAt: string;
   user?: CommentUser;
@@ -21,7 +22,8 @@ export interface CommentReply {
 export interface Comment {
   id: string;
   pageId: string;
-  userId: string;
+  userId: string | null;
+  isOwn: boolean;
   content: string;
   anchorBlockId: string | null;
   resolved: boolean;

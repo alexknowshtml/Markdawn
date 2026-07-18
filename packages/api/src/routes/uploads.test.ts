@@ -1,4 +1,3 @@
-import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
@@ -6,9 +5,9 @@ import {
   createTestApp,
   createTestFolder,
   createTestPage,
-  createTestPublicShare,
   createTestSession,
   createTestUser,
+  enableTestPagePublicAccess,
 } from '../test-utils';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 
@@ -31,97 +30,38 @@ async function waitForBlockedPid(blockerPid: number): Promise<number> {
   throw new Error(`Timed out waiting for a request blocked by PID ${blockerPid}`);
 }
 
-type BlockedExpiryTransaction = {
-  pid: number;
-  expires_at: string;
-  matching_advisory_lock: boolean;
-  started_before_expiry: boolean;
-};
-
-async function waitForBlockedExpiryTransaction(
-  blockerPid: number,
-  entityId: string,
-): Promise<BlockedExpiryTransaction> {
-  for (let attempt = 0; attempt < 300; attempt += 1) {
-    const result = await query<BlockedExpiryTransaction>(
-      `select activity.pid,
-              share.expires_at,
-              activity.xact_start < share.expires_at as started_before_expiry,
-              exists (
-                select 1
-                from pg_locks waiting
-                join pg_locks held
-                  on held.locktype = waiting.locktype
-                 and held.database is not distinct from waiting.database
-                 and held.classid is not distinct from waiting.classid
-                 and held.objid is not distinct from waiting.objid
-                 and held.objsubid is not distinct from waiting.objsubid
-                where waiting.pid = activity.pid
-                  and waiting.locktype = 'advisory'
-                  and waiting.granted = false
-                  and held.pid = $1
-                  and held.granted = true
-              ) as matching_advisory_lock
-       from pg_stat_activity activity
-       join shares share
-         on share.entity_type = 'page'
-        and share.entity_id = $2
-        and share.token is not null
-       where $1 = any(pg_blocking_pids(activity.pid))
-         and activity.xact_start is not null
-         and share.expires_at is not null
-       order by activity.pid
-       limit 1`,
-      [blockerPid, entityId],
-    );
-    const row = result.rows[0];
-    if (row?.matching_advisory_lock) return row;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error('Timed out waiting for the upload request on the exact workspace access lock');
-}
-
 async function runUploadReadBarrier(
+  ownerId: string,
   request: () => Response | Promise<Response>,
   mutateAccess: () => Promise<void>,
 ): Promise<Response> {
-  let releaseTableLock = (): void => undefined;
+  let releaseWorkspaceLock = (): void => undefined;
   let reportBlockerPid = (_pid: number): void => undefined;
-  const tableLockReleased = new Promise<void>((resolve) => {
-    releaseTableLock = resolve;
+  const lockReleased = new Promise<void>((resolve) => {
+    releaseWorkspaceLock = resolve;
   });
   const blockerReady = new Promise<number>((resolve) => {
     reportBlockerPid = resolve;
   });
-  const tableBlocker = db.transaction(async (tx) => {
-    await executeQuery(tx, 'lock table shares in access exclusive mode');
+  const blocker = db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, ownerId);
     const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
     const pid = pidResult.rows[0]?.pid;
     if (!pid) throw new Error('Failed to resolve upload read blocker PID');
     reportBlockerPid(pid);
-    await tableLockReleased;
+    await lockReleased;
   });
 
   const blockerPid = await blockerReady;
   const responsePromise = Promise.resolve(request());
-  const responsePid = await waitForBlockedPid(blockerPid);
+  await waitForBlockedPid(blockerPid);
   const mutationPromise = mutateAccess();
-
-  let orchestrationError: unknown = null;
-  try {
-    // The access mutation must wait on the upload request's workspace lock,
-    // not pass the authorization check while byte materialization is paused.
-    await waitForBlockedPid(responsePid);
-  } catch (error) {
-    orchestrationError = error;
-  } finally {
-    releaseTableLock();
-    await tableBlocker;
-  }
+  await waitForBlockedPid(blockerPid);
+  releaseWorkspaceLock();
+  await blocker;
 
   const response = await responsePromise;
   await mutationPromise;
-  if (orchestrationError) throw orchestrationError;
   return response;
 }
 
@@ -222,6 +162,50 @@ describe('uploads API', () => {
       });
 
       expect(res.status).toBe(400);
+    });
+
+    it('persists guest upload attribution on publicly editable pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
+      const guestId = crypto.randomUUID();
+      const formData = new FormData();
+      formData.append('file', new File([PNG_BYTES], 'guest.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
+
+      const response = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: `markdawn_anon_id=${guestId}` },
+        body: formData,
+      });
+
+      expect(response.status).toBe(200);
+      const url = ((await response.json()) as { url: string }).url;
+      const filename = url.split('/').at(-1);
+      const upload = await query<{
+        uploaded_by: string | null;
+        uploaded_by_guest_id: string | null;
+      }>('select uploaded_by, uploaded_by_guest_id from uploads where filename = $1', [filename]);
+      expect(upload.rows[0]).toEqual({ uploaded_by: null, uploaded_by_guest_id: guestId });
+    });
+
+    it('denies guest uploads on public view-only pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      await query("update pages set public_permission = 'view' where id = $1", [page.id]);
+      const formData = new FormData();
+      formData.append('file', new File([PNG_BYTES], 'denied.png', { type: 'image/png' }));
+      formData.append('pageId', page.id);
+
+      const response = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: `markdawn_anon_id=${crypto.randomUUID()}` },
+        body: formData,
+      });
+
+      expect(response.status).toBe(403);
     });
   });
 
@@ -339,6 +323,7 @@ describe('uploads API', () => {
       );
 
       const response = await runUploadReadBarrier(
+        owner.id,
         () => app.request(url, { headers: { Cookie: recipientSession.Cookie } }),
         () =>
           db.transaction(async (tx) => {
@@ -403,7 +388,7 @@ describe('uploads API', () => {
       if (!shareId) {
         throw new Error('Expected uploader share ID');
       }
-      const revokeRes = await app.request(`/api/shares/${shareId}`, {
+      const revokeRes = await app.request(`/api/shares/grants/${shareId}`, {
         method: 'DELETE',
         headers: { Cookie: ownerSession.Cookie },
       });
@@ -526,7 +511,7 @@ describe('uploads API', () => {
         body: formData,
       });
       const { url } = (await uploadRes.json()) as { url: string };
-      await createTestPublicShare(page.id);
+      await enableTestPagePublicAccess(page.id);
 
       const res = await app.request(url);
 
@@ -535,90 +520,7 @@ describe('uploads API', () => {
       expect(new Uint8Array(await res.arrayBuffer())).toEqual(binaryData);
     });
 
-    it('rechecks an expiring public link after waiting for the workspace access lock', async () => {
-      const connectionString = process.env.DATABASE_URL;
-      if (!connectionString) throw new Error('DATABASE_URL is required');
-
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
-      const page = await createTestPage(owner.id, { title: 'Expiring public attachment' });
-
-      const formData = new FormData();
-      formData.append('file', new File([PNG_BYTES], 'expiring-public.png', { type: 'image/png' }));
-      formData.append('pageId', page.id);
-      const uploadRes = await app.request('/api/uploads', {
-        method: 'POST',
-        headers: { Cookie: ownerSession.Cookie },
-        body: formData,
-      });
-      expect(uploadRes.status).toBe(200);
-      const { url } = (await uploadRes.json()) as { url: string };
-      const publicShare = await createTestPublicShare(page.id);
-
-      const blocker = new Client({ connectionString });
-      let blockerTransactionOpen = false;
-      let downloadPromise: Promise<Response> | null = null;
-      await blocker.connect();
-
-      try {
-        await blocker.query('begin');
-        blockerTransactionOpen = true;
-        const blockerPidResult = await blocker.query<{ pid: number }>(
-          'select pg_backend_pid() as pid',
-        );
-        const blockerPid = blockerPidResult.rows[0]?.pid;
-        if (blockerPid === undefined) {
-          throw new Error('Could not resolve upload expiry blocker PID');
-        }
-        await blocker.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-          `workspace-access:${owner.id}`,
-        ]);
-
-        const expiryResult = await query<{ expires_at: string }>(
-          `update shares
-           set expires_at = statement_timestamp() + interval '5 seconds'
-           where entity_type = 'page' and entity_id = $1 and token = $2
-           returning expires_at`,
-          [page.id, publicShare.token],
-        );
-        const expiresAt = expiryResult.rows[0]?.expires_at;
-        if (!expiresAt) throw new Error('Could not set upload link expiration');
-
-        const pendingDownload = Promise.resolve(app.request(url));
-        downloadPromise = pendingDownload;
-
-        const blocked = await waitForBlockedExpiryTransaction(blockerPid, page.id);
-        expect(blocked.matching_advisory_lock).toBe(true);
-        expect(blocked.started_before_expiry).toBe(true);
-        expect(blocked.expires_at).toBe(expiresAt);
-
-        await blocker.query(
-          `select pg_sleep(
-             greatest(0, extract(epoch from ($1::timestamptz - statement_timestamp()))) + 0.05
-           )`,
-          [expiresAt],
-        );
-        const clockResult = await blocker.query<{ expired: boolean }>(
-          'select statement_timestamp() > $1::timestamptz as expired',
-          [expiresAt],
-        );
-        expect(clockResult.rows[0]?.expired).toBe(true);
-
-        await blocker.query('commit');
-        blockerTransactionOpen = false;
-
-        const response = await pendingDownload;
-        expect(response.status).toBe(404);
-        expect(new Uint8Array(await response.arrayBuffer())).not.toEqual(PNG_BYTES);
-      } finally {
-        if (blockerTransactionOpen) await blocker.query('rollback');
-        await blocker.end();
-        if (downloadPromise) await Promise.allSettled([downloadPromise]);
-      }
-    });
-
-    it('serializes anonymous byte reads before a concurrent link disable', async () => {
+    it('serializes anonymous byte reads before concurrent public-access revocation', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const ownerSession = await createTestSession(owner.id);
@@ -634,23 +536,18 @@ describe('uploads API', () => {
       });
       expect(uploadRes.status).toBe(200);
       const { url } = (await uploadRes.json()) as { url: string };
-      await createTestPublicShare(page.id);
+      await enableTestPagePublicAccess(page.id);
 
       const response = await runUploadReadBarrier(
+        owner.id,
         () => app.request(url),
         () =>
           db.transaction(async (tx) => {
             await lockWorkspaceAccessMutation(tx, owner.id);
             await executeQuery(
               tx,
-              `DELETE FROM shares
-               WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL`,
-              [page.id],
-            );
-            await executeQuery(
-              tx,
               `UPDATE pages
-               SET is_public = false, public_token = null, updated_at = now()
+               SET public_permission = null, updated_at = now()
                WHERE id = $1`,
               [page.id],
             );
@@ -661,33 +558,6 @@ describe('uploads API', () => {
       expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG_BYTES);
       const afterDisable = await app.request(url);
       expect(afterDisable.status).toBe(404);
-    });
-
-    it('denies anonymous downloads after the page link expires', async () => {
-      const app = await createTestApp();
-      const owner = await createTestUser();
-      const ownerSession = await createTestSession(owner.id);
-      const page = await createTestPage(owner.id);
-      const formData = new FormData();
-      formData.append('file', new File([PNG_BYTES], 'expired.png', { type: 'image/png' }));
-      formData.append('pageId', page.id);
-
-      const uploadRes = await app.request('/api/uploads', {
-        method: 'POST',
-        headers: { Cookie: ownerSession.Cookie },
-        body: formData,
-      });
-      const { url } = (await uploadRes.json()) as { url: string };
-      await createTestPublicShare(page.id);
-      await query(
-        `UPDATE shares SET expires_at = now() - interval '1 hour'
-         WHERE entity_type = 'page' AND entity_id = $1 AND token IS NOT NULL`,
-        [page.id],
-      );
-
-      const res = await app.request(url);
-
-      expect(res.status).toBe(404);
     });
 
     it('allows anonymous downloads for uploads in public folders', async () => {
@@ -708,16 +578,7 @@ describe('uploads API', () => {
         body: formData,
       });
       const { url } = (await uploadRes.json()) as { url: string };
-      const token = crypto.randomUUID();
-      await query('UPDATE folders SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        folder.id,
-      ]);
-      await query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('folder', $1, $2, 'view', $3)`,
-        [folder.id, owner.id, token],
-      );
+      await query("UPDATE folders SET public_permission = 'view' WHERE id = $1", [folder.id]);
 
       const res = await app.request(url);
 

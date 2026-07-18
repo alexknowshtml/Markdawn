@@ -67,6 +67,7 @@ export async function createApp() {
   });
 
   app.route('/api/pages', pagesPublicRoute);
+  app.route('/api/pages', commentsRoute);
   app.route('/api/pages', exportRoute);
   app.route('/api/pages', pagesRoute);
 
@@ -81,8 +82,6 @@ export async function createApp() {
   app.route('/api/shares', sharesRoute);
 
   app.route('/api/favorites', favoritesRoute);
-
-  app.route('/api/pages', commentsRoute);
 
   app.route('/api/pages', versionsRoute);
 

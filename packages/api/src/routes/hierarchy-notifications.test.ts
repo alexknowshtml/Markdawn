@@ -90,8 +90,6 @@ describe('hierarchy creation notifications', () => {
     const owner = await createTestUser();
     const workspaceMember = await createTestUser();
     const folderRecipient = await createTestUser();
-    const expiredRecipient = await createTestUser();
-    const inactiveLinkVisitor = await createTestUser();
     const session = await createTestSession(owner.id);
     await createTestWorkspaceMember(owner.id, workspaceMember.id, 'viewer');
 
@@ -120,22 +118,9 @@ describe('hierarchy creation notifications', () => {
 
       await query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, recipient_email, permission
-         ) values ('folder', $1, $2, $3, $4, 'view')`,
-        [folder.id, owner.id, folderRecipient.id, folderRecipient.email],
-      );
-      await query(
-        `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, recipient_email,
-           permission, expires_at
-         ) values ('folder', $1, $2, $3, $4, 'view', now() - interval '1 minute')`,
-        [folder.id, owner.id, expiredRecipient.id, expiredRecipient.email],
-      );
-      await query(
-        `insert into folder_access_events (
-           folder_id, user_id, source, token, permission, first_seen_at, last_seen_at
-         ) values ($1, $2, 'link', $3, 'view', now(), now())`,
-        [folder.id, inactiveLinkVisitor.id, `inactive-${crypto.randomUUID()}`],
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')`,
+        [folder.id, owner.id, folderRecipient.id],
       );
 
       const pageRes = await app.request('/api/pages', {
@@ -222,9 +207,9 @@ describe('hierarchy creation notifications', () => {
       ]);
       await query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, recipient_email, permission
-         ) values ('folder', $1, $2, $3, $4, 'view')`,
-        [restrictedFolder.id, owner.id, folderRecipient.id, folderRecipient.email],
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')`,
+        [restrictedFolder.id, owner.id, folderRecipient.id],
       );
       const restrictedPageResponse = await app.request('/api/pages', {
         method: 'POST',
@@ -235,24 +220,9 @@ describe('hierarchy creation notifications', () => {
       const restrictedPage = (await restrictedPageResponse.json()) as { id: string };
       expectSingleMetaOnlyEvent(await flushNotifications(payloads), 'page', restrictedPage.id, [
         owner.id,
+        workspaceMember.id,
         folderRecipient.id,
       ]);
-
-      const renewExpiredGrant = await app.request(`/api/shares/entity/folder/${folder.id}/invite`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ email: expiredRecipient.email, permission: 'view' }),
-      });
-      expect(renewExpiredGrant.status).toBe(200);
-      const renewalEvents = await flushNotifications(payloads);
-      expect(renewalEvents).toContainEqual(
-        expect.objectContaining({
-          action: 'grant',
-          entityType: 'folder',
-          entityId: folder.id,
-          targetUserId: expiredRecipient.id,
-        }),
-      );
     } finally {
       await listener.end();
     }

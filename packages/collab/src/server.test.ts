@@ -691,31 +691,23 @@ describe('collab server', () => {
       expect(authenticated.user.id).toBe(user.id);
     });
 
-    it('allows anonymous access to pages public through an ancestor folder link', async () => {
+    it('allows anonymous access to pages public through an ancestor folder', async () => {
       const owner = await createTestUser(pool);
       const folderId = crypto.randomUUID();
-      const token = crypto.randomUUID();
       await pool.query(
-        `INSERT INTO folders (id, parent_id, name, position, created_by, is_public, public_token, created_at, updated_at)
-         VALUES ($1, NULL, 'Public Folder', '0', $2, true, $3, NOW(), NOW())`,
-        [folderId, owner.id, token],
+        `insert into folders (
+           id, parent_id, name, position, created_by, public_permission, created_at, updated_at
+         ) values ($1, null, 'Public Folder', '0', $2, 'view', now(), now())`,
+        [folderId, owner.id],
       );
       const page = await createTestPage(pool, owner.id, 'Folder Public Page');
-      await pool.query('UPDATE pages SET parent_id = $1, is_public = false WHERE id = $2', [
-        folderId,
-        page.id,
-      ]);
-      await pool.query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('folder', $1, $2, 'view', $3)`,
-        [folderId, owner.id, token],
-      );
+      await pool.query('update pages set parent_id = $1 where id = $2', [folderId, page.id]);
 
       const anonymousId = crypto.randomUUID();
       const connectionConfig = createConnectionConfig();
       const payload = createAuthenticatePayload(server, {
         documentName: page.id,
-        token: `anon:${anonymousId}:${token}`,
+        token: `anon:${anonymousId}`,
         connectionConfig,
       });
 
@@ -741,11 +733,11 @@ describe('collab server', () => {
       expect(querySpy).not.toHaveBeenCalled();
     });
 
-    it('rejects anonymous identities without a share token before querying page access', async () => {
+    it('rejects legacy anonymous identities with a share-token suffix before querying access', async () => {
       const querySpy = vi.spyOn(pool, 'query');
       const payload = createAuthenticatePayload(server, {
         documentName: crypto.randomUUID(),
-        token: `anon:${crypto.randomUUID()}`,
+        token: `anon:${crypto.randomUUID()}:${crypto.randomUUID()}`,
       });
 
       await expect(server.hocuspocus.hooks('onAuthenticate', payload)).rejects.toThrow('Forbidden');
@@ -1248,7 +1240,7 @@ describe('collab server', () => {
   });
 
   describe('write authorization fencing', () => {
-    it('rejects a write when the workspace lock wait crosses share expiry', async () => {
+    it('rejects a write when an account grant is revoked behind the workspace lock', async () => {
       const owner = await createTestUser(pool);
       const editor = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);
@@ -1269,15 +1261,6 @@ describe('collab server', () => {
           token: editorSession.token,
         }),
       );
-      const grant = await pool.query<{ expires_at: Date }>(
-        `update shares
-         set expires_at = clock_timestamp() + interval '3 seconds'
-         where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2
-         returning expires_at`,
-        [page.id, editor.id],
-      );
-      const expiresAt = grant.rows[0]?.expires_at;
-      if (!expiresAt) throw new Error('Expected expiring share');
       const blocker = await pool.connect();
       const blockerPid = (blocker as unknown as { processID: number }).processID;
       const connection = {
@@ -1315,15 +1298,16 @@ describe('collab server', () => {
             (error: unknown) => ({ status: 'rejected' as const, error }),
           );
 
-        const transactionStartedAt = await waitForExactWorkspaceLockWaiter(
+        await waitForExactWorkspaceLockWaiter(
           pool,
           blockerPid,
           'write admission to wait on the workspace lock',
         );
-        expect(transactionStartedAt.getTime()).toBeLessThan(expiresAt.getTime());
-        expect(expiresAt.getTime() - transactionStartedAt.getTime()).toBeGreaterThan(1_000);
-        const observedAfterExpiry = await waitUntilAfter(pool, expiresAt);
-        expect(observedAfterExpiry.getTime()).toBeGreaterThan(expiresAt.getTime());
+        await blocker.query(
+          `delete from shares
+           where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
+          [page.id, editor.id],
+        );
         await blocker.query('select pg_advisory_unlock(hashtextextended($1, 0))', [
           `workspace-access:${owner.id}`,
         ]);
@@ -1446,37 +1430,19 @@ describe('collab server', () => {
       }
     });
 
-    it('rejects an anonymous write when the workspace lock wait crosses link expiry', async () => {
+    it('rejects an anonymous write when public access is revoked behind the workspace lock', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);
-      const linkToken = crypto.randomUUID();
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, linkToken],
-      );
-      await pool.query('update pages set is_public = true, public_token = $1 where id = $2', [
-        linkToken,
-        page.id,
-      ]);
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [page.id]);
       const anonymousId = crypto.randomUUID();
       const context = await server.hocuspocus.hooks(
         'onAuthenticate',
         createAuthenticatePayload(server, {
           documentName: page.id,
-          token: `anon:${anonymousId}:${linkToken}`,
+          token: `anon:${anonymousId}`,
         }),
       );
       expect((context as { permission?: unknown }).permission).toBe('edit');
-      const expiry = await pool.query<{ expires_at: Date }>(
-        `update shares
-         set expires_at = clock_timestamp() + interval '3 seconds'
-         where entity_type = 'page' and entity_id = $1 and token = $2
-         returning expires_at`,
-        [page.id, linkToken],
-      );
-      const expiresAt = expiry.rows[0]?.expires_at;
-      if (!expiresAt) throw new Error('Expected expiring public link');
       const blocker = await pool.connect();
       const blockerPid = (blocker as unknown as { processID: number }).processID;
       const connection = {
@@ -1487,7 +1453,7 @@ describe('collab server', () => {
         close: vi.fn(),
       } as unknown as beforeHandleMessagePayload['connection'];
       const source = new Y.Doc();
-      source.getText('content').insert(0, 'must not outlive the public link');
+      source.getText('content').insert(0, 'must not outlive public access');
       const update = encodeYjsUpdateMessage(page.id, Y.encodeStateAsUpdate(source));
       const document = new Document(page.id);
       let lockReleased = false;
@@ -1514,15 +1480,12 @@ describe('collab server', () => {
             (error: unknown) => ({ status: 'rejected' as const, error }),
           );
 
-        const transactionStartedAt = await waitForExactWorkspaceLockWaiter(
+        await waitForExactWorkspaceLockWaiter(
           pool,
           blockerPid,
-          'link-expiry write admission to wait on the exact workspace lock',
+          'public-access write admission to wait on the exact workspace lock',
         );
-        expect(transactionStartedAt.getTime()).toBeLessThan(expiresAt.getTime());
-        expect(expiresAt.getTime() - transactionStartedAt.getTime()).toBeGreaterThan(1_000);
-        const observedAfterExpiry = await waitUntilAfter(pool, expiresAt);
-        expect(observedAfterExpiry.getTime()).toBeGreaterThan(expiresAt.getTime());
+        await blocker.query('update pages set public_permission = null where id = $1', [page.id]);
         await blocker.query('select pg_advisory_unlock(hashtextextended($1, 0))', [
           `workspace-access:${owner.id}`,
         ]);
@@ -2717,12 +2680,11 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const recipient = await createTestUser(pool);
       const parentId = crypto.randomUUID();
-      const publicToken = crypto.randomUUID();
       await pool.query(
         `insert into folders (
-           id, name, position, created_by, is_public, public_token, created_at, updated_at
-         ) values ($1, 'Hidden Public Parent', '0', $2, true, $3, now(), now())`,
-        [parentId, owner.id, publicToken],
+           id, name, position, created_by, public_permission, created_at, updated_at
+         ) values ($1, 'Hidden Public Parent', '0', $2, 'view', now(), now())`,
+        [parentId, owner.id],
       );
       const page = await createTestPage(pool, owner.id, 'Directly Shared Child');
       await pool.query('update pages set parent_id = $1 where id = $2', [parentId, page.id]);
@@ -2731,11 +2693,6 @@ describe('collab server', () => {
            entity_type, entity_id, shared_by, recipient_user_id, permission
          ) values ('page', $1, $2, $3, 'view')`,
         [page.id, owner.id, recipient.id],
-      );
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $2, 'view', $3)`,
-        [parentId, owner.id, publicToken],
       );
 
       const metaRoomName = `page-meta:${recipient.id}`;
@@ -2774,10 +2731,10 @@ describe('collab server', () => {
         );
 
         await pool.query(
-          `insert into folder_access_events (
-             folder_id, user_id, source, token, permission, first_seen_at, last_seen_at
-           ) values ($1, $2, 'link', $3, 'view', now(), now())`,
-          [parentId, recipient.id, publicToken],
+          `insert into folder_public_access_visits (
+             folder_id, user_id, first_seen_at, last_seen_at
+           ) values ($1, $2, now(), now())`,
+          [parentId, recipient.id],
         );
         await server.hocuspocus.hooks('onStoreDocument', storePayload);
         expect(metaDocument.getMap('pageIndex').get(page.id)).toEqual(
@@ -2788,39 +2745,21 @@ describe('collab server', () => {
       }
     });
 
-    it('excludes expired and token-rotated link provenance from metadata rebuilds and updates', async () => {
+    it('excludes stale public visits after access is revoked', async () => {
       const owner = await createTestUser(pool);
       const recipient = await createTestUser(pool);
       const livePage = await createTestPage(pool, owner.id, 'Live direct share');
-      const expiredPage = await createTestPage(pool, owner.id, 'Expired link');
-      const rotatedPage = await createTestPage(pool, owner.id, 'Rotated link');
-      const expiredToken = crypto.randomUUID();
-      const staleToken = crypto.randomUUID();
-      const currentToken = crypto.randomUUID();
+      const revokedPage = await createTestPage(pool, owner.id, 'Revoked public page');
+      const stalePage = await createTestPage(pool, owner.id, 'Stale public visit');
       await pool.query(
         `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
          values ('page', $1, $2, $3, 'view')`,
         [livePage.id, owner.id, recipient.id],
       );
       await pool.query(
-        `update pages
-         set is_public = true,
-             public_token = case id when $1 then $3 else $4 end
-         where id = any($2::uuid[])`,
-        [expiredPage.id, [expiredPage.id, rotatedPage.id], expiredToken, currentToken],
-      );
-      await pool.query(
-        `insert into shares (
-           entity_type, entity_id, shared_by, permission, token, expires_at
-         ) values
-           ('page', $1, $3, 'view', $4, now() - interval '1 minute'),
-           ('page', $2, $3, 'view', $5, null)`,
-        [expiredPage.id, rotatedPage.id, owner.id, expiredToken, currentToken],
-      );
-      await pool.query(
-        `insert into page_access_events (page_id, user_id, token, permission)
-         values ($1, $3, $4, 'view'), ($2, $3, $5, 'view')`,
-        [expiredPage.id, rotatedPage.id, recipient.id, expiredToken, staleToken],
+        `insert into page_public_access_visits (page_id, user_id)
+         values ($1, $3), ($2, $3)`,
+        [revokedPage.id, stalePage.id, recipient.id],
       );
 
       const documentName = `page-meta:${recipient.id}`;
@@ -2838,21 +2777,21 @@ describe('collab server', () => {
 
       await server.hocuspocus.hooks('onLoadDocument', payload);
       expect(document.getMap('pageIndex').has(livePage.id)).toBe(true);
-      expect(document.getMap('pageIndex').has(expiredPage.id)).toBe(false);
-      expect(document.getMap('pageIndex').has(rotatedPage.id)).toBe(false);
+      expect(document.getMap('pageIndex').has(revokedPage.id)).toBe(false);
+      expect(document.getMap('pageIndex').has(stalePage.id)).toBe(false);
 
       server.hocuspocus.documents.set(documentName, document);
       try {
-        await publishPageRename(server.hocuspocus, pool, expiredPage.id, 'Expired renamed', logger);
-        await publishPageRename(server.hocuspocus, pool, rotatedPage.id, 'Rotated renamed', logger);
-        expect(document.getMap('pageIndex').has(expiredPage.id)).toBe(false);
-        expect(document.getMap('pageIndex').has(rotatedPage.id)).toBe(false);
+        await publishPageRename(server.hocuspocus, pool, revokedPage.id, 'Revoked renamed', logger);
+        await publishPageRename(server.hocuspocus, pool, stalePage.id, 'Stale renamed', logger);
+        expect(document.getMap('pageIndex').has(revokedPage.id)).toBe(false);
+        expect(document.getMap('pageIndex').has(stalePage.id)).toBe(false);
       } finally {
         server.hocuspocus.documents.delete(documentName);
       }
     });
 
-    it('periodically invalidates dashboard-only metadata on expiry and edit-to-view fallback', async () => {
+    it('periodically invalidates dashboard metadata after revocation and edit-to-view fallback', async () => {
       const realSetTimeout = globalThis.setTimeout;
       const realClearTimeout = globalThis.clearTimeout;
       vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
@@ -2864,11 +2803,10 @@ describe('collab server', () => {
       });
       const owner = await createTestUser(pool);
       const recipient = await createTestUser(pool);
-      const directPage = await createTestPage(pool, owner.id, 'Expiring direct share');
-      const linkPage = await createTestPage(pool, owner.id, 'Expiring link share');
+      const directPage = await createTestPage(pool, owner.id, 'Revoked direct grant');
+      const publicPage = await createTestPage(pool, owner.id, 'Revoked public access');
       const fallbackPage = await createTestPage(pool, owner.id, 'Edit falling back to view');
       const folderId = crypto.randomUUID();
-      const linkToken = crypto.randomUUID();
       await pool.query(
         `insert into folders (id, name, position, created_by, created_at, updated_at)
          values ($1, 'Shared folder', '0', $2, now(), now())`,
@@ -2880,32 +2818,25 @@ describe('collab server', () => {
       ]);
       await pool.query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission, expires_at
-         ) values ('page', $1, $2, $3, 'view', now() + interval '1 hour')`,
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('page', $1, $2, $3, 'view')`,
         [directPage.id, owner.id, recipient.id],
       );
-      await pool.query(`update pages set is_public = true, public_token = $1 where id = $2`, [
-        linkToken,
-        linkPage.id,
+      await pool.query("update pages set public_permission = 'view' where id = $1", [
+        publicPage.id,
       ]);
       await pool.query(
         `insert into shares (
-           entity_type, entity_id, shared_by, permission, token, expires_at
-         ) values ('page', $1, $2, 'view', $3, now() + interval '1 hour')`,
-        [linkPage.id, owner.id, linkToken],
-      );
-      await pool.query(
-        `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission, expires_at
+           entity_type, entity_id, shared_by, recipient_user_id, permission
          ) values
-           ('folder', $1, $3, $4, 'view', null),
-           ('page', $2, $3, $4, 'edit', now() + interval '1 hour')`,
+           ('folder', $1, $3, $4, 'view'),
+           ('page', $2, $3, $4, 'edit')`,
         [folderId, fallbackPage.id, owner.id, recipient.id],
       );
       await pool.query(
-        `insert into page_access_events (page_id, user_id, token, permission)
-         values ($1, $2, $3, 'view')`,
-        [linkPage.id, recipient.id, linkToken],
+        `insert into page_public_access_visits (page_id, user_id)
+         values ($1, $2)`,
+        [publicPage.id, recipient.id],
       );
 
       const documentName = `page-meta:${recipient.id}`;
@@ -2923,7 +2854,7 @@ describe('collab server', () => {
         });
         periodicServer.hocuspocus.documents.set(documentName, document);
         expect(document.getMap('pageIndex').has(directPage.id)).toBe(true);
-        expect(document.getMap('pageIndex').has(linkPage.id)).toBe(true);
+        expect(document.getMap('pageIndex').has(publicPage.id)).toBe(true);
         expect(document.getMap('pageIndex').has(fallbackPage.id)).toBe(true);
         expect(document.getMap('accessPermissions').get(fallbackPage.id)).toBe('edit');
 
@@ -2936,29 +2867,31 @@ describe('collab server', () => {
           versions.observe(observer);
         });
         await pool.query(
-          `update shares
-           set expires_at = now() - interval '1 minute'
+          `delete from shares
            where entity_type = 'page' and entity_id = any($1::uuid[])`,
-          [[directPage.id, linkPage.id, fallbackPage.id]],
+          [[directPage.id, fallbackPage.id]],
         );
+        await pool.query('update pages set public_permission = null where id = $1', [
+          publicPage.id,
+        ]);
         await vi.advanceTimersByTimeAsync(1_000);
-        let expiryTimeout: ReturnType<typeof setTimeout> | undefined;
+        let reconciliationTimeout: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([
             reconciled,
             new Promise<never>((_resolve, reject) => {
-              expiryTimeout = realSetTimeout(
-                () => reject(new Error('Timed out waiting for metadata expiry')),
+              reconciliationTimeout = realSetTimeout(
+                () => reject(new Error('Timed out waiting for metadata reconciliation')),
                 5_000,
               );
             }),
           ]);
         } finally {
-          if (expiryTimeout) realClearTimeout(expiryTimeout);
+          if (reconciliationTimeout) realClearTimeout(reconciliationTimeout);
         }
 
         expect(document.getMap('pageIndex').has(directPage.id)).toBe(false);
-        expect(document.getMap('pageIndex').has(linkPage.id)).toBe(false);
+        expect(document.getMap('pageIndex').has(publicPage.id)).toBe(false);
         expect(document.getMap('pageIndex').has(fallbackPage.id)).toBe(true);
         expect(document.getMap('accessPermissions').get(fallbackPage.id)).toBe('view');
         expect(document.getMap<number>('accessVersion').get('access')).toBe(1);
@@ -3603,27 +3536,18 @@ describe('collab server', () => {
       }
     });
 
-    it('does not persist anonymous edits after link access is revoked', async () => {
+    it('does not persist anonymous edits after public access is revoked', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);
-      const token = crypto.randomUUID();
-      await pool.query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, token],
-      );
-      await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
+      const anonymousId = crypto.randomUUID();
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [page.id]);
 
       const document = new Document(page.id);
       document.getText('content').insert(0, 'Revoked anonymous edit');
       const connection = {
         context: {
-          user: { id: 'anonymous-user', isAnonymous: true },
+          user: { id: anonymousId, isAnonymous: true },
           permission: 'edit',
-          shareToken: token,
         },
         sendStateless: vi.fn(),
         close: vi.fn(),
@@ -3632,19 +3556,13 @@ describe('collab server', () => {
         getConnections: () => [connection],
       } as unknown as Document;
       server.hocuspocus.documents.set(page.id, activeDocument);
-      await pool.query("DELETE FROM shares WHERE entity_type = 'page' AND entity_id = $1", [
-        page.id,
-      ]);
-      await pool.query('UPDATE pages SET is_public = false, public_token = null WHERE id = $1', [
-        page.id,
-      ]);
+      await pool.query('update pages set public_permission = null where id = $1', [page.id]);
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
         context: {
-          user: { id: 'anonymous-user', isAnonymous: true },
+          user: { id: anonymousId, isAnonymous: true },
           permission: 'edit',
-          shareToken: token,
         },
         document,
         documentName: page.id,
@@ -3671,16 +3589,8 @@ describe('collab server', () => {
     it('rejects a debounced document containing an update from a revoked writer', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);
-      const token = crypto.randomUUID();
-      await pool.query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-        token,
-        page.id,
-      ]);
-      await pool.query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'edit', $3)`,
-        [page.id, owner.id, token],
-      );
+      const anonymousId = crypto.randomUUID();
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [page.id]);
       const document = new Document(page.id);
       document.getText('content').insert(0, 'mixed update');
       const changeBase = {
@@ -3698,9 +3608,8 @@ describe('collab server', () => {
       await server.hocuspocus.hooks('onChange', {
         ...changeBase,
         context: {
-          user: { id: 'anonymous-writer', isAnonymous: true },
+          user: { id: anonymousId, isAnonymous: true },
           permission: 'edit',
-          shareToken: token,
         },
       });
       await server.hocuspocus.hooks('onChange', {
@@ -3709,9 +3618,8 @@ describe('collab server', () => {
       });
       const anonymousConnection = {
         context: {
-          user: { id: 'anonymous-writer', isAnonymous: true },
+          user: { id: anonymousId, isAnonymous: true },
           permission: 'edit',
-          shareToken: token,
         },
         sendStateless: vi.fn(),
         close: vi.fn(),
@@ -3725,12 +3633,7 @@ describe('collab server', () => {
         getConnections: () => [anonymousConnection, ownerConnection],
       } as unknown as Document;
       server.hocuspocus.documents.set(page.id, activeDocument);
-      await pool.query("DELETE FROM shares WHERE entity_type = 'page' AND entity_id = $1", [
-        page.id,
-      ]);
-      await pool.query('UPDATE pages SET is_public = false, public_token = null WHERE id = $1', [
-        page.id,
-      ]);
+      await pool.query('update pages set public_permission = null where id = $1', [page.id]);
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
@@ -3991,16 +3894,7 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Public Editable Source');
       const privateTarget = await createTestPage(pool, owner.id, 'Account Only Target');
-      const token = crypto.randomUUID();
-      await pool.query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        source.id,
-      ]);
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'edit', $3)`,
-        [source.id, owner.id, token],
-      );
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [source.id]);
 
       const document = new Document(source.id);
       appendWikiLink(document, {
@@ -4012,7 +3906,6 @@ describe('collab server', () => {
       const anonymousContext = {
         user: { id: crypto.randomUUID(), isAnonymous: true },
         permission: 'edit' as const,
-        shareToken: token,
       };
       server.hocuspocus.documents.set(source.id, document);
       try {
@@ -4058,20 +3951,11 @@ describe('collab server', () => {
       });
     });
 
-    it('does not resolve a private target for an anonymous public-link editor', async () => {
+    it('does not resolve a private target for an anonymous public editor', async () => {
       const owner = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Public Editable Source');
       const hiddenTarget = await createTestPage(pool, owner.id, 'Private Target');
-      const token = crypto.randomUUID();
-      await pool.query('update pages set is_public = true, public_token = $1 where id = $2', [
-        token,
-        source.id,
-      ]);
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'edit', $3)`,
-        [source.id, owner.id, token],
-      );
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [source.id]);
 
       const document = new Document(source.id);
       appendWikiLink(document, {
@@ -4084,7 +3968,6 @@ describe('collab server', () => {
         context: {
           user: { id: crypto.randomUUID(), isAnonymous: true },
           permission: 'edit',
-          shareToken: token,
         },
         document,
         documentName: source.id,
@@ -4580,7 +4463,7 @@ describe('collab server', () => {
     });
   });
 
-  describe('active permission expiry', () => {
+  describe('active permission revalidation', () => {
     it('does not roll an unpersisted collaborative title back during periodic access refresh', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id, 'Persisted old title');
@@ -4694,14 +4577,14 @@ describe('collab server', () => {
       }
     });
 
-    it('disconnects a viewer after their only invitation expires', async () => {
+    it('disconnects a viewer after their only account grant is revoked', async () => {
       const owner = await createTestUser(pool);
       const viewer = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id);
       await pool.query(
         `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission, expires_at
-         ) values ('page', $1, $2, $3, 'view', now() - interval '1 second')`,
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('page', $1, $2, $3, 'view')`,
         [page.id, owner.id, viewer.id],
       );
 
@@ -4716,6 +4599,11 @@ describe('collab server', () => {
         connection,
       ] as unknown as ReturnType<Document['getConnections']>);
       server.hocuspocus.documents.set(page.id, activeDocument);
+      await pool.query(
+        `delete from shares
+         where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
+        [page.id, viewer.id],
+      );
 
       try {
         await revalidateActivePageConnections(server, pool, logger);
@@ -4797,13 +4685,13 @@ describe('collab server', () => {
   });
 
   describe('database event publication', () => {
-    it('suppresses delayed invite toasts after a permission update or revoke', async () => {
+    it('suppresses delayed grant toasts after a permission update or revoke', async () => {
       const databaseUrl = process.env.DATABASE_URL;
       if (!databaseUrl) throw new Error('DATABASE_URL is not set');
       const owner = await createTestUser(pool);
       const recipient = await createTestUser(pool);
-      const updatedPage = await createTestPage(pool, owner.id, 'Updated before invite delivery');
-      const revokedPage = await createTestPage(pool, owner.id, 'Revoked before invite delivery');
+      const updatedPage = await createTestPage(pool, owner.id, 'Updated before grant delivery');
+      const revokedPage = await createTestPage(pool, owner.id, 'Revoked before grant delivery');
       for (const page of [updatedPage, revokedPage]) {
         await pool.query(
           `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
@@ -4812,17 +4700,17 @@ describe('collab server', () => {
         );
       }
 
-      type InviteBarrier = {
+      type GrantBarrier = {
         reached(): void;
         release: Promise<void>;
       };
-      let inviteBarrier: InviteBarrier | undefined;
+      let grantBarrier: GrantBarrier | undefined;
       const gatedPool = new Proxy(pool, {
         get(target, property) {
           if (property === 'query') {
             return async (text: string, values?: unknown[]) => {
-              if (text.includes("coalesce(sharer.name, 'Someone')") && inviteBarrier) {
-                const barrier = inviteBarrier;
+              if (text.includes("coalesce(sharer.name, 'Someone')") && grantBarrier) {
+                const barrier = grantBarrier;
                 barrier.reached();
                 await barrier.release;
               }
@@ -4851,7 +4739,7 @@ describe('collab server', () => {
       eventServer.hocuspocus.documents.set(`page-meta:${recipient.id}`, metaDocument);
       await eventServer.listen();
 
-      const publishDelayedInvite = async (
+      const publishDelayedGrant = async (
         page: { id: string; title: string },
         mutate: () => Promise<unknown>,
       ): Promise<void> => {
@@ -4863,23 +4751,23 @@ describe('collab server', () => {
         const released = new Promise<void>((resolve) => {
           release = resolve;
         });
-        inviteBarrier = { reached: () => markReached?.(), release: released };
+        grantBarrier = { reached: () => markReached?.(), release: released };
         await pool.query("select pg_notify('share_event', $1)", [
           JSON.stringify({
-            type: 'invite_received',
+            type: 'grant_received',
             entityType: 'page',
             entityId: page.id,
             entityTitle: page.title,
             sharedByName: 'Test User',
             targetUserId: recipient.id,
             permission: 'edit',
-            message: `Invited as edit to ${page.title}`,
+            message: `Granted edit access to ${page.title}`,
           }),
         ]);
         await Promise.race([
           reached,
           sleep(5_000).then(() => {
-            throw new Error('Timed out waiting for canonical invite validation');
+            throw new Error('Timed out waiting for canonical grant validation');
           }),
         ]);
         await mutate();
@@ -4890,9 +4778,9 @@ describe('collab server', () => {
               String(call[0]).includes(`stale grant ignored for user=${recipient.id}`),
             ),
           5_000,
-          'stale invite suppression',
+          'stale grant suppression',
         );
-        inviteBarrier = undefined;
+        grantBarrier = undefined;
       };
 
       try {
@@ -4905,7 +4793,7 @@ describe('collab server', () => {
           'event listener subscription',
         );
 
-        await publishDelayedInvite(updatedPage, () =>
+        await publishDelayedGrant(updatedPage, () =>
           pool.query(
             `update shares set permission = 'view'
              where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
@@ -4913,7 +4801,7 @@ describe('collab server', () => {
           ),
         );
         eventDebug.mockClear();
-        await publishDelayedInvite(revokedPage, () =>
+        await publishDelayedGrant(revokedPage, () =>
           pool.query(
             `delete from shares
              where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
@@ -4923,11 +4811,11 @@ describe('collab server', () => {
 
         expect(
           connection.sendStateless.mock.calls.some(([payload]) =>
-            String(payload).includes('"type":"invite_received"'),
+            String(payload).includes('"type":"grant_received"'),
           ),
         ).toBe(false);
       } finally {
-        inviteBarrier = undefined;
+        grantBarrier = undefined;
         eventServer.hocuspocus.documents.delete(`page-meta:${recipient.id}`);
         await eventServer.destroy();
       }
@@ -4998,7 +4886,6 @@ describe('collab server', () => {
       if (!databaseUrl) throw new Error('DATABASE_URL is not set');
       const owner = await createTestUser(pool);
       const folderId = crypto.randomUUID();
-      const publicToken = crypto.randomUUID();
       await pool.query(
         `INSERT INTO folders (id, name, position, created_by, created_at, updated_at)
          VALUES ($1, 'Folder deleted with anonymous viewer', '0', $2, now(), now())`,
@@ -5007,14 +4894,9 @@ describe('collab server', () => {
       const page = await createTestPage(pool, owner.id, 'Public descendant');
       await pool.query(
         `UPDATE pages
-         SET parent_id = $1, is_public = true, public_token = $2
-         WHERE id = $3`,
-        [folderId, publicToken, page.id],
-      );
-      await pool.query(
-        `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-         VALUES ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, publicToken],
+         SET parent_id = $1, public_permission = 'view'
+         WHERE id = $2`,
+        [folderId, page.id],
       );
 
       const eventLogger = mockLogger();
@@ -5036,7 +4918,7 @@ describe('collab server', () => {
         // Isolate LISTEN delivery from client-message access revalidation winning
         // the race immediately after the deletion transaction commits.
         awareness: null,
-        token: `anon:${crypto.randomUUID()}:${publicToken}`,
+        token: `anon:${crypto.randomUUID()}`,
         onStateless: ({ payload }) => statelessMessages.push(payload),
         onClose: ({ event }) => closeEvents.push({ code: event.code, reason: event.reason }),
       });
@@ -6249,16 +6131,7 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const ownerSession = await createTestSession(pool, owner.id);
       const page = await createTestPage(pool, owner.id);
-      const publicToken = crypto.randomUUID();
-      await pool.query('update pages set is_public = true, public_token = $2 where id = $1', [
-        page.id,
-        publicToken,
-      ]);
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('page', $1, $2, 'view', $3)`,
-        [page.id, owner.id, publicToken],
-      );
+      await pool.query("update pages set public_permission = 'view' where id = $1", [page.id]);
       const sharedDocument = new Y.Doc();
       const ownerClosed = vi.fn();
       const anonymousClosed = vi.fn();
@@ -6288,7 +6161,7 @@ describe('collab server', () => {
           name: page.id,
           document: sharedDocument,
           awareness: null,
-          token: `anon:${owner.id}:${publicToken}`,
+          token: `anon:${owner.id}`,
           onClose: anonymousClosed,
         });
         await waitFor(

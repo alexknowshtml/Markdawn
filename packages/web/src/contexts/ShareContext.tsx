@@ -1,9 +1,14 @@
-import { type CapabilitySet, deriveCapabilities, getAnonymousName } from '@markdawn/shared';
+import {
+  type CapabilitySet,
+  deriveCapabilities,
+  getAnonymousName,
+  type PublicPermission,
+} from '@markdawn/shared';
 import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { getAnonymousId } from '../utils/anonymous-cookie';
 
-export type LinkPermission = 'view' | 'edit' | null;
+export type AccessPermission = PublicPermission | null;
 
 export type PublicFolderPage = {
   id: string;
@@ -32,8 +37,7 @@ export type PublicFolderPayload = {
   ownerId?: string | null;
   createdAt?: string | Date | null;
   updatedAt?: string | Date | null;
-  isPublic?: boolean;
-  linkPermission?: LinkPermission;
+  publicPermission?: AccessPermission;
   pages?: PublicFolderPage[];
   folders?: PublicFolderPayload[];
 };
@@ -42,8 +46,7 @@ interface ShareContextType {
   isAnonymous: boolean;
   anonymousId: string | null;
   anonymousName: string | null;
-  shareToken: string | null;
-  linkPermission: LinkPermission;
+  accessPermission: AccessPermission;
   capabilities: CapabilitySet;
   publicEntity: PublicFolderPayload | null;
   /** @deprecated Use capabilities.canEdit instead */
@@ -51,8 +54,8 @@ interface ShareContextType {
 }
 
 const ShareContext = createContext<ShareContextType | undefined>(undefined);
-const SetLinkPermissionContext = createContext<
-  React.Dispatch<React.SetStateAction<LinkPermission>>
+const SetAccessPermissionContext = createContext<
+  React.Dispatch<React.SetStateAction<AccessPermission>>
 >(() => {});
 const SetCapabilitiesContext = createContext<React.Dispatch<React.SetStateAction<CapabilitySet>>>(
   () => {},
@@ -67,29 +70,27 @@ const DEFAULT_CAPABILITIES: CapabilitySet = {
 
 interface ShareProviderProps {
   children: ReactNode;
-  linkPermission?: LinkPermission;
-  shareToken?: string | null;
+  publicPermission?: AccessPermission;
   capabilities?: CapabilitySet;
   publicEntity?: PublicFolderPayload | null;
 }
 
 export function ShareProvider({
   children,
-  linkPermission: initial = null,
-  shareToken = null,
+  publicPermission: initial = null,
   capabilities: initialCapabilities,
   publicEntity = null,
 }: ShareProviderProps) {
   const { data: session } = useAuth();
   const isAnonymous = !session?.user;
-  const [linkPermission, setLinkPermission] = useState(initial);
+  const [accessPermission, setAccessPermission] = useState(initial);
   // Default to no capabilities while loading to prevent flash of editable content
   const [capabilities, setCapabilities] = useState<CapabilitySet>(
     initialCapabilities ?? DEFAULT_CAPABILITIES,
   );
 
   useEffect(() => {
-    setLinkPermission(initial);
+    setAccessPermission(initial);
   }, [initial]);
 
   useEffect(() => {
@@ -104,8 +105,7 @@ export function ShareProvider({
         isAnonymous: false,
         anonymousId: null,
         anonymousName: null,
-        shareToken,
-        linkPermission,
+        accessPermission,
         capabilities,
         publicEntity,
         canEdit: capabilities.canEdit,
@@ -114,32 +114,24 @@ export function ShareProvider({
 
     const anonymousId = getAnonymousId();
     const anonymousName = getAnonymousName(anonymousId);
-    // For anonymous users, derive capabilities from the link permission
-    const derivedAnonymousCapabilities = deriveCapabilities(
-      linkPermission === 'edit' ? 'edit' : linkPermission === 'view' ? 'view' : null,
-    );
-    const anonCapabilities: CapabilitySet = {
-      ...derivedAnonymousCapabilities,
-      canCopy: false,
-    };
+    const anonymousCapabilities = deriveCapabilities(accessPermission);
 
     return {
       isAnonymous: true,
       anonymousId,
       anonymousName,
-      shareToken,
-      linkPermission,
-      capabilities: anonCapabilities,
+      accessPermission,
+      capabilities: anonymousCapabilities,
       publicEntity,
-      canEdit: anonCapabilities.canEdit,
+      canEdit: anonymousCapabilities.canEdit,
     };
-  }, [isAnonymous, shareToken, linkPermission, capabilities, publicEntity]);
+  }, [isAnonymous, accessPermission, capabilities, publicEntity]);
 
   return (
     <SetCapabilitiesContext.Provider value={setCapabilities}>
-      <SetLinkPermissionContext.Provider value={setLinkPermission}>
+      <SetAccessPermissionContext.Provider value={setAccessPermission}>
         <ShareContext.Provider value={value}>{children}</ShareContext.Provider>
-      </SetLinkPermissionContext.Provider>
+      </SetAccessPermissionContext.Provider>
     </SetCapabilitiesContext.Provider>
   );
 }
@@ -148,8 +140,7 @@ const DEFAULT_SHARE_CONTEXT: ShareContextType = {
   isAnonymous: false,
   anonymousId: null,
   anonymousName: null,
-  shareToken: null,
-  linkPermission: null,
+  accessPermission: null,
   capabilities: DEFAULT_CAPABILITIES,
   publicEntity: null,
   canEdit: false,
@@ -160,8 +151,8 @@ export function useShareContext(): ShareContextType {
   return context ?? DEFAULT_SHARE_CONTEXT;
 }
 
-export function useSetLinkPermission(): React.Dispatch<React.SetStateAction<LinkPermission>> {
-  return useContext(SetLinkPermissionContext);
+export function useSetAccessPermission(): React.Dispatch<React.SetStateAction<AccessPermission>> {
+  return useContext(SetAccessPermissionContext);
 }
 
 export function useSetCapabilities(): React.Dispatch<React.SetStateAction<CapabilitySet>> {

@@ -31,9 +31,9 @@ const mocks = vi.hoisted(() => ({
       canDelete: false,
       canCopy: true,
     },
-    linkPermission: 'edit' as 'view' | 'edit' | null,
+    accessPermission: 'edit' as 'view' | 'edit' | null,
   },
-  setLinkPermission: vi.fn(),
+  setAccessPermission: vi.fn(),
   setCapabilities: vi.fn(),
   loggerError: vi.fn(),
   snapshotPermission: 'edit' as 'view' | 'edit' | 'admin' | null,
@@ -45,7 +45,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../contexts/ShareContext', () => ({
   useShareContext: () => mocks.share,
-  useSetLinkPermission: () => mocks.setLinkPermission,
+  useSetAccessPermission: () => mocks.setAccessPermission,
   useSetCapabilities: () => mocks.setCapabilities,
 }));
 vi.mock('../hooks/use-pages', () => ({
@@ -61,6 +61,10 @@ vi.mock('../components/editor/BacklinksPanel', () => ({
   BacklinksPanel: () => <div data-testid="backlinks" />,
 }));
 vi.mock('../components/editor/Breadcrumbs', () => ({ Breadcrumbs: () => null }));
+vi.mock('../components/editor/CommentsSidebar', () => ({
+  CommentsSidebar: ({ isOpen }: { isOpen: boolean }) =>
+    isOpen ? <div data-testid="comments-sidebar" /> : null,
+}));
 vi.mock('../components/editor/PageActions', () => ({
   PageActions: () => <div data-testid="page-actions" />,
 }));
@@ -162,7 +166,7 @@ function mockPageFetch(permission: 'view' | 'edit', accessResponses: Array<boole
       return {
         ok,
         status: ok ? 200 : 500,
-        json: async () => ({ recordedLinkAccess: false }),
+        json: async () => ({ ok: true }),
       } as Response;
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -187,7 +191,7 @@ function mockPageFetchSequence(statuses: number[]) {
       return {
         ok: true,
         status: 200,
-        json: async () => ({ recordedLinkAccess: false }),
+        json: async () => ({ ok: true }),
       } as Response;
     }
     throw new Error(`Unexpected request: ${url}`);
@@ -196,12 +200,12 @@ function mockPageFetchSequence(statuses: number[]) {
 
 describe('Page permission presentation', () => {
   beforeEach(() => {
-    mocks.setLinkPermission.mockReset();
+    mocks.setAccessPermission.mockReset();
     mocks.setCapabilities.mockReset();
     mocks.share = {
       isAnonymous: false,
       capabilities: EDIT_CAPABILITIES,
-      linkPermission: 'edit',
+      accessPermission: 'edit',
     };
     mocks.snapshotPermission = 'edit';
     mocks.statusChange = null;
@@ -212,11 +216,12 @@ describe('Page permission presentation', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps body and title editable but metadata controls read-only for anonymous link editors', async () => {
+  it('keeps editor surfaces editable but hides account-only controls for anonymous public editors', async () => {
+    const user = userEvent.setup();
     mocks.share = {
       isAnonymous: true,
       capabilities: EDIT_CAPABILITIES,
-      linkPermission: 'edit',
+      accessPermission: 'edit',
     };
     vi.stubGlobal('fetch', mockPageFetch('edit'));
     await renderPage();
@@ -225,17 +230,19 @@ describe('Page permission presentation', () => {
       expect(screen.getByTestId('page-body')).toHaveAttribute('data-read-only', 'false');
       expect(screen.getByTestId('page-title')).toHaveAttribute('data-read-only', 'false');
     });
-    expect(screen.getByTestId('page-icon')).toHaveAttribute('data-read-only', 'true');
-    expect(screen.getByTestId('properties')).toHaveAttribute('data-read-only', 'true');
+    expect(screen.getByTestId('page-icon')).toHaveAttribute('data-read-only', 'false');
+    expect(screen.getByTestId('properties')).toHaveAttribute('data-read-only', 'false');
     expect(screen.queryByTestId('page-actions')).not.toBeInTheDocument();
     expect(screen.queryByTestId('backlinks')).not.toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Open comments' }));
+    expect(screen.getByTestId('comments-sidebar')).toBeInTheDocument();
   });
 
   it('keeps the entire page read-only for anonymous viewers', async () => {
     mocks.share = {
       isAnonymous: true,
       capabilities: VIEW_CAPABILITIES,
-      linkPermission: 'view',
+      accessPermission: 'view',
     };
     mocks.snapshotPermission = 'view';
     vi.stubGlobal('fetch', mockPageFetch('view'));
@@ -299,7 +306,7 @@ describe('Page request errors', () => {
     mocks.share = {
       isAnonymous: false,
       capabilities: EDIT_CAPABILITIES,
-      linkPermission: 'edit',
+      accessPermission: 'edit',
     };
     mocks.snapshotPermission = 'edit';
   });
@@ -337,7 +344,7 @@ describe('Page access recording retries', () => {
     mocks.share = {
       isAnonymous: false,
       capabilities: EDIT_CAPABILITIES,
-      linkPermission: 'edit',
+      accessPermission: 'edit',
     };
     mocks.snapshotPermission = 'edit';
   });

@@ -14,8 +14,7 @@ export interface Page {
   updatedAt: Date;
   isDeleted?: boolean;
   deletedAt?: Date | string | null;
-  isPublic?: boolean;
-  publicToken?: string | null;
+  publicPermission?: PublicPermission | null;
   inheritancePolicy?: InheritancePolicy;
 }
 
@@ -31,8 +30,7 @@ export interface Folder {
   updatedAt: Date;
   isDeleted?: boolean;
   deletedAt?: Date | string | null;
-  isPublic?: boolean;
-  publicToken?: string | null;
+  publicPermission?: PublicPermission | null;
   inheritancePolicy?: InheritancePolicy;
 }
 
@@ -50,6 +48,7 @@ export interface PageTreeNode extends Page {
 
 export type ShareEntityType = 'folder' | 'page';
 export type SharePermission = 'view' | 'edit' | 'admin';
+export type PublicPermission = Exclude<SharePermission, 'admin'>;
 export type InheritancePolicy = 'inherit' | 'restricted';
 
 export interface EntityShare {
@@ -57,8 +56,7 @@ export interface EntityShare {
   entityType: ShareEntityType;
   entityId: string;
   permission: SharePermission;
-  token: string | null;
-  recipientUserId: string | null;
+  recipientUserId: string;
   recipientEmail: string | null;
   recipientName: string | null;
   recipientAvatarUrl: string | null;
@@ -69,7 +67,7 @@ export interface EntityShare {
 }
 
 export interface EntityAccessor {
-  shareId: string | null;
+  grantId: string | null;
   userId: string;
   name: string | null;
   email: string | null;
@@ -92,12 +90,12 @@ export type CollaboratorDisplay = EntityAccessor | CollaboratorPresence;
  * One independently manageable source of account access.
  *
  * A user can have several simultaneous sources (for example a direct View
- * invite and inherited Edit access).  Keep those sources separate so the
+ * grant and inherited Edit access). Keep those sources separate so the
  * management UI never hides a latent grant behind the currently winning one.
  */
 export interface EntityAccessSource {
   kind: 'owner' | 'direct' | 'folder' | 'workspace';
-  shareId: string | null;
+  grantId: string | null;
   userId: string;
   name: string | null;
   email: string | null;
@@ -112,11 +110,10 @@ export interface EntityAccessSource {
 }
 
 /** Public access inherited from an ancestor folder. */
-export interface InheritedPublicLink {
+export interface InheritedPublicAccess {
   entityId: string;
   entityTitle: string;
-  permission: Exclude<SharePermission, 'admin'>;
-  token: string;
+  permission: PublicPermission;
   url: string;
 }
 
@@ -157,7 +154,7 @@ export function deriveCapabilities(
 }
 
 export interface PermissionDetail {
-  source: 'owner' | 'invite' | 'folder' | 'workspace' | 'link';
+  source: 'owner' | 'grant' | 'folder' | 'workspace' | 'public';
   permission: SharePermission;
   grantedByName?: string | null;
   grantedByEmail?: string | null;
@@ -185,20 +182,19 @@ export interface ShareSummary {
     title: string;
     ownerId: string | null;
   };
-  link: {
-    permission: SharePermission | 'private';
-    token: string | null;
-    url: string | null;
+  publicAccess: {
+    permission: PublicPermission | 'private';
+    url: string;
   };
   inheritance: {
     policy: InheritancePolicy;
   };
-  invites: EntityShare[];
+  grants: EntityShare[];
   accessors: EntityAccessor[];
   /** Every account source, including weaker grants hidden by a stronger one. */
   accessSources: EntityAccessSource[];
-  /** Active public links inherited from ancestor folders. */
-  inheritedLinks: InheritedPublicLink[];
+  /** Active public access inherited from ancestor folders. */
+  inheritedPublicAccess: InheritedPublicAccess[];
   /** Effective permission for the requesting user (highest across all sources). */
   userPermission: SharePermission | null;
   /** Computed capabilities derived from userPermission. */
@@ -215,7 +211,7 @@ export interface SharedWithMeItem extends EntityShare {
   ownerId: string | null;
   entityUpdatedAt: Date | string | null;
   sortAt: Date | string | null;
-  source: 'direct' | 'link';
+  source: 'direct' | 'public';
 }
 
 interface SharedNavigationBase {
@@ -227,7 +223,7 @@ interface SharedNavigationBase {
   createdBy: string | null;
   updatedAt: Date | string | null;
   userPermission: SharePermission | null;
-  source?: 'direct' | 'link';
+  source?: 'direct' | 'public';
   sortAt?: Date | string | null;
 }
 

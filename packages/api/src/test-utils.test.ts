@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
+import { query } from './db/query';
 import {
   createTestComment,
   createTestFolder,
   createTestPage,
   createTestPageLink,
-  createTestPublicShare,
   createTestReply,
   createTestSession,
   createTestTemplate,
   createTestUser,
   createTestVersion,
+  enableTestPagePublicAccess,
 } from './test-utils';
 
 describe('test-utils factories', () => {
@@ -73,11 +74,15 @@ describe('test-utils factories', () => {
     expect(link.targetPageId).toBe(page2.id);
   });
 
-  it('createTestPublicShare creates a share token for a page', async () => {
+  it('enableTestPagePublicAccess enables public page access', async () => {
     const user = await createTestUser();
     const page = await createTestPage(user.id);
-    const share = await createTestPublicShare(page.id);
-    expect(share.pageId).toBe(page.id);
-    expect(share.token).toBeTruthy();
+    const access = await enableTestPagePublicAccess(page.id);
+    expect(access.pageId).toBe(page.id);
+    const result = await query<{ public_permission: string | null }>(
+      'select public_permission from pages where id = $1',
+      [page.id],
+    );
+    expect(result.rows[0]?.public_permission).toBe('view');
   });
 });

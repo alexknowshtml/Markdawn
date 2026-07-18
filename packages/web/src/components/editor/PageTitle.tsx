@@ -10,7 +10,6 @@ interface PageTitleProps {
   initialTitle: string;
   ydoc?: Y.Doc | null;
   usePublicEndpoint?: boolean;
-  shareToken?: string | null;
 }
 
 export function PageTitle({
@@ -18,11 +17,9 @@ export function PageTitle({
   initialTitle,
   ydoc,
   usePublicEndpoint = false,
-  shareToken = null,
 }: PageTitleProps) {
   const { title, setTitle, commitTitle } = usePageTitle(pageId, initialTitle ?? 'Untitled', ydoc, {
     usePublicEndpoint,
-    shareToken,
   });
   const inputRef = useRef<HTMLInputElement>(null);
   const readOnly = useIsReadOnly();

@@ -5,7 +5,7 @@ import { showSuccessToast } from './toast';
 
 const API_BASE = '/api';
 
-export type EntityShareSource = 'direct' | 'link' | 'workspace';
+export type EntityShareSource = 'direct' | 'public' | 'workspace';
 
 type EntityBase = {
   id: string;
@@ -227,7 +227,7 @@ export function useEntityDeletion({
       return deleteMutation.mutateAsync({ entityId: entity.id, force: options?.force });
     }
 
-    if (entity.shareSource !== 'direct' && entity.shareSource !== 'link') {
+    if (entity.shareSource !== 'direct' && entity.shareSource !== 'public') {
       throw new Error(`This ${entity.type} inherits access and cannot be left directly`);
     }
 

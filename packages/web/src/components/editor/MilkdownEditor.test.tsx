@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   providerHandlers: new Map<string, (payload: unknown) => void>(),
   loggerWarn: vi.fn(),
   setCapabilities: vi.fn(),
-  setLinkPermission: vi.fn(),
+  setAccessPermission: vi.fn(),
   currentUserId: 'user-a' as string | null,
   sessionToken: 'token-a',
   getSession: vi.fn(),
@@ -76,7 +76,7 @@ vi.mock('@hocuspocus/provider', () => {
 });
 vi.mock('../../contexts/ShareContext', () => ({
   useShareContext: () => ({ isAnonymous: mocks.isAnonymous }),
-  useSetLinkPermission: () => mocks.setLinkPermission,
+  useSetAccessPermission: () => mocks.setAccessPermission,
   useSetCapabilities: () => mocks.setCapabilities,
 }));
 vi.mock('../../hooks/useAuth', () => ({
@@ -107,6 +107,7 @@ vi.mock('../../hooks/useFloatingToolbar', () => ({
     mathEditorDisplayMode: false,
     closeLinkEditor: vi.fn(),
     closeMathEditor: vi.fn(),
+    keepVisible: vi.fn(),
   }),
 }));
 vi.mock('../../hooks/useMilkdown', () => ({
@@ -204,7 +205,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     mocks.providerHandlers.clear();
     mocks.loggerWarn.mockReset();
     mocks.setCapabilities.mockReset();
-    mocks.setLinkPermission.mockReset();
+    mocks.setAccessPermission.mockReset();
     mocks.currentUserId = 'user-a';
     mocks.sessionToken = 'token-a';
     mocks.providerToken = null;
@@ -226,17 +227,49 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(mocks.providerConstructions).toBe(1);
   });
 
-  it('explains that image uploads require sign-in without opening a file picker', () => {
-    const createElementSpy = vi.spyOn(document, 'createElement');
+  it('opens the image picker for anonymous public editors', () => {
     renderEditor();
+    const fileInput = document.createElement('input');
+    const inputClickSpy = vi.spyOn(fileInput, 'click').mockImplementation(() => undefined);
+    const createElementSpy = vi.spyOn(document, 'createElement').mockReturnValue(fileInput);
 
     expect(mocks.imageUploadFromSlash).not.toBeNull();
     act(() => {
       mocks.imageUploadFromSlash?.();
     });
 
-    expect(mocks.showInfoToast).toHaveBeenCalledWith('Sign in to upload images');
-    expect(createElementSpy).not.toHaveBeenCalledWith('input');
+    expect(createElementSpy).toHaveBeenCalledWith('input');
+    expect(inputClickSpy).toHaveBeenCalledOnce();
+    expect(mocks.showInfoToast).not.toHaveBeenCalledWith('Sign in to upload images');
+  });
+
+  it('uploads images for anonymous public editors', async () => {
+    mocks.currentUserId = null;
+    mocks.hasEditor = true;
+    const fetchSpy = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        ({
+          ok: true,
+          json: () => Promise.resolve({ url: '/api/uploads/guest.png' }),
+        }) as Response,
+    );
+    vi.stubGlobal('fetch', fetchSpy);
+    renderEditor({ readOnly: false });
+    mocks.editorAction.mockClear();
+
+    await act(async () => {
+      await mocks.imageUpload?.(new File(['guest image'], 'guest.png', { type: 'image/png' }));
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/uploads',
+      expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
+    const request = fetchSpy.mock.calls[0]?.[1];
+    expect(request?.body).toBeInstanceOf(FormData);
+    expect((request?.body as FormData).get('pageId')).toBe('page-1');
+    expect((request?.body as FormData).get('file')).toBeInstanceOf(File);
+    expect(mocks.editorAction).toHaveBeenCalledOnce();
   });
 
   it('drops a delayed image upload after its identity retires', async () => {
@@ -330,7 +363,7 @@ describe('MilkdownEditor anonymous uploads', () => {
 
     expect(getByTestId('location-path')).toHaveTextContent('/app');
     expect(queryClient.getQueryData(pageQueryKey)).toBeUndefined();
-    expect(mocks.setLinkPermission).toHaveBeenLastCalledWith(null);
+    expect(mocks.setAccessPermission).toHaveBeenLastCalledWith(null);
     expect(mocks.showInfoToast).toHaveBeenCalledWith(toast);
   });
 
@@ -368,7 +401,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(wrapper).not.toHaveClass('editor-scroll-past-end');
     expect(getByTestId('location-path')).toHaveTextContent('/pages/page-1');
     expect(queryClient.getQueryData(pageQueryKey)).toEqual(cachedPage);
-    expect(mocks.setLinkPermission).not.toHaveBeenCalledWith(null);
+    expect(mocks.setAccessPermission).not.toHaveBeenCalledWith(null);
     expect(mocks.showInfoToast).not.toHaveBeenCalled();
   });
 
@@ -422,7 +455,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(wrapper).not.toHaveClass('editor-scroll-past-end');
     expect(getByTestId('location-path')).toHaveTextContent('/app');
     expect(queryClient.getQueryData(pageQueryKey)).toBeUndefined();
-    expect(mocks.setLinkPermission).toHaveBeenLastCalledWith(null);
+    expect(mocks.setAccessPermission).toHaveBeenLastCalledWith(null);
     expect(mocks.showInfoToast).toHaveBeenCalledWith('Removed from your view');
   });
 
@@ -486,7 +519,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     act(() => {
       delayedStatelessHandler({
         payload: JSON.stringify({
-          type: 'invite_received',
+          type: 'grant_received',
           sharedByName: 'Private account A sharer',
           entityTitle: 'Private account A title',
         }),
@@ -563,7 +596,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(wrapper).not.toHaveClass('editor-scroll-past-end');
   });
 
-  it('applies an equal-revision downgrade caused by natural share expiry', () => {
+  it('applies an equal-revision downgrade from canonical revalidation', () => {
     const { container, queryClient } = renderEditor();
     const wrapper = container.querySelector('.editor-wrapper');
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');

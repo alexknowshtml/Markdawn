@@ -14,7 +14,7 @@ interface PageTreeRowProps {
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
   userPermission?: SharePermission | null | undefined;
-  shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+  shareSource?: 'direct' | 'public' | 'workspace' | undefined;
   canMove?: boolean | undefined;
   isActive?: boolean;
   depth?: number;

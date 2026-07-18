@@ -1,14 +1,25 @@
+import { useLocation } from 'react-router-dom';
 import { HeaderActions } from '../components/HeaderActions';
 import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { authClient } from '../lib/auth-client';
 
 export default function Login() {
   const identityLifecycle = useIdentityLifecycle();
+  const location = useLocation();
+  const returnLocation = (
+    location.state as {
+      from?: { pathname?: unknown; search?: unknown; hash?: unknown };
+    } | null
+  )?.from;
+  const returnPath =
+    typeof returnLocation?.pathname === 'string' && returnLocation.pathname.startsWith('/')
+      ? `${returnLocation.pathname}${typeof returnLocation.search === 'string' ? returnLocation.search : ''}${typeof returnLocation.hash === 'string' ? returnLocation.hash : ''}`
+      : '/app';
   const handleSocialSignIn = (provider: 'github' | 'google') => async () => {
     try {
       await authClient.signIn.social({
         provider,
-        callbackURL: '/app',
+        callbackURL: returnPath,
         errorCallbackURL: '/login',
       });
     } catch {

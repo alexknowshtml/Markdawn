@@ -9,12 +9,10 @@ async function updatePageTitle(
   pageId: string,
   title: string,
   usePublicEndpoint: boolean,
-  shareToken: string | null,
   isIdentityActive: () => boolean,
 ): Promise<void> {
   const request = (path: string) => {
-    const query = usePublicEndpoint && shareToken ? `?share=${encodeURIComponent(shareToken)}` : '';
-    return fetch(`${API_BASE}/pages/${path}${query}`, {
+    return fetch(`${API_BASE}/pages/${path}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title }),
@@ -40,7 +38,6 @@ function normalizeTitle(value: string): string {
 
 type UsePageTitleOptions = {
   usePublicEndpoint?: boolean;
-  shareToken?: string | null;
 };
 
 export function usePageTitle(
@@ -53,7 +50,6 @@ export function usePageTitle(
   const queryClient = useQueryClient();
   const identityLifecycle = useIdentityLifecycle();
   const usePublicEndpoint = options.usePublicEndpoint ?? false;
-  const shareToken = options.shareToken ?? null;
   const lastSavedTitleRef = useRef('Untitled');
   const hasLocalEditsRef = useRef(false);
   const setTitle = useCallback((value: string) => {
@@ -92,13 +88,7 @@ export function usePageTitle(
   const mutation = useMutation({
     mutationFn: (nextTitle: string) => {
       if (!pageId) throw new Error('pageId is required');
-      return updatePageTitle(
-        pageId,
-        nextTitle,
-        usePublicEndpoint,
-        shareToken,
-        identityLifecycle.isActive,
-      );
+      return updatePageTitle(pageId, nextTitle, usePublicEndpoint, identityLifecycle.isActive);
     },
     onSuccess: (_data, nextTitle) => {
       queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
@@ -131,7 +121,7 @@ export function usePageTitle(
       }
 
       // Persist through either the authenticated page endpoint or the
-      // public-link endpoint. The collaboration update provides immediate
+      // public-access endpoint. The collaboration update provides immediate
       // feedback while the API write makes the title canonical.
       mutation.mutate(nextTitle, {
         onSuccess: () => {

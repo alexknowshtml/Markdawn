@@ -50,7 +50,7 @@ export async function refreshPageMetaQueriesAfterSync(queryClient: QueryClient):
 
   // An initial dashboard request may have started before the meta room
   // connected. Cancel it before refetching so its older snapshot cannot
-  // swallow an invitation or permission change received during startup.
+  // swallow a grant or permission change received during startup.
   await Promise.all(
     PAGE_META_SYNC_QUERY_KEYS.map((queryKey) => queryClient.cancelQueries({ queryKey })),
   );
@@ -81,8 +81,8 @@ type ShareAccessEvent = {
   entityId: string;
 };
 
-type InviteReceivedEvent = {
-  type: 'invite_received';
+type GrantReceivedEvent = {
+  type: 'grant_received';
   entityType: 'page' | 'folder';
   entityId: string;
   entityTitle: string;
@@ -95,7 +95,7 @@ type PageMetaStatelessMessage =
   | WorkspaceMembershipEvent
   | FolderDeletionEvent
   | ShareAccessEvent
-  | InviteReceivedEvent;
+  | GrantReceivedEvent;
 
 export function applyPageMetaStatelessMessage(
   message: PageMetaStatelessMessage,
@@ -114,7 +114,7 @@ export function applyPageMetaStatelessMessage(
     });
   }
   const refreshHandledByAccessVersion =
-    (message.type === 'invite_received' || message.type === 'workspace_membership_event') &&
+    (message.type === 'grant_received' || message.type === 'workspace_membership_event') &&
     message.refreshViaAccessVersion === true;
   if (!suppressAccessInvalidation && !refreshHandledByAccessVersion) {
     invalidateWorkspaceAccessQueries(queryClient);
@@ -166,7 +166,7 @@ export function parsePageMetaStatelessMessage(payload: string): PageMetaStateles
     }
     return { type: 'share_access_event', action, entityType, entityId };
   }
-  if (message.type === 'invite_received') {
+  if (message.type === 'grant_received') {
     const entityType = 'entityType' in message ? message.entityType : undefined;
     const entityId = 'entityId' in message ? message.entityId : undefined;
     const entityTitle = 'entityTitle' in message ? message.entityTitle : undefined;
@@ -183,10 +183,10 @@ export function parsePageMetaStatelessMessage(payload: string): PageMetaStateles
       (eventMessage !== undefined && typeof eventMessage !== 'string') ||
       (refreshViaAccessVersion !== undefined && refreshViaAccessVersion !== true)
     ) {
-      throw new Error('Malformed invitation event');
+      throw new Error('Malformed grant event');
     }
     return {
-      type: 'invite_received',
+      type: 'grant_received',
       entityType,
       entityId,
       entityTitle,
@@ -384,7 +384,7 @@ export function usePageMeta() {
       ) {
         navigate('/app', { replace: true });
       }
-      if (message.type === 'invite_received') {
+      if (message.type === 'grant_received') {
         showInfoToast(
           message.message ?? `${message.sharedByName} shared ${message.entityTitle} with you.`,
         );

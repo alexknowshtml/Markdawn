@@ -14,8 +14,8 @@ import {
 } from '../../contexts/IdentityLifecycleContext';
 import { useShortcut } from '../../contexts/KeyboardShortcutContext';
 import {
+  useSetAccessPermission,
   useSetCapabilities,
-  useSetLinkPermission,
   useShareContext,
 } from '../../contexts/ShareContext';
 import { invalidateWorkspaceAccessQueries } from '../../hooks/use-workspace';
@@ -64,7 +64,6 @@ import { WikiLinkSuggestions } from './WikiLinkSuggestions';
 interface MilkdownEditorProps {
   pageId: string;
   initialValue?: string;
-  shareToken?: string | null;
   onChange?: (markdown: string) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
@@ -140,7 +139,6 @@ function _execEditorAction(editor: Editor | null, fn: (ctx: unknown) => void): v
 export function MilkdownEditor({
   pageId,
   initialValue,
-  shareToken,
   onChange,
   onStatusChange,
   onProviderReady,
@@ -149,12 +147,12 @@ export function MilkdownEditor({
 }: MilkdownEditorProps) {
   const doc = useMemo(() => new Y.Doc(), []);
   const editorRef = useRef<Editor | null>(null);
-  const { isAnonymous, shareToken: contextShareToken } = useShareContext();
+  const { isAnonymous } = useShareContext();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id ?? null;
   const isReadOnly = useIsReadOnly();
   const setReadOnly = useSetReadOnly();
-  const setLinkPermission = useSetLinkPermission();
+  const setAccessPermission = useSetAccessPermission();
   const setCapabilities = useSetCapabilities();
   const navigate = useIdentityNavigate();
   const identityLifecycle = useIdentityLifecycle();
@@ -302,7 +300,6 @@ export function MilkdownEditor({
   const previousTokenIdentityRef = useRef(tokenIdentity);
   isAnonymousRef.current = isAnonymous;
   currentUserIdRef.current = currentUserId;
-  const activeShareToken = shareToken ?? contextShareToken;
   const statelessHandlerRef = useRef<(({ payload }: { payload: string }) => void) | null>(null);
   const pendingStatelessPayloadsRef = useRef<string[]>([]);
   const closeHandlerRef = useRef<((parameters: onCloseParameters) => void) | null>(null);
@@ -342,11 +339,7 @@ export function MilkdownEditor({
             throw new Error('Collaboration identity is no longer active');
           }
           if (isAnonymousRef.current) {
-            if (!activeShareToken) {
-              throw new Error('Anonymous collaboration requires a sharing token');
-            }
-            const anonymousId = getAnonymousId();
-            return `anon:${anonymousId}:${activeShareToken}`;
+            return `anon:${getAnonymousId()}`;
           }
 
           const expectedUserId = currentUserIdRef.current;
@@ -374,7 +367,7 @@ export function MilkdownEditor({
         },
       });
     });
-  }, [pageId, doc, identityLifecycle, activeShareToken]);
+  }, [pageId, doc, identityLifecycle]);
 
   useLayoutEffect(() => {
     if (previousTokenIdentityRef.current !== tokenIdentity) {
@@ -650,10 +643,6 @@ export function MilkdownEditor({
 
   const handleImageUpload = async (file: File) => {
     if (!identityLifecycle.isActive()) return;
-    if (isAnonymous) {
-      showInfoToast('Sign in to upload images');
-      return;
-    }
 
     const formData = new FormData();
     formData.append('file', file);
@@ -699,10 +688,6 @@ export function MilkdownEditor({
 
   const handleImageUploadFromSlash = () => {
     if (!identityLifecycle.isActive()) return;
-    if (isAnonymous) {
-      showInfoToast('Sign in to upload images');
-      return;
-    }
 
     const input = document.createElement('input');
     input.type = 'file';
@@ -1125,7 +1110,7 @@ export function MilkdownEditor({
       hasEvictedPage = true;
       authoritativePermissionRef.current = null;
       setReadOnly(true);
-      setLinkPermission(null);
+      setAccessPermission(null);
       setCapabilities(deriveCapabilities(null));
       queryClient.removeQueries({ queryKey: ['pages', 'detail', pageId], exact: true });
       invalidateWorkspaceAccessQueries(queryClient);
@@ -1213,7 +1198,7 @@ export function MilkdownEditor({
           return {
             ...(old as Record<string, unknown>),
             userPermission: permission,
-            linkPermission: permission === 'admin' ? 'edit' : permission,
+            accessPermission: permission === 'admin' ? 'edit' : permission,
             capabilities,
           };
         });
@@ -1271,7 +1256,7 @@ export function MilkdownEditor({
           previousPermission !== permission;
         const isSelfLeaveTransition = isPermissionTransition && consumeSelfLeave(pageId);
         setReadOnly(permission === null || permission === 'view');
-        setLinkPermission(permission === 'admin' ? 'edit' : permission);
+        setAccessPermission(permission === 'admin' ? 'edit' : permission);
         setCapabilities(deriveCapabilities(permission));
         syncPagePermission(permission);
         latestOnPermissionSnapshot.current?.(permission, accessRevision);
@@ -1308,13 +1293,13 @@ export function MilkdownEditor({
         logger.info`[collab] permission changed: ${permission}`;
         if (permission === 'view') {
           setReadOnly(true);
-          setLinkPermission('view');
+          setAccessPermission('view');
           setCapabilities(deriveCapabilities('view'));
           syncPagePermission('view');
           showInfoToast('This page is now view-only');
         } else if (permission === 'edit') {
           setReadOnly(false);
-          setLinkPermission('edit');
+          setAccessPermission('edit');
           setCapabilities(deriveCapabilities('edit'));
           syncPagePermission('edit');
           showInfoToast('You can now edit this page');
@@ -1330,7 +1315,7 @@ export function MilkdownEditor({
         logger.info`[collab] share event: action=${action} permission=${permission}`;
         // This is a notification hint only. A versioned permission_snapshot
         // is the sole authority for editor mode and access loss so a direct
-        // revoke cannot erase a valid folder/workspace/public-link fallback.
+        // revoke cannot erase a valid folder/workspace/public-access fallback.
         queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
         queryClient.invalidateQueries({ queryKey: ['pageTree'] });
         queryClient.invalidateQueries({ queryKey: ['folderTree'] });
@@ -1350,11 +1335,11 @@ export function MilkdownEditor({
         return;
       }
 
-      if (message.type === 'invite_received') {
+      if (message.type === 'grant_received') {
         const sharedByName = message.sharedByName as string | undefined;
         const entityTitle = message.entityTitle as string | undefined;
         const toastMessage = (message as { message?: string }).message;
-        logger.info`[collab] invite received: ${sharedByName} shared ${entityTitle}`;
+        logger.info`[collab] grant received: ${sharedByName} shared ${entityTitle}`;
         queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
         queryClient.invalidateQueries({ queryKey: ['pageTree'] });
         queryClient.invalidateQueries({ queryKey: ['folderTree'] });

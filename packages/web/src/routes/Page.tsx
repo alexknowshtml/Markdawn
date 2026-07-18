@@ -10,11 +10,12 @@ import {
   type SharePermission,
 } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileQuestion, LogIn, RefreshCw, ShieldOff } from 'lucide-react';
+import { FileQuestion, LogIn, MessageSquare, RefreshCw, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
+import { CommentsSidebar } from '../components/editor/CommentsSidebar';
 import { MilkdownEditor } from '../components/editor/MilkdownEditor';
 import { PageActions } from '../components/editor/PageActions';
 import { PageIcon } from '../components/editor/PageIcon';
@@ -26,8 +27,8 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import { EditorReadOnlyProvider } from '../contexts/EditorReadOnlyContext';
 import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import {
+  useSetAccessPermission,
   useSetCapabilities,
-  useSetLinkPermission,
   useShareContext,
 } from '../contexts/ShareContext';
 import { useFolderTree } from '../hooks/use-folders';
@@ -42,12 +43,11 @@ const API_BASE = '/api';
 type PageDetail = PageType & {
   userPermission?: SharePermission | null;
   capabilities?: CapabilitySet;
-  linkPermission?: 'view' | 'edit' | null;
+  publicPermission?: 'view' | 'edit' | null;
 };
 
-async function fetchPage(pageId: string, shareToken: string | null): Promise<PageDetail> {
-  const query = shareToken ? `?share=${encodeURIComponent(shareToken)}` : '';
-  const res = await fetch(`${API_BASE}/pages/${pageId}${query}`);
+async function fetchPage(pageId: string): Promise<PageDetail> {
+  const res = await fetch(`${API_BASE}/pages/${pageId}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message =
@@ -61,22 +61,20 @@ async function fetchPage(pageId: string, shareToken: string | null): Promise<Pag
 
 export default function Page() {
   const { slugAndId } = useParams<{ slugAndId: string }>();
-  const location = useLocation();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
-  const routeShareToken = new URLSearchParams(location.search).get('share')?.trim() || null;
   const navigate = useIdentityNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
   const [collabStatus, setCollabStatus] = useState<WebSocketStatus>(WebSocketStatus.Connecting);
   const [collabPermission, setCollabPermission] = useState<SharePermission | null | undefined>(
     undefined,
   );
+  const [commentsOpen, setCommentsOpen] = useState(false);
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
   const queryClient = useQueryClient();
-  const { isAnonymous, linkPermission, shareToken: contextShareToken } = useShareContext();
-  const shareToken = contextShareToken ?? routeShareToken;
-  const setLinkPermission = useSetLinkPermission();
+  const { isAnonymous, accessPermission } = useShareContext();
+  const setAccessPermission = useSetAccessPermission();
   const setCapabilities = useSetCapabilities();
 
   // Clear state on page navigation.
@@ -102,6 +100,7 @@ export default function Page() {
     // fire first), so setProvider(null) would overwrite the new provider.
     setCollabStatus(WebSocketStatus.Connecting);
     setCollabPermission(undefined);
+    setCommentsOpen(false);
     setEditorElement(null);
   }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
@@ -111,18 +110,18 @@ export default function Page() {
     error,
     refetch: refetchPage,
   } = useQuery({
-    queryKey: ['pages', 'detail', pageId, shareToken],
+    queryKey: ['pages', 'detail', pageId],
     queryFn: () => {
       if (!pageId) throw new Error('pageId is required');
-      return fetchPage(pageId, shareToken);
+      return fetchPage(pageId);
     },
     enabled: !!pageId,
     retry: false,
   });
 
   const pagePermission =
-    collabPermission !== undefined ? collabPermission : (page?.userPermission ?? linkPermission);
-  const contextLinkPermission = pagePermission === 'admin' ? 'edit' : pagePermission;
+    collabPermission !== undefined ? collabPermission : (page?.userPermission ?? accessPermission);
+  const contextAccessPermission = pagePermission === 'admin' ? 'edit' : pagePermission;
   const effectiveCapabilities = useMemo(
     () =>
       collabPermission === undefined
@@ -135,9 +134,9 @@ export default function Page() {
 
   useEffect(() => {
     if (!page) return;
-    setLinkPermission(contextLinkPermission);
+    setAccessPermission(contextAccessPermission);
     setCapabilities(effectiveCapabilities);
-  }, [page, contextLinkPermission, effectiveCapabilities, setLinkPermission, setCapabilities]);
+  }, [page, contextAccessPermission, effectiveCapabilities, setAccessPermission, setCapabilities]);
 
   // Find the .milkdown-editor DOM element for TableOfContents.
   // Re-runs on page change (data load or navigation) to handle the
@@ -198,7 +197,6 @@ export default function Page() {
       try {
         const res = await fetch(`/api/pages/${pageId}/access`, {
           method: 'POST',
-          ...(shareToken ? { headers: { 'x-share-token': shareToken } } : {}),
         });
         if (!res.ok) {
           throw new Error(`Failed to record page access (${res.status})`);
@@ -206,9 +204,8 @@ export default function Page() {
         if (cancelled) return;
         await res.json();
         if (cancelled) return;
-        // A visit can establish latent public-link provenance even while a
-        // stronger account grant currently wins. Always refresh navigation so
-        // that fallback remains discoverable after that stronger grant ends.
+        // A signed-in public visit belongs in Shared With Me even when a
+        // stronger account grant currently wins.
         queryClient.invalidateQueries({ queryKey: ['pageTree'] });
         queryClient.invalidateQueries({ queryKey: ['folderTree'] });
         queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
@@ -234,7 +231,7 @@ export default function Page() {
       cancelled = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [page, pageId, isAnonymous, queryClient, shareToken]);
+  }, [page, pageId, isAnonymous, queryClient]);
 
   const handleStatusChange = (newStatus: WebSocketStatus) => {
     setCollabStatus(newStatus);
@@ -280,8 +277,9 @@ export default function Page() {
     const expectedPath = buildPagePath(page.title, page.id).slice('/app/'.length);
 
     if (slugAndId !== expectedPath) {
-      const newPath = window.location.pathname.replace(/\/[^/]+$/, `/${expectedPath}`);
-      window.history.replaceState(null, '', newPath);
+      const canonicalUrl = new URL(window.location.href);
+      canonicalUrl.pathname = canonicalUrl.pathname.replace(/\/[^/]+$/, `/${expectedPath}`);
+      window.history.replaceState(null, '', canonicalUrl);
     }
   }, [page, slugAndId]);
 
@@ -375,9 +373,7 @@ export default function Page() {
             <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
               Page not found
             </h2>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              It may have been deleted, or the link is no longer active.
-            </p>
+            <p className="text-sm text-zinc-500 dark:text-zinc-400">It may have been deleted.</p>
           </div>
         </div>
       );
@@ -437,6 +433,14 @@ export default function Page() {
                   View only
                 </span>
               )}
+              <button
+                type="button"
+                onClick={() => setCommentsOpen(true)}
+                aria-label="Open comments"
+                className="cursor-pointer rounded-md p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
+              >
+                <MessageSquare size={20} />
+              </button>
               {!isAnonymous && <PageActions pageId={pageId} page={page} />}
               {isAnonymous && <ThemeToggle />}
               <PageStatus provider={provider} collabStatus={collabStatus} />
@@ -447,7 +451,7 @@ export default function Page() {
         <div className="mb-6">
           <div className="relative flex-1 flex items-center mt-16">
             <div className="absolute left-0 top-1/2 -translate-y-1/2 flex items-center justify-center w-[42px] h-[42px]">
-              <EditorReadOnlyProvider readOnly={readOnly || isAnonymous}>
+              <EditorReadOnlyProvider readOnly={readOnly}>
                 <PageIcon pageId={pageId} initialIcon={page?.icon ?? null} />
               </EditorReadOnlyProvider>
             </div>
@@ -457,19 +461,17 @@ export default function Page() {
                 initialTitle={page?.title ?? 'Untitled'}
                 ydoc={provider?.document ?? null}
                 usePublicEndpoint={isAnonymous}
-                shareToken={shareToken}
               />
             </div>
           </div>
         </div>
-        <EditorReadOnlyProvider readOnly={readOnly || isAnonymous}>
+        <EditorReadOnlyProvider readOnly={readOnly}>
           <PropertiesPanel pageId={pageId} properties={page?.properties ?? null} />
         </EditorReadOnlyProvider>
         {page && pageId ? (
           <MilkdownEditor
             key={pageId}
             pageId={pageId}
-            shareToken={shareToken}
             onProviderReady={setProvider}
             onStatusChange={handleStatusChange}
             onWikiLinkClick={handleWikiLinkClick}
@@ -479,6 +481,11 @@ export default function Page() {
         {!isAnonymous && <BacklinksPanel pageId={pageId} />}
         <TableOfContents editorElement={editorElement} />
       </div>
+      <CommentsSidebar
+        pageId={pageId}
+        isOpen={commentsOpen}
+        onClose={() => setCommentsOpen(false)}
+      />
     </EditorReadOnlyProvider>
   );
 }

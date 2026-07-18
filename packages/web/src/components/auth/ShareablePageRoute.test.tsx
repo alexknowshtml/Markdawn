@@ -18,11 +18,11 @@ function AccessProbe() {
   return <output data-testid="can-edit">{String(capabilities.canEdit)}</output>;
 }
 
-function folderShares(permission: 'view' | 'edit') {
+function folderEntity(permission: 'view' | 'edit') {
   return {
-    entity: { type: 'folder', id: FOLDER_ID, title: 'Folder', ownerId: 'owner-1' },
-    link: { permission: 'private' as const, token: null, url: null },
-    accessors: [],
+    id: FOLDER_ID,
+    name: 'Folder',
+    publicPermission: null,
     userPermission: permission,
     capabilities: {
       canEdit: permission === 'edit',
@@ -37,16 +37,8 @@ describe('ShareablePageRoute folder access polling', () => {
   it('invalidates every access-sensitive cache when a polled permission changes', async () => {
     const queryClient = createTestQueryClient();
     const entityKey = ['folders', 'detail', FOLDER_ID] as const;
-    const sharesKey = ['shares', 'entity', 'folder', FOLDER_ID] as const;
     queryClient.setQueryDefaults(entityKey, { staleTime: Number.POSITIVE_INFINITY });
-    queryClient.setQueryDefaults(sharesKey, { staleTime: Number.POSITIVE_INFINITY });
-    queryClient.setQueryData(entityKey, {
-      id: FOLDER_ID,
-      name: 'Folder',
-      isPublic: false,
-      linkPermission: null,
-    });
-    queryClient.setQueryData(sharesKey, folderShares('edit'));
+    queryClient.setQueryData(entityKey, folderEntity('edit'));
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
 
     render(
@@ -69,7 +61,7 @@ describe('ShareablePageRoute folder access polling', () => {
     expect(await screen.findByTestId('can-edit')).toHaveTextContent('true');
     invalidateSpy.mockClear();
 
-    act(() => queryClient.setQueryData(sharesKey, folderShares('view')));
+    act(() => queryClient.setQueryData(entityKey, folderEntity('view')));
 
     await waitFor(() => expect(screen.getByTestId('can-edit')).toHaveTextContent('false'));
     for (const queryKey of [

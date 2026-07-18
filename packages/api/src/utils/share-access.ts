@@ -22,10 +22,10 @@ export const parsePermission = (value: unknown): SharePermission => {
   throw new HTTPException(400, { message: 'Invalid permission' });
 };
 
-export const parseLinkPermission = (value: unknown): AccessMode => {
+export const parsePublicPermission = (value: unknown): AccessMode => {
   if (value === 'edit') return 'edit';
   if (value === 'view') return 'view';
-  throw new HTTPException(400, { message: 'Invalid link permission' });
+  throw new HTTPException(400, { message: 'Invalid public permission' });
 };
 
 export const parseEntityType = (value: string): ShareEntityType => {
@@ -41,7 +41,7 @@ export const ensurePageAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement = 'SELECT * FROM get_effective_page_permission_at($1, $2, statement_timestamp())';
+  const statement = 'SELECT * FROM get_effective_page_permission($1, $2)';
   const parameters = [pageId, userId];
   const result = executor
     ? await executeQuery(executor, statement, parameters)
@@ -74,8 +74,7 @@ export const ensureFolderAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement =
-    'SELECT * FROM get_effective_folder_permission_at($1, $2, statement_timestamp())';
+  const statement = 'SELECT * FROM get_effective_folder_permission($1, $2)';
   const parameters = [folderId, userId];
   const result = executor
     ? await executeQuery(executor, statement, parameters)

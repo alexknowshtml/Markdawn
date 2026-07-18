@@ -1,14 +1,21 @@
 const COOKIE_NAME = 'markdawn_anon_id';
 const ONE_YEAR_SECONDS = 365 * 24 * 60 * 60;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function getCookie(name: string): string | undefined {
   const match = document.cookie.match(new RegExp(`(?:^|; )${name}=([^;]*)`));
-  return match?.[1] ? decodeURIComponent(match[1]) : undefined;
+  if (!match?.[1]) return undefined;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return undefined;
+  }
 }
 
 function setCookie(name: string, value: string, maxAge: number): void {
+  const secure = window.location.protocol === 'https:' ? '; Secure' : '';
   // biome-ignore lint/suspicious/noDocumentCookie: Cookie Store API not widely supported
-  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax`;
+  document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax${secure}`;
 }
 
 let cachedId: string | null = null;
@@ -17,7 +24,7 @@ export function getAnonymousId(): string {
   if (cachedId) return cachedId;
 
   const existing = getCookie(COOKIE_NAME);
-  if (existing) {
+  if (existing && UUID_PATTERN.test(existing)) {
     cachedId = existing;
     return cachedId;
   }

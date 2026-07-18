@@ -101,16 +101,7 @@ describe('tags API', () => {
       const recipient = await createTestUser();
       const recipientSession = await createTestSession(recipient.id);
       const hiddenParent = await createTestFolder(owner.id, { name: 'Hidden Tag Parent' });
-      const hiddenParentToken = crypto.randomUUID();
-      await query('update folders set is_public = true, public_token = $1 where id = $2', [
-        hiddenParentToken,
-        hiddenParent.id,
-      ]);
-      await query(
-        `insert into shares (entity_type, entity_id, shared_by, permission, token)
-         values ('folder', $1, $2, 'view', $3)`,
-        [hiddenParent.id, owner.id, hiddenParentToken],
-      );
+      await query("update folders set public_permission = 'view' where id = $1", [hiddenParent.id]);
       const page = await createTestPage(owner.id, {
         title: 'Tagged Direct Share',
         parentId: hiddenParent.id,
@@ -133,7 +124,7 @@ describe('tags API', () => {
 
       const recordedFolderAccess = await query<{ count: string }>(
         `select count(*)::text as count
-         from folder_access_events
+         from folder_public_access_visits
          where folder_id = $1 and user_id = $2`,
         [hiddenParent.id, recipient.id],
       );

@@ -116,7 +116,7 @@ function createPool(
           ],
         };
       }
-      if (sql.includes('WITH page_parent')) {
+      if (sql.includes('get_public_page_permission')) {
         return {
           rows: [{ permission: options?.anonymousPermission ?? null, access_revision: '100' }],
         };
@@ -129,7 +129,7 @@ function createPool(
 const ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000001';
 const OTHER_ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000002';
 
-function privilegedEntry(userId: string, permission: string = 'view') {
+function permissionEntry(userId: string, permission: string = 'view') {
   return { user_id: userId, permission };
 }
 
@@ -264,7 +264,7 @@ describe('handleShareEvent', () => {
     }
   });
 
-  it('keeps an equal-revision expiry downgrade when a pre-expiry query arrives late', async () => {
+  it('keeps an equal-revision downgrade when an older permission query arrives late', async () => {
     const connection = createConnection({
       context: { user: { id: 'user-1' }, permission: 'edit', accessRevision: '100' },
       readOnly: false,
@@ -272,13 +272,13 @@ describe('handleShareEvent', () => {
     const server = createServerWithDocuments(
       new Map([[ACTIVE_PAGE_ID, createDocument([connection])]]),
     );
-    let releasePreExpiry: (() => void) | undefined;
-    const preExpiryBarrier = new Promise<void>((resolve) => {
-      releasePreExpiry = resolve;
+    let releaseOlderQuery: (() => void) | undefined;
+    const olderQueryBarrier = new Promise<void>((resolve) => {
+      releaseOlderQuery = resolve;
     });
-    let markPreExpiryStarted: (() => void) | undefined;
-    const preExpiryStarted = new Promise<void>((resolve) => {
-      markPreExpiryStarted = resolve;
+    let markOlderQueryStarted: (() => void) | undefined;
+    const olderQueryStarted = new Promise<void>((resolve) => {
+      markOlderQueryStarted = resolve;
     });
     let permissionQueryCount = 0;
     const pool = {
@@ -287,8 +287,8 @@ describe('handleShareEvent', () => {
         permissionQueryCount++;
         const thisQuery = permissionQueryCount;
         if (thisQuery === 1) {
-          markPreExpiryStarted?.();
-          await preExpiryBarrier;
+          markOlderQueryStarted?.();
+          await olderQueryBarrier;
         }
         const userIds = params?.[1] as string[];
         return {
@@ -301,7 +301,7 @@ describe('handleShareEvent', () => {
       }),
     } as unknown as Pool;
 
-    const delayedPreExpiry = handleShareEvent(
+    const delayedOlderQuery = handleShareEvent(
       server,
       {
         type: 'share_event',
@@ -313,7 +313,7 @@ describe('handleShareEvent', () => {
       pool,
       createLogger(),
     );
-    await preExpiryStarted;
+    await olderQueryStarted;
     await handleShareEvent(
       server,
       {
@@ -326,8 +326,8 @@ describe('handleShareEvent', () => {
       pool,
       createLogger(),
     );
-    releasePreExpiry?.();
-    await delayedPreExpiry;
+    releaseOlderQuery?.();
+    await delayedOlderQuery;
 
     expect(connection.context.permission).toBe('view');
     expect(connection.context.accessRevision).toBe('100');
@@ -365,13 +365,13 @@ describe('handleShareEvent', () => {
     const anonConn = createConnection({
       context: { user: { id: 'anon-1', isAnonymous: true } },
     });
-    // user-1 has a direct invite — should NOT be affected by link share changes
+    // user-1 has a direct account grant and retains access.
     const authConn = createConnection({
       context: { user: { id: 'user-1' } },
     });
     const doc = createDocument([anonConn, authConn]);
     const server = createServer(doc);
-    const pool = createPool([privilegedEntry('user-1', 'view')]);
+    const pool = createPool([permissionEntry('user-1', 'view')]);
 
     await handleShareEvent(
       server,
@@ -392,19 +392,19 @@ describe('handleShareEvent', () => {
     expect(authConn.close).not.toHaveBeenCalled();
   });
 
-  it('revokes authenticated link-only connections when targetUserId is undefined', async () => {
+  it('revokes authenticated public-only connections when targetUserId is undefined', async () => {
     const logger = createLogger();
-    // link-only user (no direct invite, no folder access)
-    const linkUserConn = createConnection({
-      context: { user: { id: 'link-user-1' } },
+    // Public-only user (no direct grant or folder access).
+    const publicUserConn = createConnection({
+      context: { user: { id: 'public-user-1' } },
     });
-    // user with a direct invite — should be skipped
-    const invitedConn = createConnection({
-      context: { user: { id: 'invited-user' } },
+    // A user with a View account grant must fall back to read-only access.
+    const grantedConn = createConnection({
+      context: { user: { id: 'granted-user' }, permission: 'edit' },
     });
-    const doc = createDocument([linkUserConn, invitedConn]);
+    const doc = createDocument([publicUserConn, grantedConn]);
     const server = createServer(doc);
-    const pool = createPool([privilegedEntry('invited-user', 'view')]);
+    const pool = createPool([permissionEntry('granted-user', 'view')]);
 
     await handleShareEvent(
       server,
@@ -418,11 +418,16 @@ describe('handleShareEvent', () => {
       logger,
     );
 
-    expect(linkUserConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
-    expect(linkUserConn.sendStateless).toHaveBeenCalledWith(
+    expect(publicUserConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
+    expect(publicUserConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"action":"revoke"'),
     );
-    expect(invitedConn.close).not.toHaveBeenCalled();
+    expect(grantedConn.close).not.toHaveBeenCalled();
+    expect(grantedConn.readOnly).toBe(true);
+    expect(grantedConn.context.permission).toBe('view');
+    expect(grantedConn.sendStateless).toHaveBeenCalledWith(
+      expect.stringContaining('"action":"update"'),
+    );
   });
 
   it('revokes a specific authenticated user when targetUserId is set', async () => {
@@ -436,7 +441,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([targetConn, otherConn]);
     const server = createServer(doc);
 
-    // Pool not needed — targeted events skip the invite query
+    // Pool is not needed when no fallback check can be made.
     await handleShareEvent(
       server,
       {
@@ -545,7 +550,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([conn]);
     const server = createServer(doc);
 
-    // Pool not needed — targeted events skip the invite query
+    // Pool is not needed for this targeted grant event.
     await handleShareEvent(
       server,
       {
@@ -611,23 +616,23 @@ describe('handleShareEvent', () => {
     expect(conn.sendStateless).not.toHaveBeenCalled();
   });
 
-  it('updates authenticated link-only connections when link permission changes', async () => {
+  it('updates authenticated connections when public permission changes', async () => {
     const logger = createLogger();
-    // link-only user (no direct invite) — should get updated
-    const linkUserConn = createConnection({
-      context: { user: { id: 'link-user' } },
+    // Public-only user (no direct grant) should be updated.
+    const publicUserConn = createConnection({
+      context: { user: { id: 'public-user' } },
       readOnly: false,
     });
-    // invited user — also gets updated (effective permission is max(view, view) = view)
-    const invitedConn = createConnection({
-      context: { user: { id: 'invited-user' } },
+    // An account-granted user is also updated (effective max is View).
+    const grantedConn = createConnection({
+      context: { user: { id: 'granted-user' } },
       readOnly: false,
     });
-    const doc = createDocument([linkUserConn, invitedConn]);
+    const doc = createDocument([publicUserConn, grantedConn]);
     const server = createServer(doc);
     const pool = createPool([
-      privilegedEntry('link-user', 'view'),
-      privilegedEntry('invited-user', 'view'),
+      permissionEntry('public-user', 'view'),
+      permissionEntry('granted-user', 'view'),
     ]);
 
     await handleShareEvent(
@@ -644,29 +649,29 @@ describe('handleShareEvent', () => {
     );
 
     // Both connections get readOnly=true because effective permission is 'view'
-    expect(linkUserConn.readOnly).toBe(true);
-    expect(linkUserConn.sendStateless).toHaveBeenCalledWith(
+    expect(publicUserConn.readOnly).toBe(true);
+    expect(publicUserConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"permission":"view"'),
     );
-    expect(invitedConn.readOnly).toBe(true);
-    expect(invitedConn.sendStateless).toHaveBeenCalledWith(
+    expect(grantedConn.readOnly).toBe(true);
+    expect(grantedConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"permission":"view"'),
     );
   });
 
-  it('does not revoke page owner when link share changes', async () => {
+  it('does not revoke the page owner when public access changes', async () => {
     const logger = createLogger();
     const ownerConn = createConnection({
       context: { user: { id: 'owner-id' } },
     });
-    // link-only user (no invite, not owner) — should be revoked
-    const linkUserConn = createConnection({
-      context: { user: { id: 'link-user' } },
+    // Public-only user (no account grant and not owner) should be revoked.
+    const publicUserConn = createConnection({
+      context: { user: { id: 'public-user' } },
     });
-    const doc = createDocument([ownerConn, linkUserConn]);
+    const doc = createDocument([ownerConn, publicUserConn]);
     const server = createServer(doc);
-    // pool returns the owner as privileged (from the UNION with pages.created_by)
-    const pool = createPool([privilegedEntry('owner-id', 'edit')]);
+    // The effective-permission query returns the owner's independent access.
+    const pool = createPool([permissionEntry('owner-id', 'edit')]);
 
     await handleShareEvent(
       server,
@@ -681,7 +686,7 @@ describe('handleShareEvent', () => {
     );
 
     expect(ownerConn.close).not.toHaveBeenCalled();
-    expect(linkUserConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
+    expect(publicUserConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
   });
 
   it('does not affect authenticated user when targetUserId does not match', async () => {
@@ -692,7 +697,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([conn]);
     const server = createServer(doc);
 
-    // Pool not needed — targeted events skip the invite query
+    // Pool is not needed for this targeted grant event.
     await handleShareEvent(
       server,
       {
@@ -736,7 +741,7 @@ describe('handleShareEvent', () => {
     expect(conn.readOnly).toBe(false);
   });
 
-  it('updates connection.context.permission on link share update', async () => {
+  it('updates connection.context.permission on public-access updates', async () => {
     const logger = createLogger();
     const conn = createConnection({
       context: { user: { id: 'anon-1', isAnonymous: true }, permission: 'view' },
@@ -763,7 +768,7 @@ describe('handleShareEvent', () => {
     expect(conn.readOnly).toBe(false);
   });
 
-  it('does not revoke workspace member when link share is revoked', async () => {
+  it('does not revoke a workspace member when public access is revoked', async () => {
     const logger = createLogger();
     const ownerConn = createConnection({
       context: { user: { id: 'owner-id' } },
@@ -771,14 +776,14 @@ describe('handleShareEvent', () => {
     const workspaceMemberConn = createConnection({
       context: { user: { id: 'workspace-member' } },
     });
-    const linkOnlyConn = createConnection({
-      context: { user: { id: 'link-only-user' } },
+    const publicOnlyConn = createConnection({
+      context: { user: { id: 'public-only-user' } },
     });
-    const doc = createDocument([ownerConn, workspaceMemberConn, linkOnlyConn]);
+    const doc = createDocument([ownerConn, workspaceMemberConn, publicOnlyConn]);
     const server = createServer(doc);
     const pool = createPool([
-      privilegedEntry('owner-id', 'edit'),
-      privilegedEntry('workspace-member', 'edit'),
+      permissionEntry('owner-id', 'edit'),
+      permissionEntry('workspace-member', 'edit'),
     ]);
 
     await handleShareEvent(
@@ -795,18 +800,18 @@ describe('handleShareEvent', () => {
 
     expect(ownerConn.close).not.toHaveBeenCalled();
     expect(workspaceMemberConn.close).not.toHaveBeenCalled();
-    expect(linkOnlyConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
+    expect(publicOnlyConn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
   });
 
-  it('computes effective permission as max of base and link permission', async () => {
+  it('preserves a stronger account permission when public permission is weaker', async () => {
     const logger = createLogger();
-    const invitedConn = createConnection({
-      context: { user: { id: 'invited-user' }, permission: 'edit' },
+    const grantedConn = createConnection({
+      context: { user: { id: 'granted-user' }, permission: 'edit' },
       readOnly: false,
     });
-    const doc = createDocument([invitedConn]);
+    const doc = createDocument([grantedConn]);
     const server = createServerWithDocuments(new Map([['page-1', doc]]));
-    const pool = createPool([privilegedEntry('invited-user', 'edit')]);
+    const pool = createPool([permissionEntry('granted-user', 'edit')]);
 
     await handleShareEvent(
       server,
@@ -822,24 +827,24 @@ describe('handleShareEvent', () => {
     );
 
     // The authoritative snapshot is sent even when the compatibility event is unnecessary.
-    expect(invitedConn.readOnly).toBe(false);
-    expect(invitedConn.sendStateless).toHaveBeenCalledWith(
+    expect(grantedConn.readOnly).toBe(false);
+    expect(grantedConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"type":"permission_snapshot"'),
     );
-    expect(invitedConn.sendStateless).not.toHaveBeenCalledWith(
+    expect(grantedConn.sendStateless).not.toHaveBeenCalledWith(
       expect.stringContaining('"action":"update"'),
     );
   });
 
-  it('sends notification when effective permission changes for link share', async () => {
+  it('sends a notification when public access changes the effective permission', async () => {
     const logger = createLogger();
-    const invitedConn = createConnection({
-      context: { user: { id: 'invited-user' } },
+    const grantedConn = createConnection({
+      context: { user: { id: 'granted-user' } },
       readOnly: true,
     });
-    const doc = createDocument([invitedConn]);
+    const doc = createDocument([grantedConn]);
     const server = createServer(doc);
-    const pool = createPool([privilegedEntry('invited-user', 'edit')]);
+    const pool = createPool([permissionEntry('granted-user', 'edit')]);
 
     await handleShareEvent(
       server,
@@ -855,8 +860,8 @@ describe('handleShareEvent', () => {
     );
 
     // effective = max('view', 'edit') = 'edit', readOnly changes from true → false
-    expect(invitedConn.readOnly).toBe(false);
-    expect(invitedConn.sendStateless).toHaveBeenCalledWith(
+    expect(grantedConn.readOnly).toBe(false);
+    expect(grantedConn.sendStateless).toHaveBeenCalledWith(
       expect.stringContaining('"permission":"edit"'),
     );
   });
@@ -1221,8 +1226,8 @@ describe('handleShareEvent', () => {
           ],
         };
       }
-      if (sql.includes('WITH page_parent')) {
-        return { rows: [{ permission: 'edit' }] };
+      if (sql.includes('get_public_page_permission')) {
+        return { rows: [{ permission: 'edit', access_revision: '100' }] };
       }
       return { rows: [] };
     });
@@ -1244,7 +1249,7 @@ describe('handleShareEvent', () => {
       query.mock.calls.filter(([sql]) => String(sql).includes('requested_users')),
     ).toHaveLength(1);
     expect(
-      query.mock.calls.filter(([sql]) => String(sql).includes('WITH page_parent')),
+      query.mock.calls.filter(([sql]) => String(sql).includes('get_public_page_permission')),
     ).toHaveLength(1);
   });
 
@@ -1333,11 +1338,11 @@ describe('handleShareEvent', () => {
 });
 
 describe('revalidateActivePageConnections', () => {
-  it('revokes expired access with batched authenticated and anonymous lookups', async () => {
+  it('revokes stale access with batched authenticated and anonymous lookups', async () => {
     const logger = createLogger();
     const pageId = '00000000-0000-4000-8000-000000000001';
     const userId = '00000000-0000-4000-8000-000000000002';
-    const expiredConnection = createConnection({
+    const revokedConnection = createConnection({
       context: { user: { id: userId }, permission: 'view' },
       readOnly: true,
     });
@@ -1345,7 +1350,7 @@ describe('revalidateActivePageConnections', () => {
       context: { user: { id: 'anonymous-1', isAnonymous: true }, permission: 'edit' },
     });
     const server = createServerWithDocuments(
-      new Map([[pageId, createDocument([expiredConnection, anonymousConnection])]]),
+      new Map([[pageId, createDocument([revokedConnection, anonymousConnection])]]),
     );
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('unnest($1::uuid[], $2::uuid[], $3::text[])')) {
@@ -1361,7 +1366,7 @@ describe('revalidateActivePageConnections', () => {
           ],
         };
       }
-      if (sql.includes('with page_parent')) {
+      if (sql.includes('get_public_page_permission')) {
         return { rows: [{ page_id: pageId, permission: 'edit', access_revision: '103' }] };
       }
       return { rows: [] };
@@ -1375,7 +1380,7 @@ describe('revalidateActivePageConnections', () => {
 
     expect(query).toHaveBeenCalledTimes(2);
     expect(affected).toBe(1);
-    expect(expiredConnection.close).toHaveBeenCalledWith({
+    expect(revokedConnection.close).toHaveBeenCalledWith({
       code: 4401,
       reason: 'Access revoked',
     });

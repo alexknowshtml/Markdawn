@@ -292,39 +292,4 @@ describe('migration legacy-data remediation', () => {
       });
     });
   });
-
-  it('converts legacy share expirations as UTC regardless of the migration session timezone', async () => {
-    await db.transaction(async (tx) => {
-      await executeQuery(tx, 'set local search_path = pg_temp, public');
-      await executeQuery(tx, `set local time zone 'America/Los_Angeles'`);
-      await executeQuery(
-        tx,
-        `create temporary table shares (
-           expires_at timestamp without time zone
-         ) on commit drop`,
-      );
-      await executeQuery(
-        tx,
-        `insert into shares (expires_at) values (timestamp '2030-01-01 12:00:00')`,
-      );
-
-      for (const statement of readMigrationStatements(
-        '20260717121918_convert_share_expirations_to_timestamptz',
-      )) {
-        await executeQuery(tx, statement);
-      }
-
-      const result = await executeQuery<{ matches_utc: boolean; type_name: string }>(
-        tx,
-        `select
-           expires_at = timestamptz '2030-01-01 12:00:00+00' as matches_utc,
-           pg_typeof(expires_at)::text as type_name
-         from shares`,
-      );
-      expect(result.rows[0]).toEqual({
-        matches_utc: true,
-        type_name: 'timestamp with time zone',
-      });
-    });
-  });
 });

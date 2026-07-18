@@ -75,8 +75,7 @@ export function createMockPage(overrides: Partial<Page> = {}): Page {
     updatedAt: new Date('2024-01-01'),
     isDeleted: false,
     deletedAt: null,
-    isPublic: false,
-    publicToken: null,
+    publicPermission: null,
     ...overrides,
   };
 }

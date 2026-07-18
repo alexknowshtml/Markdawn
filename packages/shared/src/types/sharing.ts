@@ -2,8 +2,8 @@ import type { ShareEntityType, SharePermission } from './page.js';
 
 /**
  * Discriminated action for a share-related realtime event.
- * - `grant`: a new share was created (email invite)
- * - `update`: an existing share's permission changed (link or email)
+ * - `grant`: a new account grant was created
+ * - `update`: an existing account or public permission changed
  * - `revoke`: a share was deleted or set to private
  * - `recompute`: permissions changed indirectly and must be reloaded from the DB
  */
@@ -15,8 +15,8 @@ export type StatelessShareEventAction = Exclude<ShareEventAction, 'recompute'>;
  * to the collab (WebSocket) server.
  *
  * `targetUserId` determines which connections are affected for grant/update/revoke events:
- * - `undefined` → affects all anonymous connections (link share changes)
- * - a user ID  → affects that specific authenticated connection (email invite changes)
+ * - `undefined` → affects every connection (public access changes)
+ * - a user ID  → affects that specific authenticated account grant
  *
  * `recompute` ignores `targetUserId` and asks the collab server to reload effective
  * permissions for every active connection on the affected page(s).
@@ -78,10 +78,8 @@ const permissionRank = (permission: SharePermission | null): number => {
 };
 
 /**
- * Equal revisions occur at natural expiry boundaries because no database
- * mutation increments the durable access counter. At an equal revision, only
- * the same permission or a downgrade is safe; an upgrade requires a newer
- * revision from an explicit access mutation.
+ * At an equal revision, only the same permission or a downgrade is safe. An
+ * upgrade requires a newer revision from an explicit access mutation.
  */
 export function shouldApplyPermissionSnapshot(
   current: Pick<PermissionSnapshotMessage, 'permission' | 'accessRevision'> | null,

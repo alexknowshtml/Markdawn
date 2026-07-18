@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { query } from '../db/query';
 import {
   createTestApp,
   createTestComment,
   createTestPage,
-  createTestPublicShare,
   createTestReply,
   createTestSession,
   createTestUser,
   createTestWorkspaceMember,
+  enableTestPagePublicAccess,
 } from '../test-utils';
 
 describe('comments API', () => {
@@ -48,7 +49,7 @@ describe('comments API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('does not expose comment or reply emails to a signed-in public-link visitor', async () => {
+    it('does not expose comment or reply emails to a signed-in public visitor', async () => {
       const app = await createTestApp();
       const owner = await createTestUser({
         email: 'private-comment-author@example.com',
@@ -63,11 +64,11 @@ describe('comments API', () => {
       const page = await createTestPage(owner.id, { title: 'Public comments' });
       const comment = await createTestComment(page.id, owner.id);
       const reply = await createTestReply(comment.id, replyAuthor.id);
-      const link = await createTestPublicShare(page.id);
+      await enableTestPagePublicAccess(page.id);
 
       const accessRes = await app.request(`/api/pages/${page.id}/access`, {
         method: 'POST',
-        headers: { Cookie: visitorSession.Cookie, 'x-share-token': link.token },
+        headers: { Cookie: visitorSession.Cookie },
       });
       expect(accessRes.status).toBe(200);
 
@@ -269,6 +270,103 @@ describe('comments API', () => {
       });
 
       expect(res.status).toBe(403);
+    });
+  });
+
+  describe('guest comments', () => {
+    it('persists a stable guest author on publicly editable pages', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
+      const guestId = crypto.randomUUID();
+      const headers = {
+        Cookie: `markdawn_anon_id=${guestId}`,
+        'Content-Type': 'application/json',
+      };
+
+      const createResponse = await app.request(`/api/pages/${page.id}/comments`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ content: 'Guest comment' }),
+      });
+      expect(createResponse.status).toBe(200);
+      const comment = (await createResponse.json()) as {
+        id: string;
+        userId: string | null;
+        isOwn: boolean;
+        user: { id: string | null; name: string };
+      };
+      expect(comment.userId).toBeNull();
+      expect(comment.isOwn).toBe(true);
+      expect(comment.user).toEqual({ id: null, name: expect.any(String), avatarUrl: null });
+
+      const replyResponse = await app.request(
+        `/api/pages/${page.id}/comments/${comment.id}/replies`,
+        {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({ content: 'Guest reply' }),
+        },
+      );
+      expect(replyResponse.status).toBe(200);
+      expect(await replyResponse.json()).toEqual(
+        expect.objectContaining({ userId: null, isOwn: true, content: 'Guest reply' }),
+      );
+
+      const listResponse = await app.request(`/api/pages/${page.id}/comments`, { headers });
+      expect(listResponse.status).toBe(200);
+      const listedComments = await listResponse.json();
+      expect(listedComments).toEqual([
+        expect.objectContaining({
+          id: comment.id,
+          userId: null,
+          isOwn: true,
+          replies: [expect.objectContaining({ userId: null, isOwn: true })],
+        }),
+      ]);
+      expect(JSON.stringify(listedComments)).not.toContain(guestId);
+
+      const identity = await query<{ name: string }>(
+        'select name from guest_identities where id = $1',
+        [guestId],
+      );
+      expect(identity.rows[0]?.name).toBe(comment.user.name);
+    });
+
+    it('lets a guest mutate only their own comment', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id);
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
+      const authorId = crypto.randomUUID();
+      const authorHeaders = {
+        Cookie: `markdawn_anon_id=${authorId}`,
+        'Content-Type': 'application/json',
+      };
+      const createResponse = await app.request(`/api/pages/${page.id}/comments`, {
+        method: 'POST',
+        headers: authorHeaders,
+        body: JSON.stringify({ content: 'Original' }),
+      });
+      const comment = (await createResponse.json()) as { id: string };
+
+      const ownEdit = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+        method: 'PATCH',
+        headers: authorHeaders,
+        body: JSON.stringify({ content: 'Updated' }),
+      });
+      expect(ownEdit.status).toBe(200);
+
+      const otherEdit = await app.request(`/api/pages/${page.id}/comments/${comment.id}`, {
+        method: 'PATCH',
+        headers: {
+          Cookie: `markdawn_anon_id=${crypto.randomUUID()}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ content: 'Stolen' }),
+      });
+      expect(otherEdit.status).toBe(403);
     });
   });
 });

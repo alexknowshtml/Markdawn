@@ -17,18 +17,13 @@ export async function getUniqueWorkspacePageLookup(
     page_id: string;
   }>(
     executor,
-    `with recursive access_snapshot as materialized (
-       select statement_timestamp() as as_of
-     ),
-     enumerable_folders as materialized (
+    `with recursive enumerable_folders as materialized (
        select enumerable.folder_id
-       from access_snapshot snapshot
-       cross join lateral get_enumerable_folder_ids_at($2, snapshot.as_of) enumerable
+       from get_enumerable_folder_ids($2) enumerable
      ),
      accessible_pages as materialized (
        select accessible.page_id
-       from access_snapshot snapshot
-       cross join lateral get_accessible_page_ids_at($2, snapshot.as_of) accessible
+       from get_accessible_page_ids($2) accessible
      ),
      visible_folders as materialized (
        select f.id, f.parent_id, f.name

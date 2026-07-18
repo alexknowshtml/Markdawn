@@ -7,14 +7,19 @@ import { auth } from '../auth';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 import { uploadsDir } from '../env';
-import { requireAuth } from '../middleware/auth';
+import {
+  actorColumns,
+  ensureActorPageAccess,
+  getRequestActor,
+  persistGuestIdentity,
+} from '../utils/guestAccess';
 import {
   hasValidImageSignature,
   IMAGE_EXTENSION_BY_MIME,
   isSafeImageMime,
   MAX_IMAGE_SIZE_BYTES,
 } from '../utils/image-upload';
-import { ensurePageAccess, lockEntityAccess, lockWorkspaceAccess } from '../utils/share-access';
+import { lockEntityAccess, lockWorkspaceAccess } from '../utils/share-access';
 
 const uploadsRoute = new Hono();
 
@@ -26,7 +31,8 @@ type UploadRow = {
   original_name: string;
   mime_type: string;
   size: number;
-  uploaded_by: string;
+  uploaded_by: string | null;
+  uploaded_by_guest_id: string | null;
 };
 
 const getUploadByFilename = async (filename: string, executor: QueryExecutor = db) => {
@@ -76,35 +82,10 @@ const isUploadPublic = async (executor: QueryExecutor, uploadId: string): Promis
   const result = await executeQuery(
     executor,
     `SELECT 1
-     FROM upload_page_refs upr
-     JOIN pages p ON p.id = upr.page_id AND p.is_deleted = false
-     WHERE upr.upload_id = $1
-       AND (
-         (
-           p.is_public = true
-           AND EXISTS (
-             SELECT 1
-             FROM shares s
-             WHERE s.entity_type = 'page'
-               AND s.entity_id = p.id
-               AND s.token IS NOT NULL
-               AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-           )
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM folder_closure fc
-           JOIN folders f ON f.id = fc.ancestor_id
-           JOIN shares s ON s.entity_type = 'folder'
-             AND s.entity_id = f.id
-             AND s.token IS NOT NULL
-             AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-           WHERE fc.descendant_id = p.parent_id
-             AND f.is_public = true
-             AND f.is_deleted = false
-             AND NOT is_page_folder_inheritance_blocked(f.id, p.id)
-         )
-       )
+     FROM upload_page_refs reference
+     JOIN pages page ON page.id = reference.page_id AND page.is_deleted = false
+     WHERE reference.upload_id = $1
+       AND get_public_page_permission(page.id) IS NOT NULL
      LIMIT 1`,
     [uploadId],
   );
@@ -127,8 +108,8 @@ const getUploadWorkspaceOwnerIds = async (
   return result.rows.map((row) => row.owner_id);
 };
 
-uploadsRoute.post('/', requireAuth, async (c) => {
-  const user = c.get('user');
+uploadsRoute.post('/', async (c) => {
+  const actor = await getRequestActor(c);
   const body = await c.req.parseBody().catch(() => null);
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid form data' });
@@ -141,7 +122,7 @@ uploadsRoute.post('/', requireAuth, async (c) => {
     throw new HTTPException(400, { message: 'Page ID is required' });
   }
 
-  await ensurePageAccess(pageId, user.id, 'edit');
+  await ensureActorPageAccess(actor, pageId, 'edit');
 
   if (!(file instanceof File)) {
     throw new HTTPException(400, { message: 'File is required' });
@@ -173,13 +154,16 @@ uploadsRoute.post('/', requireAuth, async (c) => {
   try {
     await db.transaction(async (tx) => {
       await lockEntityAccess(tx, 'page', pageId);
-      await ensurePageAccess(pageId, user.id, 'edit', tx);
+      await ensureActorPageAccess(actor, pageId, 'edit', tx);
+      await persistGuestIdentity(actor, tx);
+      const uploader = actorColumns(actor);
       const uploadResult = await executeQuery<{ id: string }>(
         tx,
-        `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
-         values ($1, $2, $3, $4, $5)
+        `insert into uploads
+           (filename, original_name, mime_type, size, uploaded_by, uploaded_by_guest_id)
+         values ($1, $2, $3, $4, $5, $6)
          returning id`,
-        [filename, file.name, file.type, file.size, user.id],
+        [filename, file.name, file.type, file.size, uploader.userId, uploader.guestId],
       );
       const uploadId = uploadResult.rows[0]?.id;
       if (!uploadId) {
@@ -230,7 +214,7 @@ uploadsRoute.get('/:filename', async (c) => {
     // Every operation that can change an upload's referenced pages or their
     // access state takes the corresponding workspace lock. Hold all current
     // owners in stable order, then re-read the reference set before checking
-    // access so a revoke, link disable, move, copy, or purge cannot linearize
+    // access so a revoke, public-access change, move, copy, or purge cannot linearize
     // between authorization and byte materialization.
     const ownerIds = await getUploadWorkspaceOwnerIds(tx, candidateUpload.id);
     for (const ownerId of ownerIds) {

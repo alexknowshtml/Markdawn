@@ -18,10 +18,10 @@ type EntityResult = {
 };
 
 type ShareSummary = {
-  accessors: Array<{ shareId?: string | null; userId: string }>;
+  accessors: Array<{ grantId?: string | null; userId: string }>;
   accessSources?: Array<{
     kind: 'owner' | 'direct' | 'folder' | 'workspace';
-    shareId: string | null;
+    grantId: string | null;
     userId: string;
     permission: 'view' | 'edit' | 'admin';
     effectivePermission: 'view' | 'edit' | 'admin';
@@ -71,7 +71,7 @@ async function createEntity(
   return (await response.json()) as EntityResult;
 }
 
-async function getDirectShareId(
+async function getDirectGrantId(
   ownerApi: APIRequestContext,
   entityType: 'page' | 'folder',
   entityId: string,
@@ -80,11 +80,11 @@ async function getDirectShareId(
   const response = await ownerApi.get(`/api/shares/entity/${entityType}/${entityId}`);
   expect(response.ok()).toBeTruthy();
   const summary = (await response.json()) as ShareSummary;
-  const shareId = summary.accessors.find(
-    (accessor) => accessor.userId === recipientId && accessor.shareId,
-  )?.shareId;
-  if (!shareId) throw new Error('Direct share was not returned');
-  return shareId;
+  const grantId = summary.accessors.find(
+    (accessor) => accessor.userId === recipientId && accessor.grantId,
+  )?.grantId;
+  if (!grantId) throw new Error('Direct grant was not returned');
+  return grantId;
 }
 
 async function waitForPersistedMarkdown(
@@ -150,14 +150,14 @@ test.describe('sharing realtime propagation', () => {
 
       expect(
         (
-          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/invite`, {
+          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/grants`, {
             data: { email: recipientEmail, permission: 'edit' },
           })
         ).ok(),
       ).toBeTruthy();
       expect(
         (
-          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/invite`, {
+          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/grants`, {
             data: { email: recipientEmail, permission: 'view' },
           })
         ).ok(),
@@ -215,13 +215,13 @@ test.describe('sharing realtime propagation', () => {
         ).ok(),
       ).toBeTruthy();
 
-      const directShareId = await getDirectShareId(
+      const directGrantId = await getDirectGrantId(
         ownerApi,
         'page',
         sharedPage.id,
         recipient.userId,
       );
-      expect((await ownerApi.delete(`/api/shares/${directShareId}`)).ok()).toBeTruthy();
+      expect((await ownerApi.delete(`/api/shares/grants/${directGrantId}`)).ok()).toBeTruthy();
       await expect(recipientEditor).toHaveAttribute('contenteditable', 'false', {
         timeout: 10_000,
       });
@@ -248,7 +248,7 @@ test.describe('sharing realtime propagation', () => {
       // Re-promotion must reconnect to the canonical non-blank document.
       expect(
         (
-          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/invite`, {
+          await ownerApi.post(`/api/shares/entity/page/${sharedPage.id}/grants`, {
             data: { email: recipientEmail, permission: 'edit' },
           })
         ).ok(),
@@ -268,7 +268,7 @@ test.describe('sharing realtime propagation', () => {
     }
   });
 
-  test('records a first authenticated folder-link visit and retains it after direct revocation', async ({
+  test('records a first authenticated public-folder visit and retains it after direct revocation', async ({
     browser,
     request,
     playwright,
@@ -292,7 +292,7 @@ test.describe('sharing realtime propagation', () => {
       });
       expect(
         (
-          await ownerApi.patch(`/api/shares/entity/folder/${folder.id}/link`, {
+          await ownerApi.patch(`/api/shares/entity/folder/${folder.id}/public-access`, {
             data: { permission: 'view' },
           })
         ).ok(),
@@ -304,13 +304,13 @@ test.describe('sharing realtime propagation', () => {
 
       expect(
         (
-          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/invite`, {
+          await ownerApi.post(`/api/shares/entity/folder/${folder.id}/grants`, {
             data: { email: recipientEmail, permission: 'edit' },
           })
         ).ok(),
       ).toBeTruthy();
-      const directShareId = await getDirectShareId(ownerApi, 'folder', folder.id, recipient.userId);
-      expect((await ownerApi.delete(`/api/shares/${directShareId}`)).ok()).toBeTruthy();
+      const directGrantId = await getDirectGrantId(ownerApi, 'folder', folder.id, recipient.userId);
+      expect((await ownerApi.delete(`/api/shares/grants/${directGrantId}`)).ok()).toBeTruthy();
 
       await recipientPage.goto('/app/shared-with-me');
       await expect(recipientPage.getByText(folderName, { exact: true }).first()).toBeVisible({
@@ -324,7 +324,7 @@ test.describe('sharing realtime propagation', () => {
     }
   });
 
-  test('refreshes invitations, permission fallback, folder revocation, and open share lists', async ({
+  test('refreshes grants, permission fallback, folder revocation, and open share lists', async ({
     browser,
     request,
     playwright,
@@ -346,24 +346,23 @@ test.describe('sharing realtime propagation', () => {
     try {
       const ownerPage = await ownerContext.newPage();
       const recipientPage = await recipientContext.newPage();
-      const inviteTitle = `Realtime direct invite ${Date.now()}`;
-      const invitePage = await createEntity(ownerApi, '/api/pages', { title: inviteTitle });
+      const grantTitle = `Realtime direct grant ${Date.now()}`;
+      const grantPage = await createEntity(ownerApi, '/api/pages', { title: grantTitle });
 
       await recipientPage.goto('/app');
-      await expect(recipientPage.getByText(inviteTitle, { exact: true })).toHaveCount(0);
-      const inviteResponse = await ownerApi.post(
-        `/api/shares/entity/page/${invitePage.id}/invite`,
-        { data: { email: recipientEmail, permission: 'view' } },
-      );
-      expect(inviteResponse.ok()).toBeTruthy();
-      await expect(recipientPage.getByText(inviteTitle, { exact: true }).first()).toBeVisible({
+      await expect(recipientPage.getByText(grantTitle, { exact: true })).toHaveCount(0);
+      const grantResponse = await ownerApi.post(`/api/shares/entity/page/${grantPage.id}/grants`, {
+        data: { email: recipientEmail, permission: 'view' },
+      });
+      expect(grantResponse.ok()).toBeTruthy();
+      await expect(recipientPage.getByText(grantTitle, { exact: true }).first()).toBeVisible({
         timeout: 15_000,
       });
 
-      await ownerPage.goto(`/app/page-${invitePage.id}`);
+      await ownerPage.goto(`/app/page-${grantPage.id}`);
       await ownerPage.locator('[data-testid="page-share-btn"]').click();
       await expect(ownerPage.getByRole('dialog')).toContainText('Realtime Sharing Recipient');
-      const leaveResponse = await recipientApi.post(`/api/pages/${invitePage.id}/leave`);
+      const leaveResponse = await recipientApi.post(`/api/pages/${grantPage.id}/leave`);
       expect(leaveResponse.ok()).toBeTruthy();
       await expect(ownerPage.getByRole('dialog')).not.toContainText('Realtime Sharing Recipient', {
         timeout: 15_000,
@@ -372,22 +371,22 @@ test.describe('sharing realtime propagation', () => {
       const fallbackPage = await createEntity(ownerApi, '/api/pages', {
         title: `Realtime fallback ${Date.now()}`,
       });
-      await ownerApi.patch(`/api/shares/entity/page/${fallbackPage.id}/link`, {
+      await ownerApi.patch(`/api/shares/entity/page/${fallbackPage.id}/public-access`, {
         data: { permission: 'view' },
       });
-      await ownerApi.post(`/api/shares/entity/page/${fallbackPage.id}/invite`, {
+      await ownerApi.post(`/api/shares/entity/page/${fallbackPage.id}/grants`, {
         data: { email: recipientEmail, permission: 'edit' },
       });
       await recipientPage.goto(`/app/page-${fallbackPage.id}`);
       const fallbackEditor = recipientPage.locator('.ProseMirror');
       await expect(fallbackEditor).toHaveAttribute('contenteditable', 'true');
-      const fallbackShareId = await getDirectShareId(
+      const fallbackGrantId = await getDirectGrantId(
         ownerApi,
         'page',
         fallbackPage.id,
         recipient.userId,
       );
-      expect((await ownerApi.delete(`/api/shares/${fallbackShareId}`)).ok()).toBeTruthy();
+      expect((await ownerApi.delete(`/api/shares/grants/${fallbackGrantId}`)).ok()).toBeTruthy();
       await expect(fallbackEditor).toHaveAttribute('contenteditable', 'false', { timeout: 10_000 });
 
       const folder = await createEntity(ownerApi, '/api/folders', {
@@ -397,10 +396,10 @@ test.describe('sharing realtime propagation', () => {
         title: `Realtime folder child ${Date.now()}`,
         parentId: folder.id,
       });
-      await ownerApi.post(`/api/shares/entity/folder/${folder.id}/invite`, {
+      await ownerApi.post(`/api/shares/entity/folder/${folder.id}/grants`, {
         data: { email: recipientEmail, permission: 'admin' },
       });
-      await ownerApi.post(`/api/shares/entity/page/${child.id}/invite`, {
+      await ownerApi.post(`/api/shares/entity/page/${child.id}/grants`, {
         data: { email: recipientEmail, permission: 'view' },
       });
       await recipientPage.goto(`/app/page-${child.id}`);
@@ -416,7 +415,7 @@ test.describe('sharing realtime propagation', () => {
       await expect(inheritedEditor).toHaveAttribute('contenteditable', 'false', {
         timeout: 10_000,
       });
-      const childShareId = await getDirectShareId(ownerApi, 'page', child.id, recipient.userId);
+      const childGrantId = await getDirectGrantId(ownerApi, 'page', child.id, recipient.userId);
       expect(
         (
           await ownerApi.patch(`/api/shares/entity/page/${child.id}/inheritance`, {
@@ -427,9 +426,9 @@ test.describe('sharing realtime propagation', () => {
       await expect(inheritedEditor).toHaveAttribute('contenteditable', 'true', {
         timeout: 10_000,
       });
-      expect((await ownerApi.delete(`/api/shares/${childShareId}`)).ok()).toBeTruthy();
-      const folderShareId = await getDirectShareId(ownerApi, 'folder', folder.id, recipient.userId);
-      expect((await ownerApi.delete(`/api/shares/${folderShareId}`)).ok()).toBeTruthy();
+      expect((await ownerApi.delete(`/api/shares/grants/${childGrantId}`)).ok()).toBeTruthy();
+      const folderGrantId = await getDirectGrantId(ownerApi, 'folder', folder.id, recipient.userId);
+      expect((await ownerApi.delete(`/api/shares/grants/${folderGrantId}`)).ok()).toBeTruthy();
       await expect(recipientPage.locator('.ProseMirror')).toHaveCount(0, { timeout: 10_000 });
       await expect
         .poll(async () => {
@@ -480,7 +479,7 @@ test.describe('sharing realtime propagation', () => {
       });
       expect(
         (
-          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/link`, {
+          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/public-access`, {
             data: { permission: 'edit' },
           })
         ).ok(),
@@ -507,7 +506,7 @@ test.describe('sharing realtime propagation', () => {
       await expect.poll(() => heldCollabRoutes.length, { timeout: 10_000 }).toBeGreaterThan(0);
       expect(
         (
-          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/link`, {
+          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/public-access`, {
             data: { permission: 'private' },
           })
         ).ok(),
@@ -561,7 +560,7 @@ test.describe('sharing realtime propagation', () => {
       });
       expect(
         (
-          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/link`, {
+          await ownerApi.patch(`/api/shares/entity/page/${publicPage.id}/public-access`, {
             data: { permission: 'edit' },
           })
         ).ok(),

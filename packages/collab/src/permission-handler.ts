@@ -101,35 +101,8 @@ function sendWorkspaceMembershipCompatibilityEvent(
 
 async function getAnonymousPagePermission(pool: Pool, pageId: string): Promise<PermissionState> {
   const result = await pool.query<{ permission: string | null; access_revision: string }>(
-    `WITH page_parent AS (
-       SELECT parent_id, is_public
-       FROM pages
-       WHERE id = $1 AND is_deleted = false
-     )
-     SELECT (
-     SELECT permission FROM (
-       SELECT s.permission, 1 AS src
-       FROM shares s
-       WHERE s.entity_type = 'page' AND s.entity_id = $1 AND s.token IS NOT NULL
-         AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-         AND EXISTS (SELECT 1 FROM page_parent WHERE is_public = true)
-       UNION ALL
-       SELECT s.permission, 2 AS src
-       FROM shares s
-       JOIN folders f ON f.id = s.entity_id AND f.is_public = true AND f.is_deleted = false
-       WHERE s.entity_type = 'folder' AND s.token IS NOT NULL
-         AND (s.expires_at IS NULL OR s.expires_at > statement_timestamp())
-         AND s.entity_id IN (
-           SELECT ancestor_id FROM folder_closure fc
-           JOIN page_parent pp ON fc.descendant_id = pp.parent_id
-         )
-         AND NOT is_page_folder_inheritance_blocked(s.entity_id, $1)
-     ) perms
-     ORDER BY CASE permission WHEN 'admin' THEN 3 WHEN 'edit' THEN 2 ELSE 1 END DESC,
-              src ASC
-     LIMIT 1
-     ) AS permission,
-     get_page_access_revision($1)::text AS access_revision`,
+    `SELECT get_public_page_permission($1) AS permission,
+            get_page_access_revision($1)::text AS access_revision`,
     [pageId],
   );
   const row = result.rows[0];
@@ -158,10 +131,9 @@ async function getAuthenticatedPagePermissions(
      SELECT requested_users.user_id, access.permission,
             get_page_access_revision($1)::text AS access_revision
      FROM requested_users
-     LEFT JOIN LATERAL get_effective_page_permission_at(
+     LEFT JOIN LATERAL get_effective_page_permission(
        $1,
-       requested_users.user_id,
-       statement_timestamp()
+       requested_users.user_id
      ) access ON true`,
     [pageId, userIds],
   );
@@ -344,10 +316,9 @@ async function recomputePageConnections(
 const PAGE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * Periodically revalidate active page rooms so time-based share expiry takes
- * effect even when a connection is only receiving updates.
- * Authenticated page/user pairs and anonymous pages are queried in two
- * batches, independent of the number of open sockets.
+ * Periodically revalidate active page rooms as a fail-safe for missed access
+ * notifications and login-session expiry. Requests are batched independently
+ * of the number of open sockets.
  */
 export async function revalidateActivePageConnections(
   server: Server,
@@ -427,10 +398,9 @@ export async function revalidateActivePageConnections(
                     end as permission,
                     get_page_access_revision(requested.page_id)::text as access_revision
              from requested
-             left join lateral get_effective_page_permission_at(
+             left join lateral get_effective_page_permission(
                requested.page_id,
-               requested.user_id,
-               statement_timestamp()
+               requested.user_id
              ) access on true`,
             [
               pairs.map((pair) => pair.pageId),
@@ -458,46 +428,10 @@ export async function revalidateActivePageConnections(
             `with requested as (
                select distinct unnest($1::uuid[]) as page_id
              )
-             select requested.page_id, access.permission,
+             select requested.page_id,
+                    get_public_page_permission(requested.page_id) as permission,
                     get_page_access_revision(requested.page_id)::text as access_revision
-             from requested
-             left join lateral (
-               with page_parent as (
-                 select parent_id, is_public
-                 from pages
-                 where id = requested.page_id and is_deleted = false
-               )
-               select permission
-               from (
-                 select s.permission, 1 as src
-                 from shares s
-                 where s.entity_type = 'page'
-                   and s.entity_id = requested.page_id
-                   and s.token is not null
-                   and (s.expires_at is null or s.expires_at > statement_timestamp())
-                   and exists (select 1 from page_parent where is_public = true)
-                 union all
-                 select s.permission, 2 as src
-                 from shares s
-                 join folders f
-                   on f.id = s.entity_id and f.is_public = true and f.is_deleted = false
-                 where s.entity_type = 'folder'
-                   and s.token is not null
-                   and (s.expires_at is null or s.expires_at > statement_timestamp())
-                   and s.entity_id in (
-                     select ancestor_id
-                     from folder_closure fc
-                     join page_parent pp on fc.descendant_id = pp.parent_id
-                   )
-                   and not is_page_folder_inheritance_blocked(
-                     s.entity_id,
-                     requested.page_id
-                   )
-               ) permissions
-               order by case permission when 'admin' then 3 when 'edit' then 2 else 1 end desc,
-                        src asc
-               limit 1
-             ) access on true`,
+             from requested`,
             [anonymousIds],
           )
           .then(
@@ -571,7 +505,7 @@ export async function revalidateActivePageConnections(
     const result = user.isAnonymous ? anonymousResult : authenticatedResult;
     if (result.status === 'rejected') {
       logger.error(
-        `[expiry] failed to revalidate ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}: ${result.reason}`,
+        `[access] failed to revalidate ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}: ${result.reason}`,
       );
       connection.close({
         code: 4500,
@@ -603,7 +537,7 @@ export async function revalidateActivePageConnections(
       );
       connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
       logger.info(
-        `[expiry] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}`,
+        `[access] revoked ${user.isAnonymous ? 'anonymous' : 'user'}=${user.id} on page=${pageId}`,
       );
       affectedCount++;
       continue;
@@ -626,7 +560,7 @@ export async function revalidateActivePageConnections(
     const userId = ctx.user?.id;
     if (!userId) continue;
     if (metaSessionResult.status === 'rejected') {
-      logger.error(`[expiry] failed to revalidate metadata session for user=${userId}`);
+      logger.error(`[access] failed to revalidate metadata session for user=${userId}`);
       connection.close({
         code: 4500,
         reason: COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED,
@@ -679,17 +613,16 @@ async function applyShareEventToPage(
   const permission = clientPermission(rawPermission);
   let affectedCount = 0;
 
-  // For link share events (no targetUserId), pre-fetch the base permissions
-  // for the page owner and all directly invited users. This lets us compute
-  // each connection's effective permission after the link change.
-  const isLinkShareEvent = targetUserId === undefined;
+  // For public-access events (no targetUserId), pre-fetch account permissions
+  // so every signed-in connection can retain or fall back to its account access.
+  const isPublicAccessEvent = targetUserId === undefined;
   let basePermissions: Map<string, SharePermission | 'edit'> | undefined;
   let basePermissionsFailed = false;
-  if (isLinkShareEvent && pool) {
+  if (isPublicAccessEvent && pool) {
     try {
       const result = await pool.query(
         `SELECT user_id, permission
-         FROM get_page_base_permissions_at($1, statement_timestamp())`,
+         FROM get_page_base_permissions($1)`,
         [pageId],
       );
       basePermissions = new Map(
@@ -704,7 +637,7 @@ async function applyShareEventToPage(
     }
   }
 
-  // If permissions cannot be verified after a link change, disconnect every
+  // If permissions cannot be verified after a public-access change, disconnect every
   // affected session. Reconnection will run the normal authentication path.
   if (basePermissionsFailed) {
     logger.warn(
@@ -732,17 +665,40 @@ async function applyShareEventToPage(
     const isAffectedAnonymous = !isTargeted && ctx.user.isAnonymous === true;
     const isAffectedUser = isTargeted && ctx.user.id === targetUserId;
 
-    // --- Link share events: handle authenticated users ---
-    if (isLinkShareEvent && !ctx.user.isAnonymous) {
+    // --- Public-access events: handle authenticated users ---
+    if (isPublicAccessEvent && !ctx.user.isAnonymous) {
       const basePerm = basePermissions?.get(ctx.user.id);
 
       if (action === 'revoke') {
-        // Revoke: only disconnect users with no independent access.
-        // Users with a base permission (owner or invite) keep their access.
+        // Account users retain their independent access, including a downgrade
+        // from public Edit to account View. Users without account access close.
         if (basePerm !== undefined) {
-          logger.debug(
-            `[share] skipping revoke for privileged user=${ctx.user.id} (base=${basePerm})`,
+          const currentPermission = clientPermission(
+            (connection.context as { permission?: string }).permission,
           );
+          const retainedPermission =
+            currentPermission === 'admin' && basePerm === 'edit' ? 'admin' : basePerm;
+          const isReadOnly = retainedPermission === 'view';
+          if (connection.readOnly === isReadOnly && currentPermission === retainedPermission) {
+            logger.debug(
+              `[share] public revoke leaves account permission unchanged for user=${ctx.user.id} (base=${retainedPermission})`,
+            );
+            continue;
+          }
+          connection.readOnly = isReadOnly;
+          (connection.context as Record<string, unknown>).permission = retainedPermission;
+          connection.sendStateless(
+            JSON.stringify({
+              type: 'share_event',
+              action: 'update',
+              permission: retainedPermission,
+              ...(message !== undefined && { message }),
+            } satisfies StatelessShareMessage),
+          );
+          logger.debug(
+            `[share] public revoke restored account permission for user=${ctx.user.id} (base=${retainedPermission})`,
+          );
+          affectedCount++;
           continue;
         }
         connection.sendStateless(
@@ -753,13 +709,13 @@ async function applyShareEventToPage(
           } satisfies StatelessShareMessage),
         );
         connection.close({ code: 4401, reason: COLLAB_TERMINAL_REASONS.ACCESS_REVOKED });
-        logger.info(`[share] revoked link-only user=${ctx.user.id} on page ${pageId}`);
+        logger.info(`[share] revoked public-only user=${ctx.user.id} on page ${pageId}`);
         affectedCount++;
         continue;
       }
 
       // grant / update: compute effective permission for EVERY connection
-      // (privileged and link-only alike) based on their base + the new link.
+      // (account and public-only alike) based on account + public permission.
       if (!permission) {
         logger.debug(`[share] unknown permission "${rawPermission}" for page ${pageId}, skipping`);
         continue;
@@ -787,13 +743,13 @@ async function applyShareEventToPage(
         } satisfies StatelessShareMessage),
       );
       logger.info(
-        `[share] set ${isReadOnly ? 'read-only' : 'editable'} for user=${ctx.user.id} on page ${pageId} (base=${basePerm ?? 'none'} link=${permission} effective=${effectivePermission})`,
+        `[share] set ${isReadOnly ? 'read-only' : 'editable'} for user=${ctx.user.id} on page ${pageId} (base=${basePerm ?? 'none'} public=${permission} effective=${effectivePermission})`,
       );
       affectedCount++;
       continue;
     }
 
-    // --- Targeted (invite) events or anonymous link share events ---
+    // --- Targeted account-grant events or anonymous public-access events ---
     if (!isAffectedAnonymous && !isAffectedUser) continue;
     affectedCount++;
 
@@ -804,7 +760,7 @@ async function applyShareEventToPage(
         try {
           const permResult = await pool.query(
             `SELECT permission
-             FROM get_effective_page_permission_at($1, $2, statement_timestamp())`,
+             FROM get_effective_page_permission($1, $2)`,
             [pageId, ctx.user.id],
           );
           const newPermission = clientPermission(
@@ -855,7 +811,7 @@ async function applyShareEventToPage(
 
     if (action === 'grant' || action === 'update') {
       const isReadOnly = permission === 'view';
-      // For targeted events (invite changes), always send notification even if
+      // For targeted account-grant events, always send notification even if
       // readOnly didn't change — the permission level itself may have changed
       // (e.g., 'edit' → 'admin') and the user needs to see the toast.
       connection.readOnly = isReadOnly;
@@ -885,8 +841,8 @@ async function applyShareEventToPage(
  * - `entityType = 'folder'`: applies to all pages in the folder and its descendants
  *
  * Connection matching:
- * - `targetUserId = undefined` → affects all anonymous connections (link share)
- * - `targetUserId = string`    → affects that specific user (email invite)
+ * - `targetUserId = undefined` → affects public-access connections
+ * - `targetUserId = string`    → affects that specific account grant
  */
 export async function handleShareEvent(
   server: Server,
@@ -911,7 +867,7 @@ export async function handleShareEvent(
   if (targetUserId) metaUserIds.add(targetUserId);
 
   if (payload.metaOnly === true) {
-    // Link-provenance visits change dashboard/list visibility, but they do not
+    // Public-access visits change dashboard/list visibility, but they do not
     // change any already-open page connection's effective permission. Keep
     // this notification targeted and bounded: only invalidate the named
     // users' durable meta rooms, without folder fanout or page revalidation.
@@ -1144,10 +1100,9 @@ export async function handleWorkspaceEvent(
        SELECT requested_pages.page_id, access.permission,
               get_page_access_revision(requested_pages.page_id)::text AS access_revision
        FROM requested_pages
-       LEFT JOIN LATERAL get_effective_page_permission_at(
+       LEFT JOIN LATERAL get_effective_page_permission(
          requested_pages.page_id,
-         $2,
-         statement_timestamp()
+         $2
        ) access ON true`,
         [pageIds, memberId],
       );

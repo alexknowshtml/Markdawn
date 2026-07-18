@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   decideSharingPermission,
-  type OracleLinkPermission,
   type OraclePermission,
+  type OraclePublicPermission,
 } from './sharingOracle';
 
 const roles: readonly OraclePermission[] = [null, 'view', 'edit', 'admin'];
-const links: readonly OracleLinkPermission[] = [null, 'view', 'edit'];
+const publicPermissions: readonly OraclePublicPermission[] = [null, 'view', 'edit'];
 const rank = (permission: OraclePermission) => roles.indexOf(permission);
 
 describe('independent sharing permission oracle', () => {
@@ -16,26 +16,26 @@ describe('independent sharing permission oracle', () => {
       for (const targetGrant of roles) {
         for (const parentGrant of roles) {
           for (const grandparentGrant of roles) {
-            for (const targetLink of links) {
-              for (const parentLink of links) {
-                for (const grandparentLink of links) {
+            for (const targetPublic of publicPermissions) {
+              for (const parentPublic of publicPermissions) {
+                for (const grandparentPublic of publicPermissions) {
                   for (let boundaryBits = 0; boundaryBits < 8; boundaryBits += 1) {
                     const decision = decideSharingPermission({
                       workspace,
                       nodes: [
                         {
                           grant: targetGrant,
-                          link: targetLink,
+                          publicAccess: targetPublic,
                           restricted: (boundaryBits & 1) !== 0,
                         },
                         {
                           grant: parentGrant,
-                          link: parentLink,
+                          publicAccess: parentPublic,
                           restricted: (boundaryBits & 2) !== 0,
                         },
                         {
                           grant: grandparentGrant,
-                          link: grandparentLink,
+                          publicAccess: grandparentPublic,
                           restricted: (boundaryBits & 4) !== 0,
                         },
                       ],
@@ -69,9 +69,9 @@ describe('independent sharing permission oracle', () => {
       const decision = decideSharingPermission({
         workspace: 'admin',
         nodes: [
-          { grant: 'edit', link: null, restricted: (boundaryBits & 1) !== 0 },
-          { grant: null, link: null, restricted: (boundaryBits & 2) !== 0 },
-          { grant: null, link: null, restricted: (boundaryBits & 4) !== 0 },
+          { grant: 'edit', publicAccess: null, restricted: (boundaryBits & 1) !== 0 },
+          { grant: null, publicAccess: null, restricted: (boundaryBits & 2) !== 0 },
+          { grant: null, publicAccess: null, restricted: (boundaryBits & 4) !== 0 },
         ],
       });
       expect(decision.activeSources).toContainEqual({
@@ -86,15 +86,15 @@ describe('independent sharing permission oracle', () => {
     const before = decideSharingPermission({
       workspace: 'view',
       nodes: [
-        { grant: 'admin', link: null, restricted: false },
-        { grant: 'edit', link: 'view', restricted: false },
+        { grant: 'admin', publicAccess: null, restricted: false },
+        { grant: 'edit', publicAccess: 'view', restricted: false },
       ],
     });
     const after = decideSharingPermission({
       workspace: 'view',
       nodes: [
-        { grant: null, link: null, restricted: false },
-        { grant: 'edit', link: 'view', restricted: false },
+        { grant: null, publicAccess: null, restricted: false },
+        { grant: 'edit', publicAccess: 'view', restricted: false },
       ],
     });
 

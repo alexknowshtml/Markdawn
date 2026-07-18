@@ -201,20 +201,9 @@ export async function createTestWorkspaceMember(
   return { workspaceOwnerId, memberId, role };
 }
 
-export async function createTestPublicShare(pageId: string) {
-  const token = randomUUID();
-  await query('UPDATE pages SET is_public = true, public_token = $1 WHERE id = $2', [
-    token,
-    pageId,
-  ]);
-  await query(
-    `INSERT INTO shares (entity_type, entity_id, shared_by, permission, token)
-     SELECT 'page', id, created_by, 'view', $1
-     FROM pages
-     WHERE id = $2`,
-    [token, pageId],
-  );
-  return { pageId, token };
+export async function enableTestPagePublicAccess(pageId: string) {
+  await query("UPDATE pages SET public_permission = 'view' WHERE id = $1", [pageId]);
+  return { pageId };
 }
 
 /**

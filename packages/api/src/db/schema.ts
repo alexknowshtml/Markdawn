@@ -11,7 +11,6 @@ import {
   text,
   timestamp,
   unique,
-  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -107,38 +106,26 @@ export const shares = pgTable(
     entityType: text('entity_type').notNull().$type<'folder' | 'page'>(),
     entityId: uuid('entity_id').notNull(),
     sharedBy: uuid('shared_by').references(() => users.id, { onDelete: 'set null' }),
-    recipientUserId: uuid('recipient_user_id').references(() => users.id, {
-      onDelete: 'cascade',
-    }),
-    recipientEmail: text('recipient_email'),
+    recipientUserId: uuid('recipient_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
     permission: text('permission').notNull().default('view').$type<'view' | 'edit' | 'admin'>(),
-    token: text('token').unique(),
-    expiresAt: timestamp('expires_at', { withTimezone: true }),
     createdAt: timestamp('created_at').defaultNow(),
     updatedAt: timestamp('updated_at').defaultNow(),
   },
   (table) => ({
     entityIdx: index('shares_entity_idx').on(table.entityType, table.entityId),
     recipientIdx: index('shares_recipient_idx').on(table.recipientUserId),
-    tokenIdx: index('shares_token_idx').on(table.token),
-    expiresAtIdx: index('shares_expires_at_idx').on(table.expiresAt),
-    inviteUnique: unique('shares_invite_unique').on(
+    recipientUnique: unique('shares_recipient_unique').on(
       table.entityType,
       table.entityId,
       table.recipientUserId,
     ),
-    linkUnique: uniqueIndex('shares_link_unique')
-      .on(table.entityType, table.entityId)
-      .where(sql`${table.token} is not null`),
-    publicLinkPermission: check(
-      'shares_public_link_permission_check',
-      sql`${table.token} is null or ${table.permission} in ('view', 'edit')`,
-    ),
   }),
 );
 
-export const pageAccessEvents = pgTable(
-  'page_access_events',
+export const pagePublicAccessVisits = pgTable(
+  'page_public_access_visits',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     pageId: uuid('page_id')
@@ -147,16 +134,15 @@ export const pageAccessEvents = pgTable(
     userId: uuid('user_id')
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
-    source: text('source').notNull().default('link').$type<'link'>(),
-    token: text('token').notNull(),
-    permission: text('permission').notNull().$type<'view' | 'edit' | 'admin'>(),
     firstSeenAt: timestamp('first_seen_at').defaultNow(),
     lastSeenAt: timestamp('last_seen_at').defaultNow(),
   },
   (table) => ({
-    pageUserSourceUnique: unique().on(table.pageId, table.userId, table.source, table.token),
-    pageUserIdx: index('page_access_events_page_user_idx').on(table.pageId, table.userId),
-    tokenIdx: index('page_access_events_token_idx').on(table.token),
+    pageUserUnique: unique('page_public_access_visits_page_user_unique').on(
+      table.pageId,
+      table.userId,
+    ),
+    userIdx: index('page_public_access_visits_user_idx').on(table.userId),
   }),
 );
 
@@ -183,9 +169,7 @@ export const folders = pgTable(
 
     deletionBatchId: uuid('deletion_batch_id'),
 
-    isPublic: boolean('is_public').default(false),
-
-    publicToken: text('public_token'),
+    publicPermission: text('public_permission').$type<'view' | 'edit'>(),
 
     inheritancePolicy: text('inheritance_policy')
       .notNull()
@@ -196,6 +180,10 @@ export const folders = pgTable(
     positionNumeric: check(
       'folders_position_numeric_check',
       sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,
+    ),
+    publicPermission: check(
+      'folders_public_permission_check',
+      sql`${table.publicPermission} is null or ${table.publicPermission} in ('view', 'edit')`,
     ),
   }),
 );
@@ -261,8 +249,7 @@ export const pages = pgTable(
 
     createdBy: uuid('created_by').references(() => users.id),
 
-    isPublic: boolean('is_public').default(false),
-    publicToken: text('public_token').unique(),
+    publicPermission: text('public_permission').$type<'view' | 'edit'>(),
 
     inheritancePolicy: text('inheritance_policy')
       .notNull()
@@ -285,6 +272,10 @@ export const pages = pgTable(
     positionNumeric: check(
       'pages_position_numeric_check',
       sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,
+    ),
+    publicPermission: check(
+      'pages_public_permission_check',
+      sql`${table.publicPermission} is null or ${table.publicPermission} in ('view', 'edit')`,
     ),
   }),
 );
@@ -339,8 +330,8 @@ export const pageVisits = pgTable(
   }),
 );
 
-export const folderAccessEvents = pgTable(
-  'folder_access_events',
+export const folderPublicAccessVisits = pgTable(
+  'folder_public_access_visits',
   {
     id: uuid('id').defaultRandom().primaryKey(),
     folderId: uuid('folder_id')
@@ -349,29 +340,45 @@ export const folderAccessEvents = pgTable(
     userId: uuid('user_id')
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
-    source: text('source').notNull().default('link').$type<'link'>(),
-    token: text('token').notNull(),
-    permission: text('permission').notNull().$type<'view' | 'edit' | 'admin'>(),
     firstSeenAt: timestamp('first_seen_at').defaultNow(),
     lastSeenAt: timestamp('last_seen_at').defaultNow(),
   },
   (table) => ({
-    folderUserSourceUnique: unique().on(table.folderId, table.userId, table.source, table.token),
-    folderUserIdx: index('folder_access_events_folder_user_idx').on(table.folderId, table.userId),
-    tokenIdx: index('folder_access_events_token_idx').on(table.token),
+    folderUserUnique: unique('folder_public_access_visits_folder_user_unique').on(
+      table.folderId,
+      table.userId,
+    ),
+    userIdx: index('folder_public_access_visits_user_idx').on(table.userId),
   }),
 );
 
-export const comments = pgTable('comments', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  content: text('content').notNull(),
-  anchorBlockId: text('anchor_block_id'),
-  resolved: boolean('resolved').default(false),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
+export const guestIdentities = pgTable('guest_identities', {
+  id: uuid('id').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+  lastSeenAt: timestamp('last_seen_at').defaultNow().notNull(),
 });
+
+export const comments = pgTable(
+  'comments',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pageId: uuid('page_id').references(() => pages.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    guestId: uuid('guest_id').references(() => guestIdentities.id),
+    content: text('content').notNull(),
+    anchorBlockId: text('anchor_block_id'),
+    resolved: boolean('resolved').default(false),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+  },
+  (table) => ({
+    author: check(
+      'comments_author_check',
+      sql`num_nonnulls(${table.userId}, ${table.guestId}) = 1`,
+    ),
+  }),
+);
 
 export const templates = pgTable('templates', {
   id: uuid('id').defaultRandom().primaryKey(),
@@ -388,13 +395,23 @@ export const templates = pgTable('templates', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-export const commentReplies = pgTable('comment_replies', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'cascade' }),
-  userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
-  content: text('content').notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const commentReplies = pgTable(
+  'comment_replies',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    commentId: uuid('comment_id').references(() => comments.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    guestId: uuid('guest_id').references(() => guestIdentities.id),
+    content: text('content').notNull(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    author: check(
+      'comment_replies_author_check',
+      sql`num_nonnulls(${table.userId}, ${table.guestId}) = 1`,
+    ),
+  }),
+);
 
 export const connections = pgTable(
   'connections',
@@ -460,17 +477,25 @@ export const connectionOccurrences = pgTable(
   }),
 );
 
-export const uploads = pgTable('uploads', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  filename: text('filename').notNull().unique(),
-  originalName: text('original_name').notNull(),
-  mimeType: text('mime_type').notNull(),
-  size: integer('size').notNull(),
-  uploadedBy: uuid('uploaded_by')
-    .references(() => users.id, { onDelete: 'cascade' })
-    .notNull(),
-  createdAt: timestamp('created_at').defaultNow(),
-});
+export const uploads = pgTable(
+  'uploads',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    filename: text('filename').notNull().unique(),
+    originalName: text('original_name').notNull(),
+    mimeType: text('mime_type').notNull(),
+    size: integer('size').notNull(),
+    uploadedBy: uuid('uploaded_by').references(() => users.id, { onDelete: 'cascade' }),
+    uploadedByGuestId: uuid('uploaded_by_guest_id').references(() => guestIdentities.id),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    uploader: check(
+      'uploads_uploader_check',
+      sql`num_nonnulls(${table.uploadedBy}, ${table.uploadedByGuestId}) = 1`,
+    ),
+  }),
+);
 
 export const uploadDeletionQueue = pgTable(
   'upload_deletion_queue',

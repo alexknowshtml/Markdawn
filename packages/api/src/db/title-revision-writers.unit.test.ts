@@ -32,7 +32,7 @@ describe('monotonic page title writers', () => {
         .map((sql) => ({ path, sql })),
     );
 
-    expect(titleUpdates.length).toBe(7);
+    expect(titleUpdates.length).toBe(8);
     for (const writer of titleUpdates) {
       expect(writer.sql, writer.path).toMatch(/\b"?title_revision"?\s*=/i);
     }

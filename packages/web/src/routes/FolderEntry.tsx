@@ -9,7 +9,7 @@ import {
   List,
 } from 'lucide-react';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import { ExplorerItem, type ExplorerItemData } from '../components/workspace/ExplorerItem';
 import { MoveDialog } from '../components/workspace/MoveDialog';
 import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
@@ -78,9 +78,8 @@ const normalizePublicFolder = (
   createdBy: folder.createdBy ?? null,
   createdAt: toDate(folder.createdAt),
   updatedAt: toDate(folder.updatedAt),
-  publicToken: null,
   ownerId: folder.ownerId ?? folder.owner_id ?? null,
-  ...(folder.isPublic !== undefined ? { isPublic: folder.isPublic } : {}),
+  publicPermission: folder.publicPermission ?? null,
   children: (folder.folders ?? []).map((child) => normalizePublicFolder(child, folder.id)),
 });
 
@@ -99,6 +98,7 @@ const findFolderById = (
 
 export default function FolderEntry() {
   const navigate = useIdentityNavigate();
+  const location = useLocation();
   const identityLifecycle = useIdentityLifecycle();
   const { slugAndId } = useParams<{ slugAndId: string }>();
   const folderId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
@@ -123,6 +123,8 @@ export default function FolderEntry() {
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const canManageFolder = !!currentUserId && capabilities.canDelete;
+  const canCreateChildren = canManageFolder || publicEntity?.publicPermission === 'edit';
+  const canGuestDuplicateItems = isAnonymous && publicEntity?.publicPermission === 'edit';
 
   const bulkRemoveMutation = useBulkRemoveEntities();
   const refreshedFavoriteKeys = useMemo(
@@ -205,8 +207,15 @@ export default function FolderEntry() {
       '/app/folder/'.length,
     );
     if (slugAndId === expectedSlug) return;
-    navigate(buildFolderPath(currentFolder.name, currentFolder.id), { replace: true });
-  }, [currentFolder, slugAndId, navigate]);
+    navigate(
+      {
+        pathname: buildFolderPath(currentFolder.name, currentFolder.id),
+        search: location.search,
+        hash: location.hash,
+      },
+      { replace: true },
+    );
+  }, [currentFolder, slugAndId, navigate, location.search, location.hash]);
 
   const breadcrumbPath = useMemo(() => {
     if (!folderId) return [];
@@ -345,7 +354,24 @@ export default function FolderEntry() {
         ...(folderId ? { parentId: folderId } : {}),
       });
       if (!identityLifecycle.isActive()) return;
-      setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
+      if (isAnonymous) {
+        navigate(buildFolderPath(folder.name, folder.id));
+      } else {
+        setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
+      }
+    } catch {
+      // Error toast handled globally by MutationCache.onError
+    }
+  };
+
+  const handleDuplicateItem = async (item: ExplorerItemData) => {
+    if (!canGuestDuplicateItems || !folderId) return;
+    try {
+      if (item.type === 'page') {
+        await copyPageMutation.mutateAsync({ pageId: item.id, parentId: folderId });
+      } else {
+        await copyFolderMutation.mutateAsync({ folderId: item.id, parentId: folderId });
+      }
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
@@ -623,7 +649,7 @@ export default function FolderEntry() {
               <List size={16} />
             </button>
           </div>
-          {canManageFolder && (
+          {canCreateChildren && (
             <div className="relative flex items-stretch" ref={newMenuRef}>
               <button
                 type="button"
@@ -700,7 +726,7 @@ export default function FolderEntry() {
           <FileText size={48} className="text-zinc-300 dark:text-zinc-600 mb-4" />
           <h3 className="text-lg font-medium text-zinc-900 dark:text-zinc-50 mb-2">No items yet</h3>
           <p className="text-sm text-zinc-500 dark:text-zinc-400 max-w-sm">
-            {canManageFolder
+            {canCreateChildren
               ? 'Create a new page or folder to get started.'
               : 'No items in this folder.'}
           </p>
@@ -730,7 +756,10 @@ export default function FolderEntry() {
                       : {})}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
                     canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                    showContextMenu={!isAnonymous}
+                    showContextMenu={!isAnonymous || canGuestDuplicateItems}
+                    {...(canGuestDuplicateItems
+                      ? { onCopy: () => void handleDuplicateItem(item) }
+                      : {})}
                   />
                 ))}
               </div>
@@ -769,7 +798,10 @@ export default function FolderEntry() {
                   onEditKeyDown={handleEditKeyDown}
                   collaborators={filterOutSelf(item.collaborators ?? [])}
                   canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                  showContextMenu={!isAnonymous}
+                  showContextMenu={!isAnonymous || canGuestDuplicateItems}
+                  {...(canGuestDuplicateItems
+                    ? { onCopy: () => void handleDuplicateItem(item) }
+                    : {})}
                 />
               ))}
             </div>
@@ -810,7 +842,10 @@ export default function FolderEntry() {
                         : {})}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
                       canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                      showContextMenu={!isAnonymous}
+                      showContextMenu={!isAnonymous || canGuestDuplicateItems}
+                      {...(canGuestDuplicateItems
+                        ? { onCopy: () => void handleDuplicateItem(item) }
+                        : {})}
                       showCheckboxes={hasSelection}
                     />
                   ))}
@@ -859,7 +894,10 @@ export default function FolderEntry() {
                     onEditKeyDown={handleEditKeyDown}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
                     canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                    showContextMenu={!isAnonymous}
+                    showContextMenu={!isAnonymous || canGuestDuplicateItems}
+                    {...(canGuestDuplicateItems
+                      ? { onCopy: () => void handleDuplicateItem(item) }
+                      : {})}
                     showCheckboxes={hasSelection}
                   />
                 ))}

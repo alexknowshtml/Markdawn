@@ -133,23 +133,6 @@ describe('Drizzle v1 migration history', () => {
     expect(migrationSql).toContain('deletion_batch_id = nearest.deletion_batch_id');
   });
 
-  it('converts absolute share expirations from the historical UTC convention', () => {
-    const expirationMigration = listMigrationDirs().find((dirName) =>
-      dirName.endsWith('_convert_share_expirations_to_timestamptz'),
-    );
-    expect(expirationMigration, 'share expiration timezone migration is missing').toBeDefined();
-
-    const migrationSql = readMigrationSql(expirationMigration ?? '');
-    expect(migrationSql).toContain('SET DATA TYPE timestamp with time zone');
-    expect(migrationSql).toContain(`USING "expires_at" AT TIME ZONE 'UTC'`);
-
-    const snapshot = readFileSync(
-      resolve(drizzleDir, expirationMigration ?? '', 'snapshot.json'),
-      'utf8',
-    );
-    expect(snapshot).toContain('timestamp with time zone');
-  });
-
   it('evaluates canonical permission wrappers at statement time', () => {
     const statementTimeMigration = listMigrationDirs().find((dirName) =>
       dirName.endsWith('_use_statement_time_for_permission_wrappers'),
@@ -171,6 +154,28 @@ describe('Drizzle v1 migration history', () => {
 
     expect(migrationSql.match(/statement_timestamp\(\)/g)).toHaveLength(wrappers.length);
     expect(migrationSql).not.toMatch(/\bNOW\(\)/i);
+  });
+
+  it('removes sharing-time permission variants with the simplified access model', () => {
+    const simplificationMigration = listMigrationDirs().find((dirName) =>
+      dirName.endsWith('_simplify_public_access'),
+    );
+    expect(
+      simplificationMigration,
+      'public access simplification migration is missing',
+    ).toBeDefined();
+
+    const migrationSql = readMigrationSql(simplificationMigration ?? '');
+    expect(migrationSql).toContain(
+      'DROP FUNCTION IF EXISTS get_effective_page_permission_at(uuid, uuid, timestamptz)',
+    );
+    expect(migrationSql).toContain(
+      'DROP FUNCTION IF EXISTS get_page_base_permissions_at(uuid, timestamptz)',
+    );
+    expect(migrationSql).not.toMatch(/CREATE FUNCTION get_[a-z_]+_at\(/);
+    expect(migrationSql).not.toContain('p_as_of');
+    expect(migrationSql).toContain('CREATE FUNCTION get_effective_page_permission(');
+    expect(migrationSql).toContain('CREATE FUNCTION get_enumerable_folder_ids(');
   });
 
   it('invalidates legacy folder-link provenance before enabling folder enumeration', () => {

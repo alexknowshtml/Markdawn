@@ -10,7 +10,7 @@ import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
-type LinkPermission = SharePermission | 'private';
+type PublicPermission = Exclude<SharePermission, 'admin'> | 'private';
 
 async function fetchShareSummary(
   entityType: ShareEntityType,
@@ -23,22 +23,22 @@ async function fetchShareSummary(
   return res.json();
 }
 
-async function updateLinkPermission({
+async function updatePublicPermission({
   entityType,
   entityId,
   permission,
 }: {
   entityType: ShareEntityType;
   entityId: string;
-  permission: LinkPermission;
-}): Promise<ShareSummary['link'] & { message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/link`, {
+  permission: PublicPermission;
+}): Promise<ShareSummary['publicAccess'] & { message?: string }> {
+  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/public-access`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ permission }),
   });
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to update link' }));
+    const error = await res.json().catch(() => ({ message: 'Failed to update public access' }));
     throw new Error(error.message);
   }
   return res.json();
@@ -65,33 +65,31 @@ async function updateInheritancePolicy({
   return res.json();
 }
 
-async function inviteToEntity({
+async function grantEntityAccess({
   entityType,
   entityId,
   email,
   permission,
-  expiresAt,
 }: {
   entityType: ShareEntityType;
   entityId: string;
   email: string;
   permission: SharePermission;
-  expiresAt?: string;
 }): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/invite`, {
+  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/grants`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, permission, expiresAt }),
+    body: JSON.stringify({ email, permission }),
   });
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to invite user' }));
+    const error = await res.json().catch(() => ({ message: 'Failed to grant access' }));
     throw new Error(error.message);
   }
   return res.json();
 }
 
-async function removeShare(shareId: string): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/${shareId}`, {
+async function removeGrant(grantId: string): Promise<{ message?: string }> {
+  const res = await fetch(`${API_BASE}/shares/grants/${grantId}`, {
     method: 'DELETE',
   });
   if (!res.ok) {
@@ -116,10 +114,10 @@ export function useShareSummary(entityType: ShareEntityType, entityId?: string) 
   });
 }
 
-export function useUpdateLinkPermission() {
+export function useUpdatePublicPermission() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: updateLinkPermission,
+    mutationFn: updatePublicPermission,
     onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
@@ -129,7 +127,7 @@ export function useUpdateLinkPermission() {
       queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
       if (data?.message) showSuccessToast(data.message);
     },
-    meta: { errorMessage: 'Failed to update link' },
+    meta: { errorMessage: 'Failed to update public access' },
   });
 }
 
@@ -150,10 +148,10 @@ export function useUpdateInheritancePolicy() {
   });
 }
 
-export function useInviteToEntity() {
+export function useGrantEntityAccess() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: inviteToEntity,
+    mutationFn: grantEntityAccess,
     onSuccess: (data, { entityType, entityId }) => {
       queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
@@ -163,18 +161,18 @@ export function useInviteToEntity() {
       queryClient.invalidateQueries({ queryKey: ['folderCollaborators'] });
       if (data?.message) showSuccessToast(data.message);
     },
-    meta: { errorMessage: 'Failed to invite user' },
+    meta: { errorMessage: 'Failed to grant access' },
   });
 }
 
-async function updateSharePermission({
-  shareId,
+async function updateGrantPermission({
+  grantId,
   permission,
 }: {
-  shareId: string;
+  grantId: string;
   permission: SharePermission;
 }): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/${shareId}`, {
+  const res = await fetch(`${API_BASE}/shares/grants/${grantId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ permission }),
@@ -186,10 +184,10 @@ async function updateSharePermission({
   return res.json();
 }
 
-export function useUpdateSharePermission() {
+export function useUpdateGrantPermission() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: updateSharePermission,
+    mutationFn: updateGrantPermission,
     onSuccess: (data) => {
       // A direct grant update can change which of several independent sources
       // wins. Refetch the server-computed provenance instead of locally
@@ -203,12 +201,12 @@ export function useUpdateSharePermission() {
   });
 }
 
-export function useRemoveShare() {
+export function useRemoveGrant() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: removeShare,
+    mutationFn: removeGrant,
     onSuccess: (data) => {
-      // Removing one grant can promote a latent folder, workspace, or link
+      // Removing one grant can promote a latent folder, workspace, or public
       // source. Only the API has enough context to recompute the winner.
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });

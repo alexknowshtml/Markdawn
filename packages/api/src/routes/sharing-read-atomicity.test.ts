@@ -39,9 +39,9 @@ async function runRevocationBarrier(
   const session = await createTestSession(revokedUser.id);
   await query(
     `insert into shares (
-       entity_type, entity_id, shared_by, recipient_user_id, recipient_email, permission
-     ) values ('page', $1, $2, $3, $4, 'admin')`,
-    [page.id, owner.id, revokedUser.id, revokedUser.email],
+       entity_type, entity_id, shared_by, recipient_user_id, permission
+     ) values ('page', $1, $2, $3, 'admin')`,
+    [page.id, owner.id, revokedUser.id],
   );
 
   let releaseTableLock = (): void => undefined;
@@ -75,9 +75,9 @@ async function runRevocationBarrier(
     await executeQuery(
       tx,
       `insert into shares (
-         entity_type, entity_id, shared_by, recipient_user_id, recipient_email, permission
-       ) values ('page', $1, $2, $3, $4, 'view')`,
-      [page.id, owner.id, secretUser.id, secretUser.email],
+         entity_type, entity_id, shared_by, recipient_user_id, permission
+       ) values ('page', $1, $2, $3, 'view')`,
+      [page.id, owner.id, secretUser.id],
     );
   });
 
@@ -106,7 +106,7 @@ async function runRevocationBarrier(
 }
 
 describe('sharing management read atomicity', () => {
-  it('does not mix a pre-revoke summary authorization with post-revoke invite data', async () => {
+  it('does not mix a pre-revoke summary authorization with post-revoke grant data', async () => {
     const app = await createTestApp();
     const result = await runRevocationBarrier((pageId, sessionCookie) =>
       app.request(`/api/shares/entity/page/${pageId}`, {
@@ -117,10 +117,10 @@ describe('sharing management read atomicity', () => {
     expect(result.response.status).toBe(200);
     const summary = (await result.response.json()) as {
       visibility: string;
-      invites: Array<{ recipientUserId: string | null }>;
+      grants: Array<{ recipientUserId: string | null }>;
     };
     expect(summary.visibility).toBe('full');
-    expect(summary.invites).not.toContainEqual(
+    expect(summary.grants).not.toContainEqual(
       expect.objectContaining({ recipientUserId: result.secretUserId }),
     );
     expect(JSON.stringify(summary)).not.toContain(result.secretEmail);
@@ -134,7 +134,7 @@ describe('sharing management read atomicity', () => {
   it('does not mix collaborator authorization with post-revoke identities', async () => {
     const app = await createTestApp();
     const result = await runRevocationBarrier((pageId, sessionCookie) =>
-      app.request(`/api/shares/pages/collaborators?pageIds=${pageId}`, {
+      app.request(`/api/shares/pages/collaborators?ids=${pageId}`, {
         headers: { Cookie: sessionCookie },
       }),
     );
@@ -149,10 +149,9 @@ describe('sharing management read atomicity', () => {
     );
     expect(JSON.stringify(collaborators)).not.toContain(result.secretEmail);
 
-    const afterRevoke = await app.request(
-      `/api/shares/pages/collaborators?pageIds=${result.pageId}`,
-      { headers: { Cookie: result.sessionCookie } },
-    );
+    const afterRevoke = await app.request(`/api/shares/pages/collaborators?ids=${result.pageId}`, {
+      headers: { Cookie: result.sessionCookie },
+    });
     expect(afterRevoke.status).toBe(200);
     expect(await afterRevoke.json()).toEqual({ [result.pageId]: [] });
   });

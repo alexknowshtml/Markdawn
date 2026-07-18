@@ -20,7 +20,7 @@ import { consumeSelfLeave, markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 // showErrorToast kept for non-mutation use in handleExport
 import { ConfirmDialog } from '../ConfirmDialog';
-import { PublicShareDialog } from '../editor/PublicShareDialog';
+import { ShareDialog } from '../editor/ShareDialog';
 import { MoveDialog } from '../workspace/MoveDialog';
 import { KebabMenu } from './KebabMenu';
 
@@ -33,7 +33,7 @@ type PageContextMenuProps = {
     ownerId?: string | null | undefined;
     createdBy?: string | null | undefined;
     userPermission?: 'view' | 'edit' | 'admin' | null | undefined;
-    shareSource?: 'direct' | 'link' | 'workspace' | undefined;
+    shareSource?: 'direct' | 'public' | 'workspace' | undefined;
     canMove?: boolean | undefined;
   };
   isFavorite?: boolean;
@@ -42,6 +42,7 @@ type PageContextMenuProps = {
   onOpenChange?: ((isOpen: boolean) => void) | undefined;
   onRename?: () => void;
   onDelete?: () => void;
+  onCopy?: () => void;
   onMutated?: () => void;
 };
 
@@ -53,6 +54,7 @@ export function PageContextMenu({
   onOpenChange,
   onRename,
   onDelete,
+  onCopy,
   onMutated,
 }: PageContextMenuProps) {
   const identityLifecycle = useIdentityLifecycle();
@@ -63,8 +65,8 @@ export function PageContextMenu({
   const toggleFavoriteMutation = useToggleFavorite();
   const bulkMovePagesMutation = useBulkMovePages();
   const bulkMoveFoldersMutation = useBulkMoveFolders();
-  const { data: folders } = useFolderTree();
-  const { data: workspaceMemberships } = useWorkspaceMemberships();
+  const { data: folders } = useFolderTree({ enabled: !isAnonymous });
+  const { data: workspaceMemberships } = useWorkspaceMemberships({ enabled: !isAnonymous });
   const { handleDelete, isPending: isDeletePending } = useEntityDeletion({
     entityType: item.type,
     currentUserId,
@@ -82,7 +84,8 @@ export function PageContextMenu({
   const isOwned = currentUserId ? isOwnedByUser(item, currentUserId) : false;
   const isAdmin = isOwned || item.userPermission === 'admin';
   const canRename = canRenameEntity(item, currentUserId);
-  const canLeave = !isOwned && (item.shareSource === 'direct' || item.shareSource === 'link');
+  const canLeave =
+    !isAnonymous && !isOwned && (item.shareSource === 'direct' || item.shareSource === 'public');
   const canMove = item.canMove ?? isAdmin;
   const hasWorkspaceRootAccess =
     isOwned ||
@@ -215,7 +218,7 @@ export function PageContextMenu({
   };
 
   const menuItems = [
-    {
+    !isAnonymous && {
       label: isFavorite ? 'Unfavorite' : 'Favorite',
       icon: <Star size={14} className={isFavorite ? 'text-yellow-500 fill-yellow-500' : ''} />,
       onClick: handleToggleFavorite,
@@ -226,7 +229,7 @@ export function PageContextMenu({
         icon: <Edit2 size={14} />,
         onClick: onRename,
       },
-    {
+    !isAnonymous && {
       label: 'Share',
       icon: <Share size={14} />,
       onClick: () => setShowShareDialog(true),
@@ -254,10 +257,10 @@ export function PageContextMenu({
       icon: <FolderInput size={14} />,
       onClick: handleMove,
     },
-    !isAnonymous && {
+    (!isAnonymous || onCopy) && {
       label: 'Copy',
       icon: <Copy size={14} />,
-      onClick: handleCopy,
+      onClick: onCopy ?? handleCopy,
     },
   ].filter(Boolean) as {
     label: string;
@@ -275,7 +278,7 @@ export function PageContextMenu({
         items={menuItems}
       />
       {showShareDialog && (
-        <PublicShareDialog
+        <ShareDialog
           entityType={item.type}
           entityId={item.id}
           title={item.title}

@@ -101,7 +101,7 @@ describe('usePageTitle', () => {
     );
   });
 
-  it('persists anonymous titles through Yjs and the public-link endpoint', async () => {
+  it('persists anonymous titles through Yjs and the public-access endpoint', async () => {
     const ydoc = new Y.Doc();
     ydoc.getText('title').insert(0, 'Original');
     const { result } = renderHook(

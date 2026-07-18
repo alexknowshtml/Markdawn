@@ -84,8 +84,8 @@ export async function notifyShareGrant(
 ): Promise<void> {
   await fireShareEvent('grant', params, executor);
   if (params.targetUserId && params.entityTitle && params.sharedByName) {
-    const invitePayload = {
-      type: 'invite_received',
+    const grantPayload = {
+      type: 'grant_received',
       entityType: params.entityType,
       entityId: params.entityId,
       entityTitle: boundedNotificationText(params.entityTitle),
@@ -95,7 +95,7 @@ export async function notifyShareGrant(
       ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
     };
     await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [
-      JSON.stringify(invitePayload),
+      JSON.stringify(grantPayload),
     ]);
   }
 }

@@ -73,7 +73,7 @@ vi.mock('../hooks/use-folders', () => ({
         ownerId: 'owner-1',
         createdAt: new Date(),
         updatedAt: new Date(),
-        publicToken: null,
+        publicPermission: null,
         children: [],
       },
     ],
@@ -113,16 +113,21 @@ describe('FolderEntry access refresh', () => {
 
   it('uses fresh polled metadata for a router-aware canonical replace', async () => {
     render(
-      <MemoryRouter initialEntries={[`/app/folder/stale-${FOLDER_ID}`]}>
+      <MemoryRouter initialEntries={[`/app/folder/stale-${FOLDER_ID}?mode=grid#section`]}>
         <Routes>
           <Route path="/app/folder/:slugAndId" element={<FolderEntry />} />
         </Routes>
       </MemoryRouter>,
     );
 
-    expect(mocks.navigate).toHaveBeenCalledWith(buildFolderPath('Fresh polled name', FOLDER_ID), {
-      replace: true,
-    });
+    expect(mocks.navigate).toHaveBeenCalledWith(
+      {
+        pathname: buildFolderPath('Fresh polled name', FOLDER_ID),
+        search: '?mode=grid',
+        hash: '#section',
+      },
+      { replace: true },
+    );
   });
 
   it('retries both page and folder trees after either fails', async () => {

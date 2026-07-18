@@ -32,9 +32,9 @@ async function runContentReadBarrier(options: {
   const session = await createTestSession(viewer.id);
   await query(
     `insert into shares (
-       entity_type, entity_id, shared_by, recipient_user_id, recipient_email, permission
-     ) values ('page', $1, $2, $3, $4, 'view')`,
-    [page.id, owner.id, viewer.id, viewer.email],
+       entity_type, entity_id, shared_by, recipient_user_id, permission
+     ) values ('page', $1, $2, $3, 'view')`,
+    [page.id, owner.id, viewer.id],
   );
 
   let releaseTableLock = (): void => undefined;

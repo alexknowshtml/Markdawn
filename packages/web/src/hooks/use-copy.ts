@@ -39,6 +39,7 @@ export function useCopyPage() {
       copyPage(pageId, parentId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       showSuccessToast('Page copied');
     },
   });
@@ -52,6 +53,7 @@ export function useCopyFolder() {
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       showSuccessToast(
         data.skippedRestrictedItems
           ? 'Folder copied. Some restricted items were skipped.'
