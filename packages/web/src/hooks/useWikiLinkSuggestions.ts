@@ -18,6 +18,18 @@ interface SuggestionsState {
   isLoading: boolean;
 }
 
+export async function bindWikiLinkTarget(
+  sourcePageId: string,
+  target: Pick<WikiLinkPage, 'id' | 'title'>,
+): Promise<void> {
+  const response = await fetch(`/api/pages/${sourcePageId}/wiki-link-target`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path: target.title, targetId: target.id }),
+  });
+  if (!response.ok) throw new Error('Failed to bind wiki-link target');
+}
+
 export function useWikiLinkSuggestions(
   editorRef: React.RefObject<Editor | null>,
   sourcePageId: string,
@@ -69,6 +81,7 @@ export function useWikiLinkSuggestions(
     (page: WikiLinkPage) => {
       const editor = editorRef.current;
       if (!editor) return;
+      let inserted = false;
 
       try {
         editor.action((ctx) => {
@@ -102,6 +115,7 @@ export function useWikiLinkSuggestions(
 
               dispatch(tr);
               view.focus();
+              inserted = true;
             }
           }
         });
@@ -109,9 +123,13 @@ export function useWikiLinkSuggestions(
         // Editor may have been destroyed
       }
 
+      if (inserted) {
+        void bindWikiLinkTarget(sourcePageId, page).catch(() => undefined);
+      }
+
       setSuggestions((prev) => ({ ...prev, isOpen: false }));
     },
-    [editorRef],
+    [editorRef, sourcePageId],
   );
 
   const handleAddPage = useCallback(

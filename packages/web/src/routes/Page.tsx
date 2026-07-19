@@ -323,21 +323,39 @@ export default function Page() {
   }, [folderTree, isAnonymous]);
 
   const handleWikiLinkClick = useCallback(
-    (path: string) => {
+    async (path: string) => {
       if (!path) return;
       if (isAnonymous) {
         const targetId = extractUuidFromSlug(path);
         if (targetId) navigate(`/app/${targetId}`);
         return;
       }
-      const targetPage = flatPages.find(
-        (p) => p.id === path || p.title.toLowerCase() === path.toLowerCase(),
+      try {
+        const response = await fetch(
+          `${API_BASE}/pages/${pageId}/wiki-link-target?path=${encodeURIComponent(path)}`,
+        );
+        if (!response.ok) return;
+        const body = (await response.json()) as {
+          target: { id: string; title: string } | null;
+        };
+        if (body.target) {
+          navigate(buildPagePath(body.target.title, body.target.id));
+          return;
+        }
+      } catch {
+        // Fall back to the current requester-filtered page tree below.
+      }
+
+      const directId = flatPages.find((candidate) => candidate.id === path);
+      const titleMatches = flatPages.filter(
+        (candidate) => candidate.title.toLowerCase() === path.toLowerCase(),
       );
-      if (targetPage) {
-        navigate(buildPagePath(targetPage.title, targetPage.id));
+      const fallbackTarget = directId ?? (titleMatches.length === 1 ? titleMatches[0] : undefined);
+      if (fallbackTarget) {
+        navigate(buildPagePath(fallbackTarget.title, fallbackTarget.id));
       }
     },
-    [flatPages, navigate, isAnonymous],
+    [flatPages, navigate, isAnonymous, pageId],
   );
 
   if (!pageId) {

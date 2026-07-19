@@ -1,7 +1,7 @@
 import type { Editor } from '@milkdown/core';
 import { renderHook } from '@testing-library/react';
 import type { RefObject } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   session: null as { user?: { id: string } | null } | null,
@@ -16,7 +16,7 @@ vi.mock('./use-pages', () => ({
   useCreatePage: () => ({ mutateAsync: vi.fn() }),
 }));
 
-import { useWikiLinkSuggestions } from './useWikiLinkSuggestions';
+import { bindWikiLinkTarget, useWikiLinkSuggestions } from './useWikiLinkSuggestions';
 
 const editorRef = { current: null } as RefObject<Editor | null>;
 
@@ -61,5 +61,22 @@ describe('useWikiLinkSuggestions page creation policy', () => {
     const { result } = renderHook(() => useWikiLinkSuggestions(editorRef, 'source-page'));
 
     expect(result.current.canAddPage).toBe(true);
+  });
+});
+
+describe('bindWikiLinkTarget', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('records the selected target outside the shared document', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await bindWikiLinkTarget('source-page', { id: 'target-page', title: 'Duplicate title' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/pages/source-page/wiki-link-target', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'Duplicate title', targetId: 'target-page' }),
+    });
   });
 });

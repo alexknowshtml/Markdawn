@@ -1381,29 +1381,27 @@ async function resolvePageTargets(
     }
 
     // Never retain a client-provided target outside the source workspace.
-    // Slug and stale-target resolution below may replace this with a target
+    // Trusted index and slug resolution below may replace this with a target
     // that was returned by the workspace-scoped lookup.
     connection.targetId = null;
 
-    const bySlugMatch = bySlug.get(connection.targetSlug);
-    if (bySlugMatch) {
-      connection.targetId = bySlugMatch.id;
-      connection.targetLabel = bySlugMatch.title;
-      continue;
-    }
-
-    // Fallback to stale targetId when slug resolution fails.
-    // This handles the case where the target page was renamed after the
-    // connection was created — the slug from the wiki link content still
-    // carries the old slug, but the stale targetId maps it to the actual
-    // page UUID. The byId map then resolves it to the updated page title.
+    // Prefer the previously validated server-side mapping over title lookup.
+    // A rename can make the old title uniquely identify a *different* page,
+    // so treating this as a fallback would silently retarget the link.
     if (staleTargets) {
       const staleId = staleTargets.get(connection.targetSlug);
       const staleMatch = staleId ? byId.get(staleId) : undefined;
       if (staleId && staleMatch) {
         connection.targetId = staleId;
         connection.targetLabel = staleMatch.title;
+        continue;
       }
+    }
+
+    const bySlugMatch = bySlug.get(connection.targetSlug);
+    if (bySlugMatch) {
+      connection.targetId = bySlugMatch.id;
+      connection.targetLabel = bySlugMatch.title;
     }
   }
 }
@@ -1437,10 +1435,12 @@ async function updateConnections(
     [pageId],
   );
   const staleTargets = new Map<string, string>();
+  const previousTargetPageIds = new Set<string>();
   for (const row of existingResult.rows) {
     if (row.target_slug && row.target_id && !staleTargets.has(row.target_slug)) {
       staleTargets.set(row.target_slug, row.target_id);
     }
+    if (row.target_id) previousTargetPageIds.add(row.target_id);
   }
 
   const extracted = extractConnectionsFromYDoc(ydocUpdate);
@@ -1492,13 +1492,19 @@ async function updateConnections(
 
   logger.debug(`[connections] updated ${indexedConnections.length} connections for page ${pageId}`);
 
-  // Return the resolved target page IDs so the caller can notify the
-  // meta room — every target's backlinks panel needs to refetch.
-  return indexedConnections
-    .filter(
-      (c): c is IndexedConnection & { targetId: string } => c.targetType === 'page' && !!c.targetId,
-    )
-    .map((c) => c.targetId);
+  // Notify targets on both sides of the replacement. Removed targets need to
+  // refetch just as much as newly linked targets do.
+  return [
+    ...new Set([
+      ...previousTargetPageIds,
+      ...indexedConnections
+        .filter(
+          (connection): connection is IndexedConnection & { targetId: string } =>
+            connection.targetType === 'page' && !!connection.targetId,
+        )
+        .map((connection) => connection.targetId),
+    ]),
+  ];
 }
 
 async function updateBacklinksVersion(
@@ -1532,10 +1538,11 @@ async function updateBacklinksVersion(
     if (!metaDoc) continue;
     try {
       metaDoc.transact(() => {
-        const bv = metaDoc.getMap('backlinksVersion');
+        const bv = metaDoc.getMap<number>('backlinksVersion');
         const now = Date.now();
         for (const id of recipientPageIds) {
-          bv.set(id, now);
+          const current = bv.get(id);
+          bv.set(id, current === undefined ? now : Math.max(now, current + 1));
         }
       });
     } catch (error) {
@@ -1971,6 +1978,17 @@ export async function publishPageDeletion(
     pageId,
     async (client, missing) => {
       const activeDocuments = getActiveMetaDocuments(hocuspocus);
+      const previousTargetPageIds = missing
+        ? []
+        : (
+            await client.query<{ target_id: string }>(
+              `select distinct target_id
+               from connections
+               where source_type = 'page' and source_id = $1
+                 and target_type = 'page' and target_id is not null`,
+              [pageId],
+            )
+          ).rows.map((row) => row.target_id);
       let recipientIds: string[];
       try {
         recipientIds = missing
@@ -2012,6 +2030,19 @@ export async function publishPageDeletion(
             `[listen] failed to remove page ${pageId} from meta for user ${recipientId}: ${error}`,
           );
         }
+      }
+
+      try {
+        await updateBacklinksVersion(
+          hocuspocus,
+          pool,
+          previousTargetPageIds,
+          logger,
+          undefined,
+          activeDocuments,
+        );
+      } catch (error) {
+        failures.push(error);
       }
 
       if (failures.length > 0) {

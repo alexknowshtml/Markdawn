@@ -34,6 +34,7 @@ import {
   ensurePageAccess,
   ensureWorkspaceAdmin,
   lockEntityAccess,
+  lockEntityAccesses,
   lockEntityAccessMutation,
   lockEntityAccessMutations,
   lockWorkspaceAccessMutation,
@@ -65,6 +66,7 @@ type RawPageRow = PageRow & {
 };
 
 type PublicPermission = 'view' | 'edit';
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const pagesRoute = new Hono();
 const pagesPublicRoute = new Hono();
@@ -758,6 +760,85 @@ pagesPublicRoute.get(':id/wiki-link-target', async (c) => {
         : null,
   });
 });
+
+pagesPublicRoute.put(
+  ':id/wiki-link-target',
+  bodyLimit({
+    maxSize: 4 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const sourcePageId = c.req.param('id');
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    const userId = session?.user ? (session.user as { id: string }).id : null;
+    if (!userId) throw new HTTPException(401, { message: 'Unauthorized' });
+
+    const body = await c.req.json().catch(() => null);
+    const authoredPath =
+      body && typeof body === 'object' ? (body as { path?: unknown }).path : undefined;
+    const targetPageId =
+      body && typeof body === 'object' ? (body as { targetId?: unknown }).targetId : undefined;
+    if (
+      typeof authoredPath !== 'string' ||
+      typeof targetPageId !== 'string' ||
+      !UUID_PATTERN.test(sourcePageId) ||
+      !UUID_PATTERN.test(targetPageId)
+    ) {
+      throw new HTTPException(400, { message: 'A valid path and targetId are required' });
+    }
+    const pathWithoutHeading = authoredPath.split('#')[0] ?? '';
+    const targetSlug = normalizeWikilinkLookupKey(pathWithoutHeading);
+    if (!targetSlug || targetSlug.length > 1_000) {
+      throw new HTTPException(400, { message: 'A valid wiki-link path is required' });
+    }
+
+    const target = await db.transaction(async (tx) => {
+      await lockEntityAccesses(tx, [
+        { entityType: 'page', entityId: sourcePageId },
+        { entityType: 'page', entityId: targetPageId },
+      ]);
+      const pagesResult = await executeQuery<{
+        id: string;
+        title: string;
+        owner_id: string;
+      }>(
+        tx,
+        `select page.id, page.title,
+                coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id
+         from pages page
+         where page.id = any($1::uuid[]) and page.is_deleted = false
+         order by page.id
+         for update of page`,
+        [[sourcePageId, targetPageId]],
+      );
+      const source = pagesResult.rows.find((page) => page.id === sourcePageId);
+      const selectedTarget = pagesResult.rows.find((page) => page.id === targetPageId);
+      if (!source || !selectedTarget || source.owner_id !== selectedTarget.owner_id) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+      await ensurePageAccess(sourcePageId, userId, 'edit', tx);
+      await ensurePageAccess(targetPageId, userId, 'view', tx);
+
+      await executeQuery(
+        tx,
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text, occurrence_count, updated_at
+         ) values ('page', $1, 'page', $2, $3, $4, 'wikilink', $4, 1, now())
+         on conflict (source_type, source_id, target_type, target_slug, connection_type)
+         do update set target_id = excluded.target_id,
+                       target_label = excluded.target_label,
+                       link_text = excluded.link_text,
+                       updated_at = excluded.updated_at`,
+        [sourcePageId, targetPageId, targetSlug, selectedTarget.title],
+      );
+      return { id: selectedTarget.id, title: selectedTarget.title };
+    });
+
+    return c.json({ target });
+  },
+);
 
 pagesPublicRoute.get(
   ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',

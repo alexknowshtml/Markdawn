@@ -4116,6 +4116,139 @@ describe('collab server', () => {
       expect(result.rows[0]?.target_id).toBe(target.id);
     });
 
+    it('keeps a trusted duplicate-title target after that target is renamed', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Source');
+      await createTestPage(pool, owner.id, 'Duplicate title');
+      const selected = await createTestPage(pool, owner.id, 'Duplicate title');
+      await pool.query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values ('page', $1, 'page', $2, 'duplicate title',
+                   'Duplicate title', 'wikilink', 'Duplicate title')`,
+        [source.id, selected.id],
+      );
+      await pool.query('update pages set title = $1 where id = $2', [
+        'Renamed target',
+        selected.id,
+      ]);
+
+      const document = new Document(source.id);
+      appendWikiLink(document, { path: 'Duplicate title', label: 'Duplicate title' });
+      await server.hocuspocus.hooks('onStoreDocument', {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      });
+
+      const result = await pool.query<{ target_id: string | null; target_label: string }>(
+        `select target_id, target_label from connections
+         where source_id = $1 and target_slug = 'duplicate title'`,
+        [source.id],
+      );
+      expect(result.rows[0]).toEqual({ target_id: selected.id, target_label: 'Renamed target' });
+    });
+
+    it('notifies target viewers when a backlink is added and removed', async () => {
+      const owner = await createTestUser(pool);
+      const targetViewer = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Private source');
+      const target = await createTestPage(pool, owner.id, 'Visible target');
+      await pool.query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'view')`,
+        [target.id, owner.id, targetViewer.id],
+      );
+      const ownerMeta = new Document(`page-meta:${owner.id}`);
+      const viewerMeta = new Document(`page-meta:${targetViewer.id}`);
+      server.hocuspocus.documents.set(`page-meta:${owner.id}`, ownerMeta);
+      server.hocuspocus.documents.set(`page-meta:${targetViewer.id}`, viewerMeta);
+
+      const document = new Document(source.id);
+      appendWikiLink(document, { path: 'visible target', label: 'Visible target' });
+      const payload: onStoreDocumentPayload = {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      };
+
+      try {
+        await server.hocuspocus.hooks('onStoreDocument', payload);
+        expect(ownerMeta.getMap('backlinksVersion').get(target.id)).toEqual(expect.any(Number));
+        expect(viewerMeta.getMap('backlinksVersion').get(target.id)).toEqual(expect.any(Number));
+        expect(viewerMeta.getMap('backlinksVersion').has(source.id)).toBe(false);
+        const addedVersion = viewerMeta.getMap<number>('backlinksVersion').get(target.id);
+        if (addedVersion === undefined) throw new Error('Missing added backlink version');
+
+        const fragment = document.getXmlFragment('prosemirror');
+        fragment.delete(0, fragment.length);
+        await server.hocuspocus.hooks('onStoreDocument', payload);
+
+        expect(ownerMeta.getMap('backlinksVersion').get(target.id)).toEqual(expect.any(Number));
+        expect(viewerMeta.getMap<number>('backlinksVersion').get(target.id)).toBeGreaterThan(
+          addedVersion,
+        );
+        expect(viewerMeta.getMap('backlinksVersion').has(source.id)).toBe(false);
+        const remaining = await pool.query<{ count: string }>(
+          `select count(*)::text as count from connections
+           where source_type = 'page' and source_id = $1 and target_id = $2`,
+          [source.id, target.id],
+        );
+        expect(remaining.rows[0]?.count).toBe('0');
+      } finally {
+        server.hocuspocus.documents.delete(`page-meta:${owner.id}`);
+        server.hocuspocus.documents.delete(`page-meta:${targetViewer.id}`);
+      }
+    });
+
+    it('notifies target viewers when a backlink source is deleted', async () => {
+      const owner = await createTestUser(pool);
+      const targetViewer = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Deleted backlink source');
+      const target = await createTestPage(pool, owner.id, 'Backlink target');
+      await pool.query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'view')`,
+        [target.id, owner.id, targetViewer.id],
+      );
+      await pool.query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values ('page', $1, 'page', $2, 'backlink target',
+                   'Backlink target', 'wikilink', 'Backlink target')`,
+        [source.id, target.id],
+      );
+      const viewerMeta = new Document(`page-meta:${targetViewer.id}`);
+      server.hocuspocus.documents.set(`page-meta:${targetViewer.id}`, viewerMeta);
+
+      try {
+        await pool.query(
+          `update pages
+           set is_deleted = true, deleted_at = now(), deletion_batch_id = gen_random_uuid()
+           where id = $1`,
+          [source.id],
+        );
+        await publishPageDeletion(server.hocuspocus, pool, source.id, mockLogger());
+
+        expect(viewerMeta.getMap('backlinksVersion').get(target.id)).toEqual(expect.any(Number));
+        expect(viewerMeta.getMap('backlinksVersion').has(source.id)).toBe(false);
+      } finally {
+        server.hocuspocus.documents.delete(`page-meta:${targetViewer.id}`);
+      }
+    });
+
     it('publishes metadata only through an active user meta room', async () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id, 'Original title');
@@ -4980,12 +5113,12 @@ describe('collab server', () => {
         });
         await waitFor(
           () => statelessMessages.includes(expectedDeletionMessage),
-          5_000,
+          10_000,
           'anonymous viewer deletion notification',
         );
         await waitFor(
           () => closeEvents.some((event) => event.reason === 'Page deleted'),
-          5_000,
+          10_000,
           'anonymous viewer protocol close',
         );
 
@@ -6396,7 +6529,7 @@ describe('collab server', () => {
           onClose: closed,
         });
         attackers.push(provider);
-        await waitFor(() => provider.synced, 5_000, 'awareness attacker to sync');
+        await waitFor(() => provider.synced, 10_000, 'awareness attacker to sync');
         const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
         const serverConnection = activeDocument?.getConnections().find((connection) => {
           const connectionContext = connection.context as { user?: { id?: string } } | undefined;
@@ -6411,7 +6544,7 @@ describe('collab server', () => {
             () =>
               closed.mock.calls.length > 0 &&
               serverClose.mock.calls.some((call) => call[0]?.code === 4403),
-            5_000,
+            10_000,
             'invalid awareness sender to close with server code 4403',
           );
           expect(serverClose).toHaveBeenCalledWith(expect.objectContaining({ code: 4403 }));

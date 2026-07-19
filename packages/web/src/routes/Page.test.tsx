@@ -9,6 +9,7 @@ import { useIsReadOnly } from '../contexts/EditorReadOnlyContext';
 import { createTestQueryClient } from '../test-utils/render';
 
 const PAGE_ID = '11111111-1111-4111-8111-111111111111';
+const WIKI_TARGET_ID = '22222222-2222-4222-8222-222222222222';
 const EDIT_CAPABILITIES: CapabilitySet = {
   canEdit: true,
   canComment: true,
@@ -41,6 +42,7 @@ const mocks = vi.hoisted(() => ({
   permissionSnapshot: null as
     | ((permission: 'view' | 'edit' | 'admin' | null, revision: string) => void)
     | null,
+  wikiLinkClick: null as ((path: string) => void | Promise<void>) | null,
 }));
 
 vi.mock('../contexts/ShareContext', () => ({
@@ -92,16 +94,19 @@ vi.mock('../components/editor/MilkdownEditor', async () => {
     MilkdownEditor: ({
       onPermissionSnapshot,
       onStatusChange,
+      onWikiLinkClick,
     }: {
       onPermissionSnapshot: (
         permission: 'view' | 'edit' | 'admin' | null,
         revision: string,
       ) => void;
       onStatusChange: (status: WebSocketStatus) => void;
+      onWikiLinkClick: (path: string) => void | Promise<void>;
     }) => {
       const readOnly = useIsReadOnly();
       mocks.statusChange = onStatusChange;
       mocks.permissionSnapshot = onPermissionSnapshot;
+      mocks.wikiLinkClick = onWikiLinkClick;
       useEffect(() => {
         onPermissionSnapshot(mocks.snapshotPermission, '1');
       }, [onPermissionSnapshot]);
@@ -210,6 +215,7 @@ describe('Page permission presentation', () => {
     mocks.snapshotPermission = 'edit';
     mocks.statusChange = null;
     mocks.permissionSnapshot = null;
+    mocks.wikiLinkClick = null;
   });
 
   afterEach(() => {
@@ -265,6 +271,51 @@ describe('Page permission presentation', () => {
     expect(screen.getByTestId('page-icon')).toHaveAttribute('data-read-only', 'false');
     expect(screen.getByTestId('properties')).toHaveAttribute('data-read-only', 'false');
     expect(screen.getByTestId('page-actions')).toBeInTheDocument();
+  });
+
+  it('resolves wiki-link navigation through the trusted connection index', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url === `/api/pages/${PAGE_ID}`) {
+        return { ok: true, status: 200, json: async () => pageResponse('edit') } as Response;
+      }
+      if (url === `/api/pages/${PAGE_ID}/access` || url === `/api/pages/${WIKI_TARGET_ID}/access`) {
+        return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
+      }
+      if (
+        url ===
+        `/api/pages/${PAGE_ID}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`
+      ) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ target: { id: WIKI_TARGET_ID, title: 'Renamed target' } }),
+        } as Response;
+      }
+      if (url === `/api/pages/${WIKI_TARGET_ID}`) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            ...pageResponse('edit'),
+            id: WIKI_TARGET_ID,
+            title: 'Renamed target',
+          }),
+        } as Response;
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    await renderPage();
+    await screen.findByTestId('page-body');
+
+    await act(async () => {
+      await mocks.wikiLinkClick?.('Duplicate title');
+    });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${WIKI_TARGET_ID}`);
+    });
   });
 
   it('fails every editor surface closed on disconnect until a fresh snapshot arrives', async () => {

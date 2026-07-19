@@ -770,6 +770,74 @@ describe('pages API', () => {
     });
   });
 
+  describe('wiki-link target resolution', () => {
+    it('preserves the selected duplicate-title target after it is renamed', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source page' });
+      await createTestPage(owner.id, { title: 'Duplicate title' });
+      const selected = await createTestPage(owner.id, { title: 'Duplicate title' });
+
+      const bind = await app.request(`/api/pages/${source.id}/wiki-link-target`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ path: 'Duplicate title', targetId: selected.id }),
+      });
+      expect(bind.status).toBe(200);
+      expect(await bind.json()).toEqual({
+        target: { id: selected.id, title: 'Duplicate title' },
+      });
+
+      const resolveSelected = await app.request(
+        `/api/pages/${source.id}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`,
+        { headers: { Cookie: session.Cookie } },
+      );
+      expect(resolveSelected.status).toBe(200);
+      expect(await resolveSelected.json()).toEqual({
+        target: { id: selected.id, title: 'Duplicate title' },
+      });
+
+      await query('update pages set title = $1 where id = $2', ['Renamed target', selected.id]);
+      const resolveRenamed = await app.request(
+        `/api/pages/${source.id}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`,
+        { headers: { Cookie: session.Cookie } },
+      );
+      expect(resolveRenamed.status).toBe(200);
+      expect(await resolveRenamed.json()).toEqual({
+        target: { id: selected.id, title: 'Renamed target' },
+      });
+    });
+
+    it('does not bind a target the editor cannot access', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const source = await createTestPage(owner.id, { title: 'Shared source' });
+      const hiddenTarget = await createTestPage(owner.id, { title: 'Hidden target' });
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'edit')`,
+        [source.id, owner.id, editor.id],
+      );
+
+      const bind = await app.request(`/api/pages/${source.id}/wiki-link-target`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ path: 'Hidden target', targetId: hiddenTarget.id }),
+      });
+
+      expect(bind.status).toBe(403);
+      const stored = await query<{ count: string }>(
+        `select count(*)::text as count from connections
+         where source_type = 'page' and source_id = $1 and target_id = $2`,
+        [source.id, hiddenTarget.id],
+      );
+      expect(stored.rows[0]?.count).toBe('0');
+    });
+  });
+
   describe('GET /api/pages/:id public access', () => {
     it('allows anonymous access through public ancestor folder access', async () => {
       const app = await createTestApp();
