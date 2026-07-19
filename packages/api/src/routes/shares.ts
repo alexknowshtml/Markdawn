@@ -988,7 +988,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/public-access', async (c) => {
           `delete from folder_public_access_visits visit
            where visit.folder_id in (
              select descendant_id from folder_closure where ancestor_id = $1
-           ) and get_public_folder_permission(visit.folder_id) is null`,
+           )`,
           [entityId],
         );
         await executeQuery(
@@ -996,8 +996,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/public-access', async (c) => {
           `delete from page_public_access_visits visit
            using pages page, folder_closure path
            where visit.page_id = page.id
-             and path.ancestor_id = $1 and path.descendant_id = page.parent_id
-             and get_public_page_permission(page.id) is null`,
+             and path.ancestor_id = $1 and path.descendant_id = page.parent_id`,
           [entityId],
         );
       }

@@ -343,6 +343,80 @@ describe('sharing API', () => {
     expect(await afterReenable.json()).toEqual([]);
   });
 
+  it('clears subtree visit history when folder public access is revoked', async () => {
+    const app = await createTestApp();
+    const owner = await createTestUser();
+    const visitor = await createTestUser();
+    const grantee = await createTestUser();
+    const ownerSession = await createTestSession(owner.id);
+    const visitorSession = await createTestSession(visitor.id);
+    const root = await createTestFolder(owner.id, { name: 'Public root' });
+    const child = await createTestFolder(owner.id, {
+      name: 'Independent public child',
+      parentId: root.id,
+    });
+    const page = await createTestPage(owner.id, {
+      parentId: child.id,
+      title: 'Independent public page',
+    });
+    await query("update folders set public_permission = 'view' where id = any($1::uuid[])", [
+      [root.id, child.id],
+    ]);
+    await query("update pages set public_permission = 'view' where id = $1", [page.id]);
+    await query(
+      `insert into folder_public_access_visits (folder_id, user_id)
+       values ($1, $3), ($2, $3)`,
+      [root.id, child.id, visitor.id],
+    );
+    await query('insert into page_public_access_visits (page_id, user_id) values ($1, $2)', [
+      page.id,
+      visitor.id,
+    ]);
+    await query(
+      `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+       values ('page', $1, $2, $3, 'view')`,
+      [page.id, owner.id, grantee.id],
+    );
+
+    const revoke = await setPublicAccess(app, ownerSession.Cookie, 'folder', root.id, 'private');
+    expect(revoke.status).toBe(200);
+
+    const visits = await query<{ count: string }>(
+      `select (
+         (select count(*) from folder_public_access_visits
+          where folder_id = any($1::uuid[]) and user_id = $3) +
+         (select count(*) from page_public_access_visits
+          where page_id = $2 and user_id = $3)
+       )::text as count`,
+      [[root.id, child.id], page.id, visitor.id],
+    );
+    expect(visits.rows[0]?.count).toBe('0');
+
+    const grant = await query<{ count: string }>(
+      `select count(*)::text as count from shares
+       where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
+      [page.id, grantee.id],
+    );
+    expect(grant.rows[0]?.count).toBe('1');
+
+    const afterRevoke = await app.request('/api/shares/with-me', {
+      headers: { Cookie: visitorSession.Cookie },
+    });
+    expect(afterRevoke.status).toBe(200);
+    expect(await afterRevoke.json()).toEqual([]);
+
+    const revisit = await app.request(`/api/pages/${page.id}`, {
+      headers: { Cookie: visitorSession.Cookie },
+    });
+    expect(revisit.status).toBe(200);
+    const afterDirectVisit = await app.request('/api/shares/with-me', {
+      headers: { Cookie: visitorSession.Cookie },
+    });
+    expect(await afterDirectVisit.json()).toEqual([
+      expect.objectContaining({ entityId: page.id, source: 'public' }),
+    ]);
+  });
+
   it('deduplicates nested grants until a restricted boundary makes the child independent', async () => {
     const app = await createTestApp();
     const owner = await createTestUser();
