@@ -1,6 +1,8 @@
 import {
   COLLAB_TERMINAL_REASONS,
   deriveCapabilities,
+  type Page,
+  type PageTreeNode,
   type SharePermission,
   shouldApplyPermissionSnapshot,
 } from '@markdawn/shared';
@@ -36,7 +38,7 @@ import { getLogger } from '../../logger-init';
 import { getAnonymousId } from '../../utils/anonymous-cookie';
 import { consumeSelfLeave } from '../../utils/leave-page';
 import { showInfoToast } from '../../utils/toast';
-import { ensureAbsoluteUrl } from '../../utils/url';
+import { buildFolderPath, ensureAbsoluteUrl } from '../../utils/url';
 import './editor.css';
 import {
   HocuspocusProvider,
@@ -1151,6 +1153,11 @@ export function MilkdownEditor({
       setReadOnly(true);
       setAccessPermission(null);
       setCapabilities(deriveCapabilities(null));
+      const detailParentId = queryClient.getQueryData<Page>(['pages', 'detail', pageId])?.parentId;
+      const treeParentId = queryClient
+        .getQueryData<PageTreeNode[]>(['pageTree'])
+        ?.find((page) => page.id === pageId)?.parentId;
+      const parentId = detailParentId ?? treeParentId;
       queryClient.removeQueries({ queryKey: ['pages', 'detail', pageId], exact: true });
       invalidateWorkspaceAccessQueries(queryClient);
       if (!suppressToast) {
@@ -1162,7 +1169,9 @@ export function MilkdownEditor({
               : 'Page deleted',
         );
       }
-      navigate('/app', { replace: true });
+      navigate(suppressToast && parentId ? buildFolderPath('folder', parentId) : '/app', {
+        replace: true,
+      });
     };
 
     const handleStatus = ({ status }: { status: WebSocketStatus }) => {

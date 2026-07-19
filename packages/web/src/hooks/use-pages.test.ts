@@ -1,6 +1,10 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { createMockPageTreeNode } from '../test-utils/factories';
+import {
+  createMockFolderTreeNode,
+  createMockPage,
+  createMockPageTreeNode,
+} from '../test-utils/factories';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 vi.mock('../utils/toast', () => ({
@@ -13,7 +17,6 @@ import { showSuccessToast } from '../utils/toast';
 
 import {
   useCreatePage,
-  useDeletePage,
   useEmptyTrash,
   useImportMarkdown,
   useMovePage,
@@ -199,6 +202,56 @@ describe('useCreatePage', () => {
     );
   });
 
+  it('adds a confirmed page to the cached tree with its effective owner', async () => {
+    const existing = createMockPageTreeNode({ id: 'existing', ownerId: 'user-1' });
+    const created = createMockPage({ id: 'p-new', createdBy: 'user-1', title: 'My Page' });
+    queryClient.setQueryData(['pageTree'], [existing]);
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(created) });
+
+    const { result } = renderHook(() => useCreatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({ title: 'My Page' });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData(['pageTree'])).toEqual([
+      expect.objectContaining({ id: 'p-new', ownerId: 'user-1', title: 'My Page' }),
+      existing,
+    ]);
+  });
+
+  it('inherits a parent folder owner when creating in another workspace', async () => {
+    const parent = createMockFolderTreeNode({
+      id: 'shared-folder',
+      ownerId: 'owner-1',
+      userPermission: 'edit',
+      workspaceAccess: true,
+    });
+    const created = createMockPage({
+      id: 'p-new',
+      parentId: parent.id,
+      createdBy: 'member-1',
+    });
+    queryClient.setQueryData(['folderTree'], [parent]);
+    queryClient.setQueryData(['pageTree'], []);
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(created) });
+
+    const { result } = renderHook(() => useCreatePage(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({ parentId: parent.id });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData(['pageTree'])).toEqual([
+      expect.objectContaining({
+        id: 'p-new',
+        ownerId: 'owner-1',
+        userPermission: 'edit',
+        workspaceAccess: true,
+      }),
+    ]);
+  });
+
   it('invalidates shared navigation after creating a page', async () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     fetchMock.mockResolvedValueOnce({
@@ -340,41 +393,6 @@ describe('useUpdatePage', () => {
     });
 
     expect(showSuccessToast).not.toHaveBeenCalled();
-  });
-});
-
-describe('useDeletePage', () => {
-  let queryClient: ReturnType<typeof createTestQueryClient>;
-  let fetchMock: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    queryClient = createTestQueryClient();
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    queryClient.clear();
-  });
-
-  it('soft-deletes a page', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ deleted: true }) });
-
-    const { result } = renderHook(() => useDeletePage(), {
-      wrapper: createWrapper(queryClient),
-    });
-
-    result.current.mutate('p1');
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/pages/p1',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
   });
 });
 

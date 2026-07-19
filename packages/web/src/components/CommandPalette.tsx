@@ -2,7 +2,7 @@ import { FileText, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useShortcut, useShortcutScope } from '../contexts/KeyboardShortcutContext';
-import { useCreatePage } from '../hooks/use-pages';
+import { useEntityCreationActions } from '../hooks/useEntityCreationActions';
 import { buildPagePath } from '../utils/url';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
@@ -21,7 +21,7 @@ export function CommandPalette() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const createPageMutation = useCreatePage();
+  const entityCreation = useEntityCreationActions();
 
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
@@ -202,15 +202,14 @@ export function CommandPalette() {
                 <button
                   type="button"
                   onClick={() => {
-                    createPageMutation.mutate(
-                      {},
-                      {
-                        onSuccess: (page) => {
-                          navigate(buildPagePath(page.title, page.id));
-                          closeDialog();
-                        },
-                      },
-                    );
+                    void entityCreation
+                      .createPageAndNavigate()
+                      .then((page) => {
+                        if (page) closeDialog();
+                      })
+                      .catch(() => {
+                        // Error toast handled globally by MutationCache.onError
+                      });
                   }}
                   className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
                 >

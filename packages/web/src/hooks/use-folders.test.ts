@@ -1,5 +1,6 @@
 import { renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMockFolder, createMockFolderTreeNode } from '../test-utils/factories';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 vi.mock('../utils/toast', () => ({
@@ -10,7 +11,6 @@ vi.mock('../utils/toast', () => ({
 
 import {
   useCreateFolder,
-  useDeleteFolder,
   useEmptyFolderTrash,
   useFolderTree,
   usePermanentDeleteFolder,
@@ -200,6 +200,24 @@ describe('useCreateFolder', () => {
     );
   });
 
+  it('adds a confirmed folder to the cached tree', async () => {
+    const existing = createMockFolderTreeNode({ id: 'existing', ownerId: 'user-1' });
+    const created = createMockFolder({ id: 'f-new', createdBy: 'user-1' });
+    queryClient.setQueryData(['folderTree'], [existing]);
+    fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(created) });
+
+    const { result } = renderHook(() => useCreateFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({});
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData(['folderTree'])).toEqual([
+      expect.objectContaining({ id: 'f-new', ownerId: 'user-1' }),
+      existing,
+    ]);
+  });
+
   it('invalidates shared navigation after creating a folder', async () => {
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ id: 'f-new' }) });
@@ -255,60 +273,6 @@ describe('useCreateFolder', () => {
   });
 });
 
-describe('useDeleteFolder', () => {
-  let queryClient: ReturnType<typeof createTestQueryClient>;
-  let fetchMock: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    queryClient = createTestQueryClient();
-    fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-    queryClient.clear();
-  });
-
-  it('soft-deletes a folder', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true });
-
-    const { result } = renderHook(() => useDeleteFolder(), {
-      wrapper: createWrapper(queryClient),
-    });
-
-    result.current.mutate({ folderId: 'f1' });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/folders/f1',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
-  });
-
-  it('force-deletes a folder with children', async () => {
-    fetchMock.mockResolvedValueOnce({ ok: true });
-
-    const { result } = renderHook(() => useDeleteFolder(), {
-      wrapper: createWrapper(queryClient),
-    });
-
-    result.current.mutate({ folderId: 'f1', force: true });
-
-    await waitFor(() => {
-      expect(result.current.isSuccess).toBe(true);
-    });
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      '/api/folders/f1?force=true',
-      expect.objectContaining({ method: 'DELETE' }),
-    );
-  });
-});
-
 describe('useUpdateFolder', () => {
   let queryClient: ReturnType<typeof createTestQueryClient>;
   let fetchMock: ReturnType<typeof vi.fn>;
@@ -347,6 +311,25 @@ describe('useUpdateFolder', () => {
         body: JSON.stringify({ name: 'Renamed' }),
       }),
     );
+  });
+
+  it('updates the cached folder name after the server confirms it', async () => {
+    const folder = createMockFolderTreeNode({ id: 'f1', name: 'Original' });
+    queryClient.setQueryData(['folderTree'], [folder]);
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: () => Promise.resolve({ ...folder, name: 'Renamed' }),
+    });
+
+    const { result } = renderHook(() => useUpdateFolder(), {
+      wrapper: createWrapper(queryClient),
+    });
+    result.current.mutate({ folderId: 'f1', updates: { name: 'Renamed' } });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(queryClient.getQueryData(['folderTree'])).toEqual([
+      expect.objectContaining({ id: 'f1', name: 'Renamed' }),
+    ]);
   });
 
   it('invalidates shared navigation after updating a folder', async () => {

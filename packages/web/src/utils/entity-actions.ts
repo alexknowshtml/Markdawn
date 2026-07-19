@@ -1,15 +1,45 @@
 import type { ShareEntityType, SharePermission } from '@markdawn/shared';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQueryClient } from '@tanstack/react-query';
 import { consumeSelfLeave, markSelfLeave } from './leave-page';
+import { removeFolderFromNavigationCache, removePageFromNavigationCache } from './navigationCache';
 import { showSuccessToast } from './toast';
 
 const API_BASE = '/api';
+
+const invalidateRemovalQueries = (
+  queryClient: QueryClient,
+  entityType: ShareEntityType,
+  includeTrash: boolean,
+) => {
+  queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+  queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+  queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
+  queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
+  queryClient.invalidateQueries({ queryKey: ['favorites'] });
+  if (!includeTrash) return;
+  if (entityType === 'page') {
+    queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+  } else {
+    queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
+    queryClient.invalidateQueries({ queryKey: ['trashPages'] });
+  }
+};
+
+const removeEntityFromNavigationCache = (
+  queryClient: QueryClient,
+  entityType: ShareEntityType,
+  entityId: string,
+) => {
+  if (entityType === 'page') removePageFromNavigationCache(queryClient, entityId);
+  else removeFolderFromNavigationCache(queryClient, entityId);
+};
 
 export type EntityShareSource = 'direct' | 'public' | 'workspace';
 
 type EntityBase = {
   id: string;
   type: ShareEntityType;
+  title: string;
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
   userPermission?: SharePermission | null | undefined;
@@ -31,7 +61,8 @@ export type DeleteEntityResult =
   | { requiresForce: true; childFolders: number; childPages: number; message: string };
 
 type UseEntityDeletionReturn = {
-  handleDelete: (entity: EntityBase, options?: DeleteEntityOptions) => Promise<DeleteEntityResult>;
+  moveToTrash: (entity: EntityBase, options?: DeleteEntityOptions) => Promise<DeleteEntityResult>;
+  removeFromView: (entity: EntityBase) => Promise<void>;
   isPending: boolean;
 };
 
@@ -89,22 +120,21 @@ export function preservesEffectiveOwnerAtRoot(entity: OwnedEntity): boolean {
   return entity.ownerId != null && entity.createdBy === entity.ownerId;
 }
 
+/** Workspace inheritance wins for personal-removal UX because direct removal would retain access. */
+export function resolveRemovalShareSource(
+  source: EntityShareSource | undefined,
+  hasWorkspaceAccess: boolean,
+): EntityShareSource | undefined {
+  return hasWorkspaceAccess ? 'workspace' : source;
+}
+
 export function useLeaveEntity(entityType: ShareEntityType) {
   const queryClient = useQueryClient();
-  const queryKeyMap: Record<ShareEntityType, string[]> = {
-    page: ['pageTree'],
-    folder: ['folderTree'],
-  };
 
   return useMutation({
     mutationFn: (entityId: string) => leaveEntity(entityType, entityId),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeyMap[entityType] });
-      const otherKey = entityType === 'page' ? 'folderTree' : 'pageTree';
-      queryClient.invalidateQueries({ queryKey: [otherKey] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      invalidateRemovalQueries(queryClient, entityType, false);
       showSuccessToast('Removed from your view');
     },
   });
@@ -112,24 +142,16 @@ export function useLeaveEntity(entityType: ShareEntityType) {
 
 export function useBulkLeaveEntities(entityType: ShareEntityType) {
   const queryClient = useQueryClient();
-  const queryKeyMap: Record<ShareEntityType, string[]> = {
-    page: ['pageTree'],
-    folder: ['folderTree'],
-  };
 
   return useMutation({
     mutationFn: ({ entityIds }: { entityIds: string[] }) =>
       bulkLeaveEntities(entityType, entityIds),
-    onSuccess: () => {
-      showSuccessToast('Removed from your view');
+    onSuccess: (_result, { entityIds }) => {
+      const suffix = entityIds.length === 1 ? 'item' : 'items';
+      showSuccessToast(`Removed ${entityIds.length} ${suffix} from your view`);
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeyMap[entityType] });
-      const otherKey = entityType === 'page' ? 'folderTree' : 'pageTree';
-      queryClient.invalidateQueries({ queryKey: [otherKey] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
+      invalidateRemovalQueries(queryClient, entityType, false);
     },
   });
 }
@@ -200,51 +222,58 @@ export function useEntityDeletion({
   const queryClient = useQueryClient();
 
   const deleteMutation = useMutation({
-    mutationFn: ({ entityId, force }: { entityId: string; force?: boolean | undefined }) =>
-      deleteEntity(entityType, entityId, force),
-    onSuccess: (result) => {
+    mutationFn: ({ entity, force }: { entity: EntityBase; force?: boolean | undefined }) =>
+      deleteEntity(entityType, entity.id, force),
+    onSuccess: (result, { entity }) => {
       if ('requiresForce' in result) return;
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      if (entityType === 'page') {
-        queryClient.invalidateQueries({ queryKey: ['trashPages'] });
-      }
-      showSuccessToast(entityType === 'page' ? 'Moved to trash' : 'Moved to trash');
+      removeEntityFromNavigationCache(queryClient, entityType, entity.id);
+      invalidateRemovalQueries(queryClient, entityType, true);
+      showSuccessToast(`Moved "${entity.title}" To Trash`);
       onSuccess?.();
     },
   });
 
-  const leaveMutation = useLeaveEntity(entityType);
+  const leaveMutation = useMutation({
+    mutationFn: (entity: EntityBase) => leaveEntity(entityType, entity.id),
+    onSuccess: (_result, entity) => {
+      removeEntityFromNavigationCache(queryClient, entityType, entity.id);
+      invalidateRemovalQueries(queryClient, entityType, false);
+      showSuccessToast(`“${entity.title}” removed from your view`);
+      onSuccess?.();
+    },
+  });
 
-  const handleDelete = async (entity: EntityBase, options?: DeleteEntityOptions) => {
+  const moveToTrash = async (entity: EntityBase, options?: DeleteEntityOptions) => {
     const isOwned = currentUserId ? isOwnedByUser(entity, currentUserId) : false;
     const canDelete = isOwned || entity.userPermission === 'admin';
-
-    if (canDelete) {
-      return deleteMutation.mutateAsync({ entityId: entity.id, force: options?.force });
-    }
-
-    if (entity.shareSource !== 'direct' && entity.shareSource !== 'public') {
-      throw new Error(`This ${entity.type} inherits access and cannot be left directly`);
-    }
-
-    if (entity.type === 'page') {
-      markSelfLeave(entity.id);
-    }
+    if (!canDelete) throw new Error(`You cannot move this ${entity.type} to Trash`);
+    if (entity.type === 'page') markSelfLeave(entity.id);
     try {
-      await leaveMutation.mutateAsync(entity.id);
+      return await deleteMutation.mutateAsync({ entity, force: options?.force });
     } catch (error) {
       if (entity.type === 'page') consumeSelfLeave(entity.id);
       throw error;
     }
-    return { deleted: true as const };
+  };
+
+  const removeFromView = async (entity: EntityBase): Promise<void> => {
+    const isOwned = currentUserId ? isOwnedByUser(entity, currentUserId) : false;
+    if (isOwned) throw new Error(`You cannot remove your own ${entity.type} from your view`);
+    if (entity.shareSource !== 'direct' && entity.shareSource !== 'public') {
+      throw new Error(`This ${entity.type} inherits access and cannot be removed directly`);
+    }
+    if (entity.type === 'page') markSelfLeave(entity.id);
+    try {
+      await leaveMutation.mutateAsync(entity);
+    } catch (error) {
+      if (entity.type === 'page') consumeSelfLeave(entity.id);
+      throw error;
+    }
   };
 
   return {
-    handleDelete,
+    moveToTrash,
+    removeFromView,
     isPending: deleteMutation.isPending || leaveMutation.isPending,
   };
 }

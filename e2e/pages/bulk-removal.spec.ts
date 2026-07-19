@@ -125,12 +125,16 @@ test('removes a mixed owned and shared selection with one progress state', async
       resolveOwnedRefreshes = resolve;
     });
     const completedOwnedRefreshes = new Set<string>();
+    let releaseSharedRefresh: (() => void) | undefined;
+    const sharedRefreshReleased = new Promise<void>((resolve) => {
+      releaseSharedRefresh = resolve;
+    });
     await page.route('**/api/**', async (route) => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
       const isFinalRefresh = request.method() === 'GET' && removalRequests.length === 4;
       if (isFinalRefresh && pathname.startsWith('/api/shares/with-me')) {
-        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        await sharedRefreshReleased;
         const response = await route.fetch();
         await route.fulfill({ response });
         return;
@@ -160,11 +164,13 @@ test('removes a mixed owned and shared selection with one progress state', async
       if (removalRequests.length === 2) resolveOwnedRemovals?.();
     });
 
-    await page.getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: 'Remove' }).click();
+    await expect(page.getByText(/2 items will be moved to Trash/)).toBeVisible();
+    await expect(page.getByText(/2 items will be removed from your view/)).toBeVisible();
     await page.getByRole('button', { name: 'Remove items' }).click();
 
     await expect(page.getByText('Removing 4 items…')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Delete' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Remove' })).toBeDisabled();
 
     await ownedRemovalsCompleted;
     await page.waitForTimeout(500);
@@ -184,7 +190,11 @@ test('removes a mixed owned and shared selection with one progress state', async
       await expect(sidebar.getByText(title, { exact: true })).toBeVisible();
     }
 
-    await expect(page.getByText('Removed 4 items')).toBeVisible({ timeout: 15_000 });
+    releaseSharedRefresh?.();
+
+    await expect(
+      page.getByText('Moved 2 items to Trash; removed 2 items from your view'),
+    ).toBeVisible({ timeout: 15_000 });
     for (const title of Object.values(titles)) {
       await expect(page.getByRole('heading', { name: title })).toHaveCount(0);
       await expect(sidebar.getByText(title, { exact: true })).toHaveCount(0);
@@ -221,7 +231,7 @@ test('removes a mixed owned and shared selection with one progress state', async
       });
     });
 
-    await page.getByRole('button', { name: 'Delete' }).click();
+    await page.getByRole('button', { name: 'Remove' }).click();
     await page.getByRole('button', { name: 'Remove items' }).click();
 
     await expect(page.getByText('1 removed, 1 failed')).toBeVisible({ timeout: 15_000 });

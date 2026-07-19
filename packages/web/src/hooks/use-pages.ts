@@ -4,6 +4,10 @@ import { useMemo } from 'react';
 import { useShareContext } from '../contexts/ShareContext';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { useLeaveEntity } from '../utils/entity-actions';
+import {
+  addCreatedPageToNavigationCache,
+  updatePageNavigationCache,
+} from '../utils/navigationCache';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -42,17 +46,6 @@ async function updatePage(
   });
   if (!res.ok) {
     throw new Error('Failed to update page');
-  }
-  return res.json();
-}
-
-async function deletePage(pageId: string): Promise<{ deleted: boolean }> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to delete page' }));
-    throw new Error(error.message);
   }
   return res.json();
 }
@@ -142,31 +135,6 @@ async function importMarkdown(file: File): Promise<Page> {
   return res.json();
 }
 
-function updatePageInTree(
-  nodes: PageTreeNode[] | undefined,
-  pageId: string,
-  updates: Partial<Page>,
-): PageTreeNode[] | undefined {
-  if (!nodes) return nodes;
-
-  let changed = false;
-  const next = nodes.map((node) => {
-    if (node.id === pageId) {
-      changed = true;
-      return { ...node, ...updates, children: node.children };
-    }
-
-    const children = updatePageInTree(node.children, pageId, updates) ?? node.children;
-    if (children !== node.children) {
-      changed = true;
-      return { ...node, children };
-    }
-    return node;
-  });
-
-  return changed ? next : nodes;
-}
-
 export function usePageTree({ enabled = true }: { enabled?: boolean } = {}) {
   return useQuery({
     queryKey: ['pageTree'],
@@ -194,7 +162,8 @@ export function useCreatePage() {
   return useMutation({
     mutationFn: ({ parentId, title }: { parentId?: string; title?: string; silent?: boolean }) =>
       createPage(parentId, title),
-    onSuccess: (_newPage, { silent }) => {
+    onSuccess: (newPage, { silent }) => {
+      addCreatedPageToNavigationCache(queryClient, newPage);
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
@@ -218,9 +187,7 @@ export function useUpdatePage() {
       silent?: boolean;
     }) => updatePage(pageId, updates, isAnonymous),
     onSuccess: (_, { pageId, updates, silent }) => {
-      queryClient.setQueryData<PageTreeNode[]>(['pageTree'], (pages) =>
-        updatePageInTree(pages, pageId, updates),
-      );
+      updatePageNavigationCache(queryClient, pageId, updates);
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail', pageId] });
@@ -232,21 +199,6 @@ export function useUpdatePage() {
       }
     },
     meta: { errorMessage: 'Failed to update page' },
-  });
-}
-
-export function useDeletePage() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (pageId: string) => deletePage(pageId),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      showSuccessToast('Moved to trash');
-    },
   });
 }
 

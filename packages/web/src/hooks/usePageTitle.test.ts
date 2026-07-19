@@ -7,6 +7,7 @@ import {
   createIdentityLifecycle,
   IdentityLifecycleProvider,
 } from '../contexts/IdentityLifecycleContext';
+import { createMockPageTreeNode } from '../test-utils/factories';
 import { createTestQueryClient, createWrapper } from '../test-utils/wrapper';
 
 import { usePageTitle } from './usePageTitle';
@@ -60,6 +61,28 @@ describe('usePageTitle', () => {
     });
 
     expect(result.current.title).toBe('Updated Title');
+  });
+
+  it('updates cached navigation titles after the server confirms the rename', async () => {
+    queryClient.setQueryData(
+      ['pageTree'],
+      [createMockPageTreeNode({ id: 'p1', title: 'Original' })],
+    );
+    queryClient.setQueryData(['pages', 'recent', 8], [{ id: 'p1', title: 'Original' }]);
+    const { result } = renderHook(() => usePageTitle('p1', 'Original'), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    act(() => result.current.commitTitle('Renamed'));
+
+    await waitFor(() =>
+      expect(queryClient.getQueryData(['pageTree'])).toEqual([
+        expect.objectContaining({ id: 'p1', title: 'Renamed' }),
+      ]),
+    );
+    expect(queryClient.getQueryData(['pages', 'recent', 8])).toEqual([
+      { id: 'p1', title: 'Renamed' },
+    ]);
   });
 
   it('does not overwrite an in-progress title edit when page data refetches', () => {

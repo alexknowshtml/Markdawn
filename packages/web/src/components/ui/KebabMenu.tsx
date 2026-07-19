@@ -10,6 +10,7 @@ export type KebabMenuItem = {
   onClick: () => void;
   className?: string;
   disabled?: boolean;
+  dividerBefore?: boolean;
 };
 
 type KebabMenuProps = {
@@ -78,38 +79,42 @@ export function KebabMenu({
               className={menuClassName ?? defaultMenuClass}
             >
               {items.map((item, index) => (
-                <button
-                  key={item.label}
-                  ref={(element) => {
-                    itemRefs.current[index] = element;
-                  }}
-                  type="button"
-                  role="menuitem"
-                  disabled={item.disabled}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    kebab.close();
-                    item.onClick();
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                      event.preventDefault();
-                      focusItem(index + (event.key === 'ArrowDown' ? 1 : -1));
-                    } else if (event.key === 'Home' || event.key === 'End') {
-                      event.preventDefault();
-                      focusItem(event.key === 'Home' ? 0 : items.length - 1);
-                    } else if (event.key === 'Escape') {
-                      event.preventDefault();
+                <div key={item.label}>
+                  {item.dividerBefore && (
+                    <hr className="mx-1 my-1 border-0 h-px bg-zinc-200 dark:bg-zinc-700" />
+                  )}
+                  <button
+                    ref={(element) => {
+                      itemRefs.current[index] = element;
+                    }}
+                    type="button"
+                    role="menuitem"
+                    disabled={item.disabled}
+                    onClick={(e) => {
+                      e.stopPropagation();
                       kebab.close();
-                      const reference = kebab.refs.domReference.current;
-                      if (reference instanceof HTMLElement) reference.focus();
-                    }
-                  }}
-                  className={`${defaultMenuItemClass} ${item.className ?? ''}`}
-                >
-                  {item.icon}
-                  {item.label}
-                </button>
+                      item.onClick();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                        event.preventDefault();
+                        focusItem(index + (event.key === 'ArrowDown' ? 1 : -1));
+                      } else if (event.key === 'Home' || event.key === 'End') {
+                        event.preventDefault();
+                        focusItem(event.key === 'Home' ? 0 : items.length - 1);
+                      } else if (event.key === 'Escape') {
+                        event.preventDefault();
+                        kebab.close();
+                        const reference = kebab.refs.domReference.current;
+                        if (reference instanceof HTMLElement) reference.focus();
+                      }
+                    }}
+                    className={`${defaultMenuItemClass} ${item.className ?? ''}`}
+                  >
+                    {item.icon}
+                    {item.label}
+                  </button>
+                </div>
               ))}
             </div>
           </div>

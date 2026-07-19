@@ -15,6 +15,8 @@ interface SelectionToolbarProps {
   selectedCount: number;
   totalCount: number;
   clipboardCount: number;
+  trashCount: number;
+  removeFromViewCount: number;
   onDelete: () => void;
   onCopy: () => void;
   onCut: () => void;
@@ -32,6 +34,8 @@ export function SelectionToolbar({
   selectedCount,
   totalCount,
   clipboardCount,
+  trashCount,
+  removeFromViewCount,
   onDelete,
   onCopy,
   onCut,
@@ -49,6 +53,16 @@ export function SelectionToolbar({
 
   const allSelected = selectedCount === totalCount && totalCount > 0;
   const hasSelection = selectedCount > 0;
+  const removalOutcomes = [
+    trashCount > 0
+      ? `${trashCount} item${trashCount === 1 ? '' : 's'} will be moved to Trash.`
+      : '',
+    removeFromViewCount > 0
+      ? `${removeFromViewCount} item${removeFromViewCount === 1 ? '' : 's'} will be removed from your view.`
+      : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   return (
     <>
@@ -111,12 +125,12 @@ export function SelectionToolbar({
             isRemoving
               ? 'Removing selected items'
               : canDelete
-                ? 'Delete or leave'
+                ? 'Move owned items to Trash and remove shared items from your view'
                 : 'Selected inherited items cannot be removed here'
           }
         >
           <Trash2 size={14} />
-          <span className="hidden sm:inline">Delete</span>
+          <span className="hidden sm:inline">Remove</span>
         </button>
         <button
           type="button"
@@ -145,8 +159,8 @@ export function SelectionToolbar({
       </div>
       <ConfirmDialog
         isOpen={showDeleteConfirm}
-        title="Delete selected items"
-        message={`Remove ${selectedCount} selected item${selectedCount === 1 ? '' : 's'}? Owned folders and their contents will be moved to trash. Shared items will be removed from your view.`}
+        title="Remove selected items?"
+        message={`${removalOutcomes} Folders moved to Trash include their contents.`}
         confirmText="Remove items"
         onConfirm={() => {
           setShowDeleteConfirm(false);

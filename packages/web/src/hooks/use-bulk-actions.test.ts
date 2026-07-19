@@ -21,6 +21,8 @@ vi.mock('../utils/toast', () => ({
 
 import {
   BulkRemovalError,
+  buildBulkRemovalInput,
+  getBulkRemovalCounts,
   useBulkDeleteFolders,
   useBulkDeletePages,
   useBulkMoveFolders,
@@ -29,6 +31,44 @@ import {
 } from './use-bulk-actions';
 import { useFavorites } from './use-favorites';
 import { usePageCollaborators } from './use-page-collaborators';
+
+describe('bulk removal planning', () => {
+  it('trashes only owned items and personally removes every eligible non-owned item', () => {
+    const input = buildBulkRemovalInput(
+      [
+        { id: 'owned-page', type: 'page', ownerId: 'user-1' },
+        {
+          id: 'admin-page',
+          type: 'page',
+          ownerId: 'owner-1',
+          userPermission: 'admin',
+          shareSource: 'direct',
+        },
+        {
+          id: 'public-folder',
+          type: 'folder',
+          ownerId: 'owner-1',
+          shareSource: 'public',
+        },
+        {
+          id: 'workspace-page',
+          type: 'page',
+          ownerId: 'owner-1',
+          shareSource: 'workspace',
+        },
+      ],
+      'user-1',
+    );
+
+    expect(input).toEqual({
+      pageIdsToDelete: ['owned-page'],
+      folderIdsToDelete: [],
+      pageIdsToLeave: ['admin-page'],
+      folderIdsToLeave: ['public-folder'],
+    });
+    expect(getBulkRemovalCounts(input)).toEqual({ trashCount: 1, removeFromViewCount: 2 });
+  });
+});
 
 function createIdentityWrapper(
   queryClient: ReturnType<typeof createTestQueryClient>,
@@ -98,7 +138,9 @@ describe('useBulkRemoveEntities', () => {
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pages', 'detail'] });
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['tags'] });
     expect(toastMocks.showSuccessToast).toHaveBeenCalledOnce();
-    expect(toastMocks.showSuccessToast).toHaveBeenCalledWith('Removed 4 items');
+    expect(toastMocks.showSuccessToast).toHaveBeenCalledWith(
+      'Moved 2 items to Trash; removed 2 items from your view',
+    );
   });
 
   it('cancels in-flight refreshes before issuing removal requests', async () => {
@@ -251,6 +293,8 @@ describe('useBulkRemoveEntities', () => {
         { id: 'shared-page', type: 'page' },
       ],
       failedItems: [{ id: 'failed-page', type: 'page' }],
+      trashedCount: 1,
+      removedFromViewCount: 1,
     });
     expect(toastMocks.showSuccessToast).not.toHaveBeenCalled();
   });

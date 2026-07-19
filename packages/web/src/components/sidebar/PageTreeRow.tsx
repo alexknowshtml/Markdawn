@@ -9,7 +9,7 @@ import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
-import { buildPagePath } from '../../utils/url';
+import { buildFolderPath, buildPagePath } from '../../utils/url';
 import { PageContextMenu } from '../ui/PageContextMenu';
 
 interface PageTreeRowProps {
@@ -20,6 +20,7 @@ interface PageTreeRowProps {
   createdBy?: string | null | undefined;
   userPermission?: SharePermission | null | undefined;
   shareSource?: 'direct' | 'public' | 'workspace' | undefined;
+  parentId?: string | null | undefined;
   canMove?: boolean | undefined;
   isActive?: boolean;
   depth?: number;
@@ -31,7 +32,6 @@ interface PageTreeRowProps {
   onCreateChild?: (() => void) | undefined;
   onNavigate?: (() => void) | undefined;
   onRename?: (() => void) | undefined;
-  onDelete?: (() => void) | undefined;
   isEditing?: boolean;
   editTitle?: string;
   onEditChange?: ((value: string) => void) | undefined;
@@ -49,6 +49,7 @@ export function PageTreeRow({
   createdBy,
   userPermission,
   shareSource,
+  parentId,
   canMove,
   isActive = false,
   depth = 0,
@@ -60,7 +61,6 @@ export function PageTreeRow({
   onCreateChild,
   onNavigate,
   onRename,
-  onDelete,
   isEditing = false,
   editTitle = '',
   onEditChange,
@@ -121,6 +121,8 @@ export function PageTreeRow({
         }
       }}
       data-testid="page-tree-row"
+      data-entity-id={id}
+      data-entity-type={isFolder ? 'folder' : 'page'}
     >
       <button
         type="button"
@@ -216,7 +218,12 @@ export function PageTreeRow({
             menuClassName="w-40 bg-white dark:bg-zinc-900 border border-black/5 dark:border-white/5 shadow-[0_8px_30px_rgb(0,0,0,0.12)] dark:shadow-[0_8px_30px_rgb(0,0,0,0.5)] rounded-2xl p-1.5 flex flex-col z-[9999]"
             onOpenChange={setIsMenuOpen}
             {...(onRename != null ? { onRename } : {})}
-            {...(onDelete != null ? { onDelete } : {})}
+            {...(isActive
+              ? {
+                  onDeleted: () =>
+                    navigate(parentId ? buildFolderPath('folder', parentId) : '/app'),
+                }
+              : {})}
           />
         </div>
       )}

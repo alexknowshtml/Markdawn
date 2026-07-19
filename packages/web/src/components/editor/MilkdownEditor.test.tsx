@@ -672,7 +672,11 @@ describe('MilkdownEditor anonymous uploads', () => {
   });
 
   it('suppresses only the revoke snapshot caused by the pending self-leave', () => {
-    renderEditor();
+    const { getByTestId, queryClient } = renderEditor();
+    queryClient.setQueryData(['pages', 'detail', 'page-1'], {
+      id: 'page-1',
+      parentId: 'folder-1',
+    });
     const send = (permission: 'edit' | null, accessRevision: string) => {
       mocks.providerHandlers.get('stateless')?.({
         payload: JSON.stringify({ type: 'permission_snapshot', permission, accessRevision }),
@@ -686,6 +690,7 @@ describe('MilkdownEditor anonymous uploads', () => {
 
     expect(mocks.showInfoToast).not.toHaveBeenCalledWith('Removed from your view');
     expect(consumeSelfLeave('page-1')).toBe(false);
+    expect(getByTestId('location-path')).toHaveTextContent('/app/folder/folder-folder-1');
   });
 
   it('scopes cached collaboration tokens to the current non-empty identity', async () => {

@@ -69,6 +69,33 @@ describe('ConfirmDialog', () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it('does not bubble confirm or cancel clicks to the clickable item beneath it', async () => {
+    const onItemClick = vi.fn();
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+
+    render(
+      <button type="button" onClick={onItemClick}>
+        Underlying item
+        <ConfirmDialog
+          isOpen={true}
+          title="Remove item?"
+          message="Choose an action"
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      </button>,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Confirm' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    expect(onConfirm).toHaveBeenCalledOnce();
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onItemClick).not.toHaveBeenCalled();
+  });
+
   it('disables buttons and shows loading text when loading', () => {
     render(
       <ConfirmDialog

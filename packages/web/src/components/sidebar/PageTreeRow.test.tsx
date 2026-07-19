@@ -4,18 +4,41 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from '../../test-utils/render';
 
+const mocks = vi.hoisted(() => ({ navigate: vi.fn() }));
+
+vi.mock('../../contexts/IdentityLifecycleContext', () => ({
+  useIdentityNavigate: () => mocks.navigate,
+}));
+
 vi.mock('../ui/PageContextMenu', () => ({
-  PageContextMenu: ({ onOpenChange }: { onOpenChange?: (open: boolean) => void }) => (
-    <button
-      type="button"
-      aria-label="Open menu"
-      onClick={(event) => {
-        event.stopPropagation();
-        onOpenChange?.(true);
-      }}
-    >
-      Menu
-    </button>
+  PageContextMenu: ({
+    onOpenChange,
+    onDeleted,
+  }: {
+    onOpenChange?: (open: boolean) => void;
+    onDeleted?: () => void;
+  }) => (
+    <>
+      <button
+        type="button"
+        aria-label="Open menu"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenChange?.(true);
+        }}
+      >
+        Menu
+      </button>
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDeleted?.();
+        }}
+      >
+        Complete removal
+      </button>
+    </>
   ),
 }));
 
@@ -54,5 +77,43 @@ describe('PageTreeRow keyboard actions', () => {
       'maxlength',
       String(MAX_PAGE_TITLE_LENGTH * 2),
     );
+  });
+
+  it.each([
+    ['page', false],
+    ['folder', true],
+  ] as const)('navigates an active removed %s to its parent folder', async (_type, isFolder) => {
+    const user = userEvent.setup();
+    mocks.navigate.mockReset();
+    render(
+      <PageTreeRow id="active-1" title="Active" parentId="folder-1" isFolder={isFolder} isActive />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Complete removal' }));
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/app/folder/folder-folder-1');
+  });
+
+  it('navigates an active top-level item Home after removal', async () => {
+    const user = userEvent.setup();
+    mocks.navigate.mockReset();
+    render(<PageTreeRow id="folder-1" title="Folder" isFolder isActive />);
+
+    await user.click(screen.getByRole('button', { name: 'Complete removal' }));
+
+    expect(mocks.navigate).toHaveBeenCalledWith('/app');
+  });
+
+  it.each([
+    ['page', false],
+    ['folder', true],
+  ] as const)('keeps the current route after removing an inactive %s', async (_type, isFolder) => {
+    const user = userEvent.setup();
+    mocks.navigate.mockReset();
+    render(<PageTreeRow id="inactive-1" title="Inactive" isFolder={isFolder} />);
+
+    await user.click(screen.getByRole('button', { name: 'Complete removal' }));
+
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
 });

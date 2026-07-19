@@ -1,4 +1,4 @@
-import { Copy, Download, Edit2, FolderInput, Share, Star, Trash2 } from 'lucide-react';
+import { Copy, Download, Edit2, EyeOff, FolderInput, Share, Star, Trash2 } from 'lucide-react';
 import type React from 'react';
 import { useState } from 'react';
 import { useClipboard } from '../../contexts/ClipboardContext';
@@ -14,9 +14,7 @@ import {
   isOwnedByUser,
   preservesEffectiveOwnerAtRoot,
   useEntityDeletion,
-  useLeaveEntity,
 } from '../../utils/entity-actions';
-import { consumeSelfLeave, markSelfLeave } from '../../utils/leave-page';
 import { showErrorToast, showSuccessToast } from '../../utils/toast';
 // showErrorToast kept for non-mutation use in handleExport
 import { ConfirmDialog } from '../ConfirmDialog';
@@ -41,7 +39,7 @@ type PageContextMenuProps = {
   menuClassName?: string;
   onOpenChange?: ((isOpen: boolean) => void) | undefined;
   onRename?: () => void;
-  onDelete?: () => void;
+  onDeleted?: () => void;
   onCopy?: () => void;
   onMutated?: () => void;
 };
@@ -53,7 +51,7 @@ export function PageContextMenu({
   menuClassName,
   onOpenChange,
   onRename,
-  onDelete,
+  onDeleted,
   onCopy,
   onMutated,
 }: PageContextMenuProps) {
@@ -67,24 +65,27 @@ export function PageContextMenu({
   const bulkMoveFoldersMutation = useBulkMoveFolders();
   const { data: folders } = useFolderTree({ enabled: !isAnonymous });
   const { data: workspaceMemberships } = useWorkspaceMemberships({ enabled: !isAnonymous });
-  const { handleDelete, isPending: isDeletePending } = useEntityDeletion({
+  const {
+    moveToTrash,
+    removeFromView,
+    isPending: isRemovalPending,
+  } = useEntityDeletion({
     entityType: item.type,
     currentUserId,
-    onSuccess: onMutated,
+    onSuccess: () => {
+      onDeleted?.();
+      onMutated?.();
+    },
   });
-  const leaveMutation = useLeaveEntity(item.type);
 
   const [moveDialogOpen, setMoveDialogOpen] = useState(false);
   const [showShareDialog, setShowShareDialog] = useState(false);
-  const [folderDeleteSummary, setFolderDeleteSummary] = useState<{
-    childFolders: number;
-    childPages: number;
-  } | null>(null);
+  const [pendingRemovalAction, setPendingRemovalAction] = useState<'trash' | 'remove' | null>(null);
 
   const isOwned = currentUserId ? isOwnedByUser(item, currentUserId) : false;
   const isAdmin = isOwned || item.userPermission === 'admin';
   const canRename = canRenameEntity(item, currentUserId);
-  const canLeave =
+  const canRemoveFromView =
     !isAnonymous && !isOwned && (item.shareSource === 'direct' || item.shareSource === 'public');
   const canMove = item.canMove ?? isAdmin;
   const hasWorkspaceRootAccess =
@@ -156,64 +157,28 @@ export function PageContextMenu({
     );
   };
 
-  const handleDeleteClick = () => {
-    if (item.type === 'folder') {
-      void requestFolderDelete();
-      return;
-    }
-    if (onDelete) {
-      onDelete();
-      return;
-    }
-    void performDelete(false);
+  const removalEntity = {
+    id: item.id,
+    type: item.type,
+    title: item.title,
+    ownerId: item.ownerId,
+    createdBy: item.createdBy,
+    userPermission: item.userPermission,
+    shareSource: item.shareSource,
   };
 
-  const handleLeaveClick = async () => {
-    if (item.type === 'page') markSelfLeave(item.id);
+  const confirmRemoval = async () => {
+    const action = pendingRemovalAction;
+    if (!action) return;
     try {
-      await leaveMutation.mutateAsync(item.id);
-      if (!identityLifecycle.isActive()) return;
-      onMutated?.();
-    } catch {
-      if (!identityLifecycle.isActive()) return;
-      if (item.type === 'page') consumeSelfLeave(item.id);
-      // Error toast handled globally by MutationCache.onError
-    }
-  };
-
-  const performDelete = async (force: boolean) => {
-    try {
-      return await handleDelete(
-        {
-          id: item.id,
-          type: item.type,
-          ownerId: item.ownerId,
-          createdBy: item.createdBy,
-          userPermission: item.userPermission,
-          shareSource: item.shareSource,
-        },
-        { force },
-      );
+      if (action === 'trash') {
+        await moveToTrash(removalEntity, { force: item.type === 'folder' });
+      } else {
+        await removeFromView(removalEntity);
+      }
+      setPendingRemovalAction(null);
     } catch {
       // Error toast handled globally by MutationCache.onError
-      return undefined;
-    }
-  };
-
-  const requestFolderDelete = async () => {
-    const result = await performDelete(false);
-    if (result && 'requiresForce' in result) {
-      setFolderDeleteSummary({
-        childFolders: result.childFolders,
-        childPages: result.childPages,
-      });
-    }
-  };
-
-  const confirmFolderDelete = async () => {
-    const result = await performDelete(true);
-    if (result && 'deleted' in result) {
-      setFolderDeleteSummary(null);
     }
   };
 
@@ -241,16 +206,17 @@ export function PageContextMenu({
         onClick: handleExport,
       },
     isAdmin && {
-      label: 'Delete',
+      label: 'Move to Trash',
       icon: <Trash2 size={14} className="text-red-600 dark:text-red-400" />,
       className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
-      onClick: handleDeleteClick,
+      onClick: () => setPendingRemovalAction('trash'),
     },
-    canLeave && {
-      label: 'Leave',
-      icon: <Trash2 size={14} className="text-red-600 dark:text-red-400" />,
+    canRemoveFromView && {
+      label: 'Remove from my view',
+      icon: <EyeOff size={14} className="text-red-600 dark:text-red-400" />,
       className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
-      onClick: () => void handleLeaveClick(),
+      dividerBefore: isAdmin,
+      onClick: () => setPendingRemovalAction('remove'),
     },
     canMove && {
       label: 'Move',
@@ -267,6 +233,7 @@ export function PageContextMenu({
     icon: React.ReactNode;
     onClick: () => void;
     className?: string;
+    dividerBefore?: boolean;
   }[];
 
   return (
@@ -295,17 +262,24 @@ export function PageContextMenu({
         onConfirm={handleConfirmMove}
       />
       <ConfirmDialog
-        isOpen={folderDeleteSummary !== null}
-        title="Delete folder and contents"
-        message={
-          folderDeleteSummary
-            ? `This folder contains ${folderDeleteSummary.childFolders} nested folder${folderDeleteSummary.childFolders === 1 ? '' : 's'} and ${folderDeleteSummary.childPages} page${folderDeleteSummary.childPages === 1 ? '' : 's'}. Move all of them to trash?`
-            : ''
+        isOpen={pendingRemovalAction !== null}
+        title={
+          pendingRemovalAction === 'trash'
+            ? `Move “${item.title}” to Trash?`
+            : `Remove “${item.title}” from your view?`
         }
-        confirmText="Move to trash"
-        onConfirm={() => void confirmFolderDelete()}
-        onCancel={() => setFolderDeleteSummary(null)}
-        loading={isDeletePending}
+        message={
+          pendingRemovalAction === 'trash'
+            ? item.type === 'folder'
+              ? 'This folder and all of its contents will be moved to Trash. You can restore them later.'
+              : 'This page will be moved to Trash. You can restore it later.'
+            : 'This item will disappear from your workspace. The owner can share it with you again.'
+        }
+        confirmText={pendingRemovalAction === 'trash' ? 'Move to Trash' : 'Remove from my view'}
+        onConfirm={() => void confirmRemoval()}
+        onCancel={() => setPendingRemovalAction(null)}
+        loading={isRemovalPending}
+        loadingText={pendingRemovalAction === 'trash' ? 'Moving...' : 'Removing...'}
       />
     </>
   );

@@ -46,7 +46,11 @@ vi.mock('../../hooks/use-workspace', () => ({
 }));
 vi.mock('../../utils/entity-actions', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../utils/entity-actions')>()),
-  useEntityDeletion: () => ({ handleDelete: vi.fn(), isPending: false }),
+  useEntityDeletion: () => ({
+    moveToTrash: vi.fn(),
+    removeFromView: vi.fn(),
+    isPending: false,
+  }),
 }));
 vi.mock('./PageTreeRow', () => ({
   PageTreeRow: ({

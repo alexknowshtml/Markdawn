@@ -1,7 +1,7 @@
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { beginBulkRemoval } from '../utils/bulkRemovalState';
-import { leaveEntity, useBulkLeaveEntities } from '../utils/entity-actions';
+import { isOwnedByUser, leaveEntity, useBulkLeaveEntities } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -42,6 +42,49 @@ export interface BulkRemovalInput {
   folderIdsToLeave: string[];
 }
 
+export interface BulkRemovalCandidate {
+  id: string;
+  type: 'page' | 'folder';
+  ownerId?: string | null | undefined;
+  createdBy?: string | null | undefined;
+  userPermission?: 'view' | 'edit' | 'admin' | null | undefined;
+  shareSource?: 'direct' | 'public' | 'workspace' | undefined;
+}
+
+export function buildBulkRemovalInput(
+  items: BulkRemovalCandidate[],
+  currentUserId?: string,
+): BulkRemovalInput {
+  const input: BulkRemovalInput = {
+    pageIdsToDelete: [],
+    folderIdsToDelete: [],
+    pageIdsToLeave: [],
+    folderIdsToLeave: [],
+  };
+  for (const item of items) {
+    const isOwned = !!currentUserId && isOwnedByUser(item, currentUserId);
+    const canRemoveFromView =
+      !isOwned && (item.shareSource === 'direct' || item.shareSource === 'public');
+    if (!isOwned && !canRemoveFromView) continue;
+    if (item.type === 'page') {
+      (isOwned ? input.pageIdsToDelete : input.pageIdsToLeave).push(item.id);
+    } else {
+      (isOwned ? input.folderIdsToDelete : input.folderIdsToLeave).push(item.id);
+    }
+  }
+  return input;
+}
+
+export function getBulkRemovalCounts(input: BulkRemovalInput): {
+  trashCount: number;
+  removeFromViewCount: number;
+} {
+  return {
+    trashCount: input.pageIdsToDelete.length + input.folderIdsToDelete.length,
+    removeFromViewCount: input.pageIdsToLeave.length + input.folderIdsToLeave.length,
+  };
+}
+
 export interface BulkRemovalItem {
   id: string;
   type: 'page' | 'folder';
@@ -50,6 +93,8 @@ export interface BulkRemovalItem {
 export interface BulkRemovalResult {
   removedItems: BulkRemovalItem[];
   failedItems: BulkRemovalItem[];
+  trashedCount: number;
+  removedFromViewCount: number;
 }
 
 export class BulkRemovalError extends Error {
@@ -62,7 +107,26 @@ export class BulkRemovalError extends Error {
   }
 }
 
-type BulkRemovalOperation = BulkRemovalItem & { run: () => Promise<unknown> };
+type BulkRemovalOperation = BulkRemovalItem & {
+  outcome: 'trash' | 'remove-from-view';
+  run: () => Promise<unknown>;
+};
+
+const formatBulkRemovalSuccess = ({
+  trashedCount,
+  removedFromViewCount,
+}: Pick<BulkRemovalResult, 'trashedCount' | 'removedFromViewCount'>): string => {
+  const outcomes: string[] = [];
+  if (trashedCount > 0) {
+    outcomes.push(`Moved ${trashedCount} item${trashedCount === 1 ? '' : 's'} to Trash`);
+  }
+  if (removedFromViewCount > 0) {
+    outcomes.push(
+      `removed ${removedFromViewCount} item${removedFromViewCount === 1 ? '' : 's'} from your view`,
+    );
+  }
+  return outcomes.join('; ');
+};
 
 const BULK_REMOVAL_QUERY_KEYS = [
   ['folderTree'],
@@ -86,16 +150,37 @@ async function removeEntities(
   isIdentityActive: () => boolean,
 ): Promise<BulkRemovalResult> {
   const operationGroups: BulkRemovalOperation[][] = [
-    input.pageIdsToDelete.map((id) => ({ id, type: 'page', run: () => deletePage(id) })),
-    input.folderIdsToDelete.map((id) => ({ id, type: 'folder', run: () => deleteFolder(id) })),
-    input.pageIdsToLeave.map((id) => ({ id, type: 'page', run: () => leaveEntity('page', id) })),
+    input.pageIdsToDelete.map((id) => ({
+      id,
+      type: 'page',
+      outcome: 'trash',
+      run: () => deletePage(id),
+    })),
+    input.folderIdsToDelete.map((id) => ({
+      id,
+      type: 'folder',
+      outcome: 'trash',
+      run: () => deleteFolder(id),
+    })),
+    input.pageIdsToLeave.map((id) => ({
+      id,
+      type: 'page',
+      outcome: 'remove-from-view',
+      run: () => leaveEntity('page', id),
+    })),
     input.folderIdsToLeave.map((id) => ({
       id,
       type: 'folder',
+      outcome: 'remove-from-view',
       run: () => leaveEntity('folder', id),
     })),
   ];
-  const result: BulkRemovalResult = { removedItems: [], failedItems: [] };
+  const result: BulkRemovalResult = {
+    removedItems: [],
+    failedItems: [],
+    trashedCount: 0,
+    removedFromViewCount: 0,
+  };
 
   // Preserve the existing per-entity-type request concurrency while delaying
   // all cache refreshes and user feedback until every group has settled.
@@ -109,8 +194,11 @@ async function removeEntities(
       const operation = operations[index];
       if (!operation) throw new Error('Bulk removal result did not match its operation');
       const item = { id: operation.id, type: operation.type };
-      if (operationResult.status === 'fulfilled') result.removedItems.push(item);
-      else result.failedItems.push(item);
+      if (operationResult.status === 'fulfilled') {
+        result.removedItems.push(item);
+        if (operation.outcome === 'trash') result.trashedCount += 1;
+        else result.removedFromViewCount += 1;
+      } else result.failedItems.push(item);
     });
   }
 
@@ -147,9 +235,7 @@ export function useBulkRemoveEntities() {
         );
         if (!identityLifecycle.isActive()) return;
         if (result) {
-          const removedCount = result.removedItems.length;
-          const suffix = removedCount === 1 ? 'item' : 'items';
-          showSuccessToast(`Removed ${removedCount} ${suffix}`);
+          showSuccessToast(formatBulkRemovalSuccess(result));
         }
       } finally {
         endBulkRemoval?.();
@@ -164,8 +250,8 @@ export function useBulkDeletePages() {
     mutationFn: async ({ pageIds }: { pageIds: string[] }) => {
       await Promise.all(pageIds.map((id) => deletePage(id)));
     },
-    onSuccess: () => {
-      showSuccessToast('Pages moved to trash');
+    onSuccess: (_result, { pageIds }) => {
+      showSuccessToast(`Moved ${pageIds.length} page${pageIds.length === 1 ? '' : 's'} to Trash`);
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
@@ -183,8 +269,10 @@ export function useBulkDeleteFolders() {
     mutationFn: async ({ folderIds }: { folderIds: string[] }) => {
       await Promise.all(folderIds.map((id) => deleteFolder(id)));
     },
-    onSuccess: () => {
-      showSuccessToast('Folders moved to trash');
+    onSuccess: (_result, { folderIds }) => {
+      showSuccessToast(
+        `Moved ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'} to Trash`,
+      );
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });

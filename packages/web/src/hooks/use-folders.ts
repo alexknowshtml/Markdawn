@@ -2,6 +2,10 @@ import type { Folder, FolderTreeNode } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { useLeaveEntity } from '../utils/entity-actions';
+import {
+  addCreatedFolderToNavigationCache,
+  updateFolderNavigationCache,
+} from '../utils/navigationCache';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
@@ -25,19 +29,6 @@ async function createFolder(parentId?: string, name?: string): Promise<Folder> {
     throw new Error(error.message);
   }
   return res.json();
-}
-
-async function deleteFolder(folderId: string, force?: boolean): Promise<void> {
-  const url = force
-    ? `${API_BASE}/folders/${folderId}?force=true`
-    : `${API_BASE}/folders/${folderId}`;
-  const res = await fetch(url, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to delete folder' }));
-    throw new Error(error.message);
-  }
 }
 
 async function fetchTrashFolders(): Promise<Folder[]> {
@@ -134,29 +125,12 @@ export function useCreateFolder() {
   return useMutation({
     mutationFn: ({ parentId, name }: { parentId?: string; name?: string }) =>
       createFolder(parentId, name),
-    onSuccess: () => {
+    onSuccess: (folder) => {
+      addCreatedFolderToNavigationCache(queryClient, folder);
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       showSuccessToast('Folder created');
-    },
-  });
-}
-
-export function useDeleteFolder() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: ({ folderId, force }: { folderId: string; force?: boolean }) =>
-      deleteFolder(folderId, force),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['trashFolders'] });
-      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      showSuccessToast('Moved to trash');
     },
   });
 }
@@ -230,7 +204,8 @@ export function useUpdateFolder() {
       folderId: string;
       updates: { name?: string; icon?: string | null; parentId?: string | null; position?: string };
     }) => updateFolder(folderId, updates),
-    onSuccess: (_folder, { folderId }) => {
+    onSuccess: (_folder, { folderId, updates }) => {
+      updateFolderNavigationCache(queryClient, folderId, updates);
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['favorites'] });

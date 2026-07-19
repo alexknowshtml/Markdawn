@@ -1,15 +1,14 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ClipboardProvider } from '../../contexts/ClipboardContext';
 import { render } from '../../test-utils/render';
-import { consumeSelfLeave } from '../../utils/leave-page';
 
 const mocks = vi.hoisted(() => ({
   useAuth: vi.fn(),
   useShareContext: vi.fn(),
-  handleDelete: vi.fn(),
-  leaveEntity: vi.fn(),
+  moveToTrash: vi.fn(),
+  removeFromView: vi.fn(),
   memberships: [] as Array<{ ownerId: string; role: 'viewer' | 'editor' | 'admin' }>,
   moveDialogProps: vi.fn(),
 }));
@@ -35,8 +34,18 @@ vi.mock('../../utils/entity-actions', async (importOriginal) => {
   const original = await importOriginal<typeof import('../../utils/entity-actions')>();
   return {
     ...original,
-    useEntityDeletion: () => ({ handleDelete: mocks.handleDelete, isPending: false }),
-    useLeaveEntity: () => ({ mutateAsync: mocks.leaveEntity, isPending: false }),
+    useEntityDeletion: ({ onSuccess }: { onSuccess?: () => void }) => ({
+      moveToTrash: async (entity: unknown, options: unknown) => {
+        const result = await mocks.moveToTrash(entity, options);
+        onSuccess?.();
+        return result;
+      },
+      removeFromView: async (entity: unknown) => {
+        await mocks.removeFromView(entity);
+        onSuccess?.();
+      },
+      isPending: false,
+    }),
   };
 });
 vi.mock('../editor/ShareDialog', () => ({ ShareDialog: () => null }));
@@ -47,12 +56,19 @@ vi.mock('../workspace/MoveDialog', () => ({
   },
 }));
 vi.mock('./KebabMenu', () => ({
-  KebabMenu: ({ items }: { items: Array<{ label: string; onClick: () => void }> }) => (
+  KebabMenu: ({
+    items,
+  }: {
+    items: Array<{ label: string; onClick: () => void; dividerBefore?: boolean }>;
+  }) => (
     <div>
       {items.map((item) => (
-        <button type="button" key={item.label} onClick={item.onClick}>
-          {item.label}
-        </button>
+        <div key={item.label}>
+          {item.dividerBefore && <hr />}
+          <button type="button" onClick={item.onClick}>
+            {item.label}
+          </button>
+        </div>
       ))}
     </div>
   ),
@@ -70,6 +86,7 @@ function renderMenu({
   anonymous = false,
   entityType = 'page',
   onCopy,
+  onDeleted,
 }: {
   permission?: Permission | undefined;
   ownerId?: string | undefined;
@@ -78,6 +95,7 @@ function renderMenu({
   anonymous?: boolean | undefined;
   entityType?: 'page' | 'folder';
   onCopy?: (() => void) | undefined;
+  onDeleted?: (() => void) | undefined;
 }) {
   mocks.useAuth.mockReturnValue({
     data: anonymous ? { user: null } : { user: { id: 'current-user' } },
@@ -98,6 +116,7 @@ function renderMenu({
         }}
         onRename={vi.fn()}
         {...(onCopy ? { onCopy } : {})}
+        {...(onDeleted ? { onDeleted } : {})}
       />
     </ClipboardProvider>,
   );
@@ -107,18 +126,20 @@ function labels(): string[] {
   return screen.queryAllByRole('button').map((button) => button.textContent ?? '');
 }
 
+function lastButton(name: string): HTMLElement {
+  const button = screen.getAllByRole('button', { name }).at(-1);
+  if (!button) throw new Error(`Expected a button named ${name}`);
+  return button;
+}
+
 describe('PageContextMenu permissions', () => {
   beforeEach(() => {
-    mocks.handleDelete.mockReset();
-    mocks.handleDelete.mockResolvedValue({ deleted: true });
-    mocks.leaveEntity.mockReset();
-    mocks.leaveEntity.mockResolvedValue({ ok: true });
+    mocks.moveToTrash.mockReset();
+    mocks.moveToTrash.mockResolvedValue({ deleted: true });
+    mocks.removeFromView.mockReset();
+    mocks.removeFromView.mockResolvedValue(undefined);
     mocks.memberships = [];
     mocks.moveDialogProps.mockReset();
-  });
-
-  afterEach(() => {
-    consumeSelfLeave('page-1');
   });
 
   it('hides signed-in-only actions from anonymous viewers and editors', () => {
@@ -127,7 +148,7 @@ describe('PageContextMenu permissions', () => {
     expect(labels()).not.toContain('Copy');
     expect(labels()).not.toContain('Export');
     expect(labels()).not.toContain('Move');
-    expect(labels()).not.toContain('Delete');
+    expect(labels()).not.toContain('Move to Trash');
     expect(labels()).not.toContain('Favorite');
     expect(labels()).not.toContain('Share');
   });
@@ -147,18 +168,18 @@ describe('PageContextMenu permissions', () => {
       role: 'viewer',
       permission: 'view' as const,
       expected: ['Favorite', 'Share', 'Export', 'Copy'],
-      absent: ['Rename', 'Move', 'Delete'],
+      absent: ['Rename', 'Move', 'Move to Trash', 'Remove from my view'],
     },
     {
       role: 'editor',
       permission: 'edit' as const,
       expected: ['Favorite', 'Rename', 'Share', 'Export', 'Copy'],
-      absent: ['Move', 'Delete'],
+      absent: ['Move', 'Move to Trash', 'Remove from my view'],
     },
     {
       role: 'admin',
       permission: 'admin' as const,
-      expected: ['Favorite', 'Rename', 'Share', 'Export', 'Delete', 'Move', 'Copy'],
+      expected: ['Favorite', 'Rename', 'Share', 'Export', 'Move to Trash', 'Move', 'Copy'],
       absent: [],
     },
   ])('renders the $role action boundary', ({ permission, expected, absent }) => {
@@ -173,69 +194,93 @@ describe('PageContextMenu permissions', () => {
     renderMenu({ ownerId: 'current-user' });
 
     expect(labels()).toEqual(
-      expect.arrayContaining(['Rename', 'Share', 'Export', 'Delete', 'Move', 'Copy']),
+      expect.arrayContaining(['Rename', 'Share', 'Export', 'Move to Trash', 'Move', 'Copy']),
     );
   });
 
   it.each([
     'direct',
     'public',
-  ] as const)('lets a directly shared viewer leave via %s access', async (shareSource) => {
+  ] as const)('removes a directly shared viewer item via %s access', async (shareSource) => {
     const user = userEvent.setup();
     renderMenu({ permission: 'view', shareSource });
 
-    await user.click(screen.getByRole('button', { name: 'Leave' }));
+    await user.click(lastButton('Remove from my view'));
+    expect(mocks.removeFromView).not.toHaveBeenCalled();
+    expect(screen.getByText('Remove “Test page” from your view?')).toBeInTheDocument();
+    await user.click(lastButton('Remove from my view'));
 
-    expect(mocks.leaveEntity).toHaveBeenCalledWith('page-1');
+    await waitFor(() =>
+      expect(mocks.removeFromView).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'page-1', shareSource }),
+      ),
+    );
+    expect(mocks.moveToTrash).not.toHaveBeenCalled();
   });
 
-  it('does not offer item-level leave for workspace-inherited access', () => {
+  it('does not offer personal removal for workspace-inherited access', () => {
     renderMenu({ permission: 'view', shareSource: 'workspace' });
 
-    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove from my view' })).not.toBeInTheDocument();
   });
 
-  it('offers a direct-share admin both structural deletion and self-leave', () => {
+  it('offers a direct-share admin distinct trash and personal-removal actions', () => {
     renderMenu({ permission: 'admin', shareSource: 'direct' });
 
-    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Leave' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Move to Trash' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove from my view' })).toBeInTheDocument();
+    expect(screen.getByRole('separator')).toBeInTheDocument();
   });
 
-  it('never offers leave to the owner', () => {
+  it('never offers personal removal to the owner', () => {
     renderMenu({ ownerId: 'current-user', shareSource: 'direct' });
 
-    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove from my view' })).not.toBeInTheDocument();
   });
 
-  it('confirms before recursively deleting a non-empty folder', async () => {
+  it('confirms before moving a folder and its contents to Trash', async () => {
     const user = userEvent.setup();
-    mocks.handleDelete
-      .mockResolvedValueOnce({
-        requiresForce: true,
-        childFolders: 2,
-        childPages: 3,
-        message: 'Folder is not empty',
-      })
-      .mockResolvedValueOnce({ deleted: true });
     renderMenu({ permission: 'admin', entityType: 'folder' });
 
-    await user.click(screen.getByRole('button', { name: 'Delete' }));
+    await user.click(lastButton('Move to Trash'));
+    expect(mocks.moveToTrash).not.toHaveBeenCalled();
+    expect(screen.getByText(/folder and all of its contents/)).toBeInTheDocument();
 
-    expect(mocks.handleDelete).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ id: 'page-1', type: 'folder' }),
-      { force: false },
-    );
-    expect(screen.getByText(/2 nested folders and 3 pages/)).toBeInTheDocument();
+    await user.click(lastButton('Move to Trash'));
 
-    await user.click(screen.getByRole('button', { name: 'Move to trash' }));
-
-    expect(mocks.handleDelete).toHaveBeenNthCalledWith(
-      2,
+    expect(mocks.moveToTrash).toHaveBeenCalledWith(
       expect.objectContaining({ id: 'page-1', type: 'folder' }),
       { force: true },
     );
+  });
+
+  it('confirms the non-owner admin trash action without using personal removal', async () => {
+    const user = userEvent.setup();
+    renderMenu({ permission: 'admin', shareSource: 'direct' });
+
+    await user.click(lastButton('Move to Trash'));
+    expect(mocks.moveToTrash).not.toHaveBeenCalled();
+    await user.click(lastButton('Move to Trash'));
+
+    await waitFor(() => expect(mocks.moveToTrash).toHaveBeenCalledOnce());
+    expect(mocks.moveToTrash).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'page-1', type: 'page', title: 'Test page' }),
+      { force: false },
+    );
+    expect(mocks.removeFromView).not.toHaveBeenCalled();
+  });
+
+  it('keeps a non-owner admin personal removal separate from moving to Trash', async () => {
+    const user = userEvent.setup();
+    const onDeleted = vi.fn();
+    renderMenu({ permission: 'admin', shareSource: 'direct', onDeleted });
+
+    await user.click(lastButton('Remove from my view'));
+    await user.click(lastButton('Remove from my view'));
+
+    await waitFor(() => expect(mocks.removeFromView).toHaveBeenCalledOnce());
+    expect(mocks.moveToTrash).not.toHaveBeenCalled();
+    expect(onDeleted).toHaveBeenCalledOnce();
   });
 
   it.each([

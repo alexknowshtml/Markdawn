@@ -99,8 +99,8 @@ vi.mock('../hooks/use-page-collaborators', () => ({
   usePageCollaborators: () => ({ data: {} }),
   useFolderCollaborators: () => ({ data: {} }),
 }));
-vi.mock('../hooks/use-bulk-actions', () => ({
-  BulkRemovalError: class BulkRemovalError extends Error {},
+vi.mock('../hooks/use-bulk-actions', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../hooks/use-bulk-actions')>()),
   useBulkMoveFolders: mocks.idleMutation,
   useBulkMovePages: mocks.idleMutation,
   useBulkRemoveEntities: mocks.idleMutation,

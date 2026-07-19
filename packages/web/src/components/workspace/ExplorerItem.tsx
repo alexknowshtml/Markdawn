@@ -120,6 +120,8 @@ export function ExplorerItem({
             handleClick(e);
           }
         }}
+        data-entity-id={item.id}
+        data-entity-type={item.type}
       >
         <div
           className={clsx(
@@ -217,6 +219,8 @@ export function ExplorerItem({
           handleClick(e);
         }
       }}
+      data-entity-id={item.id}
+      data-entity-type={item.type}
     >
       {canSelect && (
         <div className="absolute top-3 left-3 z-10">

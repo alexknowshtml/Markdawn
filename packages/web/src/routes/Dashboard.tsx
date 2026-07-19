@@ -19,21 +19,28 @@ import { useIdentityLifecycle, useIdentityNavigate } from '../contexts/IdentityL
 import { useSelection } from '../contexts/SelectionContext';
 import {
   BulkRemovalError,
+  buildBulkRemovalInput,
+  getBulkRemovalCounts,
   useBulkMoveFolders,
   useBulkMovePages,
   useBulkRemoveEntities,
 } from '../hooks/use-bulk-actions';
 import { useCopyFolder, useCopyPage } from '../hooks/use-copy';
 import { useFavorites } from '../hooks/use-favorites';
-import { useCreateFolder, useFolderTree, useUpdateFolder } from '../hooks/use-folders';
+import { useFolderTree, useUpdateFolder } from '../hooks/use-folders';
 import { useFolderCollaborators, usePageCollaborators } from '../hooks/use-page-collaborators';
-import { useCreatePage, usePageTree, useUpdatePage } from '../hooks/use-pages';
+import { usePageTree, useUpdatePage } from '../hooks/use-pages';
 import { useSharedWithMe } from '../hooks/use-shared-with-me';
 import { useWorkspaceMemberships } from '../hooks/use-workspace';
 import { useAuth } from '../hooks/useAuth';
+import { useEntityCreationActions } from '../hooks/useEntityCreationActions';
 import { useStableValueWhile } from '../hooks/useStableValue';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
-import { canRenameEntity, preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
+import {
+  canRenameEntity,
+  preservesEffectiveOwnerAtRoot,
+  resolveRemovalShareSource,
+} from '../utils/entity-actions';
 import { collectAllFolderIds, getRootPages } from '../utils/page-tree';
 import { hasInitialQueryError } from '../utils/queryState';
 import { showSuccessToast } from '../utils/toast';
@@ -131,8 +138,7 @@ export default function HomeView() {
   const favoriteKeys = useStableValueWhile(refreshedFavoriteKeys, bulkRemoveMutation.isPending);
   const isFavorite = (item: ExplorerItemData) => favoriteKeys.has(`${item.type}:${item.id}`);
 
-  const createPageMutation = useCreatePage();
-  const createFolderMutation = useCreateFolder();
+  const entityCreation = useEntityCreationActions();
   const updatePageMutation = useUpdatePage();
   const updateFolderMutation = useUpdateFolder();
   const copyPageMutation = useCopyPage();
@@ -301,9 +307,38 @@ export default function HomeView() {
     return [...folderItems, ...pageItems];
   }, [folders, pages, workspaceOwnerIds, workspaceAdminOwnerIds]);
 
+  const workspaceAccessibleFolderIds = useMemo(() => {
+    const ids = new Set<string>();
+    const walk = (nodes: FolderTreeNode[]) => {
+      for (const folder of nodes) {
+        if (folder.workspaceAccess === true) ids.add(folder.id);
+        walk(folder.children);
+      }
+    };
+    walk(folders ?? []);
+    return ids;
+  }, [folders]);
+  const workspaceAccessiblePageIds = useMemo(
+    () =>
+      new Set((pages ?? []).filter((page) => page.workspaceAccess === true).map((page) => page.id)),
+    [pages],
+  );
   const sharedBaseItems = useMemo(
-    () => [...(sharedWithMe ?? []).map(sharedItemToExplorerItem), ...workspaceBaseItems],
-    [workspaceBaseItems, sharedWithMe],
+    () => [
+      ...(sharedWithMe ?? []).map((item) => {
+        const explorerItem = sharedItemToExplorerItem(item);
+        const hasWorkspaceFallback =
+          item.entityType === 'page'
+            ? workspaceAccessiblePageIds.has(item.entityId)
+            : workspaceAccessibleFolderIds.has(item.entityId);
+        return {
+          ...explorerItem,
+          shareSource: resolveRemovalShareSource(explorerItem.shareSource, hasWorkspaceFallback),
+        };
+      }),
+      ...workspaceBaseItems,
+    ],
+    [sharedWithMe, workspaceAccessibleFolderIds, workspaceAccessiblePageIds, workspaceBaseItems],
   );
 
   const filteredBaseItems = useMemo(() => {
@@ -371,8 +406,7 @@ export default function HomeView() {
 
   const handleCreatePage = async () => {
     try {
-      const newPage = await createPageMutation.mutateAsync({});
-      navigate(buildPagePath(newPage.title, newPage.id));
+      await entityCreation.createPageAndNavigate();
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
@@ -380,8 +414,8 @@ export default function HomeView() {
 
   const handleCreateFolder = async () => {
     try {
-      const folder = await createFolderMutation.mutateAsync({});
-      if (!identityLifecycle.isActive()) return;
+      const folder = await entityCreation.createFolder();
+      if (!folder) return;
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -473,10 +507,11 @@ export default function HomeView() {
     [selection.selectedItems, allItems],
   );
 
-  const canAdminItem = (item: (typeof selectedItems)[number]) =>
-    item.ownerId === currentUserId || item.userPermission === 'admin';
-  const canLeaveItem = (item: (typeof selectedItems)[number]) =>
-    !canAdminItem(item) && (item.shareSource === 'direct' || item.shareSource === 'public');
+  const selectedRemovalInput = useMemo(
+    () => buildBulkRemovalInput(selectedItems, currentUserId),
+    [selectedItems, currentUserId],
+  );
+  const selectedRemovalCounts = getBulkRemovalCounts(selectedRemovalInput);
   const selectedOwnerIds = new Set(selectedItems.map((item) => item.ownerId));
   const selectedOwnerId = selectedOwnerIds.size === 1 ? selectedItems[0]?.ownerId : undefined;
   const canMoveSelection =
@@ -492,24 +527,12 @@ export default function HomeView() {
     hasWorkspaceRootAccess && selectedItems.every(preservesEffectiveOwnerAtRoot);
   const canRemoveSelection =
     selectedItems.length > 0 &&
-    selectedItems.every((item) => canAdminItem(item) || canLeaveItem(item));
+    selectedRemovalCounts.trashCount + selectedRemovalCounts.removeFromViewCount ===
+      selectedItems.length;
 
   const handleBulkDelete = async () => {
     try {
-      const result = await bulkRemoveMutation.mutateAsync({
-        pageIdsToDelete: selectedItems
-          .filter((item) => item.type === 'page' && canAdminItem(item))
-          .map((item) => item.id),
-        folderIdsToDelete: selectedItems
-          .filter((item) => item.type === 'folder' && canAdminItem(item))
-          .map((item) => item.id),
-        pageIdsToLeave: selectedItems
-          .filter((item) => item.type === 'page' && canLeaveItem(item))
-          .map((item) => item.id),
-        folderIdsToLeave: selectedItems
-          .filter((item) => item.type === 'folder' && canLeaveItem(item))
-          .map((item) => item.id),
-      });
+      const result = await bulkRemoveMutation.mutateAsync(selectedRemovalInput);
       if (!identityLifecycle.isActive()) return;
       for (const item of result.removedItems) selection.deselect(item.id);
     } catch (error) {
@@ -712,6 +735,7 @@ export default function HomeView() {
             <button
               type="button"
               onClick={() => setShowNewMenu((prev) => !prev)}
+              aria-label="Open new item menu"
               className="flex items-center px-1.5 h-7 bg-white dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 rounded-r-lg text-sm hover:bg-zinc-50 dark:hover:bg-zinc-700 transition-colors cursor-pointer border border-zinc-200 dark:border-zinc-700"
             >
               <ChevronDown size={14} />
@@ -879,6 +903,8 @@ export default function HomeView() {
         onCut={handleBulkCut}
         onMove={handleBulkMove}
         canDelete={canRemoveSelection}
+        trashCount={selectedRemovalCounts.trashCount}
+        removeFromViewCount={selectedRemovalCounts.removeFromViewCount}
         canMove={canMoveSelection}
         isRemoving={bulkRemoveMutation.isPending}
         onPaste={() => void handlePaste()}

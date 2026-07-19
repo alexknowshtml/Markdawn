@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type * as Y from 'yjs';
 import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
+import { updatePageNavigationCache } from '../utils/navigationCache';
 
 const API_BASE = '/api';
 
@@ -109,6 +110,7 @@ export function usePageTitle(
       );
     },
     onSuccess: (_data, { pageId: mutationPageId, title: nextTitle }) => {
+      updatePageNavigationCache(queryClient, mutationPageId, { title: nextTitle });
       queryClient.setQueryData(['pages', 'detail', mutationPageId], (old: unknown) => {
         if (!old || typeof old !== 'object' || Array.isArray(old)) return old;
         return { ...old, title: nextTitle };
