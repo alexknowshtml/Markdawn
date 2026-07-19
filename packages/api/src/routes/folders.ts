@@ -1,5 +1,6 @@
 import { deriveCapabilities } from '@markdawn/shared';
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { auth } from '../auth';
 import type { folders } from '../db';
@@ -8,6 +9,7 @@ import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { prepareCopiedYdoc } from '../utils/documentSize';
 import { getEnumerableFolderIds, redactParentId } from '../utils/folderEnumeration';
+import { createCopyFolderName, normalizeFolderName } from '../utils/folderName';
 import {
   ensureActorCanCreateInFolder,
   ensureActorFolderAccess,
@@ -52,6 +54,7 @@ type PublicPermission = 'view' | 'edit';
 
 const foldersRoute = new Hono();
 const foldersPublicRoute = new Hono();
+const bodyLimitError = (c: Context) => c.json({ message: 'Request body is too large' }, 413);
 
 const deletedFolderOwnerSql = `coalesce(
   (
@@ -67,6 +70,8 @@ const deletedFolderOwnerSql = `coalesce(
 )`;
 
 foldersRoute.use('*', requireAuth);
+foldersRoute.use('*', bodyLimit({ maxSize: 16 * 1024, onError: bodyLimitError }));
+const publicFolderBodyLimit = bodyLimit({ maxSize: 4 * 1024, onError: bodyLimitError });
 
 const normalizeFolderRow = (row: RawFolderRow): NormalizedFolderRow => ({
   ...row,
@@ -349,8 +354,11 @@ foldersRoute.get('/tree', async (c) => {
   );
 });
 
-foldersPublicRoute.post('/', async (c) => {
-  const body = await c.req.json().catch(() => null);
+foldersPublicRoute.post('/', publicFolderBodyLimit, async (c) => {
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
@@ -381,7 +389,7 @@ foldersPublicRoute.post('/', async (c) => {
       'insert into folders (parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5) returning *',
       [
         parentId ?? null,
-        typeof name === 'string' && name.trim().length > 0 ? name.trim() : 'New Folder',
+        normalizeFolderName(typeof name === 'string' ? name : undefined),
         typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
         nextPosition,
         actor.kind === 'user' ? actor.id : null,
@@ -665,7 +673,10 @@ foldersRoute.patch(':id', async (c) => {
   }
   const user = c.get('user') as { id: string };
 
-  const body = await c.req.json().catch(() => null);
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
@@ -695,12 +706,7 @@ foldersRoute.patch(':id', async (c) => {
     }
     await ensureNoFolderCycle(currentFolder.id, nextParent, user.id, tx);
 
-    const nextName =
-      typeof name === 'string'
-        ? name.trim().length > 0
-          ? name.trim()
-          : 'New Folder'
-        : currentFolder.name;
+    const nextName = typeof name === 'string' ? normalizeFolderName(name) : currentFolder.name;
     const nextIcon =
       typeof icon === 'string'
         ? icon.trim().length > 0
@@ -748,10 +754,13 @@ foldersRoute.patch(':id', async (c) => {
   );
 });
 
-foldersPublicRoute.post(':id/copy', async (c) => {
+foldersPublicRoute.post(':id/copy', publicFolderBodyLimit, async (c) => {
   const folderId = c.req.param('id');
   const actor = await getRequestActor(c);
-  const body = await c.req.json().catch(() => null);
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   const parentId =
     body && typeof body === 'object'
       ? ((body as { parentId?: string | null }).parentId ?? null)
@@ -779,7 +788,28 @@ foldersPublicRoute.post(':id/copy', async (c) => {
     if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
     await ensureNoFolderCycle(folderId, parentId, actor.id, tx);
     await persistGuestIdentity(actor, tx);
-    const copiedRoot = await copyFolderRecursive(tx, folderId, parentId, actor, copyState);
+    const destinationOwnerId = parentId
+      ? (
+          await executeQuery<{ owner_id: string | null }>(
+            tx,
+            'select get_root_folder_owner($1) as owner_id',
+            [parentId],
+          )
+        ).rows[0]?.owner_id
+      : actor.kind === 'user'
+        ? actor.id
+        : null;
+    if (!destinationOwnerId) {
+      throw new HTTPException(404, { message: 'Destination workspace not found' });
+    }
+    const copiedRoot = await copyFolderRecursive(
+      tx,
+      folderId,
+      parentId,
+      actor,
+      copyState,
+      currentFolder.ownerId === destinationOwnerId,
+    );
     if (copiedRoot) {
       const metaUserIds = await getEntityMetaUserIds(tx, 'folder', copiedRoot.id);
       await notifyShareRecompute(
@@ -809,6 +839,7 @@ async function copyFolderRecursive(
   newParentId: string | null,
   actor: RequestActor,
   state: { skippedRestrictedItems: boolean },
+  preservePageConnectionIndex: boolean,
 ): Promise<FolderRow | null> {
   const sourceResult =
     actor.kind === 'user'
@@ -844,7 +875,7 @@ async function copyFolderRecursive(
      returning *`,
     [
       newParentId,
-      `Copy of ${source.name}`,
+      createCopyFolderName(source.name),
       source.icon,
       nextPosition,
       actor.kind === 'user' ? actor.id : null,
@@ -932,8 +963,9 @@ async function copyFolderRecursive(
                 target_label, connection_type, link_text, link_context,
                 occurrence_count, first_seen_at, now()
          from connections
-         where source_type = 'page' and source_id = $2`,
-        [copiedPageId, pr.id],
+         where source_type = 'page' and source_id = $2
+           and ($3::boolean or target_type <> 'page')`,
+        [copiedPageId, pr.id, preservePageConnectionIndex],
       );
       await executeQuery(
         executor,
@@ -983,7 +1015,14 @@ async function copyFolderRecursive(
       state.skippedRestrictedItems = true;
       continue;
     }
-    await copyFolderRecursive(executor, subfolderRow.id, newFolder.id, actor, state);
+    await copyFolderRecursive(
+      executor,
+      subfolderRow.id,
+      newFolder.id,
+      actor,
+      state,
+      preservePageConnectionIndex,
+    );
   }
 
   return newFolder;
@@ -1373,7 +1412,7 @@ foldersPublicRoute.get(
   },
 );
 
-foldersPublicRoute.post(':id/access', async (c) => {
+foldersPublicRoute.post(':id/access', publicFolderBodyLimit, async (c) => {
   const folderId = c.req.param('id');
   const session = await auth.api.getSession({ headers: c.req.raw.headers });
   const sessionUserId = session?.user ? (session.user as { id: string }).id : null;

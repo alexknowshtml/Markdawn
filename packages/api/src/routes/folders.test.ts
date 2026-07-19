@@ -1,4 +1,4 @@
-import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
+import { MAX_FOLDER_NAME_LENGTH, MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
@@ -193,6 +193,73 @@ describe('folders API', () => {
       expect(body.parentId).toBe(parent.id);
     });
 
+    it('enforces the Unicode folder-name boundary', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const boundaryName = '📁'.repeat(MAX_FOLDER_NAME_LENGTH);
+
+      const accepted = await app.request('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ name: boundaryName }),
+      });
+      expect(accepted.status).toBe(201);
+      expect((await accepted.json()).name).toBe(boundaryName);
+
+      const rejected = await app.request('/api/folders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ name: `${boundaryName}📁` }),
+      });
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({
+        message: `Folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer`,
+      });
+    });
+
+    it('rejects oversized public folder request bodies before parsing JSON', async () => {
+      const app = await createTestApp();
+      const response = await app.request('/api/folders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `markdawn_anon_id=${crypto.randomUUID()}`,
+        },
+        body: JSON.stringify({ name: 'x'.repeat(5 * 1024) }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ message: 'Request body is too large' });
+    });
+
+    it('allows authenticated folder requests above the public body limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const folder = await createTestFolder(user.id, { name: 'Original' });
+
+      const response = await app.request(`/api/folders/${folder.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ name: 'Renamed', padding: 'x'.repeat(5 * 1024) }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toMatchObject({ id: folder.id, name: 'Renamed' });
+    });
+
+    it('enforces the folder-name limit at the database boundary', async () => {
+      const user = await createTestUser();
+      await expect(
+        query(
+          `insert into folders (name, position, created_by)
+           values ($1, '0', $2)`,
+          ['x'.repeat(MAX_FOLDER_NAME_LENGTH + 1), user.id],
+        ),
+      ).rejects.toThrow('folders_name_length_check');
+    });
+
     it('returns 404 for non-existent parent folder', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -230,7 +297,7 @@ describe('folders API', () => {
       ).rejects.toThrow('Cannot place content inside a deleted folder');
     });
 
-    it('requires admin access to create a nested folder', async () => {
+    it('lets an invited editor create a nested folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const editor = await createTestUser();
@@ -245,10 +312,11 @@ describe('folders API', () => {
       const res = await app.request('/api/folders', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ parentId: parent.id, name: 'Not allowed' }),
+        body: JSON.stringify({ parentId: parent.id, name: 'Editor child' }),
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({ parentId: parent.id, name: 'Editor child' });
     });
 
     it('lets a persistent guest create a folder beneath public Edit access', async () => {
@@ -576,6 +644,28 @@ describe('folders API', () => {
       expect(await readWorkspaceAccessVersion(user.id)).toBe(revisionBefore);
     });
 
+    it('rejects an oversized folder name when renaming', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const folder = await createTestFolder(user.id, { name: 'Original' });
+
+      const response = await app.request(`/api/folders/${folder.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ name: 'x'.repeat(MAX_FOLDER_NAME_LENGTH + 1) }),
+      });
+
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        message: `Folder name must be ${MAX_FOLDER_NAME_LENGTH} characters or fewer`,
+      });
+      const stored = await query<{ name: string }>('select name from folders where id = $1', [
+        folder.id,
+      ]);
+      expect(stored.rows[0]?.name).toBe('Original');
+    });
+
     it('advances the access revision when the parent changes', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -769,6 +859,26 @@ describe('folders API', () => {
       expect(body.name).toContain('Copy of');
     });
 
+    it('keeps copied folder names within the Unicode limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const sourceName = '📁'.repeat(MAX_FOLDER_NAME_LENGTH);
+      const folder = await createTestFolder(user.id, { name: sourceName });
+
+      const response = await app.request(`/api/folders/${folder.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({}),
+      });
+
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { name: string };
+      expect(Array.from(body.name)).toHaveLength(MAX_FOLDER_NAME_LENGTH);
+      expect(body.name).toBe(`Copy of ${'📁'.repeat(MAX_FOLDER_NAME_LENGTH - 8)}`);
+      expect(body.name).not.toContain('�');
+    });
+
     it('copies page connection indexes and occurrences', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
@@ -823,6 +933,18 @@ describe('folders API', () => {
       const viewer = await createTestUser();
       const session = await createTestSession(viewer.id);
       const root = await createTestFolder(owner.id, { name: 'Shared Root' });
+      const linkedSource = await createTestPage(owner.id, {
+        title: 'Linked child',
+        parentId: root.id,
+      });
+      const privateTarget = await createTestPage(owner.id, { title: 'Private target' });
+      await query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values ('page', $1, 'page', $2, $3, 'Private target', 'wikilink', 'Wiki link')`,
+        [linkedSource.id, privateTarget.id, `id:${privateTarget.id}`],
+      );
       const restricted = await createTestFolder(owner.id, {
         name: 'Restricted Child',
         parentId: root.id,
@@ -851,6 +973,46 @@ describe('folders API', () => {
         viewer.id,
       ]);
       expect(privateCopy.rowCount).toBe(0);
+      const copiedLinkedPage = await query<{ id: string }>(
+        'select id from pages where parent_id = $1 and title = $2',
+        [body.id, 'Copy of Linked child'],
+      );
+      const copiedPageConnections = await query<{ count: string }>(
+        `select count(*)::text as count from connections
+         where source_id = $1 and target_type = 'page'`,
+        [copiedLinkedPage.rows[0]?.id],
+      );
+      expect(copiedPageConnections.rows[0]?.count).toBe('0');
+    });
+
+    it('lets an invited editor paste a folder copy into a shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const destination = await createTestFolder(owner.id, { name: 'Editable destination' });
+      const source = await createTestFolder(owner.id, {
+        parentId: destination.id,
+        name: 'Editor copy source',
+      });
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('folder', $1, $2, $3, 'edit')`,
+        [destination.id, owner.id, editor.id],
+      );
+
+      const response = await app.request(`/api/folders/${source.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: destination.id }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        parentId: destination.id,
+        name: 'Copy of Editor copy source',
+        createdBy: editor.id,
+      });
     });
 
     it('keeps recursively copied page titles within the collaboration title limit', async () => {

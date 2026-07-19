@@ -1,4 +1,5 @@
 export const MAX_PAGE_TITLE_LENGTH = 250;
+export const MAX_FOLDER_NAME_LENGTH = 250;
 
 /** Match PostgreSQL char_length(): count Unicode code points, not UTF-16 units. */
 export function getUnicodeCodePointLength(value: string): number {

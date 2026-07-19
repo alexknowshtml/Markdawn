@@ -9,6 +9,25 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   refetchPages: vi.fn(),
   refetchFolders: vi.fn(),
+  pagesError: new Error('page tree failed') as Error | null,
+  foldersError: new Error('folder tree failed') as Error | null,
+  clipboardState: { action: null, items: [] } as {
+    action: 'copy' | 'cut' | null;
+    items: Array<{ id: string; type: 'page' | 'folder' }>;
+  },
+  share: {
+    capabilities: { canEdit: true, canDelete: true, canCopy: true },
+    isAnonymous: false,
+    publicEntity: {
+      id: '11111111-1111-4111-8111-111111111111',
+      name: 'Fresh polled name',
+      parentId: null,
+      publicPermission: 'edit' as const,
+      folders: [],
+      pages: [],
+    },
+  },
+  toolbarProps: vi.fn(),
   idleMutation: () => ({
     isPending: false,
     mutate: vi.fn(),
@@ -21,20 +40,10 @@ vi.mock('react-router-dom', async (importOriginal) => {
   return { ...actual, useNavigate: () => mocks.navigate };
 });
 vi.mock('../contexts/ShareContext', () => ({
-  useShareContext: () => ({
-    capabilities: { canEdit: true, canComment: true, canDelete: true, canCopy: true },
-    isAnonymous: false,
-    publicEntity: {
-      id: FOLDER_ID,
-      name: 'Fresh polled name',
-      parentId: null,
-      folders: [],
-      pages: [],
-    },
-  }),
+  useShareContext: () => mocks.share,
 }));
 vi.mock('../contexts/ClipboardContext', () => ({
-  useClipboard: () => ({ state: { action: null, items: [] }, clear: vi.fn() }),
+  useClipboard: () => ({ state: mocks.clipboardState, clear: vi.fn() }),
 }));
 vi.mock('../contexts/SelectionContext', () => ({
   useSelection: () => ({
@@ -54,7 +63,7 @@ vi.mock('../hooks/use-pages', () => ({
   usePageTree: () => ({
     data: [],
     isLoading: false,
-    error: new Error('page tree failed'),
+    error: mocks.pagesError,
     refetch: mocks.refetchPages,
   }),
   useCreatePage: mocks.idleMutation,
@@ -78,7 +87,7 @@ vi.mock('../hooks/use-folders', () => ({
       },
     ],
     isLoading: false,
-    error: new Error('folder tree failed'),
+    error: mocks.foldersError,
     refetch: mocks.refetchFolders,
   }),
   useCreateFolder: mocks.idleMutation,
@@ -102,13 +111,22 @@ vi.mock('../hooks/use-copy', () => ({
 }));
 vi.mock('../components/workspace/ExplorerItem', () => ({ ExplorerItem: () => null }));
 vi.mock('../components/workspace/MoveDialog', () => ({ MoveDialog: () => null }));
-vi.mock('../components/workspace/SelectionToolbar', () => ({ SelectionToolbar: () => null }));
+vi.mock('../components/workspace/SelectionToolbar', () => ({
+  SelectionToolbar: (props: unknown) => {
+    mocks.toolbarProps(props);
+    return null;
+  },
+}));
 
 import FolderEntry from './FolderEntry';
 
 describe('FolderEntry access refresh', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.pagesError = new Error('page tree failed');
+    mocks.foldersError = new Error('folder tree failed');
+    mocks.clipboardState = { action: null, items: [] };
+    mocks.share.capabilities = { canEdit: true, canDelete: true, canCopy: true };
   });
 
   it('uses fresh polled metadata for a router-aware canonical replace', async () => {
@@ -145,5 +163,37 @@ describe('FolderEntry access refresh', () => {
     await user.click(screen.getByRole('button', { name: 'Retry' }));
     expect(mocks.refetchPages).toHaveBeenCalledOnce();
     expect(mocks.refetchFolders).toHaveBeenCalledOnce();
+  });
+
+  it('allows editors to paste copies but not cut items', () => {
+    mocks.pagesError = null;
+    mocks.foldersError = null;
+    mocks.share.capabilities = { canEdit: true, canDelete: false, canCopy: true };
+    mocks.clipboardState = { action: 'copy', items: [{ id: 'page-1', type: 'page' }] };
+
+    const rendered = render(
+      <MemoryRouter initialEntries={[`/app/folder/fresh-${FOLDER_ID}`]}>
+        <Routes>
+          <Route path="/app/folder/:slugAndId" element={<FolderEntry />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(mocks.toolbarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canPaste: true, canMove: false }),
+    );
+
+    mocks.clipboardState = { action: 'cut', items: [{ id: 'page-1', type: 'page' }] };
+    rendered.rerender(
+      <MemoryRouter initialEntries={[`/app/folder/fresh-${FOLDER_ID}`]}>
+        <Routes>
+          <Route path="/app/folder/:slugAndId" element={<FolderEntry />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    expect(mocks.toolbarProps).toHaveBeenLastCalledWith(
+      expect.objectContaining({ canPaste: false, canMove: false }),
+    );
   });
 });

@@ -177,6 +177,7 @@ export const folders = pgTable(
       .$type<'inherit' | 'restricted'>(),
   },
   (table) => ({
+    nameLength: check('folders_name_length_check', sql`char_length(${table.name}) <= 250`),
     positionNumeric: check(
       'folders_position_numeric_check',
       sql`char_length(${table.position}) <= 128 and ${table.position} ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)$'`,

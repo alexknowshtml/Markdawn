@@ -1,4 +1,9 @@
-import type { SharePermission } from '@markdawn/shared';
+import {
+  MAX_FOLDER_NAME_LENGTH,
+  MAX_PAGE_TITLE_LENGTH,
+  type SharePermission,
+  truncateUnicodeCodePoints,
+} from '@markdawn/shared';
 import clsx from 'clsx';
 import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
@@ -67,6 +72,7 @@ export function PageTreeRow({
   const navigate = useIdentityNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
+  const editLengthLimit = isFolder ? MAX_FOLDER_NAME_LENGTH : MAX_PAGE_TITLE_LENGTH;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -158,8 +164,11 @@ export function PageTreeRow({
           <input
             ref={inputRef}
             type="text"
+            maxLength={editLengthLimit * 2}
             value={editTitle}
-            onChange={(e) => onEditChange?.(e.target.value)}
+            onChange={(e) =>
+              onEditChange?.(truncateUnicodeCodePoints(e.target.value, editLengthLimit))
+            }
             onBlur={onEditSave}
             onKeyDown={onEditKeyDown}
             className="flex-1 bg-white/50 dark:bg-black/20 border border-black/10 dark:border-white/10 rounded-md px-1 py-0.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 h-6 min-w-0 text-zinc-900 dark:text-zinc-100"

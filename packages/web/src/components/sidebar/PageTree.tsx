@@ -536,7 +536,7 @@ export function PageTree() {
           hasChildren={childFolders.length > 0 || childPages.length > 0}
           isExpanded={isExpanded}
           onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          {...(folder.userPermission === 'admin'
+          {...(folder.userPermission === 'edit' || folder.userPermission === 'admin'
             ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
             : {})}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
@@ -658,7 +658,9 @@ export function PageTree() {
           isExpanded={isExpanded}
           isFavorite={isFavoriteEntity('folder', folder.id)}
           onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          {...(isAdmin ? { onCreateChild: () => handleCreatePageInFolder(folder.id) } : {})}
+          {...(folder.userPermission === 'edit' || isAdmin
+            ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
+            : {})}
           onDelete={() => handleDeleteFolder(folder.id, childFolders.length, childPages.length)}
           {...(isAdmin ? { onRename: () => beginRenameFolder(folder) } : {})}
           onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
@@ -694,7 +696,7 @@ export function PageTree() {
         editingCapability.allowed &&
         editingTarget?.kind === 'folder' &&
         editingTarget.id === item.id;
-      const canCreateChild = item.userPermission === 'admin';
+      const canCreateChild = item.userPermission === 'edit' || item.userPermission === 'admin';
       return (
         <div key={`shared-folder-${item.id}`}>
           <PageTreeRow

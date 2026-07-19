@@ -1,4 +1,10 @@
-import type { CollaboratorDisplay, SharePermission } from '@markdawn/shared';
+import {
+  type CollaboratorDisplay,
+  MAX_FOLDER_NAME_LENGTH,
+  MAX_PAGE_TITLE_LENGTH,
+  type SharePermission,
+  truncateUnicodeCodePoints,
+} from '@markdawn/shared';
 import clsx from 'clsx';
 import { Check, FileText, Folder } from 'lucide-react';
 import type React from 'react';
@@ -66,6 +72,7 @@ export function ExplorerItem({
 }: ExplorerItemProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isHovered, setIsHovered] = useState(false);
+  const editLengthLimit = item.type === 'folder' ? MAX_FOLDER_NAME_LENGTH : MAX_PAGE_TITLE_LENGTH;
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -149,8 +156,11 @@ export function ExplorerItem({
             <input
               ref={inputRef}
               type="text"
+              maxLength={editLengthLimit * 2}
               value={editValue}
-              onChange={(e) => onEditChange?.(e.target.value)}
+              onChange={(e) =>
+                onEditChange?.(truncateUnicodeCodePoints(e.target.value, editLengthLimit))
+              }
               onBlur={onEditSave}
               onKeyDown={onEditKeyDown}
               className="w-full max-w-xs bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-zinc-900 dark:text-zinc-100"
@@ -265,8 +275,11 @@ export function ExplorerItem({
             <input
               ref={inputRef}
               type="text"
+              maxLength={editLengthLimit * 2}
               value={editValue}
-              onChange={(e) => onEditChange?.(e.target.value)}
+              onChange={(e) =>
+                onEditChange?.(truncateUnicodeCodePoints(e.target.value, editLengthLimit))
+              }
               onBlur={onEditSave}
               onKeyDown={onEditKeyDown}
               className="w-full bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/50 text-zinc-900 dark:text-zinc-100"

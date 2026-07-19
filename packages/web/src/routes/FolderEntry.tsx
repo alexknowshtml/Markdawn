@@ -123,7 +123,7 @@ export default function FolderEntry() {
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const canManageFolder = !!currentUserId && capabilities.canDelete;
-  const canCreateChildren = canManageFolder || publicEntity?.publicPermission === 'edit';
+  const canCreateChildren = capabilities.canEdit;
   const canGuestDuplicateItems = isAnonymous && publicEntity?.publicPermission === 'edit';
 
   const bulkRemoveMutation = useBulkRemoveEntities();
@@ -542,6 +542,8 @@ export default function FolderEntry() {
 
   const handlePaste = async () => {
     if (!clipboard.state.action || clipboard.state.items.length === 0) return;
+    if (clipboard.state.action === 'copy' && !canCreateChildren) return;
+    if (clipboard.state.action === 'cut' && !canManageFolder) return;
     const currentParentId = folderId ?? null;
 
     try {
@@ -918,7 +920,11 @@ export default function FolderEntry() {
           onMove={handleBulkMove}
           canDelete={canManageSelection}
           canMove={canMoveSelection}
-          canPaste={canManageFolder}
+          canPaste={
+            clipboard.state.action === 'copy'
+              ? canCreateChildren
+              : clipboard.state.action === 'cut' && canManageFolder
+          }
           isRemoving={bulkRemoveMutation.isPending}
           onPaste={() => void handlePaste()}
           onSelectAll={() => selection.selectAll(allItems.map((i) => ({ id: i.id, type: i.type })))}
