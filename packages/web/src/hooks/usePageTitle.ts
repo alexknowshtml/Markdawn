@@ -50,15 +50,13 @@ export function usePageTitle(
   const queryClient = useQueryClient();
   const identityLifecycle = useIdentityLifecycle();
   const usePublicEndpoint = options.usePublicEndpoint ?? false;
+  const currentPageIdRef = useRef(pageId);
   const lastSavedTitleRef = useRef('Untitled');
   const hasLocalEditsRef = useRef(false);
   const setTitle = useCallback((value: string) => {
     hasLocalEditsRef.current = true;
     setTitleState(value);
   }, []);
-  const ydocRef = useRef(ydoc);
-  ydocRef.current = ydoc;
-
   // Listen for title changes from Yjs (sync from other clients or offline reconnect)
   useEffect(() => {
     if (!ydoc) return undefined;
@@ -78,20 +76,40 @@ export function usePageTitle(
   }, [ydoc]);
 
   useEffect(() => {
+    if (currentPageIdRef.current !== pageId) {
+      currentPageIdRef.current = pageId;
+      hasLocalEditsRef.current = false;
+      const normalized = normalizeTitle(initialTitle ?? 'Untitled');
+      setTitleState(normalized);
+      lastSavedTitleRef.current = normalized;
+      return;
+    }
     if (typeof initialTitle === 'string' && !hasLocalEditsRef.current) {
       const normalized = normalizeTitle(initialTitle);
       setTitleState(normalized);
       lastSavedTitleRef.current = normalized;
     }
-  }, [initialTitle]);
+  }, [initialTitle, pageId]);
 
   const mutation = useMutation({
-    mutationFn: (nextTitle: string) => {
-      if (!pageId) throw new Error('pageId is required');
-      return updatePageTitle(pageId, nextTitle, usePublicEndpoint, identityLifecycle.isActive);
+    mutationFn: ({
+      pageId: mutationPageId,
+      title: nextTitle,
+      usePublicEndpoint: mutationUsesPublicEndpoint,
+    }: {
+      pageId: string;
+      title: string;
+      usePublicEndpoint: boolean;
+    }) => {
+      return updatePageTitle(
+        mutationPageId,
+        nextTitle,
+        mutationUsesPublicEndpoint,
+        identityLifecycle.isActive,
+      );
     },
-    onSuccess: (_data, nextTitle) => {
-      queryClient.setQueryData(['pages', 'detail', pageId], (old: unknown) => {
+    onSuccess: (_data, { pageId: mutationPageId, title: nextTitle }) => {
+      queryClient.setQueryData(['pages', 'detail', mutationPageId], (old: unknown) => {
         if (!old || typeof old !== 'object' || Array.isArray(old)) return old;
         return { ...old, title: nextTitle };
       });
@@ -105,17 +123,19 @@ export function usePageTitle(
 
   const commitTitle = useCallback(
     (newTitle: string) => {
+      const mutationPageId = pageId;
+      if (!mutationPageId) return;
       const nextTitle = normalizeTitle(newTitle);
-      if (nextTitle === lastSavedTitleRef.current) {
+      const isCurrentPage = currentPageIdRef.current === mutationPageId;
+      if (isCurrentPage && nextTitle === lastSavedTitleRef.current) {
         hasLocalEditsRef.current = false;
         return;
       }
-      hasLocalEditsRef.current = false;
+      if (isCurrentPage) hasLocalEditsRef.current = false;
 
       // Write to Yjs doc for offline queue and real-time sync
-      const currentDoc = ydocRef.current;
-      if (currentDoc) {
-        const titleText = currentDoc.getText('title');
+      if (ydoc) {
+        const titleText = ydoc.getText('title');
         titleText.delete(0, titleText.length);
         titleText.insert(0, nextTitle);
       }
@@ -123,13 +143,18 @@ export function usePageTitle(
       // Persist through either the authenticated page endpoint or the
       // public-access endpoint. The collaboration update provides immediate
       // feedback while the API write makes the title canonical.
-      mutation.mutate(nextTitle, {
-        onSuccess: () => {
-          lastSavedTitleRef.current = nextTitle;
+      mutation.mutate(
+        { pageId: mutationPageId, title: nextTitle, usePublicEndpoint },
+        {
+          onSuccess: () => {
+            if (currentPageIdRef.current === mutationPageId) {
+              lastSavedTitleRef.current = nextTitle;
+            }
+          },
         },
-      });
+      );
     },
-    [mutation],
+    [mutation, pageId, usePublicEndpoint, ydoc],
   );
 
   return { title, setTitle, commitTitle };

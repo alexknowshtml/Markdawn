@@ -35,8 +35,13 @@ function IdentityLoadingState() {
 export function AuthIdentityBoundary({ children }: { children: ReactNode }) {
   const { data: session, isPending, isRefetching } = useAuth();
   const parentQueryClient = useQueryClient();
-  const identityUncertain = isPending || isRefetching;
-  const resolvedIdentity = identityUncertain ? null : (session?.user?.id ?? ANONYMOUS_IDENTITY);
+  const sessionIdentity = session?.user?.id ?? ANONYMOUS_IDENTITY;
+  const lastSettledIdentityRef = useRef<string | null>(
+    !isPending && !isRefetching ? sessionIdentity : null,
+  );
+  const resolvedIdentity =
+    isPending || isRefetching ? lastSettledIdentityRef.current : sessionIdentity;
+  const identityUncertain = resolvedIdentity === null;
   const identityQueryClient = useMemo(
     () =>
       resolvedIdentity === null ? null : createQueryClient(parentQueryClient.getDefaultOptions()),
@@ -49,6 +54,12 @@ export function AuthIdentityBoundary({ children }: { children: ReactNode }) {
   const previousIdentityRef = useRef<string | null>(null);
   const previousQueryClientRef = useRef(identityQueryClient);
   const previousLifecycleRef = useRef(identityLifecycle);
+
+  useLayoutEffect(() => {
+    if (!isPending && !isRefetching) {
+      lastSettledIdentityRef.current = sessionIdentity;
+    }
+  }, [isPending, isRefetching, sessionIdentity]);
 
   useLayoutEffect(() => {
     const previousLifecycle = previousLifecycleRef.current;
@@ -65,14 +76,14 @@ export function AuthIdentityBoundary({ children }: { children: ReactNode }) {
 
     const identityChanged = previousIdentityRef.current !== resolvedIdentity;
     previousIdentityRef.current = resolvedIdentity;
-    if (identityUncertain || identityChanged) {
+    if (identityChanged) {
       clearToasts();
       resetDocumentMetadata();
       resetSelfLeaveState();
       resetBulkRemovalState();
       window.getSelection()?.removeAllRanges();
     }
-  }, [identityLifecycle, identityQueryClient, identityUncertain, resolvedIdentity]);
+  }, [identityLifecycle, identityQueryClient, resolvedIdentity]);
 
   if (
     identityUncertain ||

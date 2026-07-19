@@ -229,7 +229,7 @@ describe('AuthIdentityBoundary', () => {
     selectionSpy.mockRestore();
   });
 
-  it('unmounts identity-owned state while the session identity is being revalidated', async () => {
+  it('keeps identity-owned state mounted while the session identity is being revalidated', async () => {
     const queryClient = createTestQueryClient();
 
     const rendered = render(
@@ -259,6 +259,11 @@ describe('AuthIdentityBoundary', () => {
     act(() => showInfoToast('A private invitation'));
     expect(screen.getByText('A private invitation')).toBeInTheDocument();
 
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('button', { name: 'Populate state' }));
+    expect(screen.getByTestId('identity-state')).toHaveTextContent('user-a:1:1:dirty');
+
+    mocks.userId = null;
     mocks.isRefetching = true;
     act(() =>
       rendered.rerender(
@@ -272,14 +277,17 @@ describe('AuthIdentityBoundary', () => {
       ),
     );
 
-    expect(screen.queryByRole('button', { name: 'Populate state' })).not.toBeInTheDocument();
-    expect(screen.queryByText('A private invitation')).not.toBeInTheDocument();
-    expect(document.title).toBe('Markdawn');
+    expect(screen.getByRole('button', { name: 'Populate state' })).toBeInTheDocument();
+    expect(screen.getByTestId('identity-state')).toHaveTextContent('user-a:1:1:dirty');
+    expect(screen.getByText('A private invitation')).toBeInTheDocument();
+    expect(document.title).toBe('Secret Project | Markdawn');
     expect(document.querySelector<HTMLLinkElement>('link[rel="icon"]')?.href).toContain(
-      '/vite.svg',
+      'data:image/svg+xml,private',
     );
-    expect(document.querySelector('link[rel="canonical"]')).toBeNull();
-    expect(clearSpy).toHaveBeenCalledTimes(1);
+    expect(document.querySelector<HTMLLinkElement>('link[rel="canonical"]')?.href).toContain(
+      '/app/secret-project-page-a',
+    );
+    expect(clearSpy).not.toHaveBeenCalled();
 
     mocks.userId = 'user-b';
     mocks.isRefetching = false;

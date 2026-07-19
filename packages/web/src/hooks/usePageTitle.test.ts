@@ -77,6 +77,59 @@ describe('usePageTitle', () => {
     expect(result.current.title).toBe('Typing locally');
   });
 
+  it('discards an unfinished draft when navigating to another page', async () => {
+    const { result, rerender } = renderHook(
+      ({ pageId, initialTitle }) => usePageTitle(pageId, initialTitle),
+      {
+        initialProps: { pageId: 'page-a', initialTitle: 'Page A' },
+        wrapper: createWrapper(queryClient),
+      },
+    );
+
+    act(() => result.current.setTitle('Unfinished A draft'));
+    expect(result.current.title).toBe('Unfinished A draft');
+
+    rerender({ pageId: 'page-b', initialTitle: 'Page B' });
+
+    await waitFor(() => expect(result.current.title).toBe('Page B'));
+    act(() => result.current.commitTitle('Updated Page B'));
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/pages/page-b',
+        expect.objectContaining({ body: JSON.stringify({ title: 'Updated Page B' }) }),
+      );
+    });
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      '/api/pages/page-b',
+      expect.objectContaining({ body: JSON.stringify({ title: 'Unfinished A draft' }) }),
+    );
+  });
+
+  it('keeps a stale page callback scoped to the page that created it', async () => {
+    const pageADoc = new Y.Doc();
+    const pageBDoc = new Y.Doc();
+    const { result, rerender } = renderHook(
+      ({ pageId, initialTitle, ydoc }) => usePageTitle(pageId, initialTitle, ydoc),
+      {
+        initialProps: { pageId: 'page-a', initialTitle: 'Page A', ydoc: pageADoc },
+        wrapper: createWrapper(queryClient),
+      },
+    );
+    const commitFromPageA = result.current.commitTitle;
+
+    rerender({ pageId: 'page-b', initialTitle: 'Page B', ydoc: pageBDoc });
+    act(() => commitFromPageA('Late Page A title'));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/pages/page-a',
+        expect.objectContaining({ body: JSON.stringify({ title: 'Late Page A title' }) }),
+      );
+    });
+    expect(pageADoc.getText('title').toString()).toBe('Late Page A title');
+    expect(pageBDoc.getText('title').toString()).toBe('');
+  });
+
   it('cancels previous debounce on rapid changes', async () => {
     const { result } = renderHook(() => usePageTitle('p1', 'Original'), {
       wrapper: createWrapper(queryClient),
