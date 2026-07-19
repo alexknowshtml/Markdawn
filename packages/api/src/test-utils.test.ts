@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { query } from './db/query';
 import {
-  createTestComment,
   createTestFolder,
   createTestPage,
   createTestPageLink,
-  createTestReply,
   createTestSession,
   createTestTemplate,
   createTestUser,
@@ -39,16 +37,6 @@ describe('test-utils factories', () => {
     const page = await createTestPage(user.id);
     expect(page.id).toBeTruthy();
     expect(page.title).toBe('Test Page');
-  });
-
-  it('createTestComment and createTestReply create nested comments', async () => {
-    const user = await createTestUser();
-    const page = await createTestPage(user.id);
-    const comment = await createTestComment(page.id, user.id);
-    expect(comment.content).toBe('Test comment');
-
-    const reply = await createTestReply(comment.id, user.id);
-    expect(reply.content).toBe('Test reply');
   });
 
   it('createTestVersion creates a version for a page', async () => {

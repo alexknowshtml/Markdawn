@@ -63,7 +63,6 @@ const SetCapabilitiesContext = createContext<React.Dispatch<React.SetStateAction
 
 const DEFAULT_CAPABILITIES: CapabilitySet = {
   canEdit: false,
-  canComment: false,
   canDelete: false,
   canCopy: false,
 };

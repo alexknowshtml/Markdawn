@@ -26,7 +26,6 @@ function folderEntity(permission: 'view' | 'edit') {
     userPermission: permission,
     capabilities: {
       canEdit: permission === 'edit',
-      canComment: permission === 'edit',
       canDelete: false,
       canCopy: true,
     },

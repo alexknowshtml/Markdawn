@@ -126,7 +126,7 @@ export function SelectionToolbar({
           title={
             canPaste
               ? `Paste ${clipboardCount} item${clipboardCount !== 1 ? 's' : ''}`
-              : 'Admin access is required to paste here'
+              : 'Edit access is required to paste copies; moving requires Admin access'
           }
         >
           <ClipboardPaste size={14} />

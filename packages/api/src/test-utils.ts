@@ -93,45 +93,6 @@ export async function createTestFolder(createdBy: string, overrides?: CreateFold
   return { id, name };
 }
 
-type CreateCommentOptions = {
-  content?: string;
-  anchorBlockId?: string | null;
-};
-
-export async function createTestComment(
-  pageId: string,
-  userId: string,
-  overrides?: CreateCommentOptions,
-) {
-  const id = randomUUID();
-  const content = overrides?.content ?? 'Test comment';
-  await query(
-    `INSERT INTO comments (id, page_id, user_id, content, anchor_block_id)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [id, pageId, userId, content, overrides?.anchorBlockId ?? null],
-  );
-  return { id, pageId, userId, content };
-}
-
-type CreateReplyOptions = {
-  content?: string;
-};
-
-export async function createTestReply(
-  commentId: string,
-  userId: string,
-  overrides?: CreateReplyOptions,
-) {
-  const id = randomUUID();
-  const content = overrides?.content ?? 'Test reply';
-  await query(
-    `INSERT INTO comment_replies (id, comment_id, user_id, content)
-     VALUES ($1, $2, $3, $4)`,
-    [id, commentId, userId, content],
-  );
-  return { id, commentId, userId, content };
-}
-
 type CreateVersionOptions = {
   title?: string;
   content?: unknown;

@@ -6,7 +6,6 @@ import { HTTPException } from 'hono/http-exception';
 import { timing } from 'hono/timing';
 import { authRoutes } from './routes';
 import backlinksRoute from './routes/backlinks';
-import commentsRoute from './routes/comments';
 import exportRoute from './routes/export';
 import favoritesRoute from './routes/favorites';
 import foldersRoute, { foldersPublicRoute } from './routes/folders';
@@ -67,7 +66,6 @@ export async function createApp() {
   });
 
   app.route('/api/pages', pagesPublicRoute);
-  app.route('/api/pages', commentsRoute);
   app.route('/api/pages', exportRoute);
   app.route('/api/pages', pagesRoute);
 

@@ -10,12 +10,11 @@ import {
   type SharePermission,
 } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { FileQuestion, LogIn, MessageSquare, RefreshCw, ShieldOff } from 'lucide-react';
+import { FileQuestion, LogIn, RefreshCw, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
-import { CommentsSidebar } from '../components/editor/CommentsSidebar';
 import { MilkdownEditor } from '../components/editor/MilkdownEditor';
 import { PageActions } from '../components/editor/PageActions';
 import { PageIcon } from '../components/editor/PageIcon';
@@ -68,7 +67,6 @@ export default function Page() {
   const [collabPermission, setCollabPermission] = useState<SharePermission | null | undefined>(
     undefined,
   );
-  const [commentsOpen, setCommentsOpen] = useState(false);
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
@@ -100,7 +98,6 @@ export default function Page() {
     // fire first), so setProvider(null) would overwrite the new provider.
     setCollabStatus(WebSocketStatus.Connecting);
     setCollabPermission(undefined);
-    setCommentsOpen(false);
     setEditorElement(null);
   }, [pageId]);
   const [editorElement, setEditorElement] = useState<HTMLElement | null>(null);
@@ -451,14 +448,6 @@ export default function Page() {
                   View only
                 </span>
               )}
-              <button
-                type="button"
-                onClick={() => setCommentsOpen(true)}
-                aria-label="Open comments"
-                className="cursor-pointer rounded-md p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-200"
-              >
-                <MessageSquare size={20} />
-              </button>
               {!isAnonymous && <PageActions pageId={pageId} page={page} />}
               {isAnonymous && <ThemeToggle />}
               <PageStatus provider={provider} collabStatus={collabStatus} />
@@ -499,11 +488,6 @@ export default function Page() {
         {!isAnonymous && <BacklinksPanel pageId={pageId} />}
         <TableOfContents editorElement={editorElement} />
       </div>
-      <CommentsSidebar
-        pageId={pageId}
-        isOpen={commentsOpen}
-        onClose={() => setCommentsOpen(false)}
-      />
     </EditorReadOnlyProvider>
   );
 }

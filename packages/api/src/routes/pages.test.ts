@@ -838,6 +838,22 @@ describe('pages API', () => {
     });
   });
 
+  it('does not expose the unfinished comments API', async () => {
+    const app = await createTestApp();
+    const owner = await createTestUser();
+    const session = await createTestSession(owner.id);
+    const page = await createTestPage(owner.id);
+
+    for (const method of ['GET', 'POST'] as const) {
+      const response = await app.request(`/api/pages/${page.id}/comments`, {
+        method,
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        ...(method === 'POST' ? { body: JSON.stringify({ content: 'Not available' }) } : {}),
+      });
+      expect(response.status).toBe(404);
+    }
+  });
+
   describe('GET /api/pages/:id public access', () => {
     it('allows anonymous access through public ancestor folder access', async () => {
       const app = await createTestApp();

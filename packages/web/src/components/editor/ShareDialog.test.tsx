@@ -112,7 +112,6 @@ function adminSummary(): ShareSummary {
     userPermission: 'admin',
     capabilities: {
       canEdit: true,
-      canComment: true,
       canDelete: true,
       canCopy: true,
     },

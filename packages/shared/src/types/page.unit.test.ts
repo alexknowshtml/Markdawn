@@ -6,22 +6,22 @@ describe('deriveCapabilities', () => {
     {
       role: 'no access',
       permission: null,
-      expected: { canEdit: false, canComment: false, canDelete: false, canCopy: false },
+      expected: { canEdit: false, canDelete: false, canCopy: false },
     },
     {
       role: 'viewer',
       permission: 'view' as const,
-      expected: { canEdit: false, canComment: false, canDelete: false, canCopy: true },
+      expected: { canEdit: false, canDelete: false, canCopy: true },
     },
     {
       role: 'editor',
       permission: 'edit' as const,
-      expected: { canEdit: true, canComment: true, canDelete: false, canCopy: true },
+      expected: { canEdit: true, canDelete: false, canCopy: true },
     },
     {
       role: 'admin',
       permission: 'admin' as const,
-      expected: { canEdit: true, canComment: true, canDelete: true, canCopy: true },
+      expected: { canEdit: true, canDelete: true, canCopy: true },
     },
   ] satisfies Array<{
     role: string;
@@ -34,7 +34,6 @@ describe('deriveCapabilities', () => {
   it('gives an owner full capabilities regardless of an explicit permission', () => {
     expect(deriveCapabilities(null, true)).toEqual({
       canEdit: true,
-      canComment: true,
       canDelete: true,
       canCopy: true,
     });

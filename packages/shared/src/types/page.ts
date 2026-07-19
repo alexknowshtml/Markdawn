@@ -119,7 +119,6 @@ export interface InheritedPublicAccess {
 
 export interface CapabilitySet {
   canEdit: boolean;
-  canComment: boolean;
   canDelete: boolean;
   canCopy: boolean;
 }
@@ -129,24 +128,22 @@ export function deriveCapabilities(
   isOwner = false,
 ): CapabilitySet {
   if (isOwner) {
-    return { canEdit: true, canComment: true, canDelete: true, canCopy: true };
+    return { canEdit: true, canDelete: true, canCopy: true };
   }
   switch (permission) {
     case 'admin':
-      return { canEdit: true, canComment: true, canDelete: true, canCopy: true };
+      return { canEdit: true, canDelete: true, canCopy: true };
     case 'edit':
-      return { canEdit: true, canComment: true, canDelete: false, canCopy: true };
+      return { canEdit: true, canDelete: false, canCopy: true };
     case 'view':
       return {
         canEdit: false,
-        canComment: false,
         canDelete: false,
         canCopy: true,
       };
     default:
       return {
         canEdit: false,
-        canComment: false,
         canDelete: false,
         canCopy: false,
       };

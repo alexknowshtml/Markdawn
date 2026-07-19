@@ -22,7 +22,7 @@ async function waitForBlockedPid(blockerPid: number): Promise<number> {
 }
 
 async function runContentReadBarrier(options: {
-  table: 'comments' | 'connections' | 'page_versions';
+  table: 'connections' | 'page_versions';
   request: (pageId: string, sessionCookie: string) => Response | Promise<Response>;
   insertSecret: (executor: QueryExecutor, pageId: string, ownerId: string) => Promise<void>;
 }): Promise<{ response: Response; pageId: string; sessionCookie: string }> {
@@ -84,34 +84,6 @@ async function runContentReadBarrier(options: {
 }
 
 describe('access-controlled content read atomicity', () => {
-  it('does not return comments created after the reader is revoked', async () => {
-    const app = await createTestApp();
-    const result = await runContentReadBarrier({
-      table: 'comments',
-      request: (pageId, sessionCookie) =>
-        app.request(`/api/pages/${pageId}/comments`, {
-          headers: { Cookie: sessionCookie },
-        }),
-      insertSecret: async (executor, pageId, ownerId) => {
-        await executeQuery(
-          executor,
-          `insert into comments (page_id, user_id, content)
-           values ($1, $2, 'post-revocation comment secret')`,
-          [pageId, ownerId],
-        );
-      },
-    });
-
-    expect(result.response.status).toBe(200);
-    expect(JSON.stringify(await result.response.json())).not.toContain(
-      'post-revocation comment secret',
-    );
-    const afterRevoke = await app.request(`/api/pages/${result.pageId}/comments`, {
-      headers: { Cookie: result.sessionCookie },
-    });
-    expect(afterRevoke.status).toBe(403);
-  });
-
   it('does not return versions created after the reader is revoked', async () => {
     const app = await createTestApp();
     const result = await runContentReadBarrier({

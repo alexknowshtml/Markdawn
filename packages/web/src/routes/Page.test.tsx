@@ -12,13 +12,11 @@ const PAGE_ID = '11111111-1111-4111-8111-111111111111';
 const WIKI_TARGET_ID = '22222222-2222-4222-8222-222222222222';
 const EDIT_CAPABILITIES: CapabilitySet = {
   canEdit: true,
-  canComment: true,
   canDelete: false,
   canCopy: true,
 };
 const VIEW_CAPABILITIES: CapabilitySet = {
   canEdit: false,
-  canComment: false,
   canDelete: false,
   canCopy: true,
 };
@@ -28,7 +26,6 @@ const mocks = vi.hoisted(() => ({
     isAnonymous: false,
     capabilities: {
       canEdit: true,
-      canComment: true,
       canDelete: false,
       canCopy: true,
     },
@@ -63,10 +60,6 @@ vi.mock('../components/editor/BacklinksPanel', () => ({
   BacklinksPanel: () => <div data-testid="backlinks" />,
 }));
 vi.mock('../components/editor/Breadcrumbs', () => ({ Breadcrumbs: () => null }));
-vi.mock('../components/editor/CommentsSidebar', () => ({
-  CommentsSidebar: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="comments-sidebar" /> : null,
-}));
 vi.mock('../components/editor/PageActions', () => ({
   PageActions: () => <div data-testid="page-actions" />,
 }));
@@ -223,7 +216,6 @@ describe('Page permission presentation', () => {
   });
 
   it('keeps editor surfaces editable but hides account-only controls for anonymous public editors', async () => {
-    const user = userEvent.setup();
     mocks.share = {
       isAnonymous: true,
       capabilities: EDIT_CAPABILITIES,
@@ -240,8 +232,6 @@ describe('Page permission presentation', () => {
     expect(screen.getByTestId('properties')).toHaveAttribute('data-read-only', 'false');
     expect(screen.queryByTestId('page-actions')).not.toBeInTheDocument();
     expect(screen.queryByTestId('backlinks')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Open comments' }));
-    expect(screen.getByTestId('comments-sidebar')).toBeInTheDocument();
   });
 
   it('keeps the entire page read-only for anonymous viewers', async () => {
