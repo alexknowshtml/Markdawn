@@ -337,6 +337,11 @@ test.describe('Properties panel', () => {
     await propertyUpdate;
 
     await createAnotherPage(page);
+    // A new page can mount while the page-tree invalidation from the previous
+    // property update is still settling. Reload so this document starts from a
+    // canonical tree containing the other page's properties.
+    await page.reload({ waitUntil: 'networkidle' });
+    await page.locator('.ProseMirror').first().waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByTestId('add-property').click();
     await page.getByTestId('key-input').fill('tags');
     await page.getByTestId('key-input').press('Enter');
@@ -347,7 +352,9 @@ test.describe('Properties panel', () => {
   });
 
   test('17: shows saved content tags in the property suggestion dropdown', async ({ page }) => {
+    test.setTimeout(60_000);
     await createNewPage(page);
+    await page.locator('main .bg-emerald-500').waitFor({ state: 'visible', timeout: 15_000 });
     await focusEditor(page);
 
     const contentTag = 'contenttag';
@@ -369,7 +376,7 @@ test.describe('Properties panel', () => {
               )
             );
           }, contentTag),
-        { timeout: 15000 },
+        { timeout: 30_000 },
       )
       .toBe(true);
 

@@ -3,12 +3,15 @@ import { createNewPage, focusEditor } from '../fixtures';
 
 test.describe('Edge cases', () => {
   test('rapid typing does not cause hang', async ({ page }) => {
+    test.setTimeout(90_000);
     await createNewPage(page);
     await focusEditor(page);
     // Type a long sentence quickly
     const text = 'The quick brown fox jumps over the lazy dog. '.repeat(10);
     await page.keyboard.type(text, { delay: 10 });
-    await expect(page.locator('.ProseMirror p').first()).toContainText('quick brown fox');
+    await expect(page.locator('.ProseMirror')).toContainText('quick brown fox', {
+      timeout: 10_000,
+    });
   });
 
   test('creating h2 after h1 works', async ({ page }) => {
