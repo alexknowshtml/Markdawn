@@ -1,4 +1,4 @@
-import { MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
+import { MAX_FOLDER_NAME_LENGTH, MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
 import { query } from '../db/query';
@@ -72,6 +72,35 @@ describe('obsidian import API', () => {
         pagesCreated: 0,
         errors: [expect.stringContaining(`Title must be ${MAX_PAGE_TITLE_LENGTH}`)],
       });
+    });
+
+    it('reports an over-limit folder path without creating the folder', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const oversizedFolder = '📁'.repeat(MAX_FOLDER_NAME_LENGTH + 1);
+
+      const response = await app.request('/api/import/obsidian', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          files: [{ path: `${oversizedFolder}/note.md`, content: 'Body' }],
+        }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        foldersCreated: 0,
+        pagesCreated: 0,
+        errors: expect.arrayContaining([
+          expect.stringContaining(`Folder name must be ${MAX_FOLDER_NAME_LENGTH}`),
+        ]),
+      });
+      const folders = await query<{ count: string }>(
+        'select count(*)::text as count from folders where created_by = $1',
+        [user.id],
+      );
+      expect(folders.rows[0]?.count).toBe('0');
     });
 
     it('reports oversized markdown without creating an inaccessible page', async () => {
@@ -223,16 +252,21 @@ describe('obsidian import API', () => {
       expect(pageA).toBeDefined();
       expect(pageB).toBeDefined();
       const connections = extractConnectionsFromYDoc(new Uint8Array(pageA?.ydoc ?? []));
-      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'page b' }));
-      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
+      expect(connections).toContainEqual(
+        expect.objectContaining({ targetSlug: `id:${pageB?.id}`, targetId: pageB?.id }),
+      );
       const indexed = await query<{ target_id: string | null; target_slug: string }>(
         `select target_id, target_slug
          from connections
-         where source_type = 'page' and source_id = $1 and target_slug = 'page b'`,
-        [pageA?.id],
+         where source_type = 'page' and source_id = $1 and target_slug = $2`,
+        [pageA?.id, `id:${pageB?.id}`],
       );
-      expect(indexed.rows).toContainEqual({ target_id: pageB?.id, target_slug: 'page b' });
-      expect(pageA?.ydoc.includes(Buffer.from(pageB?.id ?? ''))).toBe(false);
+      expect(indexed.rows).toContainEqual({
+        target_id: pageB?.id,
+        target_slug: `id:${pageB?.id}`,
+      });
+      expect(pageA?.ydoc.includes(Buffer.from(pageB?.id ?? ''))).toBe(true);
+      expect(pageA?.ydoc.includes(Buffer.from('Page B'))).toBe(false);
     });
 
     it('handles invalid body gracefully', async () => {

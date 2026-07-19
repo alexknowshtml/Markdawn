@@ -1,3 +1,4 @@
+import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
@@ -13,8 +14,9 @@ export async function getUniqueWorkspacePageLookup(
   executor: QueryExecutor = db,
 ): Promise<Map<string, string>> {
   const result = await executeQuery<{
-    lookup_key: string;
     page_id: string;
+    title: string;
+    page_path: string | null;
   }>(
     executor,
     `with recursive enumerable_folders as materialized (
@@ -33,7 +35,7 @@ export async function getUniqueWorkspacePageLookup(
          and f.id in (select folder_id from enumerable_folders)
      ),
      folder_paths as (
-       select f.id, lower(trim(f.name))::text as folder_path
+       select f.id, trim(f.name)::text as folder_path
        from visible_folders f
        where not exists (
          select 1 from visible_folders parent where parent.id = f.parent_id
@@ -42,42 +44,41 @@ export async function getUniqueWorkspacePageLookup(
        union all
 
        select child.id,
-              (parent.folder_path || '/' || lower(trim(child.name)))::text as folder_path
+              (parent.folder_path || '/' || trim(child.name))::text as folder_path
        from visible_folders child
        join folder_paths parent on parent.id = child.parent_id
-     ),
-     workspace_pages as (
-       select p.id,
-              lower(trim(p.title)) as title_key,
-              case
-                when p.parent_id is null then lower(trim(p.title))
-                else paths.folder_path || '/' || lower(trim(p.title))
-              end as path_key
-       from pages p
-       left join folder_paths paths on paths.id = p.parent_id
-       where p.is_deleted = false
-         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
-         and p.id in (select page_id from accessible_pages)
-     ),
-     unique_titles as (
-       select title_key as lookup_key, min(id::text) as page_id
-       from workspace_pages
-       where title_key <> ''
-       group by title_key
-       having count(*) = 1
-     ),
-     unique_paths as (
-       select path_key as lookup_key, min(id::text) as page_id
-       from workspace_pages
-       where path_key like '%/%'
-       group by path_key
-       having count(*) = 1
      )
-     select lookup_key, page_id from unique_titles
-     union all
-     select lookup_key, page_id from unique_paths`,
+     select p.id as page_id,
+            p.title,
+            case
+              when paths.folder_path is null then null
+              else paths.folder_path || '/' || p.title
+            end as page_path
+     from pages p
+     left join folder_paths paths on paths.id = p.parent_id
+     where p.is_deleted = false
+       and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
+       and p.id in (select page_id from accessible_pages)`,
     [ownerId, requesterUserId],
   );
 
-  return new Map(result.rows.map((row) => [row.lookup_key, row.page_id]));
+  const candidates = new Map<string, Set<string>>();
+  for (const row of result.rows) {
+    for (const value of [row.title, row.page_path]) {
+      if (!value) continue;
+      const key = normalizeWikiLinkLookupKey(value);
+      if (!key) continue;
+      const ids = candidates.get(key) ?? new Set<string>();
+      ids.add(row.page_id);
+      candidates.set(key, ids);
+    }
+  }
+
+  const unique = new Map<string, string>();
+  for (const [key, ids] of candidates) {
+    if (ids.size !== 1) continue;
+    const pageId = ids.values().next().value;
+    if (pageId) unique.set(key, pageId);
+  }
+  return unique;
 }

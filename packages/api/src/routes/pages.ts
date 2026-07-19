@@ -1,4 +1,12 @@
-import { deriveCapabilities } from '@markdawn/shared';
+import {
+  deriveCapabilities,
+  MAX_WIKI_LINK_PRESENTATION_REQUESTS,
+  normalizeWikiLinkLookupKey,
+  type WikiLinkPresentation,
+  type WikiLinkPresentationRequest,
+  type WikiLinkPresentationResponse,
+} from '@markdawn/shared';
+import { extractWikiLinkTargetIds } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
@@ -22,9 +30,9 @@ import {
   persistGuestIdentity,
 } from '../utils/guestAccess';
 import {
+  bindWikiLinkTargets,
   createEmptyYjsDoc,
   createYjsDocWithTitle,
-  normalizeWikilinkLookupKey,
 } from '../utils/markdown-to-yjs';
 import { createCopyPageTitle, normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition, normalizePosition } from '../utils/position';
@@ -34,7 +42,6 @@ import {
   ensurePageAccess,
   ensureWorkspaceAdmin,
   lockEntityAccess,
-  lockEntityAccesses,
   lockEntityAccessMutation,
   lockEntityAccessMutations,
   lockWorkspaceAccessMutation,
@@ -46,6 +53,7 @@ import {
   processUploadDeletionQueue,
   purgeUnreferencedUploadsForPages,
 } from '../utils/uploadCleanup';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
 type NormalizedPageRow = PageRow & { ownerId?: string | null };
@@ -67,6 +75,11 @@ type RawPageRow = PageRow & {
 
 type PublicPermission = 'view' | 'edit';
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const isLocalWikiLinkHeading = (value: string): boolean => {
+  const trimmed = value.trim();
+  return trimmed.startsWith('#') && trimmed.slice(1).trim().length > 0;
+};
 
 const pagesRoute = new Hono();
 const pagesPublicRoute = new Hono();
@@ -689,154 +702,200 @@ pagesPublicRoute.patch(
   },
 );
 
-pagesPublicRoute.get(':id/wiki-link-target', async (c) => {
-  c.header('Cache-Control', 'no-store');
-  const pageId = c.req.param('id');
-  const authoredPath = c.req.query('path') ?? '';
-  const pathWithoutHeading = authoredPath.split('#')[0] ?? '';
-  const targetSlug = normalizeWikilinkLookupKey(pathWithoutHeading);
-  if (!targetSlug || targetSlug.length > 1_000) return c.json({ target: null });
-
-  const session = await auth.api.getSession({ headers: c.req.raw.headers });
-  const sessionUserId = session?.user ? (session.user as { id: string }).id : null;
-  const result = await query<{
-    source_authorized: boolean;
-    target_id: string | null;
-    target_title: string | null;
-  }>(
-    `with source_state as materialized (
-         select source_page.id,
-                coalesce(
-                  get_root_folder_owner(source_page.parent_id),
-                  source_page.created_by
-                 ) as owner_id,
-                 exists (
-                   select 1
-                   from get_effective_page_permission(source_page.id, $3::uuid) access
-                   where access.permission is not null
-                 ) as authorized
-         from pages source_page
-         where source_page.id = $1 and source_page.is_deleted = false
-       ), mapped_candidate_ids as materialized (
-         select distinct c.target_id
-         from connections c
-         join source_state source_page on source_page.id = c.source_id
-         where c.source_type = 'page'
-           and c.source_id = $1
-           and c.target_type = 'page'
-           and c.target_id is not null
-           and c.target_slug = $2
-           and c.connection_type in ('wikilink', 'heading')
-       ), unique_candidate as (
-         select min(target_id::text)::uuid as target_id
-         from mapped_candidate_ids
-         having count(*) = 1
-       )
-       select source.authorized as source_authorized,
-              target.id as target_id,
-              target.title as target_title
-       from source_state source
-       left join unique_candidate candidate on true
-       left join pages target
-         on target.id = candidate.target_id
-        and target.is_deleted = false
-         and coalesce(get_root_folder_owner(target.parent_id), target.created_by) = source.owner_id
-         and exists (
-           select 1
-           from get_effective_page_permission(target.id, $3::uuid) access
-           where access.permission is not null
-         )`,
-    [pageId, targetSlug, sessionUserId],
-  );
-
-  const resolution = result.rows[0];
-  if (!resolution?.source_authorized) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-  return c.json({
-    target:
-      resolution.target_id && resolution.target_title
-        ? { id: resolution.target_id, title: resolution.target_title }
-        : null,
-  });
-});
-
-pagesPublicRoute.put(
-  ':id/wiki-link-target',
+pagesPublicRoute.post(
+  ':id/wiki-link-presentations',
   bodyLimit({
-    maxSize: 4 * 1024,
+    maxSize: 256 * 1024,
     onError: (c) => c.json({ message: 'Request body is too large' }, 413),
   }),
   async (c) => {
     c.header('Cache-Control', 'no-store');
     const sourcePageId = c.req.param('id');
-    const session = await auth.api.getSession({ headers: c.req.raw.headers });
-    const userId = session?.user ? (session.user as { id: string }).id : null;
-    if (!userId) throw new HTTPException(401, { message: 'Unauthorized' });
+    if (!UUID_PATTERN.test(sourcePageId)) {
+      throw new HTTPException(400, { message: 'A valid source page is required' });
+    }
 
-    const body = await c.req.json().catch(() => null);
-    const authoredPath =
-      body && typeof body === 'object' ? (body as { path?: unknown }).path : undefined;
-    const targetPageId =
-      body && typeof body === 'object' ? (body as { targetId?: unknown }).targetId : undefined;
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+      throw new HTTPException(400, { message: 'Invalid JSON body' });
+    }
+    const rawLinks =
+      body && typeof body === 'object' && 'links' in body
+        ? (body as { links?: unknown }).links
+        : undefined;
     if (
-      typeof authoredPath !== 'string' ||
-      typeof targetPageId !== 'string' ||
-      !UUID_PATTERN.test(sourcePageId) ||
-      !UUID_PATTERN.test(targetPageId)
+      !Array.isArray(rawLinks) ||
+      rawLinks.length === 0 ||
+      rawLinks.length > MAX_WIKI_LINK_PRESENTATION_REQUESTS
     ) {
-      throw new HTTPException(400, { message: 'A valid path and targetId are required' });
-    }
-    const pathWithoutHeading = authoredPath.split('#')[0] ?? '';
-    const targetSlug = normalizeWikilinkLookupKey(pathWithoutHeading);
-    if (!targetSlug || targetSlug.length > 1_000) {
-      throw new HTTPException(400, { message: 'A valid wiki-link path is required' });
+      throw new HTTPException(400, {
+        message: `links must contain between 1 and ${MAX_WIKI_LINK_PRESENTATION_REQUESTS} items`,
+      });
     }
 
-    const target = await db.transaction(async (tx) => {
-      await lockEntityAccesses(tx, [
-        { entityType: 'page', entityId: sourcePageId },
-        { entityType: 'page', entityId: targetPageId },
-      ]);
-      const pagesResult = await executeQuery<{
-        id: string;
-        title: string;
-        owner_id: string;
-      }>(
-        tx,
-        `select page.id, page.title,
-                coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id
-         from pages page
-         where page.id = any($1::uuid[]) and page.is_deleted = false
-         order by page.id
-         for update of page`,
-        [[sourcePageId, targetPageId]],
-      );
-      const source = pagesResult.rows.find((page) => page.id === sourcePageId);
-      const selectedTarget = pagesResult.rows.find((page) => page.id === targetPageId);
-      if (!source || !selectedTarget || source.owner_id !== selectedTarget.owner_id) {
-        throw new HTTPException(404, { message: 'Page not found' });
+    const links: WikiLinkPresentationRequest[] = [];
+    const keys = new Set<string>();
+    for (const rawLink of rawLinks) {
+      if (!rawLink || typeof rawLink !== 'object') {
+        throw new HTTPException(400, { message: 'Each link must be an object' });
       }
-      await ensurePageAccess(sourcePageId, userId, 'edit', tx);
-      await ensurePageAccess(targetPageId, userId, 'view', tx);
+      const key = 'key' in rawLink ? rawLink.key : undefined;
+      const targetId = 'targetId' in rawLink ? rawLink.targetId : undefined;
+      const path = 'path' in rawLink ? rawLink.path : undefined;
+      if (
+        typeof key !== 'string' ||
+        key.length === 0 ||
+        key.length > 128 ||
+        keys.has(key) ||
+        (targetId !== undefined &&
+          (typeof targetId !== 'string' || !UUID_PATTERN.test(targetId))) ||
+        (path !== undefined && (typeof path !== 'string' || path.length > 1_000)) ||
+        (targetId === undefined &&
+          (typeof path !== 'string' ||
+            (!normalizeWikiLinkLookupKey(path) && !isLocalWikiLinkHeading(path))))
+      ) {
+        throw new HTTPException(400, { message: 'Each link needs a unique key and valid target' });
+      }
+      keys.add(key);
+      links.push({
+        key,
+        ...(typeof targetId === 'string' && { targetId: targetId.toLowerCase() }),
+        ...(typeof path === 'string' && { path }),
+      });
+    }
 
-      await executeQuery(
+    const actor = await getRequestActor(c);
+    const response = await db.transaction(async (tx): Promise<WikiLinkPresentationResponse> => {
+      await lockEntityAccess(tx, 'page', sourcePageId);
+      await ensureActorPageAccess(actor, sourcePageId, 'view', tx);
+      const sourceResult = await executeQuery<{ owner_id: string | null }>(
         tx,
-        `insert into connections (
-           source_type, source_id, target_type, target_id, target_slug,
-           target_label, connection_type, link_text, occurrence_count, updated_at
-         ) values ('page', $1, 'page', $2, $3, $4, 'wikilink', $4, 1, now())
-         on conflict (source_type, source_id, target_type, target_slug, connection_type)
-         do update set target_id = excluded.target_id,
-                       target_label = excluded.target_label,
-                       link_text = excluded.link_text,
-                       updated_at = excluded.updated_at`,
-        [sourcePageId, targetPageId, targetSlug, selectedTarget.title],
+        `select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+         from pages where id = $1 and is_deleted = false`,
+        [sourcePageId],
       );
-      return { id: selectedTarget.id, title: selectedTarget.title };
+      const ownerId = sourceResult.rows[0]?.owner_id;
+      if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+
+      const pathKeys = [
+        ...new Set(
+          links
+            .filter((link) => !link.targetId && link.path)
+            .map((link) => normalizeWikiLinkLookupKey(link.path ?? ''))
+            .filter(Boolean),
+        ),
+      ];
+      const mappedTargets = new Map<string, string>();
+      if (pathKeys.length > 0) {
+        const mapped = await executeQuery<{ target_slug: string; target_id: string }>(
+          tx,
+          `select target_slug, min(target_id::text)::uuid as target_id
+           from connections
+           where source_type = 'page' and source_id = $1
+             and target_type = 'page' and target_id is not null
+             and target_slug = any($2::text[])
+             and connection_type in ('wikilink', 'heading')
+           group by target_slug
+           having count(distinct target_id) = 1`,
+          [sourcePageId, pathKeys],
+        );
+        for (const row of mapped.rows) mappedTargets.set(row.target_slug, row.target_id);
+      }
+
+      const autoLookup = new Map<string, string>();
+      if (pathKeys.length > 0) {
+        if (actor.kind === 'user') {
+          const requesterLookup = await getUniqueWorkspacePageLookup(ownerId, actor.id, tx);
+          for (const pathKey of pathKeys) {
+            const pageId = requesterLookup.get(pathKey);
+            if (pageId) autoLookup.set(pathKey, pageId);
+          }
+        } else {
+          const publicPages = await executeQuery<{ id: string; title: string }>(
+            tx,
+            `select p.id, p.title
+             from pages p
+             where p.is_deleted = false
+               and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
+               and get_public_page_permission(p.id) is not null`,
+            [ownerId],
+          );
+          const publicByTitle = new Map<string, string[]>();
+          for (const page of publicPages.rows) {
+            const lookupKey = normalizeWikiLinkLookupKey(page.title);
+            const ids = publicByTitle.get(lookupKey) ?? [];
+            ids.push(page.id);
+            publicByTitle.set(lookupKey, ids);
+          }
+          for (const pathKey of pathKeys) {
+            const ids = publicByTitle.get(pathKey);
+            if (ids?.length === 1 && ids[0]) autoLookup.set(pathKey, ids[0]);
+          }
+        }
+      }
+
+      const candidateByKey = new Map<string, { id: string }>();
+      for (const link of links) {
+        if (link.targetId) {
+          candidateByKey.set(link.key, { id: link.targetId });
+          continue;
+        }
+        const pathKey = normalizeWikiLinkLookupKey(link.path ?? '');
+        if (!pathKey && isLocalWikiLinkHeading(link.path ?? '')) {
+          candidateByKey.set(link.key, { id: sourcePageId });
+          continue;
+        }
+        const mappedId = mappedTargets.get(pathKey);
+        const automaticId = autoLookup.get(pathKey);
+        const candidateId = mappedId ?? automaticId;
+        if (candidateId) {
+          candidateByKey.set(link.key, { id: candidateId });
+        }
+      }
+
+      const candidateIds = [...new Set([...candidateByKey.values()].map(({ id }) => id))];
+      const knownTargets = new Map<string, { id: string; title: string; accessible: boolean }>();
+      if (candidateIds.length > 0) {
+        const targets = await executeQuery<{ id: string; title: string; accessible: boolean }>(
+          tx,
+          `select target.id, target.title,
+                  case
+                    when $3::uuid is not null then exists (
+                      select 1 from get_effective_page_permission(target.id, $3::uuid) access
+                      where access.permission is not null
+                    )
+                    else get_public_page_permission(target.id) is not null
+                  end as accessible
+           from pages target
+           where target.id = any($1::uuid[])
+             and target.is_deleted = false
+             and coalesce(get_root_folder_owner(target.parent_id), target.created_by) = $2`,
+          [candidateIds, ownerId, actor.kind === 'user' ? actor.id : null],
+        );
+        for (const target of targets.rows) knownTargets.set(target.id, target);
+      }
+
+      const presentations: WikiLinkPresentation[] = links.map((link) => {
+        const candidate = candidateByKey.get(link.key);
+        if (!candidate) return { key: link.key, state: 'unavailable' };
+        const target = knownTargets.get(candidate.id);
+        if (!target) return { key: link.key, state: 'unavailable' };
+        if (target.accessible) {
+          return {
+            key: link.key,
+            state: 'accessible',
+            target: { id: target.id, title: target.title },
+          };
+        }
+        return { key: link.key, state: 'restricted' };
+      });
+      return { links: presentations };
     });
 
-    return c.json({ target });
+    return c.json(response);
   },
 );
 
@@ -1253,15 +1312,51 @@ pagesRoute.get(':id/export/markdown', async (c) => {
        where upr.page_id = $1`,
       [pageId],
     );
+    const targetIds = page.ydoc
+      ? extractWikiLinkTargetIds(new Uint8Array(page.ydoc)).filter((targetId) =>
+          UUID_PATTERN.test(targetId),
+        )
+      : [];
+    const ownerId =
+      page.ownerId ??
+      (
+        await executeQuery<{ owner_id: string | null }>(
+          tx,
+          `select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+           from pages where id = $1`,
+          [pageId],
+        )
+      ).rows[0]?.owner_id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+    const targetResult =
+      targetIds.length > 0
+        ? await executeQuery<{ id: string; title: string }>(
+            tx,
+            `select p.id, p.title
+             from pages p
+             where p.id = any($1::uuid[])
+               and p.is_deleted = false
+               and p.id in (select page_id from get_accessible_page_ids($2))
+               and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $3`,
+            [targetIds, user.id, ownerId],
+          )
+        : { rows: [] };
     return {
       page,
       authorizedUploadFilenames: new Set(uploadResult.rows.map((row) => row.filename)),
+      wikiLinkTargets: new Map(targetResult.rows.map((target) => [target.id, target.title])),
     };
   });
 
-  const { page, authorizedUploadFilenames } = snapshot;
+  const { page, authorizedUploadFilenames, wikiLinkTargets } = snapshot;
   const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
-  const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
+  const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined, {
+    resolveWikiLinkTarget: (targetId) => {
+      const title = wikiLinkTargets.get(targetId.toLowerCase());
+      return title ? { title } : null;
+    },
+    restrictedWikiLinkText: 'Restricted page',
+  });
   const extracted = await extractImages(markdown, uploadsDir, authorizedUploadFilenames);
 
   if (extracted.assets.size === 0) {
@@ -1334,10 +1429,23 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
     await ensurePageAccess(pageId, user.id, 'edit', tx);
 
-    // Wiki links store authored paths only. A target UUID cannot be embedded
-    // in the canonical Y.Doc because every page reader receives the same state.
+    const ownerId =
+      currentPage.ownerId ??
+      (
+        await executeQuery<{ owner_id: string | null }>(
+          tx,
+          `select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+           from pages where id = $1`,
+          [pageId],
+        )
+      ).rows[0]?.owner_id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+    const pageLookup = await getUniqueWorkspacePageLookup(ownerId, user.id, tx);
     const ydocBuffer = Buffer.from(
-      createYjsDocWithTitle(currentPage.title || 'Untitled', markdown),
+      bindWikiLinkTargets(
+        createYjsDocWithTitle(currentPage.title || 'Untitled', markdown),
+        pageLookup,
+      ),
     );
     ensureYdocSize(ydocBuffer);
 
@@ -1488,6 +1596,22 @@ pagesPublicRoute.post(':id/copy', async (c) => {
     if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
     await persistGuestIdentity(actor, tx);
 
+    const destinationOwnerId = parentId
+      ? (
+          await executeQuery<{ owner_id: string | null }>(
+            tx,
+            'select get_root_folder_owner($1) as owner_id',
+            [parentId],
+          )
+        ).rows[0]?.owner_id
+      : actor.kind === 'user'
+        ? actor.id
+        : null;
+    if (!destinationOwnerId) {
+      throw new HTTPException(404, { message: 'Destination workspace not found' });
+    }
+    const preservePageConnectionIndex = currentPage.ownerId === destinationOwnerId;
+
     const copiedTitle = createCopyPageTitle(currentPage.title);
     const copiedYdoc = prepareCopiedYdoc(currentPage.ydoc, copiedTitle);
     const nextPosition = await getNextPosition('pages', parentId ?? null, actor.id, tx);
@@ -1529,8 +1653,9 @@ pagesPublicRoute.post(':id/copy', async (c) => {
               target_label, connection_type, link_text, link_context,
               occurrence_count, first_seen_at, now()
        from connections
-       where source_type = 'page' and source_id = $2`,
-      [insertedPage.id, pageId],
+       where source_type = 'page' and source_id = $2
+         and ($3::boolean or target_type <> 'page')`,
+      [insertedPage.id, pageId, preservePageConnectionIndex],
     );
     await executeQuery(
       tx,

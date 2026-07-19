@@ -105,26 +105,13 @@ export async function ensureActorFolderAccess(
   return permission;
 }
 
-/**
- * Creating content inside a folder remains an admin operation for private
- * account grants. Public Edit is the explicit exception: it grants both
- * signed-in visitors and persistent guests permission to add descendants.
- */
+/** Edit grants creation without granting organization, deletion, or access management. */
 export async function ensureActorCanCreateInFolder(
   actor: RequestActor,
   folderId: string,
   executor: QueryExecutor = db,
 ): Promise<void> {
   await ensureActorFolderAccess(actor, folderId, 'edit', executor);
-  if (actor.kind === 'guest') return;
-
-  const publicAccess = await executeQuery<{ permission: SharePermission | null }>(
-    executor,
-    'select get_public_folder_permission($1) as permission',
-    [folderId],
-  );
-  if (publicAccess.rows[0]?.permission === 'edit') return;
-  await ensureFolderAccess(folderId, actor.id, 'admin', executor);
 }
 
 export function actorColumns(actor: RequestActor): {

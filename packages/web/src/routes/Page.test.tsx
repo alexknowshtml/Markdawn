@@ -3,7 +3,7 @@ import type { CapabilitySet } from '@markdawn/shared';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useIsReadOnly } from '../contexts/EditorReadOnlyContext';
 import { createTestQueryClient } from '../test-utils/render';
@@ -39,7 +39,7 @@ const mocks = vi.hoisted(() => ({
   permissionSnapshot: null as
     | ((permission: 'view' | 'edit' | 'admin' | null, revision: string) => void)
     | null,
-  wikiLinkClick: null as ((path: string) => void | Promise<void>) | null,
+  wikiLinkClick: null as ((target: { id: string; title: string; heading?: string }) => void) | null,
 }));
 
 vi.mock('../contexts/ShareContext', () => ({
@@ -94,7 +94,7 @@ vi.mock('../components/editor/MilkdownEditor', async () => {
         revision: string,
       ) => void;
       onStatusChange: (status: WebSocketStatus) => void;
-      onWikiLinkClick: (path: string) => void | Promise<void>;
+      onWikiLinkClick: (target: { id: string; title: string; heading?: string }) => void;
     }) => {
       const readOnly = useIsReadOnly();
       mocks.statusChange = onStatusChange;
@@ -112,6 +112,11 @@ vi.mock('../components/editor/TableOfContents', () => ({ TableOfContents: () => 
 vi.mock('../components/ThemeToggle', () => ({ ThemeToggle: () => null }));
 
 import Page from './Page';
+
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.hash}`}</output>;
+}
 
 function pageResponse(permission: 'view' | 'edit') {
   return {
@@ -138,6 +143,7 @@ function renderPage() {
   const result = render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={[`/app/test-page-${PAGE_ID}`]}>
+        <LocationProbe />
         <Routes>
           <Route path="/app/:slugAndId" element={<Page />} />
         </Routes>
@@ -263,7 +269,7 @@ describe('Page permission presentation', () => {
     expect(screen.getByTestId('page-actions')).toBeInTheDocument();
   });
 
-  it('resolves wiki-link navigation through the trusted connection index', async () => {
+  it('navigates only with the target already resolved by the server presentation', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url === `/api/pages/${PAGE_ID}`) {
@@ -271,16 +277,6 @@ describe('Page permission presentation', () => {
       }
       if (url === `/api/pages/${PAGE_ID}/access` || url === `/api/pages/${WIKI_TARGET_ID}/access`) {
         return { ok: true, status: 200, json: async () => ({ ok: true }) } as Response;
-      }
-      if (
-        url ===
-        `/api/pages/${PAGE_ID}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`
-      ) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ target: { id: WIKI_TARGET_ID, title: 'Renamed target' } }),
-        } as Response;
       }
       if (url === `/api/pages/${WIKI_TARGET_ID}`) {
         return {
@@ -300,12 +296,19 @@ describe('Page permission presentation', () => {
     await screen.findByTestId('page-body');
 
     await act(async () => {
-      await mocks.wikiLinkClick?.('Duplicate title');
+      mocks.wikiLinkClick?.({
+        id: WIKI_TARGET_ID,
+        title: 'Renamed target',
+        heading: 'Release Milestones',
+      });
     });
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(`/api/pages/${WIKI_TARGET_ID}`);
     });
+    expect(screen.getByTestId('location')).toHaveTextContent(
+      `/app/renamed-target-${WIKI_TARGET_ID}#release-milestones`,
+    );
   });
 
   it('fails every editor surface closed on disconnect until a fresh snapshot arrives', async () => {

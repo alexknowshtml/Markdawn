@@ -97,7 +97,7 @@ Body text`;
       });
     });
 
-    it('stores imported wiki links as authored paths without target IDs', async () => {
+    it('binds imported wiki links within the destination workspace', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const otherOwner = await createTestUser();
@@ -124,12 +124,17 @@ Body text`;
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
       );
-      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'roadmap' }));
-      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
-      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(ownTarget.id))).toBe(false);
+      expect(connections).toContainEqual(
+        expect.objectContaining({
+          targetSlug: `id:${ownTarget.id}`,
+          targetId: ownTarget.id,
+        }),
+      );
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(ownTarget.id))).toBe(true);
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from('Roadmap'))).toBe(false);
     });
 
-    it('never embeds visible or hidden target IDs when importing into a shared folder', async () => {
+    it('binds only targets the importer can access inside a shared folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const importer = await createTestUser();
@@ -171,17 +176,19 @@ Body text`;
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
       );
       expect(connections).toContainEqual(
-        expect.objectContaining({ targetSlug: 'visible in shared folder' }),
+        expect.objectContaining({
+          targetSlug: `id:${visibleTarget.id}`,
+          targetId: visibleTarget.id,
+        }),
       );
-      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
       expect(
         connections.find((connection) => connection.targetSlug === 'hidden owner page')?.targetId,
       ).toBeUndefined();
       expect(connections.some((connection) => connection.targetId === hiddenTarget.id)).toBe(false);
-      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(false);
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(true);
     });
 
-    it('preserves explicit paths without embedding duplicate-title target IDs', async () => {
+    it('binds explicit paths while leaving duplicate titles unresolved', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
@@ -215,10 +222,15 @@ Body text`;
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
       );
-      expect(connections).toContainEqual(expect.objectContaining({ targetSlug: 'plans/roadmap' }));
+      expect(connections).toContainEqual(
+        expect.objectContaining({
+          targetSlug: `id:${pathTarget.id}`,
+          targetId: pathTarget.id,
+        }),
+      );
       const ambiguous = connections.find((connection) => connection.targetSlug === 'roadmap');
       expect(ambiguous?.targetId).toBeUndefined();
-      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(pathTarget.id))).toBe(false);
+      expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(pathTarget.id))).toBe(true);
     });
 
     it('rejects oversized markdown before creating a page', async () => {

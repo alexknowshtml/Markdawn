@@ -34,10 +34,16 @@ This defers visibility by one `requestAnimationFrame` so the element is position
 
 ### Wiki Links
 
-Links are **marks, not nodes**:
+Wiki links are atomic nodes. Bound links store a target page ID but not its
+title. The server returns a requester-scoped presentation; clients must not
+guess destinations or reveal authored labels when that presentation is
+restricted or unavailable.
 
 ```typescript
-[{ type: "text", text: linkText, marks: [{ type: "link", attrs: { href } }] }]
+{
+  type: "wikiLink",
+  attrs: { targetId, path: "", label: customAliasOrEmpty, heading }
+}
 ```
 
 ### Collaboration Persistence

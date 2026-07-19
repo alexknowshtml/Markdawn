@@ -31,8 +31,9 @@ function isTerminalMetaClose({ event }: onCloseParameters): boolean {
 /**
  * Module-level reference to the current pageIndex Y.Map.
  *
- * Set by `usePageMeta` when the meta room connects, read by the
- * wiki link node view to resolve authored paths against requester-visible pages.
+ * Set by `usePageMeta` when the meta room connects and used by account-scoped
+ * navigation surfaces. Wiki links use the source-page presentation endpoint
+ * so signed-in, signed-out, web, and future native clients share one policy.
  *
  * An effect-local ID (`effectIdRef`) prevents the cleanup from nulling
  * the map during a user switch.

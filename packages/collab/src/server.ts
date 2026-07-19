@@ -9,7 +9,9 @@ import {
   getStableColor,
   getUnicodeCodePointLength,
   MAX_PAGE_TITLE_LENGTH,
+  MAX_WIKI_LINK_PRESENTATION_REQUESTS,
   MAX_YDOC_BYTES,
+  normalizeWikiLinkLookupKey,
   type PermissionSnapshotMessage,
   type ShareEventPayload,
   type SharePermission,
@@ -20,7 +22,6 @@ import {
   type ConnectionDraft,
   extractConnectionsFromYDoc,
   normalizeTagSlug,
-  stripWikiLinkTargetIds,
 } from '@markdawn/shared/yjs-helpers';
 import { Client, type Pool, type PoolClient, type QueryResult } from 'pg';
 import * as Y from 'yjs';
@@ -481,34 +482,6 @@ export function yjsUpdateTouchesTitle(document: Y.Doc, update: Uint8Array): bool
   return false;
 }
 
-/**
- * A page room has one canonical Y.Doc for every reader, so a target UUID in a
- * wiki-link attribute would disclose that target even to readers who cannot
- * enumerate it. Validate the semantic post-update document before Hocuspocus
- * physically applies or broadcasts the client update.
- */
-export function yjsUpdateIntroducesWikiLinkTargetIds(
-  _document: Y.Doc,
-  update: Uint8Array,
-): boolean {
-  try {
-    const decoded = Y.decodeUpdate(update);
-    // XmlElement attributes are Y.Items whose parentSub is the attribute key,
-    // including when the parent struct has not arrived yet. This raw check is
-    // therefore complete for old/malicious wiki-link targetId attributes and
-    // stays O(update), rather than cloning an up-to-16MB document per keystroke.
-    return decoded.structs.some(
-      (struct) =>
-        struct instanceof Y.Item &&
-        struct.parentSub === 'targetId' &&
-        !(struct.content instanceof Y.ContentDeleted),
-    );
-  } catch {
-    // The protocol decoder owns malformed-message rejection below.
-    return false;
-  }
-}
-
 export function sanitizeCanonicalYjsUpdate(update: Uint8Array): Uint8Array {
   const candidate = new Y.Doc();
   try {
@@ -516,22 +489,7 @@ export function sanitizeCanonicalYjsUpdate(update: Uint8Array): Uint8Array {
     if (candidate.store.pendingStructs !== null || candidate.store.pendingDs !== null) {
       throw new Error('Canonical Yjs state contains unresolved updates');
     }
-    stripWikiLinkTargetIds(candidate);
-    // Always re-encode. Even when no live attribute remains, an input update
-    // can retain a UUID in tombstoned set/delete structs.
-    const canonicalState = Y.encodeStateAsUpdate(candidate);
-    const canonicalDecoded = Y.decodeUpdate(canonicalState);
-    if (
-      canonicalDecoded.structs.some(
-        (struct) =>
-          struct instanceof Y.Item &&
-          struct.parentSub === 'targetId' &&
-          !(struct.content instanceof Y.ContentDeleted),
-      )
-    ) {
-      throw new Error('Canonical Yjs state contains forbidden wiki-link target metadata');
-    }
-    return canonicalState;
+    return Y.encodeStateAsUpdate(candidate);
   } finally {
     candidate.destroy();
   }
@@ -754,6 +712,95 @@ function getActiveMetaDocuments(hocuspocus: Hocuspocus): ActiveMetaDocuments {
     documents.set(userId, document as Document);
   }
   return documents;
+}
+
+type WikiLinkInvalidationScope =
+  | { targetPageIds: readonly string[] }
+  | { folderId: string }
+  | { workspaceOwnerId: string };
+
+/** Notify only active source documents whose persisted links hit the affected targets. */
+export async function broadcastWikiLinkPresentationInvalidation(
+  hocuspocus: Hocuspocus,
+  executor: QueryExecutor,
+  scope: WikiLinkInvalidationScope,
+  options: { recipientUserId?: string } = {},
+): Promise<number> {
+  const activeSourceIds = Array.from(hocuspocus.documents.keys()).filter((documentName) =>
+    UUID_REGEX.test(documentName),
+  );
+  if (activeSourceIds.length === 0) return 0;
+
+  const targetPageIds =
+    'targetPageIds' in scope
+      ? [...new Set(scope.targetPageIds.filter((pageId) => UUID_REGEX.test(pageId)))]
+      : null;
+  if (targetPageIds?.length === 0) return 0;
+
+  const result = await executor.query<{ source_id: string; target_id: string }>(
+    `select distinct connection.source_id, connection.target_id
+     from connections connection
+     left join pages target on target.id = connection.target_id
+     where connection.source_type = 'page'
+       and connection.target_type = 'page'
+       and connection.target_id is not null
+       and connection.source_id = any($1::uuid[])
+       and (
+         ($2::uuid[] is not null and connection.target_id = any($2::uuid[]))
+         or (
+           $3::uuid is not null
+           and target.parent_id is not null
+           and (
+             target.parent_id = $3::uuid
+             or exists (
+               select 1 from folder_closure path
+               where path.ancestor_id = $3::uuid
+                 and path.descendant_id = target.parent_id
+             )
+           )
+         )
+         or (
+           $4::uuid is not null
+           and coalesce(get_root_folder_owner(target.parent_id), target.created_by) = $4::uuid
+         )
+       )
+     order by connection.source_id, connection.target_id`,
+    [
+      activeSourceIds,
+      targetPageIds,
+      'folderId' in scope ? scope.folderId : null,
+      'workspaceOwnerId' in scope ? scope.workspaceOwnerId : null,
+    ],
+  );
+
+  const targetIdsBySource = new Map<string, Set<string>>();
+  for (const row of result.rows) {
+    const targetIds = targetIdsBySource.get(row.source_id) ?? new Set<string>();
+    targetIds.add(row.target_id);
+    targetIdsBySource.set(row.source_id, targetIds);
+  }
+
+  let notifiedConnectionCount = 0;
+  for (const [sourceId, targetIds] of targetIdsBySource) {
+    const document = hocuspocus.documents.get(sourceId) as Document | undefined;
+    if (!document) continue;
+    const ids = [...targetIds];
+    for (let offset = 0; offset < ids.length; offset += MAX_WIKI_LINK_PRESENTATION_REQUESTS) {
+      const message = JSON.stringify({
+        type: 'wiki_link_presentations_changed',
+        targetIds: ids.slice(offset, offset + MAX_WIKI_LINK_PRESENTATION_REQUESTS),
+      });
+      for (const connection of document.getConnections()) {
+        if (options.recipientUserId) {
+          const context = connection.context as { user?: { id?: string } } | undefined;
+          if (context?.user?.id !== options.recipientUserId) continue;
+        }
+        connection.sendStateless(message);
+        notifiedConnectionCount += 1;
+      }
+    }
+  }
+  return notifiedConnectionCount;
 }
 
 async function rebuildPageMetaDocument(
@@ -1216,16 +1263,6 @@ async function resolvePageTargets(
   principals: ConnectionResolutionPrincipal[],
   staleTargets?: Map<string, string>,
 ): Promise<void> {
-  // A persistence path without an attributable writer must never fall back to
-  // owner-wide discovery. Keep authored labels, but leave every page target
-  // unresolved until a later authorized writer saves the document.
-  if (principals.length === 0) {
-    for (const connection of connections) {
-      if (connection.targetType === 'page') connection.targetId = null;
-    }
-    return;
-  }
-
   const authenticatedUserIds = [
     ...new Set(
       principals.filter((principal) => !principal.isAnonymous).map((principal) => principal.userId),
@@ -1267,56 +1304,16 @@ async function resolvePageTargets(
        from pages p
        where p.id = any($1::uuid[])
          and p.is_deleted = false
-         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $2
-         and not exists (
-           select 1
-           from unnest($3::uuid[]) actor(user_id)
-           where not exists (
-             select 1
-             from get_accessible_page_ids(actor.user_id) accessible
-             where accessible.page_id = p.id
-           )
-         )
-         and (not $4::boolean or get_public_page_permission(p.id) is not null)`,
-      [ids, ownerId, authenticatedUserIds, hasAnonymousPrincipal],
+         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $2`,
+      [ids, ownerId],
     );
     for (const row of result.rows) {
       byId.set(row.id, row);
     }
   }
 
-  const titleSlugs = slugs.filter((slug) => !slug.includes('/'));
-  if (titleSlugs.length > 0) {
-    const result = await client.query<PageLookupRow & { normalized_title: string }>(
-      `select min(p.id::text) as id,
-              min(p.title) as title,
-              lower(trim(p.title)) as normalized_title
-       from pages p
-       where coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
-         and lower(trim(p.title)) = any($2::text[])
-         and p.is_deleted = false
-         and not exists (
-           select 1
-           from unnest($3::uuid[]) actor(user_id)
-           where not exists (
-             select 1
-             from get_accessible_page_ids(actor.user_id) accessible
-             where accessible.page_id = p.id
-           )
-         )
-         and (not $4::boolean or get_public_page_permission(p.id) is not null)
-       group by lower(trim(p.title))
-       having count(*) = 1`,
-      [ownerId, titleSlugs, authenticatedUserIds, hasAnonymousPrincipal],
-    );
-    for (const row of result.rows) {
-      bySlug.set(row.normalized_title, row);
-    }
-  }
-
-  const pathSlugs = slugs.filter((slug) => slug.includes('/'));
-  if (pathSlugs.length > 0) {
-    const result = await client.query<PageLookupRow & { normalized_path: string }>(
+  if (principals.length > 0 && slugs.length > 0) {
+    const result = await client.query<PageLookupRow & { candidate_value: string }>(
       `with recursive visible_folders as materialized (
          select f.id, f.parent_id, f.name
          from folders f
@@ -1324,58 +1321,80 @@ async function resolvePageTargets(
            and get_root_folder_owner(f.id) = $1
            and not exists (
              select 1
-             from unnest($3::uuid[]) actor(user_id)
+             from unnest($2::uuid[]) actor(user_id)
              where not exists (
                select 1
-         from get_enumerable_folder_ids(actor.user_id) enumerable
+               from get_enumerable_folder_ids(actor.user_id) enumerable
                where enumerable.folder_id = f.id
              )
            )
-           and (not $4::boolean or get_public_folder_permission(f.id) is not null)
+           and (not $3::boolean or get_public_folder_permission(f.id) is not null)
        ),
        folder_paths as (
-         select f.id, lower(trim(f.name))::text as folder_path
+         select f.id, trim(f.name)::text as folder_path
          from visible_folders f
          where not exists (
            select 1 from visible_folders parent where parent.id = f.parent_id
          )
          union all
          select child.id,
-                (parent.folder_path || '/' || lower(trim(child.name)))::text
+                (parent.folder_path || '/' || trim(child.name))::text
          from visible_folders child
          join folder_paths parent on parent.id = child.parent_id
-       )
-       select min(p.id::text) as id,
-              min(p.title) as title,
-              paths.folder_path || '/' || lower(trim(p.title)) as normalized_path
-       from pages p
-       join folder_paths paths on paths.id = p.parent_id
-       where p.is_deleted = false
-         and paths.folder_path || '/' || lower(trim(p.title)) = any($2::text[])
-         and not exists (
-           select 1
-           from unnest($3::uuid[]) actor(user_id)
-           where not exists (
+       ),
+       workspace_pages as materialized (
+         select p.id, p.title, p.parent_id
+         from pages p
+         where p.is_deleted = false
+           and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
+           and not exists (
              select 1
-             from get_accessible_page_ids(actor.user_id) accessible
-             where accessible.page_id = p.id
+             from unnest($2::uuid[]) actor(user_id)
+             where not exists (
+               select 1
+               from get_accessible_page_ids(actor.user_id) accessible
+               where accessible.page_id = p.id
+             )
            )
-         )
-         and (not $4::boolean or get_public_page_permission(p.id) is not null)
-       group by paths.folder_path || '/' || lower(trim(p.title))
-       having count(*) = 1`,
-      [ownerId, pathSlugs, authenticatedUserIds, hasAnonymousPrincipal],
+           and (not $3::boolean or get_public_page_permission(p.id) is not null)
+       ),
+       candidate_values as (
+         select p.id, p.title, p.title::text as candidate_value
+         from workspace_pages p
+
+         union all
+
+         select p.id, p.title, (paths.folder_path || '/' || p.title)::text
+         from workspace_pages p
+         join folder_paths paths on paths.id = p.parent_id
+         where not $3::boolean
+       )
+       select candidate.id, candidate.title, candidate.candidate_value
+       from candidate_values candidate`,
+      [ownerId, authenticatedUserIds, hasAnonymousPrincipal],
     );
+    const slugSet = new Set(slugs);
+    const candidates = new Map<string, Map<string, PageLookupRow>>();
     for (const row of result.rows) {
-      bySlug.set(row.normalized_path, row);
+      const normalizedKey = normalizeWikiLinkLookupKey(row.candidate_value);
+      if (!slugSet.has(normalizedKey)) continue;
+      const matches = candidates.get(normalizedKey) ?? new Map<string, PageLookupRow>();
+      matches.set(row.id, row);
+      candidates.set(normalizedKey, matches);
+    }
+    for (const [normalizedKey, matches] of candidates) {
+      if (matches.size !== 1) continue;
+      const match = matches.values().next().value;
+      if (match) bySlug.set(normalizedKey, match);
     }
   }
 
   for (const connection of connections) {
     if (connection.targetType !== 'page') continue;
 
-    const byIdMatch = connection.targetId ? byId.get(connection.targetId) : undefined;
+    const byIdMatch = connection.targetId ? byId.get(connection.targetId.toLowerCase()) : undefined;
     if (byIdMatch) {
+      connection.targetId = byIdMatch.id;
       connection.targetLabel = byIdMatch.title;
       continue;
     }
@@ -1579,6 +1598,7 @@ async function persistDocument(
   let committedStateSize = 0;
   let committedTitle = lastCanonicalTitle ?? 'Untitled';
   let committedWhileDeleted = false;
+  let wikiLinkPresentationsChanged = false;
 
   try {
     await client.query('BEGIN');
@@ -1612,15 +1632,12 @@ async function persistDocument(
     const connectionSnapshot = new Y.Doc();
     Y.applyUpdate(connectionSnapshot, connectionSnapshotState);
     if (current.ydoc && current.ydoc.length > 0) {
-      // API imports and pre-invariant snapshots may contain legacy targetId
-      // attributes. Sanitize in an isolated document before merging so the
-      // raw update can never be emitted from the live room during this save.
+      // Validate and canonicalize the persisted update before merging it into
+      // the active room and immutable connection-index snapshot.
       const canonicalCurrentState = sanitizeCanonicalYjsUpdate(new Uint8Array(current.ydoc));
       Y.applyUpdate(document, canonicalCurrentState);
       Y.applyUpdate(connectionSnapshot, canonicalCurrentState);
     }
-    stripWikiLinkTargetIds(document);
-    stripWikiLinkTargetIds(connectionSnapshot);
     const connectionState = Y.encodeStateAsUpdate(connectionSnapshot);
     connectionSnapshot.destroy();
 
@@ -1721,6 +1738,7 @@ async function persistDocument(
     await client.query('COMMIT');
     committedStateSize = state.length;
     committedTitle = pageMeta?.title ?? committedTitle ?? current.title;
+    wikiLinkPresentationsChanged = !committedWhileDeleted && committedTitle !== current.title;
   } catch (err) {
     await client.query('ROLLBACK');
 
@@ -1757,6 +1775,18 @@ async function persistDocument(
   // here would add save latency without preserving useful state.
   if (committedWhileDeleted) {
     return { committed: true, canonicalTitle: committedTitle, stateSize: committedStateSize };
+  }
+
+  if (wikiLinkPresentationsChanged) {
+    try {
+      await broadcastWikiLinkPresentationInvalidation(hocuspocus, pool, {
+        targetPageIds: [documentName],
+      });
+    } catch (error) {
+      logger.error(
+        `[persist] wiki-link invalidation failed after title commit for page=${documentName}: ${error}`,
+      );
+    }
   }
 
   const activeDocuments = getActiveMetaDocuments(hocuspocus);
@@ -1827,6 +1857,10 @@ export async function publishPageRename(
   if (failures.length > 0) {
     throw new AggregateError(failures, `Failed to publish rename metadata for ${pageId}`);
   }
+
+  await broadcastWikiLinkPresentationInvalidation(hocuspocus, pool, {
+    targetPageIds: [pageId],
+  });
 
   logger.debug(`[listen] updated meta for renamed page ${pageId} -> ${newTitle}`);
 }
@@ -2051,6 +2085,12 @@ export async function publishPageDeletion(
     },
   );
 
+  if (published) {
+    await broadcastWikiLinkPresentationInvalidation(hocuspocus, pool, {
+      targetPageIds: [pageId],
+    });
+  }
+
   logger.debug(
     published
       ? `[listen] removed deleted page ${pageId} from active meta rooms`
@@ -2160,6 +2200,10 @@ export async function publishFolderDeletion(
       }
     },
   );
+
+  if (published) {
+    await broadcastWikiLinkPresentationInvalidation(hocuspocus, pool, { folderId });
+  }
 
   logger.debug(
     published
@@ -3212,14 +3256,6 @@ export function createCollabServer(config: CollabServerConfig) {
         });
         return;
       }
-      if (writeUpdate && yjsUpdateIntroducesWikiLinkTargetIds(document as Document, writeUpdate)) {
-        // Authored path/label text is page content. A structured target UUID is
-        // different: it is hidden entity metadata, and a canonical page room
-        // cannot safely personalize it for each reader.
-        rejectConnectionTraffic(connectionContext);
-        connection.close({ code: 4403, reason: 'Wiki-link target IDs are not allowed' });
-        throw new CollabProtocolDeniedError('Wiki-link target IDs are not allowed');
-      }
       const writer = connectionContext;
       if (!isSyncMessage && !isAwarenessMessage && !writeUpdate) return;
       if (!writer?.user) throw new Error('Unauthorized');
@@ -3753,7 +3789,17 @@ export function createCollabServer(config: CollabServerConfig) {
     maxPending: SHARE_EVENT_QUEUE_LIMIT,
     getKey: getShareEventQueueKey,
     mergePending: mergeShareEventMetadata,
-    handle: (payload) => handleShareEvent(server, payload, pool, logger),
+    handle: async (payload) => {
+      await handleShareEvent(server, payload, pool, logger);
+      await broadcastWikiLinkPresentationInvalidation(
+        server.hocuspocus,
+        pool,
+        payload.entityType === 'page'
+          ? { targetPageIds: [payload.entityId] }
+          : { folderId: payload.entityId },
+        payload.targetUserId ? { recipientUserId: payload.targetUserId } : {},
+      );
+    },
     handleOverflow: async () => {
       logger.warn(
         `[listen] share event backlog exceeded ${SHARE_EVENT_QUEUE_LIMIT}; rebuilding active collaboration state`,
@@ -3764,6 +3810,8 @@ export function createCollabServer(config: CollabServerConfig) {
         }),
         revalidateActivePageConnections(server, pool, logger),
       ]);
+      // Do not fan out an unscoped wiki-link refresh after dropping event
+      // details. Active clients periodically revalidate presentations.
     },
     onError: (error) => logger.error(`[listen] handleShareEvent failed: ${error}`),
   });
@@ -3786,7 +3834,17 @@ export function createCollabServer(config: CollabServerConfig) {
   const workspaceEventQueue = createCoalescingTaskQueue<WorkspaceEventPayload>({
     maxPending: WORKSPACE_EVENT_QUEUE_LIMIT,
     getKey: (payload) => `${payload.ownerId}:${payload.memberId}`,
-    handle: (payload) => handleWorkspaceEvent(server, payload, pool, logger),
+    handle: async (payload) => {
+      await handleWorkspaceEvent(server, payload, pool, logger);
+      await broadcastWikiLinkPresentationInvalidation(
+        server.hocuspocus,
+        pool,
+        {
+          workspaceOwnerId: payload.ownerId,
+        },
+        { recipientUserId: payload.memberId },
+      );
+    },
     handleOverflow: async () => {
       logger.warn(
         `[listen] workspace event backlog exceeded ${WORKSPACE_EVENT_QUEUE_LIMIT}; rebuilding active collaboration state`,
@@ -3807,6 +3865,8 @@ export function createCollabServer(config: CollabServerConfig) {
         }),
         revalidateActivePageConnections(server, pool, logger),
       ]);
+      // The overflow no longer has a safe workspace scope. Rely on the
+      // client's bounded periodic presentation revalidation instead.
     },
     onError: (error) => logger.error(`[listen] handleWorkspaceEvent failed: ${error}`),
   });

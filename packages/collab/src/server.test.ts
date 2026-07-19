@@ -23,13 +23,13 @@ import WebSocket from 'ws';
 import * as Y from 'yjs';
 import { revalidateActivePageConnections } from './permission-handler';
 import {
+  broadcastWikiLinkPresentationInvalidation,
   createCollabServer,
   publishFolderDeletion,
   publishPageDeletion,
   publishPageRename,
   reconcileActiveCollaborationState,
   sanitizeCanonicalYjsUpdate,
-  yjsUpdateIntroducesWikiLinkTargetIds,
 } from './server';
 import {
   createCorruptedYjsDoc,
@@ -405,70 +405,37 @@ async function createPausedConnectionHarness(
 }
 
 describe('canonical wiki-link target metadata', () => {
-  const hiddenTargetId = '11111111-1111-1111-1111-111111111111';
+  const targetId = '11111111-1111-1111-1111-111111111111';
 
-  it('rejects an out-of-order targetId attribute update before its parent can integrate', () => {
+  it('rejects an unresolved attribute update before its parent can integrate', () => {
     const attacker = new Y.Doc();
     const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('path', 'Private roadmap');
+    link.setAttribute('path', 'Roadmap');
     attacker.getXmlFragment('prosemirror').push([link]);
-    const creationUpdate = Y.encodeStateAsUpdate(attacker);
     const afterCreation = Y.encodeStateVector(attacker);
 
-    link.setAttribute('targetId', hiddenTargetId);
+    link.setAttribute('targetId', targetId);
     const attributeOnlyUpdate = Y.encodeStateAsUpdate(attacker, afterCreation);
-    expect(Buffer.from(attributeOnlyUpdate).includes(Buffer.from(hiddenTargetId))).toBe(true);
-
-    const canonical = new Y.Doc();
-    expect(yjsUpdateIntroducesWikiLinkTargetIds(canonical, attributeOnlyUpdate)).toBe(true);
-    expect(
-      Buffer.from(Y.encodeStateAsUpdate(canonical)).includes(Buffer.from(hiddenTargetId)),
-    ).toBe(false);
-
-    // A later valid parent update cannot complete the rejected attribute.
-    Y.applyUpdate(canonical, creationUpdate);
-    const canonicalLink = canonical.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
-    expect(canonicalLink.getAttribute('targetId')).toBeUndefined();
-    expect(
-      Buffer.from(Y.encodeStateAsUpdate(canonical)).includes(Buffer.from(hiddenTargetId)),
-    ).toBe(false);
-  });
-
-  it('rejects a targetId attribute in an alternate XML root', () => {
-    const attacker = new Y.Doc();
-    const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('path', 'Private roadmap');
-    link.setAttribute('targetId', hiddenTargetId);
-    attacker.getXmlFragment('alternate').push([link]);
-
-    expect(yjsUpdateIntroducesWikiLinkTargetIds(new Y.Doc(), Y.encodeStateAsUpdate(attacker))).toBe(
-      true,
+    expect(() => sanitizeCanonicalYjsUpdate(attributeOnlyUpdate)).toThrow(
+      'Canonical Yjs state contains unresolved updates',
     );
   });
 
-  it('re-encodes tombstoned targetId updates without retaining UUID bytes', () => {
+  it('preserves a stable targetId in canonical content', () => {
     const source = new Y.Doc();
     const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('path', 'Private roadmap');
+    link.setAttribute('targetId', targetId);
+    link.setAttribute('path', '');
+    link.setAttribute('label', 'Plan');
     source.getXmlFragment('prosemirror').push([link]);
-    const creation = Y.encodeStateAsUpdate(source);
-    const beforeSet = Y.encodeStateVector(source);
-    link.setAttribute('targetId', hiddenTargetId);
-    const setAttribute = Y.encodeStateAsUpdate(source, beforeSet);
-    const beforeDelete = Y.encodeStateVector(source);
-    link.removeAttribute('targetId');
-    const deleteAttribute = Y.encodeStateAsUpdate(source, beforeDelete);
-    const legacyState = Y.mergeUpdates([creation, setAttribute, deleteAttribute]);
+    const canonicalState = sanitizeCanonicalYjsUpdate(Y.encodeStateAsUpdate(source));
 
-    expect(Buffer.from(legacyState).includes(Buffer.from(hiddenTargetId))).toBe(true);
-    const canonicalState = sanitizeCanonicalYjsUpdate(legacyState);
-    expect(Buffer.from(canonicalState).includes(Buffer.from(hiddenTargetId))).toBe(false);
-
-    const cleanClient = new Y.Doc();
-    Y.applyUpdate(cleanClient, canonicalState);
-    expect(
-      yjsUpdateIntroducesWikiLinkTargetIds(new Y.Doc(), Y.encodeStateAsUpdate(cleanClient)),
-    ).toBe(false);
+    const loaded = new Y.Doc();
+    Y.applyUpdate(loaded, canonicalState);
+    const loadedLink = loaded.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
+    expect(loadedLink.getAttribute('targetId')).toBe(targetId);
+    expect(loadedLink.getAttribute('path')).toBe('');
+    expect(loadedLink.getAttribute('label')).toBe('Plan');
   });
 });
 
@@ -2938,16 +2905,16 @@ describe('collab server', () => {
       provider.destroy();
     });
 
-    it('strips and rewrites legacy wiki-link target IDs before initial sync', async () => {
-      const hiddenTargetId = '44444444-4444-4444-4444-444444444444';
+    it('preserves wiki-link target IDs during initial sync', async () => {
+      const targetId = '44444444-4444-4444-4444-444444444444';
       const user = await createTestUser(pool);
       const legacyDocument = new Y.Doc();
       const link = new Y.XmlElement('wikiLink');
-      link.setAttribute('targetId', hiddenTargetId);
-      link.setAttribute('path', 'Private roadmap');
+      link.setAttribute('targetId', targetId);
+      link.setAttribute('path', '');
       legacyDocument.getXmlFragment('prosemirror').push([link]);
       const legacyState = Y.encodeStateAsUpdate(legacyDocument);
-      expect(Buffer.from(legacyState).includes(Buffer.from(hiddenTargetId))).toBe(true);
+      expect(Buffer.from(legacyState).includes(Buffer.from(targetId))).toBe(true);
       const page = await createTestPage(pool, user.id, 'Source page', legacyState);
 
       const loadedDocument = new Document(page.id);
@@ -2963,14 +2930,14 @@ describe('collab server', () => {
       });
 
       const loadedLink = loadedDocument.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
-      expect(loadedLink.getAttribute('targetId')).toBeUndefined();
+      expect(loadedLink.getAttribute('targetId')).toBe(targetId);
       expect(
-        Buffer.from(Y.encodeStateAsUpdate(loadedDocument)).includes(Buffer.from(hiddenTargetId)),
-      ).toBe(false);
+        Buffer.from(Y.encodeStateAsUpdate(loadedDocument)).includes(Buffer.from(targetId)),
+      ).toBe(true);
       const stored = await pool.query<{ ydoc: Buffer }>('select ydoc from pages where id = $1', [
         page.id,
       ]);
-      expect(stored.rows[0]?.ydoc.includes(Buffer.from(hiddenTargetId))).toBe(false);
+      expect(stored.rows[0]?.ydoc.includes(Buffer.from(targetId))).toBe(true);
     });
 
     it('serves the same content to two concurrent readers', async () => {
@@ -3666,7 +3633,7 @@ describe('collab server', () => {
       });
     });
 
-    it('does not persist a wiki-link targetId from another workspace', async () => {
+    it('does not index a wiki-link targetId from another workspace', async () => {
       const sourceOwner = await createTestUser(pool);
       const otherOwner = await createTestUser(pool);
       const source = await createTestPage(pool, sourceOwner.id, 'Source');
@@ -3699,7 +3666,7 @@ describe('collab server', () => {
       expect(result.rows[0]?.target_id).toBeNull();
     });
 
-    it('does not restore a stale wiki-link targetId from another workspace', async () => {
+    it('does not restore a stale cross-workspace target in the derived index', async () => {
       const sourceOwner = await createTestUser(pool);
       const otherOwner = await createTestUser(pool);
       const source = await createTestPage(pool, sourceOwner.id, 'Source');
@@ -3736,7 +3703,7 @@ describe('collab server', () => {
       expect(result.rows[0]?.target_id).toBeNull();
     });
 
-    it('does not resolve a same-workspace hidden targetId for a page editor', async () => {
+    it('retains a same-workspace targetId in the derived connection index', async () => {
       const owner = await createTestUser(pool);
       const editor = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Shared Source');
@@ -3776,11 +3743,10 @@ describe('collab server', () => {
         [source.id],
       );
       expect(result.rows[0]).toEqual({
-        target_id: null,
-        target_label: 'authored-unresolved-path',
+        target_id: hiddenTarget.id,
+        target_label: 'Hidden Canonical Title',
         link_text: 'Authored Alias',
       });
-      expect(result.rows[0]?.target_label).not.toBe(hiddenTarget.title);
     });
 
     it('does not resolve a same-workspace hidden title for a page editor', async () => {
@@ -3829,7 +3795,7 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const editor = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Shared Source');
-      const hiddenTarget = await createTestPage(pool, owner.id, 'Owner Only Target');
+      await createTestPage(pool, owner.id, 'Owner Only Target');
       await pool.query(
         `insert into shares (
            entity_type, entity_id, shared_by, recipient_user_id, permission
@@ -3841,7 +3807,6 @@ describe('collab server', () => {
       appendWikiLink(document, {
         path: 'owner-only-target',
         label: 'Authored Alias',
-        targetId: hiddenTarget.id,
       });
       const ownerContext = { user: { id: owner.id }, permission: 'edit' as const };
       const editorContext = { user: { id: editor.id }, permission: 'edit' as const };
@@ -3893,14 +3858,13 @@ describe('collab server', () => {
     it('intersects authenticated and anonymous writers in one debounced batch', async () => {
       const owner = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Public Editable Source');
-      const privateTarget = await createTestPage(pool, owner.id, 'Account Only Target');
+      await createTestPage(pool, owner.id, 'Account Only Target');
       await pool.query("update pages set public_permission = 'edit' where id = $1", [source.id]);
 
       const document = new Document(source.id);
       appendWikiLink(document, {
         path: 'account-only-target',
         label: 'Authored Alias',
-        targetId: privateTarget.id,
       });
       const ownerContext = { user: { id: owner.id }, permission: 'edit' as const };
       const anonymousContext = {
@@ -3954,14 +3918,13 @@ describe('collab server', () => {
     it('does not resolve a private target for an anonymous public editor', async () => {
       const owner = await createTestUser(pool);
       const source = await createTestPage(pool, owner.id, 'Public Editable Source');
-      const hiddenTarget = await createTestPage(pool, owner.id, 'Private Target');
+      await createTestPage(pool, owner.id, 'Private Target');
       await pool.query("update pages set public_permission = 'edit' where id = $1", [source.id]);
 
       const document = new Document(source.id);
       appendWikiLink(document, {
         path: 'private-target',
         label: 'Authored Alias',
-        targetId: hiddenTarget.id,
       });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
@@ -3985,6 +3948,47 @@ describe('collab server', () => {
       expect(result.rows[0]).toEqual({ target_id: null, target_label: 'private-target' });
     });
 
+    it('does not use folder paths to expose structure to an anonymous editor', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Public Editable Source');
+      const target = await createTestPage(pool, owner.id, 'Public Target');
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `insert into folders (
+           id, name, position, created_by, public_permission, created_at, updated_at
+         ) values ($1, 'Internal Structure', '0', $2, 'view', now(), now())`,
+        [folderId, owner.id],
+      );
+      await pool.query('update pages set parent_id = $1 where id = $2', [folderId, target.id]);
+      await pool.query("update pages set public_permission = 'edit' where id = $1", [source.id]);
+
+      const document = new Document(source.id);
+      appendWikiLink(document, {
+        path: 'Internal Structure/Public Target',
+        label: 'Authored path',
+      });
+      await server.hocuspocus.hooks('onStoreDocument', {
+        clientsCount: 1,
+        context: {
+          user: { id: crypto.randomUUID(), isAnonymous: true },
+          permission: 'edit',
+        },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      });
+
+      const result = await pool.query<{ target_id: string | null }>(
+        `select target_id from connections
+         where source_id = $1 and target_slug = 'internal structure/public target'`,
+        [source.id],
+      );
+      expect(result.rows[0]?.target_id).toBeNull();
+    });
+
     it('resolves a target that the page editor can enumerate', async () => {
       const owner = await createTestUser(pool);
       const editor = await createTestUser(pool);
@@ -4000,7 +4004,7 @@ describe('collab server', () => {
       );
 
       const document = new Document(source.id);
-      appendWikiLink(document, { path: 'visible target', label: 'Authored Alias' });
+      appendWikiLink(document, { path: '/Visible Target.md#Section', label: 'Authored Alias' });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
         context: { user: { id: editor.id }, permission: 'edit' },
@@ -4086,6 +4090,42 @@ describe('collab server', () => {
         target_id: target.id,
         target_label: 'Path Target',
       });
+    });
+
+    it('uses the shared normalizer for explicit paths with a one-character folder', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Source');
+      const target = await createTestPage(pool, owner.id, 'Path Target');
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `insert into folders (id, name, position, created_by, created_at, updated_at)
+         values ($1, 'X', '0', $2, now(), now())`,
+        [folderId, owner.id],
+      );
+      await pool.query('update pages set parent_id = $1 where id = $2', [folderId, target.id]);
+
+      const document = new Document(source.id);
+      appendWikiLink(document, {
+        path: '/X/Path Target.md#Details',
+        label: 'Path target details',
+      });
+      await server.hocuspocus.hooks('onStoreDocument', {
+        clientsCount: 1,
+        context: { user: { id: owner.id }, permission: 'admin' },
+        document,
+        documentName: source.id,
+        instance: server.hocuspocus,
+        requestHeaders: {},
+        requestParameters: new URLSearchParams(),
+        socketId: crypto.randomUUID(),
+      });
+
+      const result = await pool.query<{ target_id: string | null; target_label: string }>(
+        `select target_id, target_label from connections
+         where source_id = $1 and target_slug = 'x/path target'`,
+        [source.id],
+      );
+      expect(result.rows[0]).toEqual({ target_id: target.id, target_label: 'Path Target' });
     });
 
     it('retains a valid wiki-link targetId from the source workspace', async () => {
@@ -4246,6 +4286,143 @@ describe('collab server', () => {
         expect(viewerMeta.getMap('backlinksVersion').has(source.id)).toBe(false);
       } finally {
         server.hocuspocus.documents.delete(`page-meta:${targetViewer.id}`);
+      }
+    });
+
+    it('invalidates only active source documents that reference the renamed target', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Source');
+      const unrelatedSource = await createTestPage(pool, owner.id, 'Unrelated source');
+      const target = await createTestPage(pool, owner.id, 'Original target');
+      await pool.query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values ('page', $1, 'page', $2, $3, 'Original target', 'wikilink', 'Wiki link')`,
+        [source.id, target.id, `id:${target.id}`],
+      );
+      const session = await createTestSession(pool, owner.id);
+      const messages: string[] = [];
+      const unrelatedMessages: string[] = [];
+      const provider = new HocuspocusProvider({
+        url: `ws://localhost:${port}`,
+        name: source.id,
+        document: new Y.Doc(),
+        awareness: null,
+        token: session.token,
+        onStateless: ({ payload }) => messages.push(payload),
+      });
+      const unrelatedProvider = new HocuspocusProvider({
+        url: `ws://localhost:${port}`,
+        name: unrelatedSource.id,
+        document: new Y.Doc(),
+        awareness: null,
+        token: session.token,
+        onStateless: ({ payload }) => unrelatedMessages.push(payload),
+      });
+
+      try {
+        await waitFor(
+          () => provider.synced && unrelatedProvider.synced,
+          5_000,
+          'wiki-link source providers to sync',
+        );
+        await pool.query('update pages set title = $1 where id = $2', [
+          'Renamed target',
+          target.id,
+        ]);
+        await publishPageRename(server.hocuspocus, pool, target.id, 'Renamed target', mockLogger());
+
+        await waitFor(
+          () =>
+            messages.includes(
+              JSON.stringify({
+                type: 'wiki_link_presentations_changed',
+                targetIds: [target.id],
+              }),
+            ),
+          5_000,
+          'wiki-link presentation invalidation',
+        );
+        expect(messages.join('\n')).not.toContain('Renamed target');
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        expect(unrelatedMessages).not.toContainEqual(
+          expect.stringContaining('wiki_link_presentations_changed'),
+        );
+      } finally {
+        provider.destroy();
+        unrelatedProvider.destroy();
+      }
+    });
+
+    it('targets folder and workspace invalidations to matching linked pages', async () => {
+      const owner = await createTestUser(pool);
+      const source = await createTestPage(pool, owner.id, 'Source');
+      const folderTarget = await createTestPage(pool, owner.id, 'Folder target');
+      const rootTarget = await createTestPage(pool, owner.id, 'Root target');
+      const folderId = crypto.randomUUID();
+      await pool.query(
+        `insert into folders (id, name, position, created_by, created_at, updated_at)
+         values ($1, 'Target folder', '0', $2, now(), now())`,
+        [folderId, owner.id],
+      );
+      await pool.query('update pages set parent_id = $1 where id = $2', [
+        folderId,
+        folderTarget.id,
+      ]);
+      await pool.query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values
+           ('page', $1, 'page', $2, $4, 'Folder target', 'wikilink', 'Wiki link'),
+           ('page', $1, 'page', $3, $5, 'Root target', 'wikilink', 'Wiki link')`,
+        [source.id, folderTarget.id, rootTarget.id, `id:${folderTarget.id}`, `id:${rootTarget.id}`],
+      );
+      const session = await createTestSession(pool, owner.id);
+      const messages: string[] = [];
+      const provider = new HocuspocusProvider({
+        url: `ws://localhost:${port}`,
+        name: source.id,
+        document: new Y.Doc(),
+        awareness: null,
+        token: session.token,
+        onStateless: ({ payload }) => messages.push(payload),
+      });
+
+      try {
+        await waitFor(() => provider.synced, 5_000, 'wiki-link source provider to sync');
+        await broadcastWikiLinkPresentationInvalidation(server.hocuspocus, pool, { folderId });
+        await waitFor(
+          () =>
+            messages.includes(
+              JSON.stringify({
+                type: 'wiki_link_presentations_changed',
+                targetIds: [folderTarget.id],
+              }),
+            ),
+          5_000,
+          'folder wiki-link invalidation',
+        );
+
+        messages.length = 0;
+        await broadcastWikiLinkPresentationInvalidation(server.hocuspocus, pool, {
+          workspaceOwnerId: owner.id,
+        });
+        await waitFor(
+          () => messages.some((message) => message.includes('wiki_link_presentations_changed')),
+          5_000,
+          'workspace wiki-link invalidation',
+        );
+        const invalidation = messages
+          .map((message) => JSON.parse(message) as { type?: string; targetIds?: string[] })
+          .find((message) => message.type === 'wiki_link_presentations_changed');
+        expect(invalidation?.targetIds).toHaveLength(2);
+        expect(invalidation?.targetIds).toEqual(
+          expect.arrayContaining([folderTarget.id, rootTarget.id]),
+        );
+      } finally {
+        provider.destroy();
       }
     });
 

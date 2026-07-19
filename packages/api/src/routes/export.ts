@@ -1,3 +1,4 @@
+import { extractWikiLinkTargetIds } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
 import { query } from '../db/query';
@@ -8,6 +9,7 @@ import { slugifyFilename } from '../utils/filename';
 
 type PageExportRow = {
   id: string;
+  ownerId: string;
   title: string | null;
   ydoc: Buffer | null;
   properties: Record<string, unknown> | null;
@@ -24,7 +26,9 @@ exportRoute.get('/export', async (c) => {
 
   const result = await query(
     `
-      select p.id, p.title, p.ydoc, p.properties, p.icon,
+      select p.id,
+        coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId",
+        p.title, p.ydoc, p.properties, p.icon,
         coalesce(
           (
             select array_agg(u.filename)
@@ -43,6 +47,30 @@ exportRoute.get('/export', async (c) => {
   );
 
   const pages = result.rows as PageExportRow[];
+  const targetIds = [
+    ...new Set(
+      pages.flatMap((page) =>
+        page.ydoc
+          ? extractWikiLinkTargetIds(new Uint8Array(page.ydoc)).filter((targetId) =>
+              /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(targetId),
+            )
+          : [],
+      ),
+    ),
+  ];
+  const exportTargets = new Map<string, { title: string; ownerId: string }>();
+  if (targetIds.length > 0) {
+    const targets = await query<{ id: string; title: string; ownerId: string }>(
+      `select p.id, p.title,
+              coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId"
+       from pages p
+       where p.id = any($1::uuid[])
+         and p.is_deleted = false
+         and p.id in (select page_id from get_accessible_page_ids($2))`,
+      [targetIds, user.id],
+    );
+    for (const target of targets.rows) exportTargets.set(target.id, target);
+  }
   const zip = new JSZip();
   const usedNames = new Map<string, number>();
   const allAssets = new Map<string, Buffer>();
@@ -60,7 +88,13 @@ exportRoute.get('/export', async (c) => {
     usedNames.set(baseName, seenCount + 1);
     const filename = seenCount > 0 ? `${baseName}-${seenCount + 1}.md` : `${baseName}.md`;
 
-    let content = pageToMarkdown(page.ydoc, page.properties, page.icon, title);
+    let content = pageToMarkdown(page.ydoc, page.properties, page.icon, title, {
+      resolveWikiLinkTarget: (targetId) => {
+        const target = exportTargets.get(targetId.toLowerCase());
+        return target?.ownerId === page.ownerId ? { title: target.title } : null;
+      },
+      restrictedWikiLinkText: 'Restricted page',
+    });
     const extracted = await extractImages(content, uploadsDir, new Set(page.uploadFilenames));
     content = extracted.markdown;
 

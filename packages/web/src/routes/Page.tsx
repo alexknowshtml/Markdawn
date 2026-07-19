@@ -12,7 +12,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileQuestion, LogIn, RefreshCw, ShieldOff } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 import { BacklinksPanel } from '../components/editor/BacklinksPanel';
 import { Breadcrumbs } from '../components/editor/Breadcrumbs';
 import { MilkdownEditor } from '../components/editor/MilkdownEditor';
@@ -30,11 +30,13 @@ import {
   useSetCapabilities,
   useShareContext,
 } from '../contexts/ShareContext';
+import type { WikiLinkNavigationTarget } from '../editor/wikiLinkPresentations';
 import { useFolderTree } from '../hooks/use-folders';
 import { type RecentPage, usePageTree } from '../hooks/use-pages';
 import { getLogger } from '../logger-init';
 import { ApiError } from '../utils/api';
 import { resetDocumentMetadata } from '../utils/documentMeta';
+import { findRenderedHeading, getMilkdownHeadingId } from '../utils/headingNavigation';
 import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
@@ -60,6 +62,7 @@ async function fetchPage(pageId: string): Promise<PageDetail> {
 
 export default function Page() {
   const { slugAndId } = useParams<{ slugAndId: string }>();
+  const location = useLocation();
   const pageId = slugAndId ? extractUuidFromSlug(slugAndId) : undefined;
   const navigate = useIdentityNavigate();
   const [provider, setProvider] = useState<HocuspocusProvider | null>(null);
@@ -160,6 +163,35 @@ export default function Page() {
     poll();
     return () => clearTimeout(id);
   }, [page]);
+
+  useEffect(() => {
+    if (!editorElement || !location.hash) return;
+    let headingId: string;
+    try {
+      headingId = decodeURIComponent(location.hash.slice(1));
+    } catch {
+      return;
+    }
+    if (!headingId) return;
+
+    const scrollToHeading = (): boolean => {
+      const heading = findRenderedHeading(editorElement, headingId);
+      if (!heading) return false;
+      heading.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return true;
+    };
+    if (scrollToHeading()) return;
+
+    const observer = new MutationObserver(() => {
+      if (scrollToHeading()) observer.disconnect();
+    });
+    observer.observe(editorElement, { childList: true, subtree: true, attributes: true });
+    const timeout = window.setTimeout(() => observer.disconnect(), 5_000);
+    return () => {
+      window.clearTimeout(timeout);
+      observer.disconnect();
+    };
+  }, [editorElement, location.hash]);
 
   useEffect(() => {
     if (!page || !pageId || isAnonymous) {
@@ -320,39 +352,12 @@ export default function Page() {
   }, [folderTree, isAnonymous]);
 
   const handleWikiLinkClick = useCallback(
-    async (path: string) => {
-      if (!path) return;
-      if (isAnonymous) {
-        const targetId = extractUuidFromSlug(path);
-        if (targetId) navigate(`/app/${targetId}`);
-        return;
-      }
-      try {
-        const response = await fetch(
-          `${API_BASE}/pages/${pageId}/wiki-link-target?path=${encodeURIComponent(path)}`,
-        );
-        if (!response.ok) return;
-        const body = (await response.json()) as {
-          target: { id: string; title: string } | null;
-        };
-        if (body.target) {
-          navigate(buildPagePath(body.target.title, body.target.id));
-          return;
-        }
-      } catch {
-        // Fall back to the current requester-filtered page tree below.
-      }
-
-      const directId = flatPages.find((candidate) => candidate.id === path);
-      const titleMatches = flatPages.filter(
-        (candidate) => candidate.title.toLowerCase() === path.toLowerCase(),
-      );
-      const fallbackTarget = directId ?? (titleMatches.length === 1 ? titleMatches[0] : undefined);
-      if (fallbackTarget) {
-        navigate(buildPagePath(fallbackTarget.title, fallbackTarget.id));
-      }
+    (target: WikiLinkNavigationTarget) => {
+      const path = buildPagePath(target.title, target.id);
+      const headingId = target.heading ? getMilkdownHeadingId(target.heading) : '';
+      navigate(headingId ? `${path}#${encodeURIComponent(headingId)}` : path);
     },
-    [flatPages, navigate, isAnonymous, pageId],
+    [navigate],
   );
 
   if (!pageId) {

@@ -50,12 +50,12 @@ describe('document size validation', () => {
     expect(decoded.getText('title').toString()).toBe('Copy of Original');
   });
 
-  it('removes legacy wiki-link target IDs from copied canonical state', () => {
-    const hiddenTargetId = '11111111-1111-1111-1111-111111111111';
+  it('preserves stable wiki-link targets when copying canonical state', () => {
+    const targetId = '11111111-1111-1111-1111-111111111111';
     const source = new Y.Doc();
     const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('targetId', hiddenTargetId);
-    link.setAttribute('path', 'Private roadmap');
+    link.setAttribute('targetId', targetId);
+    link.setAttribute('path', '');
     source.getXmlFragment('prosemirror').push([link]);
 
     const copied = prepareCopiedYdoc(Y.encodeStateAsUpdate(source), 'Copy');
@@ -64,21 +64,19 @@ describe('document size validation', () => {
     const copiedDocument = new Y.Doc();
     Y.applyUpdate(copiedDocument, new Uint8Array(copied ?? []));
     const copiedLink = copiedDocument.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
-    expect(copiedLink.getAttribute('targetId')).toBeUndefined();
-    expect(copiedLink.getAttribute('path')).toBe('Private roadmap');
-    expect(Buffer.from(copied ?? []).includes(Buffer.from(hiddenTargetId))).toBe(false);
+    expect(copiedLink.getAttribute('targetId')).toBe(targetId);
+    expect(copiedLink.getAttribute('path')).toBe('');
+    expect(Buffer.from(copied ?? []).includes(Buffer.from(targetId))).toBe(true);
   });
 
-  it('rejects targetId metadata in an unsupported alternate XML root', () => {
-    const hiddenTargetId = '22222222-2222-2222-2222-222222222222';
+  it('does not treat a target ID in another collaborative root as invalid content', () => {
+    const targetId = '22222222-2222-2222-2222-222222222222';
     const source = new Y.Doc();
     const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('targetId', hiddenTargetId);
+    link.setAttribute('targetId', targetId);
     source.getXmlFragment('alternate').push([link]);
 
-    expect(() => prepareCopiedYdoc(Y.encodeStateAsUpdate(source), 'Copy')).toThrow(
-      expect.objectContaining({ status: 422 }),
-    );
+    expect(() => prepareCopiedYdoc(Y.encodeStateAsUpdate(source), 'Copy')).not.toThrow();
   });
 
   it('rejects malformed source documents instead of copying inaccessible state', () => {

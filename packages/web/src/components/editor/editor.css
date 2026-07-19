@@ -270,6 +270,26 @@
   color: #60a5fa;
 }
 
+.milkdown-editor-view .wiki-link-restricted,
+.milkdown-editor-view .wiki-link-unavailable {
+  color: #71717a;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.milkdown-editor-view .wiki-link-restricted::before {
+  display: inline-block;
+  width: 0.85em;
+  height: 0.85em;
+  margin-right: 0.25em;
+  vertical-align: -0.08em;
+  content: "";
+  background-color: currentColor;
+  mask:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17 9V7a5 5 0 0 0-10 0v2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-9a2 2 0 0 0-2-2h-2Zm-8-2a3 3 0 0 1 6 0v2H9V7Zm10 13H5v-9h14v9Z'/%3E%3C/svg%3E")
+    center / contain no-repeat;
+}
+
 .milkdown-editor-view .tag {
   color: #3b82f6;
   cursor: pointer;

@@ -2,6 +2,7 @@ import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
+import * as Y from 'yjs';
 import { db } from '../db/connection';
 import { executeQuery, query } from '../db/query';
 import {
@@ -65,6 +66,18 @@ function expectFieldsAbsent(value: Record<string, unknown>, fields: readonly str
 
 function guestCookie(id = crypto.randomUUID()): string {
   return `markdawn_anon_id=${id}`;
+}
+
+function createBoundWikiLinkYdoc(targetId: string, label = ''): Buffer {
+  const doc = new Y.Doc();
+  const paragraph = new Y.XmlElement('paragraph');
+  const link = new Y.XmlElement('wikiLink');
+  link.setAttribute('targetId', targetId);
+  link.setAttribute('path', '');
+  link.setAttribute('label', label);
+  paragraph.push([link]);
+  doc.getXmlFragment('prosemirror').push([paragraph]);
+  return Buffer.from(Y.encodeStateAsUpdate(doc));
 }
 
 type ShareEventNotification = {
@@ -254,7 +267,7 @@ describe('pages API', () => {
       expect(res.status).toBe(404);
     });
 
-    it('requires admin access to create inside a shared folder', async () => {
+    it('lets an invited editor create inside a shared folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const editor = await createTestUser();
@@ -265,10 +278,11 @@ describe('pages API', () => {
       const res = await app.request('/api/pages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ title: 'Not allowed', parentId: folder.id }),
+        body: JSON.stringify({ title: 'Editor child', parentId: folder.id }),
       });
 
-      expect(res.status).toBe(403);
+      expect(res.status).toBe(201);
+      expect(await res.json()).toMatchObject({ title: 'Editor child', parentId: folder.id });
     });
 
     it('lets a persistent guest create a page inside a publicly editable folder', async () => {
@@ -771,7 +785,7 @@ describe('pages API', () => {
   });
 
   describe('wiki-link target resolution', () => {
-    it('preserves the selected duplicate-title target after it is renamed', async () => {
+    it('returns the current title for the exact selected duplicate after a rename', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const session = await createTestSession(owner.id);
@@ -779,37 +793,43 @@ describe('pages API', () => {
       await createTestPage(owner.id, { title: 'Duplicate title' });
       const selected = await createTestPage(owner.id, { title: 'Duplicate title' });
 
-      const bind = await app.request(`/api/pages/${source.id}/wiki-link-target`, {
-        method: 'PUT',
+      const resolveSelected = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ path: 'Duplicate title', targetId: selected.id }),
+        body: JSON.stringify({
+          links: [{ key: 'selected', targetId: selected.id }],
+        }),
       });
-      expect(bind.status).toBe(200);
-      expect(await bind.json()).toEqual({
-        target: { id: selected.id, title: 'Duplicate title' },
-      });
-
-      const resolveSelected = await app.request(
-        `/api/pages/${source.id}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`,
-        { headers: { Cookie: session.Cookie } },
-      );
       expect(resolveSelected.status).toBe(200);
       expect(await resolveSelected.json()).toEqual({
-        target: { id: selected.id, title: 'Duplicate title' },
+        links: [
+          {
+            key: 'selected',
+            state: 'accessible',
+            target: { id: selected.id, title: 'Duplicate title' },
+          },
+        ],
       });
 
       await query('update pages set title = $1 where id = $2', ['Renamed target', selected.id]);
-      const resolveRenamed = await app.request(
-        `/api/pages/${source.id}/wiki-link-target?path=${encodeURIComponent('Duplicate title')}`,
-        { headers: { Cookie: session.Cookie } },
-      );
+      const resolveRenamed = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ links: [{ key: 'selected', targetId: selected.id }] }),
+      });
       expect(resolveRenamed.status).toBe(200);
       expect(await resolveRenamed.json()).toEqual({
-        target: { id: selected.id, title: 'Renamed target' },
+        links: [
+          {
+            key: 'selected',
+            state: 'accessible',
+            target: { id: selected.id, title: 'Renamed target' },
+          },
+        ],
       });
     });
 
-    it('does not bind a target the editor cannot access', async () => {
+    it('returns only a restricted state when the requester cannot access the target', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const editor = await createTestUser();
@@ -822,19 +842,215 @@ describe('pages API', () => {
         [source.id, owner.id, editor.id],
       );
 
-      const bind = await app.request(`/api/pages/${source.id}/wiki-link-target`, {
-        method: 'PUT',
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
-        body: JSON.stringify({ path: 'Hidden target', targetId: hiddenTarget.id }),
+        body: JSON.stringify({ links: [{ key: 'hidden', targetId: hiddenTarget.id }] }),
       });
 
-      expect(bind.status).toBe(403);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [{ key: 'hidden', state: 'restricted' }],
+      });
+    });
+
+    it('automatically resolves only unique normalized authored paths', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source' });
+      const target = await createTestPage(owner.id, { title: 'Roadmap' });
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({
+          links: [
+            { key: 'markdown', path: '/Roadmap.md#Plan' },
+            { key: 'missing', path: 'Missing' },
+          ],
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [
+          {
+            key: 'markdown',
+            state: 'accessible',
+            target: { id: target.id, title: 'Roadmap' },
+          },
+          { key: 'missing', state: 'unavailable' },
+        ],
+      });
+    });
+
+    it('resolves a heading-only link against its source page', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source page' });
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ links: [{ key: 'heading', path: '#Overview' }] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [
+          {
+            key: 'heading',
+            state: 'accessible',
+            target: { id: source.id, title: 'Source page' },
+          },
+        ],
+      });
+    });
+
+    it('leaves ambiguous authored titles unavailable instead of guessing', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source' });
+      await createTestPage(owner.id, { title: 'Duplicate' });
+      await createTestPage(owner.id, { title: 'Duplicate' });
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ links: [{ key: 'ambiguous', path: 'Duplicate' }] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [{ key: 'ambiguous', state: 'unavailable' }],
+      });
+    });
+
+    it('shows signed-out readers the same restricted state without target metadata', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const source = await createTestPage(owner.id, { title: 'Public source' });
+      const hiddenTarget = await createTestPage(owner.id, { title: 'Private target' });
+      await query("update pages set public_permission = 'view' where id = $1", [source.id]);
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
+        body: JSON.stringify({ links: [{ key: 'hidden', targetId: hiddenTarget.id }] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [{ key: 'hidden', state: 'restricted' }],
+      });
+    });
+
+    it('updates a signed-out presentation when public target access is revoked', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const source = await createTestPage(owner.id, { title: 'Public source' });
+      const target = await createTestPage(owner.id, { title: 'Public target' });
+      await query("update pages set public_permission = 'view' where id = any($1::uuid[])", [
+        [source.id, target.id],
+      ]);
+      const cookie = guestCookie();
+      const requestPresentation = () =>
+        app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: cookie },
+          body: JSON.stringify({ links: [{ key: 'target', targetId: target.id }] }),
+        });
+
+      const accessible = await requestPresentation();
+      expect(await accessible.json()).toEqual({
+        links: [
+          {
+            key: 'target',
+            state: 'accessible',
+            target: { id: target.id, title: 'Public target' },
+          },
+        ],
+      });
+
+      await query('update pages set public_permission = null where id = $1', [target.id]);
+      const restricted = await requestPresentation();
+      expect(await restricted.json()).toEqual({
+        links: [{ key: 'target', state: 'restricted' }],
+      });
+    });
+
+    it('marks a deleted bound target unavailable without retaining its title', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source' });
+      const target = await createTestPage(owner.id, { title: 'Deleted target' });
+      await query('update pages set is_deleted = true, deleted_at = now() where id = $1', [
+        target.id,
+      ]);
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ links: [{ key: 'target', targetId: target.id }] }),
+      });
+
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        links: [{ key: 'target', state: 'unavailable' }],
+      });
+    });
+
+    it('does not recreate a ghost connection through the removed binding endpoint', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source' });
+      const target = await createTestPage(owner.id, { title: 'Target' });
+
+      const response = await app.request(`/api/pages/${source.id}/wiki-link-target`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ path: 'Target', targetId: target.id }),
+      });
+      expect(response.status).toBe(404);
       const stored = await query<{ count: string }>(
         `select count(*)::text as count from connections
          where source_type = 'page' and source_id = $1 and target_id = $2`,
-        [source.id, hiddenTarget.id],
+        [source.id, target.id],
       );
       expect(stored.rows[0]?.count).toBe('0');
+    });
+
+    it('returns 413 for an oversized streamed presentation request', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const session = await createTestSession(owner.id);
+      const source = await createTestPage(owner.id, { title: 'Source' });
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            new TextEncoder().encode(JSON.stringify({ links: [], padding: 'x'.repeat(300_000) })),
+          );
+          controller.close();
+        },
+      });
+      const request = new Request(
+        `http://localhost/api/pages/${source.id}/wiki-link-presentations`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+          body: stream,
+          duplex: 'half',
+        } as RequestInit & { duplex: 'half' },
+      );
+
+      const response = await app.request(request);
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ message: 'Request body is too large' });
     });
   });
 
@@ -1453,6 +1669,44 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
     });
 
+    it('exports current target titles only to requesters who can access them', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const viewerSession = await createTestSession(viewer.id);
+      const source = await createTestPage(owner.id, { title: 'Source export' });
+      const target = await createTestPage(owner.id, { title: 'Roadmap' });
+      await query('update pages set ydoc = $1 where id = $2', [
+        createBoundWikiLinkYdoc(target.id, 'Project plan'),
+        source.id,
+      ]);
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'view')`,
+        [source.id, owner.id, viewer.id],
+      );
+      await query('update pages set title = $1 where id = $2', ['2026 Roadmap', target.id]);
+
+      const ownerExport = await app.request(`/api/pages/${source.id}/export/markdown`, {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(ownerExport.status).toBe(200);
+      const ownerMarkdown = await ownerExport.text();
+      expect(ownerMarkdown).toContain('[[2026 Roadmap|Project plan]]');
+      expect(ownerMarkdown).not.toContain(target.id);
+
+      const viewerExport = await app.request(`/api/pages/${source.id}/export/markdown`, {
+        headers: { Cookie: viewerSession.Cookie },
+      });
+      expect(viewerExport.status).toBe(200);
+      const viewerMarkdown = await viewerExport.text();
+      expect(viewerMarkdown).toContain('Restricted page');
+      expect(viewerMarkdown).not.toContain('2026 Roadmap');
+      expect(viewerMarkdown).not.toContain('Project plan');
+      expect(viewerMarkdown).not.toContain(target.id);
+    });
+
     it('orders a queued revoke before a later export authorization snapshot', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
@@ -1553,7 +1807,7 @@ describe('pages API', () => {
       expect(await readWorkspaceAccessVersion(user.id)).toBe(revisionBefore);
     });
 
-    it('does not embed any workspace page IDs for a public-access importer', async () => {
+    it('binds only the exact target visible to a public-access importer', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const importer = await createTestUser();
@@ -1584,9 +1838,11 @@ describe('pages API', () => {
       ]);
       const connections = extractConnectionsFromYDoc(new Uint8Array(stored.rows[0]?.ydoc ?? []));
       expect(connections).toContainEqual(
-        expect.objectContaining({ targetSlug: 'visible reference' }),
+        expect.objectContaining({
+          targetSlug: `id:${visibleTarget.id}`,
+          targetId: visibleTarget.id,
+        }),
       );
-      expect(connections.every((connection) => connection.targetId === undefined)).toBe(true);
       expect(
         connections.find((connection) => connection.targetSlug === 'private reference')?.targetId,
       ).toBeUndefined();
@@ -1594,7 +1850,8 @@ describe('pages API', () => {
       expect(connections.some((connection) => connection.targetId === hiddenDuplicate.id)).toBe(
         false,
       );
-      expect(stored.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(false);
+      expect(stored.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(true);
+      expect(stored.rows[0]?.ydoc.includes(Buffer.from('Visible reference'))).toBe(false);
     });
 
     it('resolves targets after a queued revoke has linearized', async () => {
@@ -1793,6 +2050,80 @@ describe('pages API', () => {
       expect(res.status).toBe(201);
       const copied = await res.json();
       expect(copied.createdBy).toBe(viewer.id);
+    });
+
+    it('does not copy a cross-workspace page connection into the derived index', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const viewer = await createTestUser();
+      const session = await createTestSession(viewer.id);
+      const source = await createTestPage(owner.id, { title: 'Shared source' });
+      const target = await createTestPage(owner.id, { title: 'Private target' });
+      const sourceYdoc = createBoundWikiLinkYdoc(target.id);
+      await query('update pages set ydoc = $1 where id = $2', [sourceYdoc, source.id]);
+      await query(
+        `insert into connections (
+           source_type, source_id, target_type, target_id, target_slug,
+           target_label, connection_type, link_text
+         ) values ('page', $1, 'page', $2, $3, 'Private target', 'wikilink', 'Wiki link')`,
+        [source.id, target.id, `id:${target.id}`],
+      );
+      await query(
+        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+         values ('page', $1, $2, $3, 'view')`,
+        [source.id, owner.id, viewer.id],
+      );
+
+      const response = await app.request(`/api/pages/${source.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: null }),
+      });
+
+      expect(response.status).toBe(201);
+      const copied = (await response.json()) as { id: string; ydoc: number[] };
+      expect(Buffer.from(copied.ydoc).includes(Buffer.from(target.id))).toBe(true);
+      const copiedConnections = await query<{ count: string }>(
+        `select count(*)::text as count from connections
+         where source_id = $1 and target_type = 'page'`,
+        [copied.id],
+      );
+      expect(copiedConnections.rows[0]?.count).toBe('0');
+
+      const presentation = await app.request(`/api/pages/${copied.id}/wiki-link-presentations`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ links: [{ key: 'target', targetId: target.id }] }),
+      });
+      expect(await presentation.json()).toEqual({
+        links: [{ key: 'target', state: 'unavailable' }],
+      });
+    });
+
+    it('lets an invited editor paste a page copy into a shared folder', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const editor = await createTestUser();
+      const session = await createTestSession(editor.id);
+      const folder = await createTestFolder(owner.id, { name: 'Editable destination' });
+      const source = await createTestPage(owner.id, {
+        parentId: folder.id,
+        title: 'Editor copy source',
+      });
+      await addFolderGrant(folder.id, editor.id, 'edit');
+
+      const response = await app.request(`/api/pages/${source.id}/copy`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ parentId: folder.id }),
+      });
+
+      expect(response.status).toBe(201);
+      expect(await response.json()).toMatchObject({
+        parentId: folder.id,
+        title: 'Copy of Editor copy source',
+        createdBy: editor.id,
+      });
     });
 
     it('lets a persistent guest duplicate a page inside a publicly editable folder', async () => {

@@ -32,6 +32,7 @@ import { tag } from '../editor/plugins/tag';
 import { wikiLinkView } from '../editor/plugins/wikiLinkView';
 import { wikiLink } from '../editor/plugins/wikilink';
 import { repairDocument } from '../editor/utils/documentRepair';
+import type { WikiLinkNavigationTarget } from '../editor/wikiLinkPresentations';
 import { ensureAbsoluteUrl } from '../utils/url';
 import 'katex/dist/katex.min.css';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
@@ -169,7 +170,7 @@ interface UseMilkdownProps {
   onChange?: (markdown: string) => void;
   doc?: Y.Doc;
   provider?: HocuspocusProvider;
-  onWikiLinkClick?: ((path: string) => void) | undefined;
+  onWikiLinkClick?: ((target: WikiLinkNavigationTarget) => void) | undefined;
   onWikiLinkSuggest?: (
     isOpen: boolean,
     query: string,
@@ -204,27 +205,6 @@ function findListItemAncestor(
     }
   }
   return null;
-}
-
-function scrollToHeading(headingText: string): void {
-  const normalized = headingText.toLowerCase().trim();
-  const headingId = normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  let element = document.getElementById(headingId);
-  if (!element) {
-    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    for (const h of headings) {
-      if (!(h instanceof HTMLElement)) continue;
-      const text = h.textContent?.trim().toLowerCase() ?? '';
-      if (text === normalized || text.includes(normalized)) {
-        if (!h.id) h.id = headingId;
-        element = h;
-        break;
-      }
-    }
-  }
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
 }
 
 export function useMilkdown({
@@ -502,22 +482,16 @@ export function useMilkdown({
 
                   linkEditor.close();
 
-                  // A target UUID is authorization-sensitive metadata and is
-                  // never stored in the shared node/canonical Yjs. Resolve the
-                  // authored path through requester-scoped navigation state.
-                  const path = anchor.getAttribute('data-path') || '';
-                  const heading = anchor.getAttribute('data-heading') || '';
-                  // Strip #heading suffix from path if present, since
-                  // handleWikiLinkClick resolves by title match and a
-                  // "#Heading" suffix would never match a page title.
-                  const pagePath =
-                    heading && path.endsWith(`#${heading}`)
-                      ? path.slice(0, -(heading.length + 1))
-                      : path;
-                  if (pagePath && onWikiLinkClickRef.current) {
-                    onWikiLinkClickRef.current(pagePath);
-                  } else if (heading) {
-                    scrollToHeading(heading);
+                  if (anchor.dataset.state !== 'accessible') return true;
+                  const targetId = anchor.dataset.targetId;
+                  const targetTitle = anchor.dataset.targetTitle;
+                  if (targetId && targetTitle && onWikiLinkClickRef.current) {
+                    const heading = anchor.dataset.heading;
+                    onWikiLinkClickRef.current({
+                      id: targetId,
+                      title: targetTitle,
+                      ...(heading && { heading }),
+                    });
                   }
                   return true;
                 }
@@ -532,6 +506,22 @@ export function useMilkdown({
                 if (!(anchor instanceof HTMLAnchorElement)) return false;
 
                 if (anchor.classList.contains('wiki-link')) {
+                  event.preventDefault();
+                  // Mouse activation is handled on mousedown so the editor
+                  // selection cannot swallow it. Keyboard activation emits a
+                  // click with detail=0 and must follow the same safe target.
+                  if (event.detail === 0 && anchor.dataset.state === 'accessible') {
+                    const targetId = anchor.dataset.targetId;
+                    const targetTitle = anchor.dataset.targetTitle;
+                    if (targetId && targetTitle && onWikiLinkClickRef.current) {
+                      const heading = anchor.dataset.heading;
+                      onWikiLinkClickRef.current({
+                        id: targetId,
+                        title: targetTitle,
+                        ...(heading && { heading }),
+                      });
+                    }
+                  }
                   return true;
                 }
 

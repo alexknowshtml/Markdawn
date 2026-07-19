@@ -8,7 +8,11 @@ import { executeQuery } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
-import { createYjsDocWithTitle, stripLeadingH1 } from '../utils/markdown-to-yjs';
+import {
+  bindWikiLinkTargets,
+  createYjsDocWithTitle,
+  stripLeadingH1,
+} from '../utils/markdown-to-yjs';
 import { normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition } from '../utils/position';
 import {
@@ -18,6 +22,7 @@ import {
 } from '../utils/share-access';
 import { notifyShareRecompute } from '../utils/share-notify';
 import { getEntityMetaUserIds } from '../utils/shareRecipients';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 type PageRow = typeof pages.$inferSelect;
 type RawPageRow = PageRow & {
@@ -221,9 +226,18 @@ importRoute.post('/markdown', async (c) => {
       await lockWorkspaceAccessMutation(tx, user.id);
     }
 
-    // Keep only the authored path in shared content. Target IDs are resolved
-    // by the collaboration indexer under the writer's current permissions.
-    const ydocBuffer = unresolvedYdocBuffer;
+    const ownerId = parentId
+      ? (
+          await executeQuery<{ owner_id: string | null }>(
+            tx,
+            'select get_root_folder_owner($1) as owner_id',
+            [parentId],
+          )
+        ).rows[0]?.owner_id
+      : user.id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Parent folder not found' });
+    const pageLookup = await getUniqueWorkspacePageLookup(ownerId, user.id, tx);
+    const ydocBuffer = Buffer.from(bindWikiLinkTargets(unresolvedYdocBuffer, pageLookup));
     ensureYdocSize(ydocBuffer);
 
     const nextPosition = await getNextPosition('pages', parentId, user.id, tx);

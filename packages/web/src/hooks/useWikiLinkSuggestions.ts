@@ -11,23 +11,19 @@ type WikiLinkPage = {
   icon: string | null;
 };
 
+export function createBoundWikiLinkAttributes(targetId: string): {
+  targetId: string;
+  path: string;
+  label: string;
+} {
+  return { targetId, path: '', label: '' };
+}
+
 interface SuggestionsState {
   isOpen: boolean;
   query: string;
   position: { x: number; y: number } | null;
   isLoading: boolean;
-}
-
-export async function bindWikiLinkTarget(
-  sourcePageId: string,
-  target: Pick<WikiLinkPage, 'id' | 'title'>,
-): Promise<void> {
-  const response = await fetch(`/api/pages/${sourcePageId}/wiki-link-target`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path: target.title, targetId: target.id }),
-  });
-  if (!response.ok) throw new Error('Failed to bind wiki-link target');
 }
 
 export function useWikiLinkSuggestions(
@@ -81,8 +77,6 @@ export function useWikiLinkSuggestions(
     (page: WikiLinkPage) => {
       const editor = editorRef.current;
       if (!editor) return;
-      let inserted = false;
-
       try {
         editor.action((ctx) => {
           const view = ctx.get(editorViewCtx);
@@ -103,10 +97,7 @@ export function useWikiLinkSuggestions(
               const tr = state.tr.replaceWith(
                 start,
                 end,
-                wikiLinkNode.create({
-                  path: page.title,
-                  label: page.title,
-                }),
+                wikiLinkNode.create(createBoundWikiLinkAttributes(page.id)),
               );
 
               const nextPos = start + 1;
@@ -115,7 +106,6 @@ export function useWikiLinkSuggestions(
 
               dispatch(tr);
               view.focus();
-              inserted = true;
             }
           }
         });
@@ -123,13 +113,9 @@ export function useWikiLinkSuggestions(
         // Editor may have been destroyed
       }
 
-      if (inserted) {
-        void bindWikiLinkTarget(sourcePageId, page).catch(() => undefined);
-      }
-
       setSuggestions((prev) => ({ ...prev, isOpen: false }));
     },
-    [editorRef, sourcePageId],
+    [editorRef],
   );
 
   const handleAddPage = useCallback(

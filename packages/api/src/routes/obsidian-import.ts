@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
 import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -9,16 +10,13 @@ import { executeQuery, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
+import { normalizeFolderName } from '../utils/folderName';
 import {
   hasValidImageSignature,
   MAX_IMAGE_SIZE_BYTES,
   safeImageMimeForExtension,
 } from '../utils/image-upload';
-import {
-  markdownToYjsState,
-  normalizeWikilinkLookupKey,
-  stripLeadingH1,
-} from '../utils/markdown-to-yjs';
+import { bindWikiLinkTargets, markdownToYjsState, stripLeadingH1 } from '../utils/markdown-to-yjs';
 import {
   getExtension,
   isImageFile,
@@ -228,7 +226,7 @@ obsidianImportRoute.post('/', async (c) => {
   for (const dirPath of sortedDirs) {
     try {
       const parts = dirPath.split('/');
-      const name = parts[parts.length - 1] ?? '';
+      const name = normalizeFolderName(parts[parts.length - 1] ?? '');
       const parentPath = parts.length > 1 ? parts.slice(0, -1).join('/') : null;
       const parentId = parentPath ? (folderPathToId.get(parentPath) ?? null) : null;
       if (parentPath && !parentId) {
@@ -434,6 +432,17 @@ obsidianImportRoute.post('/', async (c) => {
         const pageWasEdited = !currentYdoc.equals(originalYdoc);
         let createdBacklinks = 0;
 
+        if (!pageWasEdited) {
+          const boundYdoc = Buffer.from(bindWikiLinkTargets(currentYdoc, workspacePageLookup));
+          ensureYdocSize(boundYdoc);
+          if (!boundYdoc.equals(currentYdoc)) {
+            await executeQuery(tx, 'update pages set ydoc = $1, updated_at = now() where id = $2', [
+              boundYdoc,
+              pageId,
+            ]);
+          }
+        }
+
         // Do not index the original markdown after a user has already changed
         // the page. The current Yjs state is preserved and the collaboration
         // indexer remains authoritative for that newer content.
@@ -445,8 +454,9 @@ obsidianImportRoute.post('/', async (c) => {
           for (const link of allLinks) {
             if (link.isEmbed && isImageFile(link.page)) continue;
 
-            const targetTitleLower = normalizeWikilinkLookupKey(link.page);
+            const targetTitleLower = normalizeWikiLinkLookupKey(link.page);
             const targetPageId = workspacePageLookup.get(targetTitleLower) ?? null;
+            const targetSlug = targetPageId ? `id:${targetPageId}` : targetTitleLower;
             const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
 
             await executeQuery(
@@ -466,7 +476,7 @@ obsidianImportRoute.post('/', async (c) => {
               [
                 pageId,
                 targetPageId,
-                targetTitleLower,
+                targetSlug,
                 link.page,
                 connectionType,
                 link.alias || link.page,

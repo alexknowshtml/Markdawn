@@ -18,6 +18,12 @@ import {
   useSetCapabilities,
   useShareContext,
 } from '../../contexts/ShareContext';
+import {
+  fetchWikiLinkPresentations,
+  refreshWikiLinkPresentations,
+  registerWikiLinkPresentationResolver,
+  type WikiLinkNavigationTarget,
+} from '../../editor/wikiLinkPresentations';
 import { invalidateWorkspaceAccessQueries } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { useAwareness } from '../../hooks/useAwareness';
@@ -67,11 +73,12 @@ interface MilkdownEditorProps {
   onChange?: (markdown: string) => void;
   onProviderReady?: (provider: HocuspocusProvider) => void;
   onStatusChange?: (status: WebSocketStatus) => void;
-  onWikiLinkClick?: (path: string) => void;
+  onWikiLinkClick?: (target: WikiLinkNavigationTarget) => void;
   onPermissionSnapshot?: (permission: SharePermission | null, accessRevision: string) => void;
 }
 
 const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
+const WIKI_LINK_PRESENTATION_REVALIDATION_MS = 30_000;
 
 type PageProviderCacheEntry = {
   identityLifecycle: IdentityLifecycle;
@@ -407,6 +414,38 @@ export function MilkdownEditor({
     }, []),
     readOnly: isReadOnly,
   });
+
+  useEffect(() => {
+    if (!editor) return undefined;
+    let unregister: (() => void) | undefined;
+    const refreshPresentations = () => {
+      try {
+        editor.action((ctx) => {
+          refreshWikiLinkPresentations(ctx.get(editorViewCtx));
+        });
+        queryClient.invalidateQueries({ queryKey: ['backlinks'] });
+      } catch {
+        // The editor may be retiring while the timer fires.
+      }
+    };
+    try {
+      editor.action((ctx) => {
+        unregister = registerWikiLinkPresentationResolver(ctx.get(editorViewCtx), (requests) =>
+          fetchWikiLinkPresentations(pageId, requests),
+        );
+      });
+    } catch {
+      return undefined;
+    }
+    const interval = window.setInterval(
+      refreshPresentations,
+      WIKI_LINK_PRESENTATION_REVALIDATION_MS,
+    );
+    return () => {
+      window.clearInterval(interval);
+      unregister?.();
+    };
+  }, [editor, pageId, queryClient]);
 
   useAwareness(provider);
 
@@ -1131,6 +1170,14 @@ export function MilkdownEditor({
       if (status !== WebSocketStatus.Connected) {
         setReadOnly(true);
         setCapabilities(deriveCapabilities(null));
+      } else {
+        try {
+          editorRef.current?.action((ctx) => {
+            refreshWikiLinkPresentations(ctx.get(editorViewCtx));
+          });
+        } catch {
+          // The editor may have been destroyed while reconnecting.
+        }
       }
       const cb = latestOnStatusChange.current;
       if (cb) {
@@ -1332,6 +1379,22 @@ export function MilkdownEditor({
           consumeSelfLeave(pageId),
           entityType === 'folder' ? 'folder' : 'page',
         );
+        return;
+      }
+
+      if (message.type === 'wiki_link_presentations_changed') {
+        const rawTargetIds = message.targetIds;
+        const targetIds = Array.isArray(rawTargetIds)
+          ? rawTargetIds.filter((targetId): targetId is string => typeof targetId === 'string')
+          : undefined;
+        try {
+          editorRef.current?.action((ctx) => {
+            refreshWikiLinkPresentations(ctx.get(editorViewCtx), targetIds);
+          });
+        } catch {
+          // The editor may have been destroyed while the event was in flight.
+        }
+        queryClient.invalidateQueries({ queryKey: ['backlinks'] });
         return;
       }
 

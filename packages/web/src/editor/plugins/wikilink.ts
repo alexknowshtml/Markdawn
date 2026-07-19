@@ -5,6 +5,7 @@ export const wikiLink = $node('wikiLink', () => ({
   inline: true,
   atom: true,
   attrs: {
+    targetId: { default: '' },
     path: { default: '' },
     heading: { default: '' },
     label: { default: '' },
@@ -13,9 +14,10 @@ export const wikiLink = $node('wikiLink', () => ({
     {
       tag: 'a.wiki-link',
       getAttrs: (dom) => ({
+        targetId: (dom as HTMLElement).getAttribute('data-target-id') || '',
         path: (dom as HTMLElement).getAttribute('data-path'),
         heading: (dom as HTMLElement).getAttribute('data-heading') || '',
-        label: dom.textContent,
+        label: (dom as HTMLElement).getAttribute('data-label') || '',
       }),
     },
   ],
@@ -24,10 +26,12 @@ export const wikiLink = $node('wikiLink', () => ({
     {
       class: 'wiki-link',
       href: '#',
+      'data-target-id': node.attrs.targetId || '',
       'data-path': node.attrs.path,
       'data-heading': node.attrs.heading || '',
+      'data-label': node.attrs.label || '',
     },
-    node.attrs.label,
+    node.attrs.label || node.attrs.path || 'Wiki link',
   ],
   parseMarkdown: {
     match: (node) =>
@@ -38,7 +42,7 @@ export const wikiLink = $node('wikiLink', () => ({
       if (match) {
         const path = match[1] || '';
         const heading = match[2] || '';
-        const label = match[3] || (path ? (heading ? `${path}#${heading}` : path) : `#${heading}`);
+        const label = match[3] || '';
 
         state.addNode(nodeType, {
           path,
@@ -52,11 +56,15 @@ export const wikiLink = $node('wikiLink', () => ({
     match: (node) => node.type.name === 'wikiLink',
     runner: (state, node) => {
       const path = String(node.attrs.path || '');
+      const targetId = String(node.attrs.targetId || '');
+      if (targetId && !path) {
+        state.addNode('text', undefined, String(node.attrs.label || 'Link unavailable'));
+        return;
+      }
       const heading = String(node.attrs.heading || '');
       const target = heading ? `${path}#${heading}` : path;
-      const defaultLabel = path ? (heading ? `${path}#${heading}` : path) : `#${heading}`;
-      const text =
-        node.attrs.label !== defaultLabel ? `[[${target}|${node.attrs.label}]]` : `[[${target}]]`;
+      const label = String(node.attrs.label || '');
+      const text = label ? `[[${target}|${label}]]` : `[[${target}]]`;
       state.addNode('text', undefined, text);
     },
   },

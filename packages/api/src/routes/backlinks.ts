@@ -29,6 +29,10 @@ backlinksRoute.get('/', async (c) => {
          and c.target_id = $1
          and c.connection_type in ('wikilink', 'heading', 'embed')
          and p.is_deleted = false
+         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = (
+           select coalesce(get_root_folder_owner(target.parent_id), target.created_by)
+           from pages target where target.id = $1 and target.is_deleted = false
+         )
          and p.id in (select page_id from get_accessible_page_ids($2))
        order by c.updated_at desc`,
       [pageId, user.id],
@@ -50,17 +54,37 @@ backlinksRoute.get('/outgoing', async (c) => {
     await ensurePageAccess(pageId, user.id, 'view', tx);
     return executeQuery(
       tx,
-      `select c.id, p.id as "targetPageId",
+      `select c.id, accessible_target.id as "targetPageId",
               case
-                when p.id is not null then c.target_label
-                else c.link_text
+                when accessible_target.id is not null then accessible_target.title
+                when known_target.id is not null then 'Restricted page'
+                else 'Link unavailable'
               end as "targetTitle",
-              c.link_text as "linkText", c.connection_type as "linkType",
-              p.title as "targetPageTitle", p.icon as "targetPageIcon"
+              case
+                when accessible_target.id is not null then c.link_text
+                when known_target.id is not null then 'Restricted page'
+                else 'Link unavailable'
+              end as "linkText",
+              c.connection_type as "linkType",
+              case
+                when accessible_target.id is not null then 'accessible'
+                when known_target.id is not null then 'restricted'
+                else 'unavailable'
+              end as "targetState",
+              accessible_target.title as "targetPageTitle",
+              accessible_target.icon as "targetPageIcon"
        from connections c
-       left join pages p on p.id = c.target_id
-         and p.is_deleted = false
-         and p.id in (select page_id from get_accessible_page_ids($2))
+       join pages source on source.id = c.source_id and source.is_deleted = false
+       left join pages known_target on known_target.id = c.target_id
+         and known_target.is_deleted = false
+         and coalesce(get_root_folder_owner(known_target.parent_id), known_target.created_by) =
+             coalesce(get_root_folder_owner(source.parent_id), source.created_by)
+       left join pages accessible_target on accessible_target.id = known_target.id
+         and exists (
+           select 1
+           from get_effective_page_permission(accessible_target.id, $2) access
+           where access.permission is not null
+         )
        where c.source_id = $1
          and c.target_type = 'page'
          and c.connection_type in ('wikilink', 'heading', 'embed')

@@ -136,6 +136,7 @@ describe('backlinks API', () => {
           targetPageId: page2.id,
           targetTitle: 'Target',
           targetPageTitle: 'Target',
+          targetState: 'accessible',
         }),
       );
     });
@@ -185,20 +186,61 @@ describe('backlinks API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body).toHaveLength(2);
-      for (const link of body) {
-        expect(link).toEqual(
-          expect.objectContaining({
-            targetPageId: null,
-            targetTitle: 'Authored Alias',
-            linkText: 'Authored Alias',
-            targetPageTitle: null,
-            targetPageIcon: null,
-          }),
-        );
-      }
+      expect(body).toContainEqual(
+        expect.objectContaining({
+          targetPageId: null,
+          targetTitle: 'Restricted page',
+          linkText: 'Restricted page',
+          targetPageTitle: null,
+          targetPageIcon: null,
+          targetState: 'restricted',
+        }),
+      );
+      expect(body).toContainEqual(
+        expect.objectContaining({
+          targetPageId: null,
+          targetTitle: 'Link unavailable',
+          linkText: 'Link unavailable',
+          targetPageTitle: null,
+          targetPageIcon: null,
+          targetState: 'unavailable',
+        }),
+      );
       expect(JSON.stringify(body)).not.toContain('Private Target');
       expect(JSON.stringify(body)).not.toContain('Resolver Canonical Private Title');
       expect(JSON.stringify(body)).not.toContain('Unresolved Candidate');
+      expect(JSON.stringify(body)).not.toContain('Authored Alias');
+    });
+
+    it('treats a stale cross-workspace target as unavailable on both sides', async () => {
+      const app = await createTestApp();
+      const sourceOwner = await createTestUser();
+      const targetOwner = await createTestUser();
+      const sourceSession = await createTestSession(sourceOwner.id);
+      const targetSession = await createTestSession(targetOwner.id);
+      const source = await createTestPage(sourceOwner.id, { title: 'Source workspace page' });
+      const target = await createTestPage(targetOwner.id, { title: 'Other workspace target' });
+      await createTestPageLink(source.id, target.id);
+      await addPageGrant(source.id, targetOwner.id);
+
+      const outgoing = await app.request(`/api/backlinks/outgoing?pageId=${source.id}`, {
+        headers: { Cookie: sourceSession.Cookie },
+      });
+      expect(outgoing.status).toBe(200);
+      expect(await outgoing.json()).toContainEqual(
+        expect.objectContaining({
+          targetPageId: null,
+          targetTitle: 'Link unavailable',
+          linkText: 'Link unavailable',
+          targetState: 'unavailable',
+        }),
+      );
+
+      const incoming = await app.request(`/api/backlinks?pageId=${target.id}`, {
+        headers: { Cookie: targetSession.Cookie },
+      });
+      expect(incoming.status).toBe(200);
+      expect(await incoming.json()).toEqual([]);
     });
   });
 
@@ -231,6 +273,18 @@ describe('backlinks API', () => {
       );
       expect(connectionsResult.rows[0]?.target_slug).toBe('original');
       expect(connectionsResult.rows[0]?.target_label).toBe('Original');
+
+      const outgoingRes = await app.request(`/api/backlinks/outgoing?pageId=${source.id}`, {
+        headers: { Cookie: session.Cookie },
+      });
+      expect(outgoingRes.status).toBe(200);
+      expect(await outgoingRes.json()).toContainEqual(
+        expect.objectContaining({
+          targetPageId: target.id,
+          targetTitle: 'Renamed',
+          targetPageTitle: 'Renamed',
+        }),
+      );
     });
 
     it('does not mutate connections when title has not changed', async () => {

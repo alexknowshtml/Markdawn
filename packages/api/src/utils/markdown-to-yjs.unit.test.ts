@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { markdownToYjsState, stripLeadingH1 } from './markdown-to-yjs';
+import { bindWikiLinkTargets, markdownToYjsState, stripLeadingH1 } from './markdown-to-yjs';
 
 function toFragment(md: string): Y.XmlFragment {
   const state = markdownToYjsState(md);
@@ -284,7 +284,7 @@ describe('markdownToYjsState', () => {
       if (link instanceof Y.XmlElement) {
         expect(link.nodeName).toBe('wikiLink');
         expect(link.getAttribute('path')).toBe('My Page');
-        expect(link.getAttribute('label')).toBe('My Page');
+        expect(link.getAttribute('label')).toBe('');
         expect(link.getAttribute('targetId')).toBeUndefined();
       }
     });
@@ -307,6 +307,43 @@ describe('markdownToYjsState', () => {
       if (second instanceof Y.XmlElement) {
         expect(second.nodeName).toBe('wikiLink');
       }
+    });
+
+    it('binds a unique target without retaining its default title', () => {
+      const targetId = '11111111-1111-4111-8111-111111111111';
+      const bound = bindWikiLinkTargets(
+        markdownToYjsState('See [[/Roadmap.md#Plan]] and [[Roadmap|Project plan]]'),
+        new Map([['roadmap', targetId]]),
+      );
+      const doc = new Y.Doc();
+      Y.applyUpdate(doc, bound);
+      const paragraph = first(doc.getXmlFragment('prosemirror'));
+      const defaultLink = paragraph.get(1) as Y.XmlElement;
+      const aliasedLink = paragraph.get(3) as Y.XmlElement;
+
+      expect(defaultLink.getAttribute('targetId')).toBe(targetId);
+      expect(defaultLink.getAttribute('path')).toBe('');
+      expect(defaultLink.getAttribute('heading')).toBe('Plan');
+      expect(defaultLink.getAttribute('label')).toBe('');
+      expect(aliasedLink.getAttribute('targetId')).toBe(targetId);
+      expect(aliasedLink.getAttribute('path')).toBe('');
+      expect(aliasedLink.getAttribute('label')).toBe('Project plan');
+      expect(Buffer.from(bound).includes(Buffer.from('Roadmap'))).toBe(false);
+    });
+
+    it('preserves an explicit alias even when it equals the authored path', () => {
+      const targetId = '11111111-1111-4111-8111-111111111111';
+      const bound = bindWikiLinkTargets(
+        markdownToYjsState('[[Roadmap|Roadmap]]'),
+        new Map([['roadmap', targetId]]),
+      );
+      const doc = new Y.Doc();
+      Y.applyUpdate(doc, bound);
+      const link = first(doc.getXmlFragment('prosemirror')).get(0) as Y.XmlElement;
+
+      expect(link.getAttribute('targetId')).toBe(targetId);
+      expect(link.getAttribute('path')).toBe('');
+      expect(link.getAttribute('label')).toBe('Roadmap');
     });
   });
 

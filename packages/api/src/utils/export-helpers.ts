@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
+import { type MarkdownRenderOptions, yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
 
 /**
  * Matches markdown image syntax: ![alt](src) with optional title.
@@ -307,10 +307,11 @@ export function pageToMarkdown(
   properties: Record<string, unknown> | null,
   icon: string | null,
   title?: string,
+  markdownOptions?: MarkdownRenderOptions,
 ): string {
   let body = '';
   if (ydoc && ydoc.length > 0) {
-    body = yDocToMarkdown(ydoc instanceof Buffer ? new Uint8Array(ydoc) : ydoc);
+    body = yDocToMarkdown(ydoc instanceof Buffer ? new Uint8Array(ydoc) : ydoc, markdownOptions);
   }
 
   const frontmatter = serializeFrontmatter(properties, icon);
