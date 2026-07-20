@@ -19,3 +19,23 @@ Session tokens checked in this order:
 - Binary Yjs updates stored in `pages.ydoc` (BYTEA)
 - Default: 500ms debounce, 3000ms max
 - Force-save on disconnect
+
+### Database Access
+
+- Keep parameterized `pg` access behind focused repository/service modules.
+- Direct driver access is expected for `LISTEN` subscriptions and collaboration
+  transactions whose lifetime spans Hocuspocus message application.
+- Do not scatter SQL through protocol, permission-transition, or WebSocket
+  orchestration code.
+- A future shared database package may provide Drizzle schema typing; do not
+  import API-internal schema files or duplicate the schema in this package.
+
+### Hocuspocus Lifecycle Hooks
+
+- `@hocuspocus/server` is pinned to 3.4.4 and extended by the checked-in pnpm
+  patch under `patches/`.
+- The patch exposes server-scoped awareness, send, close, and
+  message-application lifecycle hooks required by the collaboration
+  authorization fence.
+- Keep these changes in the package patch; do not mutate Hocuspocus prototypes
+  or package-global hook state at runtime.

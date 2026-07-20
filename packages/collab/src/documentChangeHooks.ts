@@ -1,0 +1,112 @@
+import type {
+  onChangePayload,
+  onDisconnectPayload,
+  onStoreDocumentPayload,
+} from '@hocuspocus/server';
+import type { Logger } from '@logtape/logtape';
+import * as Y from 'yjs';
+import {
+  type CollabSession,
+  isCollabSession,
+  waitForPermissionChecks,
+  waitForWriteApplications,
+} from './collabSession';
+import {
+  getConnectionLifecycle,
+  type WriteAdmission,
+  writeAdmissionsByUpdate,
+} from './hocuspocusV3Adapter';
+import type { PageTitleRuntime } from './pageTitleRuntime';
+
+export function createDocumentChangeHooks(options: {
+  logger: Logger;
+  maxDocumentBytes: number;
+  titles: PageTitleRuntime;
+  isMetaRoom(documentName: string): boolean;
+  isDocumentBlocked(documentName: string): boolean;
+  getActiveDocument(documentName: string): Y.Doc | undefined;
+  getDocumentSizeEstimate(documentName: string): number;
+  setDocumentSizeEstimate(documentName: string, size: number): void;
+  blockOversizedDocument(documentName: string, size: number): void;
+  recordDocumentChange(
+    documentName: string,
+    context: CollabSession,
+    admission: WriteAdmission | undefined,
+  ): void;
+  resetDocumentState(documentName: string): void;
+  flushDocument(
+    documentName: string,
+    document: Y.Doc,
+    fallbackContext: CollabSession | undefined,
+    source: 'persist' | 'disconnect',
+  ): Promise<void>;
+}) {
+  return {
+    onChange: async ({ documentName, context, document, update }: onChangePayload) => {
+      if (options.isMetaRoom(documentName) || options.isDocumentBlocked(documentName)) return;
+      const writer = isCollabSession(context) ? context : undefined;
+      const exactAdmission = writeAdmissionsByUpdate.get(update);
+      if (exactAdmission) writeAdmissionsByUpdate.delete(update);
+      const admission =
+        exactAdmission ??
+        (writer ? getConnectionLifecycle(writer).pendingWriteAdmissions.shift() : undefined);
+      if (!options.titles.ensureWithinLimit(documentName, document)) return;
+      if (admission?.touchesTitle) {
+        options.titles.setPendingBaseline(documentName, admission.titleRevision);
+      }
+      if (!writer) return;
+      if (!admission && (writer.permission === 'view' || writer.permission === null)) return;
+
+      const estimatedSize = options.getDocumentSizeEstimate(documentName) + update.byteLength;
+      if (estimatedSize > options.maxDocumentBytes) {
+        const encodedSize = Y.encodeStateAsUpdate(document).length;
+        if (encodedSize > options.maxDocumentBytes) {
+          options.blockOversizedDocument(documentName, encodedSize);
+          return;
+        }
+        options.setDocumentSizeEstimate(documentName, encodedSize);
+      } else {
+        options.setDocumentSizeEstimate(documentName, estimatedSize);
+      }
+      options.recordDocumentChange(documentName, writer, admission);
+    },
+    onStoreDocument: async (data: onStoreDocumentPayload) => {
+      const { documentName } = data;
+      if (options.isDocumentBlocked(documentName)) return;
+      if (options.isMetaRoom(documentName)) {
+        options.logger.debug(`[meta] skip persist for meta room: ${documentName}`);
+        return;
+      }
+      const context = isCollabSession(data.context) ? data.context : undefined;
+      if (!context) throw new Error('Unauthorized');
+      const fallback =
+        options.getActiveDocument(documentName) === data.document ? undefined : context;
+      try {
+        await options.flushDocument(documentName, data.document, fallback, 'persist');
+      } catch (error) {
+        options.logger.error(`[persist] failed to save "${documentName}": ${error}`);
+        throw error;
+      }
+    },
+    afterUnloadDocument: async ({ documentName }: { documentName: string }) => {
+      options.resetDocumentState(documentName);
+      options.titles.clear(documentName);
+    },
+    onDisconnect: async ({ documentName, instance, context }: onDisconnectPayload) => {
+      if (options.isMetaRoom(documentName) || options.isDocumentBlocked(documentName)) return;
+      const session = isCollabSession(context) ? context : undefined;
+      if (session) {
+        await waitForPermissionChecks(session);
+        await waitForWriteApplications(session);
+      }
+      await Promise.resolve();
+      const document = instance.documents.get(documentName) as Y.Doc | undefined;
+      if (!document) return;
+      try {
+        await options.flushDocument(documentName, document, undefined, 'disconnect');
+      } catch (error) {
+        options.logger.error(`[disconnect] force save failed for "${documentName}": ${error}`);
+      }
+    },
+  };
+}

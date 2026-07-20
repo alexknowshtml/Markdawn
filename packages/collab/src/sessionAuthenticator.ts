@@ -1,0 +1,121 @@
+import type { onAuthenticatePayload } from '@hocuspocus/server';
+import type { Logger } from '@logtape/logtape';
+import { getAnonymousName } from '@markdawn/shared';
+import type { Pool } from 'pg';
+import { CollabAccessError } from './collabErrors';
+import { type CollabSession, createCollabSession } from './collabSession';
+import { createConnectionLifecycle } from './hocuspocusV3Adapter';
+import type { GrantedPermissionState } from './permissionState';
+import { queryAuthenticatedSession } from './sessionQueries';
+import { isUuid, parseCookies } from './utils';
+
+type SessionAuthenticatorOptions = {
+  pool: Pool;
+  logger: Logger;
+  isDocumentBlocked(documentName: string): boolean;
+  isMetaRoom(documentName: string): boolean;
+  assertAnonymousPageAccess(documentName: string): Promise<GrantedPermissionState>;
+  assertPageAccess(
+    documentName: string,
+    userId: string,
+    sessionToken: string,
+  ): Promise<GrantedPermissionState>;
+  assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void>;
+};
+
+const META_ROOM_PREFIX = 'page-meta:';
+
+function getSessionToken(payload: onAuthenticatePayload): string {
+  const cookies = parseCookies(payload.requestHeaders.cookie);
+  const bearerToken = payload.requestHeaders.authorization?.match(/^Bearer\s+(.+)$/i)?.[1]?.trim();
+  return (
+    payload.token?.trim() ||
+    bearerToken ||
+    cookies.get('better-auth.session_token')?.trim() ||
+    cookies.get('__Secure-better-auth.session_token')?.trim() ||
+    ''
+  );
+}
+
+export function createSessionAuthenticator(options: SessionAuthenticatorOptions) {
+  const {
+    pool,
+    logger,
+    isDocumentBlocked,
+    isMetaRoom,
+    assertAnonymousPageAccess,
+    assertPageAccess,
+    assertMetaRoomAccess,
+  } = options;
+
+  return async (payload: onAuthenticatePayload): Promise<CollabSession> => {
+    const { documentName, connectionConfig } = payload;
+    if (documentName && isDocumentBlocked(documentName)) throw new CollabAccessError();
+    const sessionToken = getSessionToken(payload);
+    if (!sessionToken) {
+      logger.debug('[auth] no session token provided');
+      throw new Error('Unauthorized');
+    }
+
+    if (sessionToken.startsWith('anon:')) {
+      const anonymousId = sessionToken.slice(5);
+      if (!isUuid(anonymousId) || !documentName || !isUuid(documentName)) {
+        logger.debug('[auth] anonymous token requires valid UUID identity and document name');
+        throw new Error('Forbidden');
+      }
+      const access = await assertAnonymousPageAccess(documentName);
+      const anonymousName = getAnonymousName(anonymousId);
+      await pool.query(
+        `insert into guest_identities (id, name, created_at, last_seen_at)
+         values ($1, $2, now(), now())
+         on conflict (id) do update set last_seen_at = excluded.last_seen_at`,
+        [anonymousId, anonymousName],
+      );
+      if (access.permission === 'view') connectionConfig.readOnly = true;
+      logger.info(
+        `[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${access.permission})`,
+      );
+      return createCollabSession({
+        principal: {
+          kind: 'anonymous',
+          user: { id: anonymousId, name: anonymousName },
+          sessionToken: `anon:${anonymousId}`,
+        },
+        permission: access.permission,
+        accessRevision: access.accessRevision,
+        lifecycle: createConnectionLifecycle(),
+      });
+    }
+
+    const authenticated = await queryAuthenticatedSession(pool, sessionToken);
+    if (!authenticated) {
+      logger.debug('[auth] invalid/expired session');
+      throw new Error('Unauthorized');
+    }
+    const { user, accessRevision: sessionAccessRevision } = authenticated;
+    if (!documentName) throw new CollabAccessError(sessionAccessRevision);
+
+    let permission: CollabSession['permission'] = null;
+    let accessRevision = sessionAccessRevision;
+    if (isMetaRoom(documentName)) {
+      const roomUserId = documentName.slice(META_ROOM_PREFIX.length);
+      if (!isUuid(roomUserId)) throw new CollabAccessError(accessRevision);
+      await assertMetaRoomAccess(user.id, roomUserId);
+      connectionConfig.readOnly = true;
+    } else {
+      if (!isUuid(documentName)) throw new CollabAccessError(accessRevision);
+      const access = await assertPageAccess(documentName, user.id, sessionToken);
+      permission = access.permission;
+      accessRevision = access.accessRevision;
+      if (permission === 'view') connectionConfig.readOnly = true;
+    }
+
+    logger.info(`[auth] authenticated user=${user.id} (${user.email}) permission=${permission}`);
+    return createCollabSession({
+      principal: { kind: 'account', user, sessionToken },
+      permission,
+      accessRevision,
+      lifecycle: createConnectionLifecycle(),
+    });
+  };
+}

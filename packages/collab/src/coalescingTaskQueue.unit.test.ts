@@ -1,7 +1,7 @@
 import type { ShareEventPayload } from '@markdawn/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { createCoalescingTaskQueue } from './coalescingTaskQueue';
-import { getShareEventQueueKey, mergeShareEventMetadata } from './server';
+import { getShareEventQueueKey, mergeShareEventMetadata } from './notificationRuntime';
 
 function deferred(): { promise: Promise<void>; resolve: () => void } {
   let resolvePromise: (() => void) | undefined;

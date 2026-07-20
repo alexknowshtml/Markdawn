@@ -7,6 +7,9 @@ settings:
 overrides:
   yjs: 13.6.29
 
+patchedDependencies:
+  '@hocuspocus/server@3.4.4': e9e87dbef2ec9369df64559d0738cf6c4e928c0c943b8d23ec89ad6276740890
+
 importers:
 
   .:
@@ -122,14 +125,14 @@ importers:
   packages/collab:
     dependencies:
       '@hocuspocus/extension-database':
-        specifier: ^3.4.4
+        specifier: 3.4.4
         version: 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       '@hocuspocus/extension-logger':
-        specifier: ^3.4.4
+        specifier: 3.4.4
         version: 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       '@hocuspocus/server':
-        specifier: ^3.4.4
-        version: 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
+        specifier: 3.4.4
+        version: 3.4.4(patch_hash=e9e87dbef2ec9369df64559d0738cf6c4e928c0c943b8d23ec89ad6276740890)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       '@logtape/logtape':
         specifier: ^2.0.5
         version: 2.0.5
@@ -150,7 +153,7 @@ importers:
         version: 13.6.29
     devDependencies:
       '@hocuspocus/provider':
-        specifier: ^3.4.4
+        specifier: 3.4.4
         version: 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       '@types/node':
         specifier: ^25.3.0
@@ -217,7 +220,7 @@ importers:
         specifier: ^5.2.8
         version: 5.2.8
       '@hocuspocus/provider':
-        specifier: ^3.4.4
+        specifier: 3.4.4
         version: 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       '@logtape/logtape':
         specifier: ^2.0.5
@@ -3623,7 +3626,7 @@ snapshots:
 
   '@hocuspocus/extension-database@3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)':
     dependencies:
-      '@hocuspocus/server': 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
+      '@hocuspocus/server': 3.4.4(patch_hash=e9e87dbef2ec9369df64559d0738cf6c4e928c0c943b8d23ec89ad6276740890)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
       yjs: 13.6.29
     transitivePeerDependencies:
       - bufferutil
@@ -3632,7 +3635,7 @@ snapshots:
 
   '@hocuspocus/extension-logger@3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)':
     dependencies:
-      '@hocuspocus/server': 3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
+      '@hocuspocus/server': 3.4.4(patch_hash=e9e87dbef2ec9369df64559d0738cf6c4e928c0c943b8d23ec89ad6276740890)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3651,7 +3654,7 @@ snapshots:
       - bufferutil
       - utf-8-validate
 
-  '@hocuspocus/server@3.4.4(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)':
+  '@hocuspocus/server@3.4.4(patch_hash=e9e87dbef2ec9369df64559d0738cf6c4e928c0c943b8d23ec89ad6276740890)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29)':
     dependencies:
       '@hocuspocus/common': 3.4.4
       async-lock: 1.4.1

@@ -1,0 +1,2 @@
+# Vendored pnpm patches preserve upstream whitespace context.
+patches/** -whitespace

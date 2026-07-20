@@ -1,137 +1,17 @@
-import type { Server } from '@hocuspocus/server';
-import type { Logger } from '@logtape/logtape';
 import type { Pool } from 'pg';
 import { describe, expect, it, vi } from 'vitest';
+import { handleShareEvent, handleWorkspaceEvent } from './permission-handler';
 import {
-  handleShareEvent,
-  handleWorkspaceEvent,
-  revalidateActivePageConnections,
-} from './permission-handler';
-
-function createLogger() {
-  const fn = () => vi.fn();
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    fatal: vi.fn(),
-    category: fn(),
-    parent: null,
-    getChild: fn(),
-    with: fn(),
-    get enabled() {
-      return true;
-    },
-    log: fn(),
-    trace: fn(),
-  } as unknown as Logger;
-}
-
-function createConnection(overrides?: {
-  context?: {
-    user?: { id: string; isAnonymous?: boolean };
-    permission?: string;
-    accessRevision?: string;
-    sessionToken?: string;
-  };
-  readOnly?: boolean;
-}) {
-  return {
-    context: overrides?.context ?? { user: { id: 'user-1' }, permission: 'edit' },
-    readOnly: overrides?.readOnly ?? false,
-    sendStateless: vi.fn(),
-    close: vi.fn(),
-  };
-}
-
-function createDocument(connections: ReturnType<typeof createConnection>[]) {
-  const accessVersions = new Map<string, number>();
-  return {
-    getConnections: () => connections,
-    transact: (callback: () => void) => callback(),
-    getMap: (_name?: string) => ({
-      get: (key: string) => accessVersions.get(key),
-      set: (key: string, value: number) => accessVersions.set(key, value),
-    }),
-  };
-}
-
-function createServer(doc: ReturnType<typeof createDocument> | undefined) {
-  return {
-    hocuspocus: {
-      documents: {
-        get: vi.fn().mockReturnValue(doc),
-      },
-    },
-    configure: vi.fn(),
-    destroy: vi.fn(),
-    listen: vi.fn(),
-  } as unknown as Server;
-}
-
-function createServerWithDocuments(
-  documents: Map<string, ReturnType<typeof createDocument>>,
-): Server {
-  return {
-    hocuspocus: {
-      documents,
-    },
-    configure: vi.fn(),
-    destroy: vi.fn(),
-    listen: vi.fn(),
-  } as unknown as Server;
-}
-
-function createPool(
-  entries: Array<{ user_id: string; permission: string }> = [],
-  options?: { anonymousPermission?: string | null; defaultPermission?: string | null },
-) {
-  return {
-    query: vi.fn(async (sql: string, params?: unknown[]) => {
-      if (sql.includes('get_page_base_permissions')) {
-        return { rows: entries };
-      }
-      if (sql.includes('get_effective_page_permission')) {
-        const requestedUsers = params?.[1];
-        if (Array.isArray(requestedUsers)) {
-          return {
-            rows: requestedUsers.map((userId) => {
-              const entry = entries.find((item) => item.user_id === userId);
-              return {
-                user_id: userId,
-                permission: entry?.permission ?? options?.defaultPermission ?? null,
-                access_revision: '100',
-              };
-            }),
-          };
-        }
-        const entry = entries.find((item) => item.user_id === requestedUsers);
-        return {
-          rows: [
-            {
-              permission: entry?.permission ?? options?.defaultPermission ?? null,
-              access_revision: '100',
-            },
-          ],
-        };
-      }
-      if (sql.includes('get_public_page_permission')) {
-        return {
-          rows: [{ permission: options?.anonymousPermission ?? null, access_revision: '100' }],
-        };
-      }
-      return { rows: entries };
-    }),
-  } as unknown as Pool;
-}
-
-const ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000001';
-const OTHER_ACTIVE_PAGE_ID = '00000000-0000-4000-8000-000000000002';
-
-function permissionEntry(userId: string, permission: string = 'view') {
-  return { user_id: userId, permission };
-}
+  ACTIVE_PAGE_ID,
+  createConnection,
+  createDocument,
+  createLogger,
+  createPool,
+  createServer,
+  createServerWithDocuments,
+  OTHER_ACTIVE_PAGE_ID,
+  permissionEntry,
+} from './permissionHandlerTestUtils';
 
 describe('handleShareEvent', () => {
   it('handles metadata-only provenance events without page or folder permission fanout', async () => {
@@ -200,8 +80,10 @@ describe('handleShareEvent', () => {
         await firstQueryBarrier;
       }
       const userIds = params?.[1] as string[];
+      const pageIds = params?.[0] as string[];
       return {
-        rows: userIds.map((userId) => ({
+        rows: userIds.map((userId, index) => ({
+          page_id: pageIds[index],
           user_id: userId,
           permission: 'edit',
           access_revision: String(100 + permissionQueryCount),
@@ -264,6 +146,44 @@ describe('handleShareEvent', () => {
     }
   });
 
+  it('does not revalidate an anonymous connection that reuses a targeted account ID', async () => {
+    const accountConnection = createConnection({
+      context: { user: { id: 'target-user' }, permission: 'view', accessRevision: '1' },
+      readOnly: true,
+    });
+    const anonymousConnection = createConnection({
+      context: {
+        user: { id: 'target-user', isAnonymous: true },
+        permission: 'view',
+        accessRevision: '1',
+      },
+      readOnly: true,
+    });
+    const server = createServerWithDocuments(
+      new Map([[ACTIVE_PAGE_ID, createDocument([accountConnection, anonymousConnection])]]),
+    );
+    const pool = createPool([permissionEntry('target-user', 'edit')]);
+
+    await handleShareEvent(
+      server,
+      {
+        type: 'share_event',
+        action: 'update',
+        entityType: 'page',
+        entityId: ACTIVE_PAGE_ID,
+        targetUserId: 'target-user',
+        permission: 'edit',
+      },
+      pool,
+      createLogger(),
+    );
+
+    expect(accountConnection.context.permission).toBe('edit');
+    expect(anonymousConnection.context.permission).toBe('view');
+    expect(anonymousConnection.sendStateless).not.toHaveBeenCalled();
+    expect(anonymousConnection.close).not.toHaveBeenCalled();
+  });
+
   it('keeps an equal-revision downgrade when an older permission query arrives late', async () => {
     const connection = createConnection({
       context: { user: { id: 'user-1' }, permission: 'edit', accessRevision: '100' },
@@ -291,8 +211,10 @@ describe('handleShareEvent', () => {
           await olderQueryBarrier;
         }
         const userIds = params?.[1] as string[];
+        const pageIds = params?.[0] as string[];
         return {
-          rows: userIds.map((userId) => ({
+          rows: userIds.map((userId, index) => ({
+            page_id: pageIds[index],
             user_id: userId,
             permission: thisQuery === 1 ? 'edit' : 'view',
             access_revision: '100',
@@ -441,7 +363,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([targetConn, otherConn]);
     const server = createServer(doc);
 
-    // Pool is not needed when no fallback check can be made.
+    const pool = createPool();
     await handleShareEvent(
       server,
       {
@@ -451,7 +373,7 @@ describe('handleShareEvent', () => {
         entityId: 'page-1',
         targetUserId: 'user-target',
       },
-      undefined,
+      pool,
       logger,
     );
 
@@ -550,7 +472,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([conn]);
     const server = createServer(doc);
 
-    // Pool is not needed for this targeted grant event.
+    const pool = createPool([], { defaultPermission: 'edit' });
     await handleShareEvent(
       server,
       {
@@ -561,12 +483,12 @@ describe('handleShareEvent', () => {
         permission: 'edit',
         targetUserId: 'user-1',
       },
-      undefined,
+      pool,
       logger,
     );
 
     expect(conn.readOnly).toBe(false);
-    expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"action":"grant"'));
+    expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"action":"update"'));
   });
 
   it('skips connections with no user context', async () => {
@@ -591,13 +513,14 @@ describe('handleShareEvent', () => {
     expect(conn.close).not.toHaveBeenCalled();
   });
 
-  it('skips unknown permission values when no database pool is available', async () => {
+  it('uses canonical permission state instead of an invalid advertised permission', async () => {
     const logger = createLogger();
     const conn = createConnection({
       context: { user: { id: 'anon-1', isAnonymous: true } },
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
+    const pool = createPool();
 
     await handleShareEvent(
       server,
@@ -608,12 +531,11 @@ describe('handleShareEvent', () => {
         entityId: 'page-1',
         permission: 'invalid' as never,
       },
-      undefined,
+      pool,
       logger,
     );
 
-    expect(conn.readOnly).toBe(false);
-    expect(conn.sendStateless).not.toHaveBeenCalled();
+    expect(conn.close).toHaveBeenCalledWith(expect.objectContaining({ code: 4401 }));
   });
 
   it('updates authenticated connections when public permission changes', async () => {
@@ -697,7 +619,7 @@ describe('handleShareEvent', () => {
     const doc = createDocument([conn]);
     const server = createServer(doc);
 
-    // Pool is not needed for this targeted grant event.
+    const pool = createPool();
     await handleShareEvent(
       server,
       {
@@ -707,7 +629,7 @@ describe('handleShareEvent', () => {
         entityId: 'page-1',
         targetUserId: 'user-target',
       },
-      undefined,
+      pool,
       logger,
     );
 
@@ -722,6 +644,7 @@ describe('handleShareEvent', () => {
     });
     const doc = createDocument([conn]);
     const server = createServer(doc);
+    const pool = createPool([], { defaultPermission: 'edit' });
 
     await handleShareEvent(
       server,
@@ -733,7 +656,7 @@ describe('handleShareEvent', () => {
         permission: 'edit',
         targetUserId: 'user-1',
       },
-      undefined,
+      pool,
       logger,
     );
 
@@ -883,7 +806,16 @@ describe('handleShareEvent', () => {
         return { rows: [{ id: ACTIVE_PAGE_ID }] };
       }
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ user_id: 'user-1', permission: 'edit', access_revision: '101' }] };
+        return {
+          rows: [
+            {
+              page_id: ACTIVE_PAGE_ID,
+              user_id: 'user-1',
+              permission: 'edit',
+              access_revision: '101',
+            },
+          ],
+        };
       }
       return { rows: [] };
     });
@@ -937,8 +869,10 @@ describe('handleShareEvent', () => {
       }
       if (sql.includes('get_effective_page_permission')) {
         const userIds = params?.[1] as string[];
+        const pageIds = params?.[0] as string[];
         return {
-          rows: userIds.map((userId) => ({
+          rows: userIds.map((userId, index) => ({
+            page_id: pageIds[index],
             user_id: userId,
             permission: userId === 'direct-user' ? 'edit' : null,
             access_revision: '102',
@@ -997,11 +931,14 @@ describe('handleShareEvent', () => {
         throw new Error('folder lookup failed');
       }
       if (sql.includes('get_effective_page_permission')) {
+        const pageIds = params?.[0] as string[];
         const userIds = params?.[1] as string[];
         return {
-          rows: userIds.map((userId) => ({
+          rows: userIds.map((userId, index) => ({
+            page_id: pageIds[index],
             user_id: userId,
-            permission: params?.[0] === ACTIVE_PAGE_ID ? null : 'edit',
+            permission: pageIds[index] === ACTIVE_PAGE_ID ? null : 'edit',
+            access_revision: '100',
           })),
         };
       }
@@ -1127,11 +1064,21 @@ describe('handleShareEvent', () => {
       if (sql.includes('p.id = ANY($2::uuid[])')) {
         return { rows: [{ id: 'page-1' }, { id: 'page-2' }] };
       }
-      if (sql.includes('WITH requested_pages AS')) {
+      if (sql.includes('WITH requested_users AS')) {
         return {
           rows: [
-            { page_id: 'page-1', permission: 'view' },
-            { page_id: 'page-2', permission: 'edit' },
+            {
+              page_id: 'page-1',
+              user_id: 'member-1',
+              permission: 'view',
+              access_revision: '100',
+            },
+            {
+              page_id: 'page-2',
+              user_id: 'member-1',
+              permission: 'edit',
+              access_revision: '100',
+            },
           ],
         };
       }
@@ -1175,11 +1122,14 @@ describe('handleShareEvent', () => {
         throw new Error('workspace lookup failed');
       }
       if (sql.includes('get_effective_page_permission')) {
+        const pageIds = params?.[0] as string[];
         const userIds = params?.[1] as string[];
         return {
-          rows: userIds.map((userId) => ({
+          rows: userIds.map((userId, index) => ({
+            page_id: pageIds[index],
             user_id: userId,
-            permission: params?.[0] === 'affected-page' ? null : 'edit',
+            permission: pageIds[index] === 'affected-page' ? null : 'edit',
+            access_revision: '100',
           })),
         };
       }
@@ -1308,7 +1258,16 @@ describe('handleShareEvent', () => {
     );
     const query = vi.fn(async (sql: string) => {
       if (sql.includes('get_effective_page_permission')) {
-        return { rows: [{ user_id: 'user-1', permission: 'view' }] };
+        return {
+          rows: [
+            {
+              page_id: 'page-1',
+              user_id: 'user-1',
+              permission: 'view',
+              access_revision: '100',
+            },
+          ],
+        };
       }
       return { rows: [] };
     });
@@ -1334,79 +1293,5 @@ describe('handleShareEvent', () => {
     expect(conn.sendStateless).toHaveBeenCalledWith(expect.stringContaining('"permission":"view"'));
     expect(metaDocument.getMap().get('access')).toBe(1);
     expect(metaConnection.sendStateless).not.toHaveBeenCalled();
-  });
-});
-
-describe('revalidateActivePageConnections', () => {
-  it('revokes stale access with batched authenticated and anonymous lookups', async () => {
-    const logger = createLogger();
-    const pageId = '00000000-0000-4000-8000-000000000001';
-    const userId = '00000000-0000-4000-8000-000000000002';
-    const revokedConnection = createConnection({
-      context: { user: { id: userId }, permission: 'view' },
-      readOnly: true,
-    });
-    const anonymousConnection = createConnection({
-      context: { user: { id: 'anonymous-1', isAnonymous: true }, permission: 'edit' },
-    });
-    const server = createServerWithDocuments(
-      new Map([[pageId, createDocument([revokedConnection, anonymousConnection])]]),
-    );
-    const query = vi.fn(async (sql: string) => {
-      if (sql.includes('unnest($1::uuid[], $2::uuid[], $3::text[])')) {
-        return {
-          rows: [
-            {
-              page_id: pageId,
-              user_id: userId,
-              session_token: null,
-              permission: null,
-              access_revision: '103',
-            },
-          ],
-        };
-      }
-      if (sql.includes('get_public_page_permission')) {
-        return { rows: [{ page_id: pageId, permission: 'edit', access_revision: '103' }] };
-      }
-      return { rows: [] };
-    });
-
-    const affected = await revalidateActivePageConnections(
-      server,
-      { query } as unknown as Pool,
-      logger,
-    );
-
-    expect(query).toHaveBeenCalledTimes(2);
-    expect(affected).toBe(1);
-    expect(revokedConnection.close).toHaveBeenCalledWith({
-      code: 4401,
-      reason: 'Access revoked',
-    });
-    expect(anonymousConnection.close).not.toHaveBeenCalled();
-  });
-
-  it('fails closed with a verification error when a batch query fails', async () => {
-    const logger = createLogger();
-    const pageId = '00000000-0000-4000-8000-000000000003';
-    const userId = '00000000-0000-4000-8000-000000000004';
-    const connection = createConnection({
-      context: { user: { id: userId }, permission: 'edit' },
-    });
-    const server = createServerWithDocuments(new Map([[pageId, createDocument([connection])]]));
-    const pool = {
-      query: vi.fn(async () => {
-        throw new Error('database unavailable');
-      }),
-    } as unknown as Pool;
-
-    await revalidateActivePageConnections(server, pool, logger);
-
-    expect(connection.close).toHaveBeenCalledWith({
-      code: 4500,
-      reason: 'Permission verification failed',
-    });
-    expect(connection.sendStateless).not.toHaveBeenCalled();
   });
 });

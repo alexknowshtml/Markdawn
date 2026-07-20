@@ -21,6 +21,21 @@ import {
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
 import * as Y from 'yjs';
+import {
+  type CollabSession,
+  createCollabSession,
+  getSessionUser,
+  isAnonymousSession,
+  waitForPermissionChecks,
+} from './collabSession';
+import {
+  concatBytes,
+  encodeAuthenticationMessage,
+  encodeAwarenessMessage,
+  encodeProtocolMessage,
+  encodeVarUint,
+} from './collabTestUtils';
+import { createConnectionLifecycle } from './hocuspocusV3Adapter';
 import { revalidateActivePageConnections } from './permission-handler';
 import {
   broadcastWikiLinkPresentationInvalidation,
@@ -29,7 +44,6 @@ import {
   publishPageDeletion,
   publishPageRename,
   reconcileActiveCollaborationState,
-  sanitizeCanonicalYjsUpdate,
 } from './server';
 import {
   createCorruptedYjsDoc,
@@ -42,6 +56,50 @@ import {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+async function createAccountHookContext(
+  pool: ReturnType<typeof getTestPool>,
+  userId: string,
+  permission: CollabSession['permission'] = 'admin',
+): Promise<CollabSession> {
+  const session = await createTestSession(pool, userId);
+  return createUnverifiedAccountHookContext(userId, permission, session.token);
+}
+
+function createUnverifiedAccountHookContext(
+  userId: string,
+  permission: CollabSession['permission'] = 'admin',
+  sessionToken = `test-session:${userId}`,
+): CollabSession {
+  return createCollabSession({
+    principal: {
+      kind: 'account',
+      user: {
+        id: userId,
+        email: `${userId}@example.com`,
+        name: 'Test User',
+        avatarUrl: null,
+      },
+      sessionToken,
+    },
+    permission,
+    accessRevision: '0',
+    lifecycle: createConnectionLifecycle(),
+  });
+}
+
+function createAnonymousHookContext(userId: string, permission: 'view' | 'edit'): CollabSession {
+  return createCollabSession({
+    principal: {
+      kind: 'anonymous',
+      user: { id: userId, name: getAnonymousName(userId) },
+      sessionToken: `anon:${userId}`,
+    },
+    permission,
+    accessRevision: '0',
+    lifecycle: createConnectionLifecycle(),
+  });
 }
 
 async function waitFor(
@@ -116,75 +174,6 @@ function createConnectionConfig(): ConnectionConfiguration {
     readOnly: false,
     isAuthenticated: false,
   };
-}
-
-function encodeVarUint(value: number): Uint8Array {
-  const bytes: number[] = [];
-  let remaining = value;
-  while (remaining > 0x7f) {
-    bytes.push((remaining & 0x7f) | 0x80);
-    remaining = Math.floor(remaining / 128);
-  }
-  bytes.push(remaining);
-  return Uint8Array.from(bytes);
-}
-
-function concatBytes(chunks: Uint8Array[]): Uint8Array {
-  const length = chunks.reduce((total, chunk) => total + chunk.length, 0);
-  const result = new Uint8Array(length);
-  let offset = 0;
-  for (const chunk of chunks) {
-    result.set(chunk, offset);
-    offset += chunk.length;
-  }
-  return result;
-}
-
-function encodeVarString(value: string): Uint8Array {
-  const bytes = new TextEncoder().encode(value);
-  return concatBytes([encodeVarUint(bytes.length), bytes]);
-}
-
-function encodeProtocolMessage(
-  documentName: string,
-  messageType: number,
-  payload?: string,
-): Uint8Array {
-  return concatBytes([
-    encodeVarString(documentName),
-    encodeVarUint(messageType),
-    ...(payload === undefined ? [] : [encodeVarString(payload)]),
-  ]);
-}
-
-function encodeAuthenticationMessage(documentName: string, token: string): Uint8Array {
-  // Hocuspocus MessageType.Auth = 2; AuthMessageType.Token = 0.
-  return concatBytes([
-    encodeVarString(documentName),
-    encodeVarUint(2),
-    encodeVarUint(0),
-    encodeVarString(token),
-  ]);
-}
-
-function encodeAwarenessMessage(
-  documentName: string,
-  entries: Array<{ clientId: number; clock: number; state: unknown }>,
-): Uint8Array {
-  const awarenessPayload = concatBytes([
-    encodeVarUint(entries.length),
-    ...entries.flatMap((entry) => [
-      encodeVarUint(entry.clientId),
-      encodeVarUint(entry.clock),
-      encodeVarString(JSON.stringify(entry.state)),
-    ]),
-  ]);
-  return concatBytes([
-    encodeVarString(documentName),
-    encodeVarUint(1),
-    encodeVarUint(awarenessPayload.length),
-    awarenessPayload,
-  ]);
 }
 
 function canonicalTestAwarenessUser(userId: string) {
@@ -276,6 +265,11 @@ type PausedConnectionHarness = {
   teardown: Promise<void>;
 };
 
+function applicationsInFlight(context: Record<string, unknown>): number | undefined {
+  const application = (context as CollabSession).lifecycle.application;
+  return application.state === 'running' ? application.inFlight : 0;
+}
+
 async function createPausedConnectionHarness(
   server: Server,
   pageId: string,
@@ -319,6 +313,7 @@ async function createPausedConnectionHarness(
     socketId,
     context,
     connectionConfig.readOnly,
+    server.hocuspocus.configuration.lifecycleHooks,
   );
   const pendingChanges: Promise<unknown>[] = [];
   document.onUpdate((changedDocument, origin, update) => {
@@ -362,26 +357,33 @@ async function createPausedConnectionHarness(
   });
   connection.onClose(() => {
     void (async () => {
+      let phase = 'pending changes';
       try {
         await Promise.all(pendingChanges);
+        phase = 'disconnect persistence';
         await server.hocuspocus.hooks('onDisconnect', {
           ...payloadBase,
           clientsCount: document.getConnectionsCount(),
         } satisfies onDisconnectPayload);
+        phase = 'before unload';
         await server.hocuspocus.hooks('beforeUnloadDocument', {
           instance: server.hocuspocus,
           documentName: pageId,
           document,
         });
+        phase = 'document removal';
         server.hocuspocus.documents.delete(pageId);
         document.destroy();
+        phase = 'after unload';
         await server.hocuspocus.hooks('afterUnloadDocument', {
           instance: server.hocuspocus,
           documentName: pageId,
         });
         resolveTeardown?.();
       } catch (error) {
-        rejectTeardown?.(error);
+        rejectTeardown?.(
+          new Error(`Paused connection teardown failed during ${phase}`, { cause: error }),
+        );
       }
     })();
   });
@@ -403,41 +405,6 @@ async function createPausedConnectionHarness(
     teardown,
   };
 }
-
-describe('canonical wiki-link target metadata', () => {
-  const targetId = '11111111-1111-1111-1111-111111111111';
-
-  it('rejects an unresolved attribute update before its parent can integrate', () => {
-    const attacker = new Y.Doc();
-    const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('path', 'Roadmap');
-    attacker.getXmlFragment('prosemirror').push([link]);
-    const afterCreation = Y.encodeStateVector(attacker);
-
-    link.setAttribute('targetId', targetId);
-    const attributeOnlyUpdate = Y.encodeStateAsUpdate(attacker, afterCreation);
-    expect(() => sanitizeCanonicalYjsUpdate(attributeOnlyUpdate)).toThrow(
-      'Canonical Yjs state contains unresolved updates',
-    );
-  });
-
-  it('preserves a stable targetId in canonical content', () => {
-    const source = new Y.Doc();
-    const link = new Y.XmlElement('wikiLink');
-    link.setAttribute('targetId', targetId);
-    link.setAttribute('path', '');
-    link.setAttribute('label', 'Plan');
-    source.getXmlFragment('prosemirror').push([link]);
-    const canonicalState = sanitizeCanonicalYjsUpdate(Y.encodeStateAsUpdate(source));
-
-    const loaded = new Y.Doc();
-    Y.applyUpdate(loaded, canonicalState);
-    const loadedLink = loaded.getXmlFragment('prosemirror').get(0) as Y.XmlElement;
-    expect(loadedLink.getAttribute('targetId')).toBe(targetId);
-    expect(loadedLink.getAttribute('path')).toBe('');
-    expect(loadedLink.getAttribute('label')).toBe('Plan');
-  });
-});
 
 describe('collab server', () => {
   const pool = getTestPool();
@@ -620,8 +587,8 @@ describe('collab server', () => {
       });
 
       const result = await server.hocuspocus.hooks('onAuthenticate', payload);
-      const authenticated = result as { user: { id: string } };
-      expect(authenticated.user.id).toBe(user.id);
+      const authenticated = result as CollabSession;
+      expect(getSessionUser(authenticated).id).toBe(user.id);
     });
 
     it('authenticates with better-auth session cookie', async () => {
@@ -637,8 +604,8 @@ describe('collab server', () => {
       });
 
       const result = await server.hocuspocus.hooks('onAuthenticate', payload);
-      const authenticated = result as { user: { id: string } };
-      expect(authenticated.user.id).toBe(user.id);
+      const authenticated = result as CollabSession;
+      expect(getSessionUser(authenticated).id).toBe(user.id);
     });
 
     it('authenticates with secure better-auth session cookie', async () => {
@@ -654,8 +621,8 @@ describe('collab server', () => {
       });
 
       const result = await server.hocuspocus.hooks('onAuthenticate', payload);
-      const authenticated = result as { user: { id: string } };
-      expect(authenticated.user.id).toBe(user.id);
+      const authenticated = result as CollabSession;
+      expect(getSessionUser(authenticated).id).toBe(user.id);
     });
 
     it('allows anonymous access to pages public through an ancestor folder', async () => {
@@ -679,12 +646,9 @@ describe('collab server', () => {
       });
 
       const result = await server.hocuspocus.hooks('onAuthenticate', payload);
-      const authenticated = result as {
-        user: { id: string; isAnonymous: boolean };
-        permission: 'view' | 'edit' | 'admin';
-      };
-      expect(authenticated.user.id).toBe(anonymousId);
-      expect(authenticated.user.isAnonymous).toBe(true);
+      const authenticated = result as CollabSession;
+      expect(getSessionUser(authenticated).id).toBe(anonymousId);
+      expect(isAnonymousSession(authenticated)).toBe(true);
       expect(authenticated.permission).toBe('view');
       expect(connectionConfig.readOnly).toBe(true);
     });
@@ -907,7 +871,8 @@ describe('collab server', () => {
               const result = await target.query(text, values);
               if (
                 text.includes('get_effective_page_permission') &&
-                values?.[1] === editor.id &&
+                Array.isArray(values?.[1]) &&
+                values[1].includes(editor.id) &&
                 ++editorAccessChecks === 2
               ) {
                 markConnectedCheckReached?.();
@@ -997,8 +962,8 @@ describe('collab server', () => {
         expect(receivedTypes.filter((type) => [0, 1, 3, 4, 5, 6, 8].includes(type))).toEqual([]);
 
         const provisionalConnection = activeDocument?.getConnections().find((connection) => {
-          const context = connection.context as { user?: { id?: string } } | undefined;
-          return context?.user?.id === editor.id;
+          const context = connection.context as CollabSession | undefined;
+          return context?.principal && getSessionUser(context).id === editor.id;
         });
         expect(provisionalConnection).toBeDefined();
         provisionalConnection?.close({ code: 4401, reason: 'Access revoked' });
@@ -1061,6 +1026,76 @@ describe('collab server', () => {
   });
 
   describe('authorization', () => {
+    it('rejects awareness updates above the dedicated presence payload limit', async () => {
+      const awarenessServer = createCollabServer({
+        port: 0,
+        pool,
+        logger: mockLogger(),
+        permissionRevalidationMs: 0,
+        maxAwarenessPayloadBytes: 512,
+      });
+      await awarenessServer.listen();
+      const awarenessPort = (awarenessServer as unknown as { address: { port: number } }).address
+        .port;
+      const owner = await createTestUser(pool);
+      const page = await createTestPage(pool, owner.id);
+      const session = await createTestSession(pool, owner.id);
+      const document = new Y.Doc();
+      const closed = vi.fn();
+      const provider = new HocuspocusProvider({
+        url: `ws://localhost:${awarenessPort}`,
+        name: page.id,
+        document,
+        token: session.token,
+        onClose: closed,
+      });
+
+      try {
+        await waitFor(() => provider.synced, 5_000, 'limited-awareness provider to sync');
+        const activeDocument = awarenessServer.hocuspocus.documents.get(page.id) as
+          | Document
+          | undefined;
+        const connection = activeDocument?.getConnections()[0];
+        if (!connection) throw new Error('Missing limited-awareness connection');
+        const serverClose = vi.spyOn(connection, 'close');
+
+        provider.configuration.websocketProvider.webSocket?.send(
+          encodeAwarenessMessage(page.id, [
+            {
+              clientId: document.clientID,
+              clock: 1,
+              state: {
+                user: canonicalTestAwarenessUser(owner.id),
+                padding: 'x'.repeat(2_048),
+              },
+            },
+          ]),
+        );
+
+        await waitFor(
+          () =>
+            closed.mock.calls.length > 0 &&
+            serverClose.mock.calls.some(
+              (call) =>
+                call[0]?.code === 4403 && call[0]?.reason === 'Awareness payload is too large',
+            ),
+          5_000,
+          'oversized awareness sender to close',
+        );
+        expect(
+          (
+            activeDocument?.awareness.getStates().get(document.clientID) as
+              | { padding?: string }
+              | undefined
+          )?.padding,
+        ).toBeUndefined();
+        serverClose.mockRestore();
+      } finally {
+        provider.destroy();
+        await awarenessServer.destroy();
+      }
+    });
+
     it('rejects a raw client broadcast-stateless frame before any peer receives it', async () => {
       const owner = await createTestUser(pool);
       const attacker = await createTestUser(pool);
@@ -2011,6 +2046,7 @@ describe('collab server', () => {
         'select ydoc from pages where id = $1',
         [page.id],
       );
+      expect(stored.rows[0]?.ydoc).not.toBeNull();
       const storedDocument = new Y.Doc();
       Y.applyUpdate(storedDocument, new Uint8Array(stored.rows[0]?.ydoc ?? []));
       expect(storedDocument.getText('content').toString()).toBe('authorized before downgrade');
@@ -2151,6 +2187,7 @@ describe('collab server', () => {
         'select ydoc from pages where id = $1',
         [page.id],
       );
+      expect(stored.rows[0]?.ydoc).not.toBeNull();
       const storedDocument = new Y.Doc();
       Y.applyUpdate(storedDocument, new Uint8Array(stored.rows[0]?.ydoc ?? []));
       expect(storedDocument.getText('content').toString()).toBe('admitted before revoke teardown');
@@ -2448,7 +2485,7 @@ describe('collab server', () => {
           'first update to apply',
         );
         await waitFor(
-          () => harness.context.applicationsInFlight === undefined,
+          () => applicationsInFlight(harness.context) === 0,
           5_000,
           'first application transaction to finalize',
         );
@@ -2460,7 +2497,7 @@ describe('collab server', () => {
           'duplicate update permission hook to resolve',
         );
         await waitFor(
-          () => harness.context.applicationsInFlight === undefined,
+          () => applicationsInFlight(harness.context) === 0,
           5_000,
           'duplicate no-op transaction to finalize',
         );
@@ -2502,7 +2539,7 @@ describe('collab server', () => {
       await harness.hookResolved;
       harness.releaseApply();
       await waitFor(
-        () => harness.context.applicationsInFlight === undefined,
+        () => applicationsInFlight(harness.context) === 0,
         5_000,
         'malformed application transaction to finalize',
       );
@@ -2605,7 +2642,7 @@ describe('collab server', () => {
 
     it('returns early for invalid non-uuid document names', async () => {
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: crypto.randomUUID() } },
+        context: createUnverifiedAccountHookContext(crypto.randomUUID()),
         document: new Document('not-a-uuid'),
         documentName: 'not-a-uuid',
         instance: server.hocuspocus,
@@ -2626,7 +2663,7 @@ describe('collab server', () => {
       const documentName = `page-meta:${user.id}`;
       const document = new Document(documentName);
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: user.id } },
+        context: await createAccountHookContext(pool, user.id),
         document,
         documentName,
         instance: server.hocuspocus,
@@ -2665,7 +2702,7 @@ describe('collab server', () => {
       const metaRoomName = `page-meta:${recipient.id}`;
       const metaDocument = new Document(metaRoomName);
       await server.hocuspocus.hooks('onLoadDocument', {
-        context: { user: { id: recipient.id } },
+        context: await createAccountHookContext(pool, recipient.id),
         document: metaDocument,
         documentName: metaRoomName,
         instance: server.hocuspocus,
@@ -2683,7 +2720,7 @@ describe('collab server', () => {
       pageDocument.getText('content').insert(0, 'owner update');
       const storePayload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, owner.id, 'edit'),
         document: pageDocument,
         documentName: page.id,
         instance: server.hocuspocus,
@@ -2732,7 +2769,7 @@ describe('collab server', () => {
       const documentName = `page-meta:${recipient.id}`;
       const document = new Document(documentName);
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: recipient.id } },
+        context: await createAccountHookContext(pool, recipient.id),
         document,
         documentName,
         instance: server.hocuspocus,
@@ -2810,7 +2847,7 @@ describe('collab server', () => {
       const document = new Document(documentName);
       try {
         await periodicServer.hocuspocus.hooks('onLoadDocument', {
-          context: { user: { id: recipient.id } },
+          context: await createAccountHookContext(pool, recipient.id),
           document,
           documentName,
           instance: periodicServer.hocuspocus,
@@ -2919,7 +2956,7 @@ describe('collab server', () => {
 
       const loadedDocument = new Document(page.id);
       await server.hocuspocus.hooks('onLoadDocument', {
-        context: { user: { id: user.id } },
+        context: await createAccountHookContext(pool, user.id),
         document: loadedDocument,
         documentName: page.id,
         instance: server.hocuspocus,
@@ -2980,7 +3017,7 @@ describe('collab server', () => {
       );
 
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: user.id } },
+        context: await createAccountHookContext(pool, user.id),
         document: new Document(pageId),
         documentName: pageId,
         instance: server.hocuspocus,
@@ -2998,7 +3035,7 @@ describe('collab server', () => {
       const nonExistentId = crypto.randomUUID();
 
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: crypto.randomUUID() } },
+        context: createUnverifiedAccountHookContext(crypto.randomUUID()),
         document: new Document(nonExistentId),
         documentName: nonExistentId,
         instance: server.hocuspocus,
@@ -3021,7 +3058,7 @@ describe('collab server', () => {
       );
 
       const payload: onLoadDocumentPayload = {
-        context: { user: { id: user.id } },
+        context: await createAccountHookContext(pool, user.id),
         document: new Document(pageId),
         documentName: pageId,
         instance: server.hocuspocus,
@@ -3072,7 +3109,7 @@ describe('collab server', () => {
       document.getText('content').insert(0, 'x'.repeat(2048));
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: page.id,
         instance: sizeLimitedServer.hocuspocus,
@@ -3139,7 +3176,7 @@ describe('collab server', () => {
         Document['getConnections']
       >);
       server.hocuspocus.documents.set(page.id, document);
-      const context = { user: { id: owner.id }, permission: 'admin' };
+      const context = await createAccountHookContext(pool, owner.id);
       const loadPayload: onLoadDocumentPayload = {
         context,
         document,
@@ -3208,7 +3245,7 @@ describe('collab server', () => {
         Document['getConnections']
       >);
       server.hocuspocus.documents.set(page.id, document);
-      const context = { user: { id: owner.id }, permission: 'admin' as const };
+      const context = await createAccountHookContext(pool, owner.id);
       const payloadBase = {
         clientsCount: 1,
         context,
@@ -3293,7 +3330,7 @@ describe('collab server', () => {
       );
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: page.id,
         instance: verificationServer.hocuspocus,
@@ -3353,7 +3390,7 @@ describe('collab server', () => {
       unexpectedServer.hocuspocus.documents.set(page.id, activeDocument);
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document: new Document(page.id),
         documentName: page.id,
         instance: unexpectedServer.hocuspocus,
@@ -3409,7 +3446,7 @@ describe('collab server', () => {
       const documentName = page.id;
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: user.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, user.id, 'edit'),
         document: new Document(documentName),
         documentName,
         instance: failingServer.hocuspocus,
@@ -3470,7 +3507,7 @@ describe('collab server', () => {
       document.getText('content').insert(0, 'Stale editor update');
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: editor.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, editor.id, 'edit'),
         document,
         documentName: page.id,
         instance: lockedServer.hocuspocus,
@@ -3512,10 +3549,7 @@ describe('collab server', () => {
       const document = new Document(page.id);
       document.getText('content').insert(0, 'Revoked anonymous edit');
       const connection = {
-        context: {
-          user: { id: anonymousId, isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(anonymousId, 'edit'),
         sendStateless: vi.fn(),
         close: vi.fn(),
       };
@@ -3527,10 +3561,7 @@ describe('collab server', () => {
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: {
-          user: { id: anonymousId, isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(anonymousId, 'edit'),
         document,
         documentName: page.id,
         instance: server.hocuspocus,
@@ -3574,25 +3605,19 @@ describe('collab server', () => {
 
       await server.hocuspocus.hooks('onChange', {
         ...changeBase,
-        context: {
-          user: { id: anonymousId, isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(anonymousId, 'edit'),
       });
       await server.hocuspocus.hooks('onChange', {
         ...changeBase,
-        context: { user: { id: owner.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, owner.id, 'edit'),
       });
       const anonymousConnection = {
-        context: {
-          user: { id: anonymousId, isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(anonymousId, 'edit'),
         sendStateless: vi.fn(),
         close: vi.fn(),
       };
       const ownerConnection = {
-        context: { user: { id: owner.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, owner.id, 'edit'),
         sendStateless: vi.fn(),
         close: vi.fn(),
       };
@@ -3604,7 +3629,7 @@ describe('collab server', () => {
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, owner.id, 'edit'),
         document,
         documentName: page.id,
         instance: server.hocuspocus,
@@ -3647,7 +3672,7 @@ describe('collab server', () => {
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: sourceOwner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, sourceOwner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -3684,7 +3709,7 @@ describe('collab server', () => {
       appendWikiLink(document, { path: 'renamed-target', label: 'External Target' });
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: sourceOwner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, sourceOwner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -3723,7 +3748,7 @@ describe('collab server', () => {
       });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: { user: { id: editor.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, editor.id, 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -3765,7 +3790,7 @@ describe('collab server', () => {
       appendWikiLink(document, { path: 'hidden slug target', label: 'Authored Alias' });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: { user: { id: editor.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, editor.id, 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -3808,8 +3833,8 @@ describe('collab server', () => {
         path: 'owner-only-target',
         label: 'Authored Alias',
       });
-      const ownerContext = { user: { id: owner.id }, permission: 'edit' as const };
-      const editorContext = { user: { id: editor.id }, permission: 'edit' as const };
+      const ownerContext = await createAccountHookContext(pool, owner.id, 'edit');
+      const editorContext = await createAccountHookContext(pool, editor.id, 'edit');
       server.hocuspocus.documents.set(source.id, document);
       try {
         for (const [context, update] of [
@@ -3866,11 +3891,8 @@ describe('collab server', () => {
         path: 'account-only-target',
         label: 'Authored Alias',
       });
-      const ownerContext = { user: { id: owner.id }, permission: 'edit' as const };
-      const anonymousContext = {
-        user: { id: crypto.randomUUID(), isAnonymous: true },
-        permission: 'edit' as const,
-      };
+      const ownerContext = await createAccountHookContext(pool, owner.id, 'edit');
+      const anonymousContext = createAnonymousHookContext(crypto.randomUUID(), 'edit');
       server.hocuspocus.documents.set(source.id, document);
       try {
         for (const [context, update] of [
@@ -3928,10 +3950,7 @@ describe('collab server', () => {
       });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: {
-          user: { id: crypto.randomUUID(), isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(crypto.randomUUID(), 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -3969,10 +3988,7 @@ describe('collab server', () => {
       });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: {
-          user: { id: crypto.randomUUID(), isAnonymous: true },
-          permission: 'edit',
-        },
+        context: createAnonymousHookContext(crypto.randomUUID(), 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4007,7 +4023,7 @@ describe('collab server', () => {
       appendWikiLink(document, { path: '/Visible Target.md#Section', label: 'Authored Alias' });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: { user: { id: editor.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, editor.id, 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4056,7 +4072,7 @@ describe('collab server', () => {
       });
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: editor.id }, permission: 'edit' },
+        context: await createAccountHookContext(pool, editor.id, 'edit'),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4111,7 +4127,7 @@ describe('collab server', () => {
       });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4137,7 +4153,7 @@ describe('collab server', () => {
 
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4178,7 +4194,7 @@ describe('collab server', () => {
       appendWikiLink(document, { path: 'Duplicate title', label: 'Duplicate title' });
       await server.hocuspocus.hooks('onStoreDocument', {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4214,7 +4230,7 @@ describe('collab server', () => {
       appendWikiLink(document, { path: 'visible target', label: 'Visible target' });
       const payload: onStoreDocumentPayload = {
         clientsCount: 1,
-        context: { user: { id: owner.id }, permission: 'admin' },
+        context: await createAccountHookContext(pool, owner.id),
         document,
         documentName: source.id,
         instance: server.hocuspocus,
@@ -4438,7 +4454,7 @@ describe('collab server', () => {
         document.getText('title').insert(0, 'Updated title');
         const payload: onStoreDocumentPayload = {
           clientsCount: 1,
-          context: { user: { id: owner.id }, permission: 'admin' },
+          context: await createAccountHookContext(pool, owner.id),
           document,
           documentName: page.id,
           instance: server.hocuspocus,
@@ -4462,7 +4478,7 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id, 'Original title');
       const document = new Document(page.id);
-      const context = { user: { id: owner.id }, permission: 'admin' as const };
+      const context = await createAccountHookContext(pool, owner.id);
       await server.hocuspocus.hooks('onLoadDocument', {
         context,
         document,
@@ -4505,7 +4521,7 @@ describe('collab server', () => {
       const owner = await createTestUser(pool);
       const page = await createTestPage(pool, owner.id, 'Merge page');
       const document = new Document(page.id);
-      const context = { user: { id: owner.id }, permission: 'admin' as const };
+      const context = await createAccountHookContext(pool, owner.id);
       await server.hocuspocus.hooks('onLoadDocument', {
         context,
         document,
@@ -4575,7 +4591,7 @@ describe('collab server', () => {
       });
       const document = new Document(page.id);
       document.getText('content').insert(0, 'durably committed');
-      const context = { user: { id: owner.id }, permission: 'admin' as const };
+      const context = await createAccountHookContext(pool, owner.id);
       const metaRoomName = `page-meta:${owner.id}`;
       postCommitServer.hocuspocus.documents.set(metaRoomName, new Document(metaRoomName));
       postCommitServer.hocuspocus.documents.set(page.id, document);
@@ -4728,14 +4744,11 @@ describe('collab server', () => {
       await waitFor(() => provider.synced, 5_000, 'provider to sync');
       const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
       const serverConnection = activeDocument?.getConnections().find((connection) => {
-        const connectionContext = connection.context as { user?: { id?: string } } | undefined;
-        return connectionContext?.user?.id === user.id;
+        const connectionContext = connection.context as CollabSession | undefined;
+        return connectionContext?.principal && getSessionUser(connectionContext).id === user.id;
       });
       if (!serverConnection) throw new Error('Missing server-side coalescing connection');
-      const connectionContext = serverConnection.context as
-        | { permissionCheck?: Promise<void> }
-        | undefined;
-      await connectionContext?.permissionCheck;
+      await waitForPermissionChecks(serverConnection.context as CollabSession);
 
       // Spy on pool.connect calls — each persistDocument call acquires a client,
       // so connect call count after the initial sync fence reflects persistence
@@ -4770,227 +4783,6 @@ describe('collab server', () => {
 
       connectSpy.mockRestore();
       provider.destroy();
-    });
-  });
-
-  describe('active permission revalidation', () => {
-    it('does not roll an unpersisted collaborative title back during periodic access refresh', async () => {
-      const owner = await createTestUser(pool);
-      const page = await createTestPage(pool, owner.id, 'Persisted old title');
-      const periodicServer = createCollabServer({
-        port: 0,
-        pool,
-        logger: mockLogger(),
-        permissionRevalidationMs: 10,
-      });
-      const activeDocument = new Document(page.id);
-      activeDocument.getText('title').insert(0, 'Pending collaborative title');
-      periodicServer.hocuspocus.documents.set(page.id, activeDocument);
-
-      try {
-        await sleep(100);
-        expect(activeDocument.getText('title').toString()).toBe('Pending collaborative title');
-        const persisted = await pool.query<{ title: string }>(
-          'select title from pages where id = $1',
-          [page.id],
-        );
-        expect(persisted.rows[0]?.title).toBe('Persisted old title');
-      } finally {
-        periodicServer.hocuspocus.documents.delete(page.id);
-        await periodicServer.destroy();
-      }
-    });
-
-    it('canonically recovers missed permission, metadata, and deletion events', async () => {
-      const owner = await createTestUser(pool);
-      const viewer = await createTestUser(pool);
-      const page = await createTestPage(pool, owner.id, 'Canonical title');
-      const deletedPage = await createTestPage(pool, owner.id, 'Deleted while offline');
-      await pool.query(
-        `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
-         values ('page', $1, $2, $3, 'view')`,
-        [page.id, owner.id, viewer.id],
-      );
-      const pageRevision = await pool.query<{ access_revision: string }>(
-        'select get_page_access_revision($1)::text as access_revision',
-        [page.id],
-      );
-      const deletedPageRevision = await pool.query<{ access_revision: string }>(
-        'select get_page_access_revision($1)::text as access_revision',
-        [deletedPage.id],
-      );
-
-      const viewerConnection = {
-        context: {
-          user: { id: viewer.id },
-          permission: 'view',
-          accessRevision: pageRevision.rows[0]?.access_revision,
-        },
-        readOnly: true,
-        send: vi.fn(),
-        sendStateless: vi.fn(),
-        close: vi.fn(),
-      };
-      const deletedConnection = {
-        context: {
-          user: { id: owner.id },
-          permission: 'admin',
-          accessRevision: deletedPageRevision.rows[0]?.access_revision,
-        },
-        readOnly: false,
-        send: vi.fn(),
-        sendStateless: vi.fn(),
-        close: vi.fn(),
-      };
-      const pageDocument = new Document(page.id);
-      const deletedDocument = new Document(deletedPage.id);
-      const metaDocument = new Document(`page-meta:${owner.id}`);
-      metaDocument.getMap('pageIndex').set(page.id, { title: 'Stale title' });
-      metaDocument.getMap('pageIndex').set(deletedPage.id, { title: deletedPage.title });
-      vi.spyOn(pageDocument, 'getConnections').mockReturnValue([
-        viewerConnection,
-      ] as unknown as ReturnType<Document['getConnections']>);
-      vi.spyOn(deletedDocument, 'getConnections').mockReturnValue([
-        deletedConnection,
-      ] as unknown as ReturnType<Document['getConnections']>);
-      server.hocuspocus.documents.set(page.id, pageDocument);
-      server.hocuspocus.documents.set(deletedPage.id, deletedDocument);
-      server.hocuspocus.documents.set(`page-meta:${owner.id}`, metaDocument);
-
-      // These mutations represent events lost while the LISTEN connection was down.
-      await pool.query(
-        `delete from shares
-         where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
-        [page.id, viewer.id],
-      );
-      await pool.query('update pages set is_deleted = true where id = $1', [deletedPage.id]);
-
-      try {
-        await reconcileActiveCollaborationState(server, pool, logger);
-
-        expect(viewerConnection.close).toHaveBeenCalledWith({
-          code: 4401,
-          reason: 'Access revoked',
-        });
-        expect(deletedConnection.close).toHaveBeenCalledWith({
-          code: 4402,
-          reason: 'Page deleted',
-        });
-        expect(metaDocument.getMap('pageIndex').get(page.id)).toEqual(
-          expect.objectContaining({ title: 'Canonical title' }),
-        );
-        expect(metaDocument.getMap('pageIndex').has(deletedPage.id)).toBe(false);
-      } finally {
-        server.hocuspocus.documents.delete(page.id);
-        server.hocuspocus.documents.delete(deletedPage.id);
-        server.hocuspocus.documents.delete(`page-meta:${owner.id}`);
-      }
-    });
-
-    it('disconnects a viewer after their only account grant is revoked', async () => {
-      const owner = await createTestUser(pool);
-      const viewer = await createTestUser(pool);
-      const page = await createTestPage(pool, owner.id);
-      await pool.query(
-        `insert into shares (
-           entity_type, entity_id, shared_by, recipient_user_id, permission
-         ) values ('page', $1, $2, $3, 'view')`,
-        [page.id, owner.id, viewer.id],
-      );
-
-      const connection = {
-        context: { user: { id: viewer.id }, permission: 'view' },
-        readOnly: true,
-        sendStateless: vi.fn(),
-        close: vi.fn(),
-      };
-      const activeDocument = new Document(page.id);
-      vi.spyOn(activeDocument, 'getConnections').mockReturnValue([
-        connection,
-      ] as unknown as ReturnType<Document['getConnections']>);
-      server.hocuspocus.documents.set(page.id, activeDocument);
-      await pool.query(
-        `delete from shares
-         where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
-        [page.id, viewer.id],
-      );
-
-      try {
-        await revalidateActivePageConnections(server, pool, logger);
-        expect(connection.close).toHaveBeenCalledWith({
-          code: 4401,
-          reason: 'Access revoked',
-        });
-      } finally {
-        server.hocuspocus.documents.delete(page.id);
-      }
-    });
-
-    it('disconnects page and metadata sockets when their session is deleted', async () => {
-      const user = await createTestUser(pool);
-      const session = await createTestSession(pool, user.id);
-      const page = await createTestPage(pool, user.id);
-      const pageRevision = await pool.query<{ access_revision: string }>(
-        'select get_page_access_revision($1)::text as access_revision',
-        [page.id],
-      );
-      const metaRevision = await pool.query<{ access_revision: string }>(
-        'select coalesce(max(version), 0)::text as access_revision from workspace_access_versions',
-      );
-      const pageConnection = {
-        context: {
-          user: { id: user.id },
-          permission: 'admin',
-          sessionToken: session.token,
-          accessRevision: pageRevision.rows[0]?.access_revision,
-        },
-        readOnly: false,
-        sendStateless: vi.fn(),
-        close: vi.fn(),
-      };
-      const metaConnection = {
-        context: {
-          user: { id: user.id },
-          permission: null,
-          sessionToken: session.token,
-          accessRevision: metaRevision.rows[0]?.access_revision,
-        },
-        readOnly: true,
-        sendStateless: vi.fn(),
-        close: vi.fn(),
-      };
-      const pageDocument = new Document(page.id);
-      const metaDocument = new Document(`page-meta:${user.id}`);
-      vi.spyOn(pageDocument, 'getConnections').mockReturnValue([
-        pageConnection,
-      ] as unknown as ReturnType<Document['getConnections']>);
-      vi.spyOn(metaDocument, 'getConnections').mockReturnValue([
-        metaConnection,
-      ] as unknown as ReturnType<Document['getConnections']>);
-      server.hocuspocus.documents.set(page.id, pageDocument);
-      server.hocuspocus.documents.set(`page-meta:${user.id}`, metaDocument);
-      await pool.query('delete from sessions where token = $1', [session.token]);
-
-      try {
-        await revalidateActivePageConnections(server, pool, logger);
-        expect(pageConnection.close).toHaveBeenCalledWith({
-          code: 4401,
-          reason: 'Access revoked',
-        });
-        expect(metaConnection.close).toHaveBeenCalledWith({
-          code: 4401,
-          reason: 'Session expired',
-        });
-        expect(pageConnection.sendStateless).toHaveBeenCalledWith(
-          expect.stringMatching(/"type":"permission_snapshot".*"permission":null/),
-        );
-        expect(metaConnection.sendStateless).toHaveBeenCalledWith(
-          expect.stringMatching(/"type":"permission_snapshot".*"permission":null/),
-        );
-      } finally {
-        server.hocuspocus.documents.delete(page.id);
-        server.hocuspocus.documents.delete(`page-meta:${user.id}`);
-      }
     });
   });
 
@@ -5248,11 +5040,10 @@ describe('collab server', () => {
           () =>
             (eventServer.hocuspocus.documents.get(page.id) as Document | undefined)
               ?.getConnections()
-              .some(
-                (connection) =>
-                  (connection.context as { user?: { isAnonymous?: boolean } } | undefined)?.user
-                    ?.isAnonymous === true,
-              ) === true,
+              .some((connection) => {
+                const context = connection.context as CollabSession | undefined;
+                return context?.principal.kind === 'anonymous';
+              }) === true,
           5_000,
           'anonymous connection to become active',
         );
@@ -5801,7 +5592,7 @@ describe('collab server', () => {
     it('returns early when no in-memory document exists', async () => {
       const payload: onDisconnectPayload = {
         clientsCount: 0,
-        context: { user: { id: crypto.randomUUID() } },
+        context: createUnverifiedAccountHookContext(crypto.randomUUID()),
         document: new Document(crypto.randomUUID()),
         documentName: crypto.randomUUID(),
         instance: server.hocuspocus,
@@ -5839,7 +5630,7 @@ describe('collab server', () => {
       try {
         await isolatedServer.hocuspocus.hooks('onDisconnect', {
           clientsCount: 1,
-          context: { user: { id: crypto.randomUUID() }, permission: 'view' },
+          context: createUnverifiedAccountHookContext(crypto.randomUUID(), 'view'),
           document,
           documentName,
           instance: isolatedServer.hocuspocus,
@@ -5891,7 +5682,7 @@ describe('collab server', () => {
       const doc = new Document(documentName);
       doc.getText('content').insert(0, 'pending');
       failingServer.hocuspocus.documents.set(documentName, doc);
-      const context = { user: { id: user.id }, permission: 'admin' as const };
+      const context = await createAccountHookContext(pool, user.id);
       await failingServer.hocuspocus.hooks('onChange', {
         clientsCount: 1,
         context,
@@ -5963,7 +5754,7 @@ describe('collab server', () => {
 
       const payload: onDisconnectPayload = {
         clientsCount: 0,
-        context: { user: { id: crypto.randomUUID() } },
+        context: createUnverifiedAccountHookContext(crypto.randomUUID()),
         document: doc,
         documentName,
         instance: server.hocuspocus,
@@ -6397,8 +6188,10 @@ describe('collab server', () => {
         await waitFor(() => intruderProvider?.synced === true, 5_000, 'intruder provider to sync');
         const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
         const intruderConnection = activeDocument?.getConnections().find((connection) => {
-          const connectionContext = connection.context as { user?: { id?: string } } | undefined;
-          return connectionContext?.user?.id === intruder.id;
+          const connectionContext = connection.context as CollabSession | undefined;
+          return (
+            connectionContext?.principal && getSessionUser(connectionContext).id === intruder.id
+          );
         });
         if (!activeDocument || !intruderConnection) {
           throw new Error('Missing intruder awareness connection');
@@ -6481,10 +6274,12 @@ describe('collab server', () => {
         );
         const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
         const anonymousConnection = activeDocument?.getConnections().find((connection) => {
-          const connectionContext = connection.context as
-            | { user?: { id?: string; isAnonymous?: boolean } }
-            | undefined;
-          return connectionContext?.user?.id === owner.id && connectionContext.user.isAnonymous;
+          const connectionContext = connection.context as CollabSession | undefined;
+          return (
+            connectionContext?.principal &&
+            getSessionUser(connectionContext).id === owner.id &&
+            isAnonymousSession(connectionContext)
+          );
         });
         const currentClock = activeDocument?.awareness.meta.get(sharedDocument.clientID)?.clock;
         if (!activeDocument || !anonymousConnection || currentClock === undefined) {
@@ -6635,12 +6430,11 @@ describe('collab server', () => {
         await waitFor(() => duplicate?.synced === true, 5_000, 'unbound duplicate to sync');
         const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
         const unboundConnection = activeDocument?.getConnections().find((connection) => {
-          const connectionContext = connection.context as
-            | { awarenessClientId?: number; user?: { id?: string } }
-            | undefined;
+          const connectionContext = connection.context as CollabSession | undefined;
           return (
-            connectionContext?.user?.id === user.id &&
-            connectionContext.awarenessClientId === undefined
+            connectionContext?.principal &&
+            getSessionUser(connectionContext).id === user.id &&
+            connectionContext.lifecycle.awareness.clientId === undefined
           );
         });
         const currentClock = activeDocument?.awareness.meta.get(sharedDocument.clientID)?.clock;
@@ -6708,9 +6502,26 @@ describe('collab server', () => {
         attackers.push(provider);
         await waitFor(() => provider.synced, 10_000, 'awareness attacker to sync');
         const activeDocument = server.hocuspocus.documents.get(page.id) as Document | undefined;
+        await waitFor(
+          () =>
+            activeDocument?.getConnections().some((connection) => {
+              const connectionContext = connection.context as CollabSession | undefined;
+              return (
+                connectionContext?.principal.kind === 'account' &&
+                getSessionUser(connectionContext).id === attacker.id &&
+                connectionContext.lifecycle.awareness.clientId === attackerDocument.clientID
+              );
+            }) === true,
+          5_000,
+          'current awareness attacker connection to become identifiable',
+        );
         const serverConnection = activeDocument?.getConnections().find((connection) => {
-          const connectionContext = connection.context as { user?: { id?: string } } | undefined;
-          return connectionContext?.user?.id === attacker.id;
+          const connectionContext = connection.context as CollabSession | undefined;
+          return (
+            connectionContext?.principal.kind === 'account' &&
+            getSessionUser(connectionContext).id === attacker.id &&
+            connectionContext.lifecycle.awareness.clientId === attackerDocument.clientID
+          );
         });
         if (!serverConnection) throw new Error('Missing server-side attacker connection');
         const serverClose = vi.spyOn(serverConnection, 'close');

@@ -9,3 +9,6 @@ allowBuilds:
   esbuild: true
   '@playwright/test': true
   '@biomejs/biome': false
+
+patchedDependencies:
+  '@hocuspocus/server@3.4.4': patches/@hocuspocus__server@3.4.4.patch
