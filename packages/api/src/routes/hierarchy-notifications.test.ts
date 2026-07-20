@@ -1,7 +1,9 @@
+import { sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestFolder,
@@ -245,7 +247,10 @@ describe('hierarchy creation notifications', () => {
 
     const blocker = db.transaction(async (tx) => {
       await lockWorkspaceAccessMutation(tx, originalOwner.id);
-      const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+      const pidResult = await executeQuery<{ pid: number }>(
+        tx,
+        sql.raw('select pg_backend_pid() as pid'),
+      );
       const pid = pidResult.rows[0]?.pid;
       if (pid === undefined) throw new Error('Failed to resolve blocker PID');
       signalBlockerReady(pid);

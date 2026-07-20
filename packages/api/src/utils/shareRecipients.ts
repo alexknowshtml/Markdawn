@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
 type ShareEntityType = 'folder' | 'page';
@@ -14,11 +15,11 @@ export async function getEntityMetaUserIds(
 ): Promise<string[]> {
   const statement =
     entityType === 'page'
-      ? `with target as (
+      ? sql`with target as (
            select page.parent_id,
                   coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id
            from pages page
-           where page.id = $1
+           where page.id = ${entityId}
          ), source_folders as (
            select path.ancestor_id as id
            from target
@@ -30,33 +31,33 @@ export async function getEntityMetaUserIds(
            join workspace_members member on member.workspace_owner_id = target.owner_id
            union
            select share.recipient_user_id from shares share
-           where share.entity_type = 'page' and share.entity_id = $1
+           where share.entity_type = 'page' and share.entity_id = ${entityId}
            union
            select share.recipient_user_id from shares share
            where share.entity_type = 'folder'
              and share.entity_id in (select id from source_folders)
            union
-           select visit.user_id from page_public_access_visits visit where visit.page_id = $1
+           select visit.user_id from page_public_access_visits visit where visit.page_id = ${entityId}
            union
            select visit.user_id from folder_public_access_visits visit
            where visit.folder_id in (select id from source_folders)
          )
          select distinct user_id from candidates where user_id is not null`
-      : `with target_folders as (
+      : sql`with target_folders as (
            select path.descendant_id as id
            from folder_closure path
-           where path.ancestor_id = $1
+           where path.ancestor_id = ${entityId}
          ), target_pages as (
            select page.id from pages page
            where page.parent_id in (select id from target_folders)
          ), related_folders as (
            select path.ancestor_id as id
            from folder_closure path
-           where path.descendant_id = $1
+           where path.descendant_id = ${entityId}
            union
            select id from target_folders
          ), target as (
-           select get_root_folder_owner($1) as owner_id
+           select get_root_folder_owner(${entityId}) as owner_id
          ), candidates as (
            select owner_id as user_id from target
            union
@@ -79,7 +80,7 @@ export async function getEntityMetaUserIds(
          )
          select distinct user_id from candidates where user_id is not null`;
 
-  const result = await executeQuery<{ user_id: string }>(executor, statement, [entityId]);
+  const result = await executeQuery<{ user_id: string }>(executor, statement);
   return result.rows.map((row) => row.user_id);
 }
 

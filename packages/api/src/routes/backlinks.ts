@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
@@ -20,22 +21,21 @@ backlinksRoute.get('/', async (c) => {
     await ensurePageAccess(pageId, user.id, 'view', tx);
     return executeQuery(
       tx,
-      `select c.id, c.source_id as "sourcePageId", c.link_text as "linkText",
+      sql`select c.id, c.source_id as "sourcePageId", c.link_text as "linkText",
               c.connection_type as "linkType", c.updated_at as "createdAt",
               p.title as "sourceTitle", p.icon as "sourceIcon"
        from connections c
        join pages p on p.id = c.source_id
        where c.target_type = 'page'
-         and c.target_id = $1
+         and c.target_id = ${pageId}
          and c.connection_type in ('wikilink', 'heading', 'embed')
          and p.is_deleted = false
          and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = (
            select coalesce(get_root_folder_owner(target.parent_id), target.created_by)
-           from pages target where target.id = $1 and target.is_deleted = false
+           from pages target where target.id = ${pageId} and target.is_deleted = false
          )
-         and p.id in (select page_id from get_accessible_page_ids($2))
+         and p.id in (select page_id from get_accessible_page_ids(${user.id}))
        order by c.updated_at desc`,
-      [pageId, user.id],
     );
   });
 
@@ -54,7 +54,7 @@ backlinksRoute.get('/outgoing', async (c) => {
     await ensurePageAccess(pageId, user.id, 'view', tx);
     return executeQuery(
       tx,
-      `select c.id, accessible_target.id as "targetPageId",
+      sql`select c.id, accessible_target.id as "targetPageId",
               case
                 when accessible_target.id is not null then accessible_target.title
                 when known_target.id is not null then 'Restricted page'
@@ -82,14 +82,13 @@ backlinksRoute.get('/outgoing', async (c) => {
        left join pages accessible_target on accessible_target.id = known_target.id
          and exists (
            select 1
-           from get_effective_page_permission(accessible_target.id, $2) access
+           from get_effective_page_permission(accessible_target.id, ${user.id}) access
            where access.permission is not null
          )
-       where c.source_id = $1
+       where c.source_id = ${pageId}
          and c.target_type = 'page'
          and c.connection_type in ('wikilink', 'heading', 'embed')
        order by c.updated_at desc`,
-      [pageId, user.id],
     );
   });
 

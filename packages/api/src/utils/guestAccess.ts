@@ -1,4 +1,5 @@
 import { getAnonymousName } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import type { Context } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { auth } from '../auth';
@@ -47,10 +48,9 @@ export async function persistGuestIdentity(
   if (actor.kind !== 'guest') return;
   await executeQuery(
     executor,
-    `insert into guest_identities (id, name, created_at, last_seen_at)
-     values ($1, $2, now(), now())
+    sql`insert into guest_identities (id, name, created_at, last_seen_at)
+     values (${actor.id}, ${actor.name}, now(), now())
      on conflict (id) do update set last_seen_at = excluded.last_seen_at`,
-    [actor.id, actor.name],
   );
 }
 
@@ -68,8 +68,7 @@ export async function ensureActorPageAccess(
   }
   const result = await executeQuery<{ permission: SharePermission | null }>(
     executor,
-    'select get_public_page_permission($1) as permission',
-    [pageId],
+    sql`select get_public_page_permission(${pageId}) as permission`,
   );
   const permission = result.rows[0]?.permission;
   if (!permission) {
@@ -92,8 +91,7 @@ export async function ensureActorFolderAccess(
   }
   const result = await executeQuery<{ permission: SharePermission | null }>(
     executor,
-    'select get_public_folder_permission($1) as permission',
-    [folderId],
+    sql`select get_public_folder_permission(${folderId}) as permission`,
   );
   const permission = result.rows[0]?.permission;
   if (!permission) {

@@ -1,9 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { type SQL, sql } from 'drizzle-orm';
+import type { QueryResult, QueryResultRow } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { db } from './connection';
-import { executeQuery } from './query';
+import { executeQuery as executeSql, type QueryExecutor } from './query';
+
+async function executeQuery<T extends QueryResultRow = QueryResultRow>(
+  executor: QueryExecutor,
+  statement: string | SQL,
+): Promise<QueryResult<T>> {
+  return executeSql<T>(executor, typeof statement === 'string' ? sql.raw(statement) : statement);
+}
 
 const currentDir = dirname(fileURLToPath(import.meta.url));
 const drizzleDir = resolve(currentDir, '../../drizzle');
@@ -29,9 +38,8 @@ describe('migration legacy-data remediation', () => {
       );
       await executeQuery(
         tx,
-        `insert into pages (title, title_search)
-         values ($1, to_tsvector('english', $1))`,
-        ['📚'.repeat(251)],
+        sql`insert into pages (title, title_search)
+         values (${'📚'.repeat(251)}, to_tsvector('english', ${'📚'.repeat(251)}))`,
       );
 
       for (const statement of readMigrationStatements('20260717113244_enforce_page_title_length')) {
@@ -99,17 +107,16 @@ describe('migration legacy-data remediation', () => {
       const folderId = crypto.randomUUID();
       await executeQuery(
         tx,
-        `insert into shares (entity_type, entity_id, token, permission)
-         values ('page', $1, 'page-token', 'admin'), ('folder', $2, 'folder-token', 'admin')`,
-        [pageId, folderId],
+        sql`insert into shares (entity_type, entity_id, token, permission)
+         values ('page', ${pageId}, 'page-token', 'admin'), ('folder', ${folderId}, 'folder-token', 'admin')`,
       );
-      await executeQuery(tx, `insert into page_access_events values ($1, 'page-token', 'admin')`, [
-        pageId,
-      ]);
       await executeQuery(
         tx,
-        `insert into folder_access_events values ($1, 'folder-token', 'admin')`,
-        [folderId],
+        sql`insert into page_access_events values (${pageId}, 'page-token', 'admin')`,
+      );
+      await executeQuery(
+        tx,
+        sql`insert into folder_access_events values (${folderId}, 'folder-token', 'admin')`,
       );
 
       for (const statement of readMigrationStatements(
@@ -154,7 +161,7 @@ describe('migration legacy-data remediation', () => {
            title text
          ) on commit drop`,
       );
-      await executeQuery(tx, 'insert into page_versions (title) values ($1)', ['📚'.repeat(251)]);
+      await executeQuery(tx, sql`insert into page_versions (title) values (${'📚'.repeat(251)})`);
 
       for (const statement of readMigrationStatements(
         '20260717115547_enforce_page_version_title_length',
@@ -229,29 +236,26 @@ describe('migration legacy-data remediation', () => {
       const nearerBatchId = crypto.randomUUID();
       await executeQuery(
         tx,
-        `insert into folders (id, is_deleted, deleted_at, deletion_batch_id)
+        sql`insert into folders (id, is_deleted, deleted_at, deletion_batch_id)
          values
-           ($1, true, '2026-01-01 00:00:00', $5),
-           ($2, false, null, null),
-           ($3, true, '2026-02-01 00:00:00', $6),
-           ($4, false, null, null)`,
-        [rootId, childId, nearerDeletedId, leafId, rootBatchId, nearerBatchId],
+           (${rootId}, true, '2026-01-01 00:00:00', ${rootBatchId}),
+           (${childId}, false, null, null),
+           (${nearerDeletedId}, true, '2026-02-01 00:00:00', ${nearerBatchId}),
+           (${leafId}, false, null, null)`,
       );
       await executeQuery(
         tx,
-        `insert into folder_closure (ancestor_id, descendant_id, depth)
+        sql`insert into folder_closure (ancestor_id, descendant_id, depth)
          values
-           ($1, $1, 0),
-           ($1, $2, 1), ($2, $2, 0),
-           ($1, $3, 2), ($2, $3, 1), ($3, $3, 0),
-           ($1, $4, 3), ($2, $4, 2), ($3, $4, 1), ($4, $4, 0)`,
-        [rootId, childId, nearerDeletedId, leafId],
+           (${rootId}, ${rootId}, 0),
+           (${rootId}, ${childId}, 1), (${childId}, ${childId}, 0),
+           (${rootId}, ${nearerDeletedId}, 2), (${childId}, ${nearerDeletedId}, 1), (${nearerDeletedId}, ${nearerDeletedId}, 0),
+           (${rootId}, ${leafId}, 3), (${childId}, ${leafId}, 2), (${nearerDeletedId}, ${leafId}, 1), (${leafId}, ${leafId}, 0)`,
       );
       await executeQuery(
         tx,
-        `insert into pages (id, parent_id, is_deleted)
-         values ($1, $2, false)`,
-        [pageId, leafId],
+        sql`insert into pages (id, parent_id, is_deleted)
+         values (${pageId}, ${leafId}, false)`,
       );
 
       for (const statement of readMigrationStatements(
@@ -269,7 +273,7 @@ describe('migration legacy-data remediation', () => {
         page_batch: string | null;
       }>(
         tx,
-        `select
+        sql`select
            child.is_deleted as child_deleted,
            child.deletion_batch_id::text as child_batch,
            leaf.is_deleted as leaf_deleted,
@@ -277,10 +281,9 @@ describe('migration legacy-data remediation', () => {
            page.is_deleted as page_deleted,
            page.deletion_batch_id::text as page_batch
          from folders child
-         join folders leaf on leaf.id = $2
-         join pages page on page.id = $3
-         where child.id = $1`,
-        [childId, leafId, pageId],
+         join folders leaf on leaf.id = ${leafId}
+         join pages page on page.id = ${pageId}
+         where child.id = ${childId}`,
       );
       expect(result.rows[0]).toEqual({
         child_deleted: true,

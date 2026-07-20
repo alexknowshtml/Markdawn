@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { query } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import { createTestApp } from '../test-utils';
 
 describe('POST /api/test/setup', () => {

@@ -1,10 +1,14 @@
 import {
+  type GrantReceivedNotificationPayload,
   getUnicodeCodePointLength,
   type ShareEntityType,
   type ShareEventAction,
+  type ShareEventPayload,
   type SharePermission,
   truncateUnicodeCodePoints,
+  type WorkspaceNotificationPayload,
 } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
@@ -28,6 +32,13 @@ export interface ShareEventBase {
   message?: string;
 }
 
+type ShareGrantEvent = ShareEventBase & {
+  permission: SharePermission;
+  targetUserId: string;
+  entityTitle: string;
+  sharedByName: string;
+};
+
 export function createShareEventPayloads(
   action: ShareEventAction,
   params: ShareEventBase,
@@ -49,7 +60,7 @@ export function createShareEventPayloads(
 
   return metaUserChunks.map((metaUserIds, index) => {
     const isMetaOnly = params.metaOnly === true || index > 0;
-    return JSON.stringify({
+    const payload = {
       type: 'share_event',
       action,
       entityType: params.entityType,
@@ -63,7 +74,8 @@ export function createShareEventPayloads(
       ...((params.metaOnly !== undefined || index > 0) && { metaOnly: isMetaOnly }),
       ...(!isMetaOnly &&
         params.message !== undefined && { message: boundedNotificationText(params.message) }),
-    });
+    } satisfies ShareEventPayload;
+    return JSON.stringify(payload);
   });
 }
 
@@ -74,30 +86,29 @@ async function fireShareEvent(
 ): Promise<void> {
   const payloads = createShareEventPayloads(action, params);
   for (const payload of payloads) {
-    await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [payload]);
+    await executeQuery(executor, sql`SELECT pg_notify('share_event', ${payload})`);
   }
 }
 
 export async function notifyShareGrant(
-  params: ShareEventBase,
+  params: ShareGrantEvent,
   executor: QueryExecutor = db,
 ): Promise<void> {
   await fireShareEvent('grant', params, executor);
-  if (params.targetUserId && params.entityTitle && params.sharedByName) {
-    const grantPayload = {
-      type: 'grant_received',
-      entityType: params.entityType,
-      entityId: params.entityId,
-      entityTitle: boundedNotificationText(params.entityTitle),
-      sharedByName: boundedNotificationText(params.sharedByName),
-      targetUserId: params.targetUserId,
-      ...(params.permission !== undefined && { permission: params.permission }),
-      ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
-    };
-    await executeQuery(executor, "SELECT pg_notify('share_event', $1)", [
-      JSON.stringify(grantPayload),
-    ]);
-  }
+  const grantPayload = {
+    type: 'grant_received',
+    entityType: params.entityType,
+    entityId: params.entityId,
+    entityTitle: boundedNotificationText(params.entityTitle),
+    sharedByName: boundedNotificationText(params.sharedByName),
+    targetUserId: params.targetUserId,
+    permission: params.permission,
+    ...(params.message !== undefined && { message: boundedNotificationText(params.message) }),
+  } satisfies GrantReceivedNotificationPayload;
+  await executeQuery(
+    executor,
+    sql`SELECT pg_notify('share_event', ${JSON.stringify(grantPayload)})`,
+  );
 }
 
 export function notifyShareUpdate(params: ShareEventBase, executor: QueryExecutor = db) {
@@ -125,8 +136,9 @@ export function notifyWorkspaceEvent(
     ownerId,
     memberId,
     ...(message !== undefined && { message: boundedNotificationText(message) }),
-  };
-  return executeQuery(executor, "SELECT pg_notify('workspace_event', $1)", [
-    JSON.stringify(payload),
-  ]);
+  } satisfies WorkspaceNotificationPayload;
+  return executeQuery(
+    executor,
+    sql`SELECT pg_notify('workspace_event', ${JSON.stringify(payload)})`,
+  );
 }

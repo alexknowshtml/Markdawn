@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
@@ -30,9 +31,8 @@ router.post('/test/setup', async (c) => {
   const email = `e2e-${id.slice(0, 8)}@example.com`;
 
   await query(
-    `INSERT INTO users (id, email, name, email_verified, created_at, updated_at)
-     VALUES ($1, $2, $3, true, NOW(), NOW())`,
-    [id, email, name ?? 'E2E Test User'],
+    sql`INSERT INTO users (id, email, name, email_verified, created_at, updated_at)
+     VALUES (${id}, ${email}, ${name ?? 'E2E Test User'}, true, NOW(), NOW())`,
   );
 
   const token = randomUUID();
@@ -50,9 +50,8 @@ router.post('/test/setup', async (c) => {
   const signedToken = `${token}.${base64sig}`;
 
   await query(
-    `INSERT INTO sessions (id, token, expires_at, created_at, updated_at, user_id)
-     VALUES ($1, $2, NOW() + INTERVAL '1 day', NOW(), NOW(), $3)`,
-    [sessionId, token, id],
+    sql`INSERT INTO sessions (id, token, expires_at, created_at, updated_at, user_id)
+     VALUES (${sessionId}, ${token}, NOW() + INTERVAL '1 day', NOW(), NOW(), ${id})`,
   );
 
   return c.json({ cookie: signedToken, userId: id });

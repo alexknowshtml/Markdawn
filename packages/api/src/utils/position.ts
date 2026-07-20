@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
@@ -24,12 +25,14 @@ export async function getNextPosition(
   ownerId: string,
   executor: QueryExecutor = db,
 ): Promise<string> {
-  const scope = parentId ? 'parent_id = $1' : 'parent_id is null and created_by = $1';
+  const scope = parentId
+    ? sql`parent_id = ${parentId}`
+    : sql`parent_id is null and created_by = ${ownerId}`;
   const result = await executeQuery<{ next_position: string }>(
     executor,
-    `with current_position as (
+    sql`with current_position as (
        select max(position::numeric) as maximum
-       from ${entity}
+       from ${sql.identifier(entity)}
        where ${scope} and is_deleted = false
      ), candidate as (
        select maximum, coalesce(maximum, -1::numeric) + 1 as value
@@ -40,7 +43,6 @@ export async function getNextPosition(
        else maximum::text
      end as next_position
      from candidate`,
-    [parentId ?? ownerId],
   );
 
   const nextPosition = result.rows[0]?.next_position;

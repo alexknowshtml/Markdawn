@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
 type EntityType = 'folder' | 'page';
@@ -17,27 +18,23 @@ export async function purgeEntityAccessMetadata(
 
   await executeQuery(
     executor,
-    'delete from shares where entity_type = $1 and entity_id = any($2::uuid[])',
-    [entityType, entityIds],
+    sql`delete from shares where entity_type = ${entityType} and entity_id = any(${sql.param([...entityIds])}::uuid[])`,
   );
   await executeQuery(
     executor,
-    'delete from user_favorites where entity_type = $1 and entity_id = any($2::uuid[])',
-    [entityType, entityIds],
+    sql`delete from user_favorites where entity_type = ${entityType} and entity_id = any(${sql.param([...entityIds])}::uuid[])`,
   );
 
   if (entityType === 'page') {
     await executeQuery(
       executor,
-      'delete from page_public_access_visits where page_id = any($1::uuid[])',
-      [entityIds],
+      sql`delete from page_public_access_visits where page_id = any(${sql.param([...entityIds])}::uuid[])`,
     );
     return;
   }
 
   await executeQuery(
     executor,
-    'delete from folder_public_access_visits where folder_id = any($1::uuid[])',
-    [entityIds],
+    sql`delete from folder_public_access_visits where folder_id = any(${sql.param([...entityIds])}::uuid[])`,
   );
 }

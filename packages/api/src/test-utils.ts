@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createApp } from './app';
-import { query } from './db/query';
+import { testQuery as query } from './db/testQuery';
 
 export async function createTestApp() {
   return createApp();

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { query } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestPage,

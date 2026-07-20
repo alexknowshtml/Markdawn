@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
@@ -19,7 +20,7 @@ const versionsRoute = new Hono();
 versionsRoute.use('*', requireAuth);
 
 const ensurePageExists = async (pageId: string) => {
-  const result = await query('select id from pages where id = $1 limit 1', [pageId]);
+  const result = await query(sql`select id from pages where id = ${pageId} limit 1`);
   return !!result.rows[0];
 };
 
@@ -32,8 +33,7 @@ versionsRoute.get(':pageId/versions', async (c) => {
 
     const versionsResult = await executeQuery(
       tx,
-      'select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = $1 order by pv.created_at desc',
-      [pageId],
+      sql`select pv.id, pv.page_id, pv.title, pv.created_at, u.name as created_by_name from page_versions pv left join users u on u.id = pv.created_by where pv.page_id = ${pageId} order by pv.created_at desc`,
     );
 
     const versions = (versionsResult.rows as VersionRow[]).map((row) => ({
@@ -72,8 +72,7 @@ versionsRoute.post(':pageId/versions', async (c) => {
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     return executeQuery(
       tx,
-      "insert into page_versions (page_id, content, title, created_by) values ($1, '{}'::jsonb, $2, $3) returning id, page_id, title, created_at",
-      [pageId, normalizedTitle, user.id],
+      sql`insert into page_versions (page_id, content, title, created_by) values (${pageId}, '{}'::jsonb, ${normalizedTitle}, ${user.id}) returning id, page_id, title, created_at`,
     );
   });
 
@@ -105,8 +104,7 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
   await ensurePageAccess(pageId, user.id, 'edit');
 
   const versionResult = await query(
-    'select title from page_versions where id = $1 and page_id = $2 limit 1',
-    [versionId, pageId],
+    sql`select title from page_versions where id = ${versionId} and page_id = ${pageId} limit 1`,
   );
 
   if (versionResult.rowCount === 0) {
@@ -122,19 +120,15 @@ versionsRoute.post(':pageId/versions/:versionId/restore', async (c) => {
     await ensurePageAccess(pageId, user.id, 'edit', tx);
     const result = await executeQuery(
       tx,
-      `update pages
-       set title_revision = title_revision + case when title is distinct from $1 then 1 else 0 end,
-           title = $1,
-           title_search = to_tsvector('english', $1),
+      sql`update pages
+       set title_revision = title_revision + case when title is distinct from ${versionTitle} then 1 else 0 end,
+           title = ${versionTitle},
+           title_search = to_tsvector('english', ${versionTitle}),
            updated_at = now()
-       where id = $2
+       where id = ${pageId}
        returning id, title`,
-      [versionTitle, pageId],
     );
-    await executeQuery(tx, 'select pg_notify($1, $2)', [
-      'page_renamed',
-      JSON.stringify({ pageId }),
-    ]);
+    await executeQuery(tx, sql`select pg_notify(${'page_renamed'}, ${JSON.stringify({ pageId })})`);
     return result;
   });
 

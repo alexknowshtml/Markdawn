@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { query } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestFolder,
@@ -126,10 +126,14 @@ describe('sharing API', () => {
     const recipientSession = await createTestSession(recipient.id);
     const page = await createTestPage(owner.id);
 
-    await app.request(`/api/shares/entity/page/${page.id}/grants`, {
+    const grantResponse = await app.request(`/api/shares/entity/page/${page.id}/grants`, {
       method: 'POST',
       headers: jsonHeaders(ownerSession.Cookie),
       body: JSON.stringify({ email: recipient.email, permission: 'view' }),
+    });
+    expect(await grantResponse.json()).toEqual({
+      ok: true,
+      message: `Granted view access to ${recipient.email} on ${page.title}`,
     });
     const grant = await query<{ id: string }>(
       'select id from shares where entity_type = $1 and entity_id = $2 and recipient_user_id = $3',
@@ -144,6 +148,10 @@ describe('sharing API', () => {
       body: JSON.stringify({ permission: 'edit' }),
     });
     expect(updateResponse.status).toBe(200);
+    expect(await updateResponse.json()).toEqual({
+      ok: true,
+      message: `Updated ${recipient.email}’s access to edit on ${page.title}`,
+    });
     expect(
       (
         await query<{ permission: string }>('select permission from shares where id = $1', [
@@ -157,6 +165,10 @@ describe('sharing API', () => {
       headers: { Cookie: ownerSession.Cookie },
     });
     expect(deleteResponse.status).toBe(200);
+    expect(await deleteResponse.json()).toEqual({
+      ok: true,
+      message: `Removed ${recipient.email}’s access to ${page.title}`,
+    });
     expect(
       (
         await app.request(`/api/pages/${page.id}`, {
@@ -191,7 +203,10 @@ describe('sharing API', () => {
       headers: { Cookie: recipientSession.Cookie },
     });
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ok: true, message: `Left ${page.title}` });
+    expect(await response.json()).toEqual({
+      ok: true,
+      message: `Removed ${page.title} from your view`,
+    });
   });
 
   it('keeps canonical page URLs stable through public access changes', async () => {

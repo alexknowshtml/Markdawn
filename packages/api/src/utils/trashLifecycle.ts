@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { executeQuery, type QueryExecutor } from '../db/query';
 import { purgeEntityAccessMetadata } from './entityCleanup';
@@ -13,17 +14,16 @@ export async function purgeFolderSubtrees(
 
   const folderResult = await executeQuery<{ id: string; is_deleted: boolean }>(
     executor,
-    `select f.id, f.is_deleted
+    sql`select f.id, f.is_deleted
      from folders f
      where exists (
          select 1
          from folder_closure fc
          where fc.descendant_id = f.id
-           and fc.ancestor_id = any($1::uuid[])
+           and fc.ancestor_id = any(${sql.param([...rootFolderIds])}::uuid[])
        )
      order by f.id
      for update of f`,
-    [rootFolderIds],
   );
   const folderIds = folderResult.rows.map((row) => row.id);
   const folderById = new Map(folderResult.rows.map((row) => [row.id, row]));
@@ -38,12 +38,11 @@ export async function purgeFolderSubtrees(
 
   const pageResult = await executeQuery<{ id: string; is_deleted: boolean }>(
     executor,
-    `select p.id, p.is_deleted
+    sql`select p.id, p.is_deleted
      from pages p
-     where p.parent_id = any($1::uuid[])
+     where p.parent_id = any(${sql.param(folderIds)}::uuid[])
      order by p.id
      for update of p`,
-    [folderIds],
   );
   if (pageResult.rows.some((page) => !page.is_deleted)) {
     throw new HTTPException(409, {
@@ -57,8 +56,7 @@ export async function purgeFolderSubtrees(
   await purgeEntityAccessMetadata(executor, 'folder', folderIds);
   const deleteResult = await executeQuery(
     executor,
-    'delete from folders where id = any($1::uuid[]) and is_deleted = true',
-    [rootFolderIds],
+    sql`delete from folders where id = any(${sql.param([...rootFolderIds])}::uuid[]) and is_deleted = true`,
   );
   if ((deleteResult.rowCount ?? 0) !== rootFolderIds.length) {
     throw new HTTPException(409, { message: 'Folder was restored concurrently' });

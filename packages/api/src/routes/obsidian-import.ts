@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
 import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
@@ -170,13 +171,13 @@ obsidianImportRoute.post('/', async (c) => {
   };
 
   const hasPropertiesColumn = await query(
-    `SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
+    sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
   )
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
 
   const hasConnectionsTable = await query(
-    `SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`,
+    sql`SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`,
   )
     .then((r) => (r.rowCount ?? 0) > 0)
     .catch(() => false);
@@ -238,8 +239,7 @@ obsidianImportRoute.post('/', async (c) => {
         const nextPosition = await getNextPosition('folders', parentId, user.id, tx);
         return executeQuery(
           tx,
-          'insert into folders (parent_id, name, position, created_by) values ($1, $2, $3, $4) returning id',
-          [parentId, name, nextPosition, user.id],
+          sql`insert into folders (parent_id, name, position, created_by) values (${parentId}, ${name}, ${nextPosition}, ${user.id}) returning id`,
         );
       });
 
@@ -284,10 +284,9 @@ obsidianImportRoute.post('/', async (c) => {
       await writeFile(filePath, buffer);
 
       const uploadResult = await query<{ id: string }>(
-        `insert into uploads (filename, original_name, mime_type, size, uploaded_by)
-         values ($1, $2, $3, $4, $5)
+        sql`insert into uploads (filename, original_name, mime_type, size, uploaded_by)
+         values (${filename}, ${path.basename(file.path)}, ${expectedMime}, ${buffer.length}, ${user.id})
          returning id`,
-        [filename, path.basename(file.path), expectedMime, buffer.length, user.id],
       );
       const uploadId = uploadResult.rows[0]?.id;
       if (!uploadId) {
@@ -344,15 +343,13 @@ obsidianImportRoute.post('/', async (c) => {
         const insertResult = hasPropertiesColumn
           ? await executeQuery(
               tx,
-              `insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
-               values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *`,
-              [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(frontmatter)],
+              sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
+               values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}, ${JSON.stringify(frontmatter)}) returning *`,
             )
           : await executeQuery(
               tx,
-              `insert into pages (parent_id, title, title_search, position, created_by, ydoc)
-               values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *`,
-              [parentId, title, nextPosition, user.id, ydocBuffer],
+              sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc)
+               values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}) returning *`,
             );
         const insertedPageId = insertResult.rows[0]?.id;
         if (typeof insertedPageId !== 'string') {
@@ -363,24 +360,22 @@ obsidianImportRoute.post('/', async (c) => {
           if (!processedBody.includes(url)) continue;
           await executeQuery(
             tx,
-            `insert into upload_page_refs (upload_id, page_id)
-             values ($1, $2)
+            sql`insert into upload_page_refs (upload_id, page_id)
+             values (${uploadId}, ${insertedPageId})
              on conflict (upload_id, page_id) do nothing`,
-            [uploadId, insertedPageId],
           );
         }
 
         for (const tagSlug of pageTagSlugs) {
           await executeQuery(
             tx,
-            `insert into connections (
+            sql`insert into connections (
                source_type, source_id, target_type, target_slug,
                target_label, connection_type, link_text, occurrence_count, updated_at
              )
-             values ('page', $1, 'tag', $2, $2, 'tag', $2, 1, now())
+             values ('page', ${insertedPageId}, 'tag', ${tagSlug}, ${tagSlug}, 'tag', ${tagSlug}, 1, now())
              on conflict (source_type, source_id, target_type, target_slug, connection_type)
              do update set updated_at = now(), occurrence_count = excluded.occurrence_count`,
-            [insertedPageId, tagSlug],
           );
         }
 
@@ -416,11 +411,10 @@ obsidianImportRoute.post('/', async (c) => {
         await lockWorkspaceAccess(tx, user.id);
         const pageResult = await executeQuery<{ ydoc: Buffer | null }>(
           tx,
-          `select ydoc
+          sql`select ydoc
            from pages
-           where id = $1 and is_deleted = false
+           where id = ${pageId} and is_deleted = false
            for update`,
-          [pageId],
         );
         const storedYdoc = pageResult.rows[0]?.ydoc;
         if (!storedYdoc) {
@@ -436,10 +430,10 @@ obsidianImportRoute.post('/', async (c) => {
           const boundYdoc = Buffer.from(bindWikiLinkTargets(currentYdoc, workspacePageLookup));
           ensureYdocSize(boundYdoc);
           if (!boundYdoc.equals(currentYdoc)) {
-            await executeQuery(tx, 'update pages set ydoc = $1, updated_at = now() where id = $2', [
-              boundYdoc,
-              pageId,
-            ]);
+            await executeQuery(
+              tx,
+              sql`update pages set ydoc = ${boundYdoc}, updated_at = now() where id = ${pageId}`,
+            );
           }
         }
 
@@ -461,11 +455,11 @@ obsidianImportRoute.post('/', async (c) => {
 
             await executeQuery(
               tx,
-              `insert into connections (
+              sql`insert into connections (
                  source_type, source_id, target_type, target_id, target_slug,
                  target_label, connection_type, link_text, occurrence_count, updated_at
                )
-               values ('page', $1, 'page', $2, $3, $4, $5, $6, 1, now())
+               values ('page', ${pageId}, 'page', ${targetPageId}, ${targetSlug}, ${link.page}, ${connectionType}, ${link.alias || link.page}, 1, now())
                on conflict (source_type, source_id, target_type, target_slug, connection_type)
                do update set
                  target_id = excluded.target_id,
@@ -473,14 +467,6 @@ obsidianImportRoute.post('/', async (c) => {
                  link_text = excluded.link_text,
                  occurrence_count = connections.occurrence_count + 1,
                  updated_at = now()`,
-              [
-                pageId,
-                targetPageId,
-                targetSlug,
-                link.page,
-                connectionType,
-                link.alias || link.page,
-              ],
             );
 
             if (targetPageId) createdBacklinks += 1;

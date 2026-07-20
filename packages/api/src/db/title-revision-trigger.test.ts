@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createTestPage, createTestUser } from '../test-utils';
-import { query } from './query';
+import { testQuery as query } from './testQuery';
 
 async function readPage(pageId: string): Promise<{ title: string; title_revision: string }> {
   const result = await query<{ title: string; title_revision: string }>(

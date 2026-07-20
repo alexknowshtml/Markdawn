@@ -1,4 +1,5 @@
 import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 
@@ -19,19 +20,19 @@ export async function getUniqueWorkspacePageLookup(
     page_path: string | null;
   }>(
     executor,
-    `with recursive enumerable_folders as materialized (
+    sql`with recursive enumerable_folders as materialized (
        select enumerable.folder_id
-       from get_enumerable_folder_ids($2) enumerable
+       from get_enumerable_folder_ids(${requesterUserId}) enumerable
      ),
      accessible_pages as materialized (
        select accessible.page_id
-       from get_accessible_page_ids($2) accessible
+       from get_accessible_page_ids(${requesterUserId}) accessible
      ),
      visible_folders as materialized (
        select f.id, f.parent_id, f.name
        from folders f
        where f.is_deleted = false
-         and get_root_folder_owner(f.id) = $1
+         and get_root_folder_owner(f.id) = ${ownerId}
          and f.id in (select folder_id from enumerable_folders)
      ),
      folder_paths as (
@@ -57,9 +58,8 @@ export async function getUniqueWorkspacePageLookup(
      from pages p
      left join folder_paths paths on paths.id = p.parent_id
      where p.is_deleted = false
-       and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
+       and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = ${ownerId}
        and p.id in (select page_id from accessible_pages)`,
-    [ownerId, requesterUserId],
   );
 
   const candidates = new Map<string, Set<string>>();

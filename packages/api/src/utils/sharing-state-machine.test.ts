@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   decideSharingPermission,
   type OraclePermission,
@@ -101,9 +103,8 @@ describe('seeded sharing state machine', () => {
             await executeQuery(
               tx,
               entityTypes[nodeIndex] === 'page'
-                ? 'UPDATE pages SET public_permission = $1 WHERE id = $2'
-                : 'UPDATE folders SET public_permission = $1 WHERE id = $2',
-              [permission, entityIds[nodeIndex]],
+                ? sql`UPDATE pages SET public_permission = ${permission} WHERE id = ${entityIds[nodeIndex]}`
+                : sql`UPDATE folders SET public_permission = ${permission} WHERE id = ${entityIds[nodeIndex]}`,
             );
           });
           trace.push(`publicAccess[${nodeIndex}]=${permission ?? 'none'}`);

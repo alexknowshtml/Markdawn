@@ -1,6 +1,7 @@
 import { unlink } from 'node:fs/promises';
 import path from 'node:path';
 import { getApiLogger } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor } from '../db/query';
 import { uploadsDir } from '../env';
@@ -29,31 +30,30 @@ export async function purgeUnreferencedUploadsForPages(
 
   const candidates = await executeQuery<{ id: string }>(
     executor,
-    `select u.id
+    sql`select u.id
      from uploads u
      where exists (
        select 1
        from upload_page_refs target_ref
        where target_ref.upload_id = u.id
-         and target_ref.page_id = any($1::uuid[])
+         and target_ref.page_id = any(${sql.param([...pageIds])}::uuid[])
      )
      order by u.id
      for update of u`,
-    [pageIds],
   );
   const uploadIds = candidates.rows.map((row) => row.id);
   if (uploadIds.length === 0) return [];
 
   const result = await executeQuery<{ filename: string }>(
     executor,
-    `with deleted as (
+    sql`with deleted as (
        delete from uploads u
-       where u.id = any($1::uuid[])
+       where u.id = any(${sql.param(uploadIds)}::uuid[])
          and not exists (
            select 1
            from upload_page_refs surviving_ref
            where surviving_ref.upload_id = u.id
-             and not (surviving_ref.page_id = any($2::uuid[]))
+             and not (surviving_ref.page_id = any(${sql.param([...pageIds])}::uuid[]))
          )
        returning u.filename
      ), queued as (
@@ -67,7 +67,6 @@ export async function purgeUnreferencedUploadsForPages(
      select filename
      from queued
      order by filename`,
-    [uploadIds, pageIds],
   );
   return result.rows.map((row) => row.filename);
 }
@@ -84,11 +83,10 @@ export async function processUploadDeletionQueue(
 ): Promise<UploadCleanupResult> {
   const jobs = await executeQuery<{ filename: string; id: string }>(
     executor,
-    `select id, filename
+    sql`select id, filename
      from upload_deletion_queue
      order by updated_at, id
-     limit $1`,
-    [batchSize],
+     limit ${batchSize}`,
   );
   let failed = 0;
   let processed = 0;
@@ -105,12 +103,11 @@ export async function processUploadDeletionQueue(
         const message = error instanceof Error ? error.message : String(error);
         await executeQuery(
           executor,
-          `update upload_deletion_queue
+          sql`update upload_deletion_queue
            set attempts = attempts + 1,
-               last_error = $2,
+               last_error = ${message},
                updated_at = now()
-           where id = $1`,
-          [job.id, message],
+           where id = ${job.id}`,
         );
         getApiLogger().error('Upload file cleanup failed and remains queued', {
           error: message,
@@ -120,7 +117,7 @@ export async function processUploadDeletionQueue(
       }
     }
 
-    await executeQuery(executor, 'delete from upload_deletion_queue where id = $1', [job.id]);
+    await executeQuery(executor, sql`delete from upload_deletion_queue where id = ${job.id}`);
     processed += 1;
   }
 

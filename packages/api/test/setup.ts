@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, vi } from 'vitest';
-import { query } from '../src/db/query';
+import { testQuery } from '../src/db/testQuery';
 
 beforeEach(async () => {
-  await query('SET session_replication_role = replica');
-  await query(`
+  await testQuery('SET session_replication_role = replica');
+  await testQuery(`
     DO $$ DECLARE t RECORD;
     BEGIN
       FOR t IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public')
@@ -12,7 +12,7 @@ beforeEach(async () => {
       END LOOP;
     END $$;
   `);
-  await query('SET session_replication_role = default');
+  await testQuery('SET session_replication_role = default');
 });
 
 // Restore any vi.spyOn mocks after each test to prevent cascading failures

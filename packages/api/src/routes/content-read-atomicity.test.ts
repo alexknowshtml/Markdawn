@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, type QueryExecutor, query } from '../db/query';
+import { executeQuery, type QueryExecutor } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 
@@ -46,8 +48,11 @@ async function runContentReadBarrier(options: {
     reportBlockerPid = resolve;
   });
   const tableBlocker = db.transaction(async (tx) => {
-    await executeQuery(tx, `lock table ${options.table} in access exclusive mode`);
-    const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+    await executeQuery(tx, sql.raw(`lock table ${options.table} in access exclusive mode`));
+    const pidResult = await executeQuery<{ pid: number }>(
+      tx,
+      sql.raw('select pg_backend_pid() as pid'),
+    );
     const pid = pidResult.rows[0]?.pid;
     if (!pid) throw new Error('Failed to resolve content read blocker PID');
     reportBlockerPid(pid);
@@ -61,9 +66,8 @@ async function runContentReadBarrier(options: {
     await lockWorkspaceAccessMutation(tx, owner.id);
     await executeQuery(
       tx,
-      `delete from shares
-       where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
-      [page.id, viewer.id],
+      sql`delete from shares
+       where entity_type = 'page' and entity_id = ${page.id} and recipient_user_id = ${viewer.id}`,
     );
     await options.insertSecret(tx, page.id, owner.id);
   });
@@ -95,9 +99,8 @@ describe('access-controlled content read atomicity', () => {
       insertSecret: async (executor, pageId, ownerId) => {
         await executeQuery(
           executor,
-          `insert into page_versions (page_id, content, title, created_by)
-           values ($1, '{}'::jsonb, 'post-revocation version secret', $2)`,
-          [pageId, ownerId],
+          sql`insert into page_versions (page_id, content, title, created_by)
+           values (${pageId}, '{}'::jsonb, 'post-revocation version secret', ${ownerId})`,
         );
       },
     });
@@ -123,15 +126,14 @@ describe('access-controlled content read atomicity', () => {
       insertSecret: async (executor, pageId) => {
         await executeQuery(
           executor,
-          `insert into connections (
+          sql`insert into connections (
              source_type, source_id, target_type, target_slug, target_label,
              connection_type, link_text
            ) values (
-             'page', $1, 'page', 'post-revocation-secret',
+             'page', ${pageId}, 'page', 'post-revocation-secret',
              'post-revocation connection secret', 'wikilink',
              'post-revocation connection secret'
            )`,
-          [pageId],
         );
       },
     });

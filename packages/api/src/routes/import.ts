@@ -1,18 +1,20 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import type { pages } from '../db';
 import { db } from '../db/connection';
 import { executeQuery } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import { getDestinationOwnerId } from '../utils/destinationOwner';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
 import {
   bindWikiLinkTargets,
   createYjsDocWithTitle,
   stripLeadingH1,
 } from '../utils/markdown-to-yjs';
+import { normalizePageRow, type PageDatabaseRow } from '../utils/pageRows';
 import { normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition } from '../utils/position';
 import {
@@ -24,27 +26,11 @@ import { notifyShareRecompute } from '../utils/share-notify';
 import { getEntityMetaUserIds } from '../utils/shareRecipients';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
-type PageRow = typeof pages.$inferSelect;
-type RawPageRow = PageRow & {
-  parent_id?: string | null;
-  created_by?: string | null;
-  created_at?: Date | null;
-  updated_at?: Date | null;
-};
-
 const ALLOWED_IMAGE_TYPES = new Set(['jpeg', 'jpg', 'png', 'gif', 'webp']);
 
 const importRoute = new Hono();
 
 importRoute.use('*', requireAuth);
-
-const normalizePageRow = (row: RawPageRow): PageRow => ({
-  ...row,
-  parentId: row.parentId ?? row.parent_id ?? null,
-  createdBy: row.createdBy ?? row.created_by ?? null,
-  createdAt: row.createdAt ?? row.created_at ?? null,
-  updatedAt: row.updatedAt ?? row.updated_at ?? null,
-});
 
 const getExtension = (filename: string): string => {
   const lastDot = filename.lastIndexOf('.');
@@ -226,15 +212,7 @@ importRoute.post('/markdown', async (c) => {
       await lockWorkspaceAccessMutation(tx, user.id);
     }
 
-    const ownerId = parentId
-      ? (
-          await executeQuery<{ owner_id: string | null }>(
-            tx,
-            'select get_root_folder_owner($1) as owner_id',
-            [parentId],
-          )
-        ).rows[0]?.owner_id
-      : user.id;
+    const ownerId = await getDestinationOwnerId(tx, parentId, user.id);
     if (!ownerId) throw new HTTPException(404, { message: 'Parent folder not found' });
     const pageLookup = await getUniqueWorkspacePageLookup(ownerId, user.id, tx);
     const ydocBuffer = Buffer.from(bindWikiLinkTargets(unresolvedYdocBuffer, pageLookup));
@@ -242,17 +220,15 @@ importRoute.post('/markdown', async (c) => {
 
     const nextPosition = await getNextPosition('pages', parentId, user.id, tx);
     const result = hasProperties
-      ? await executeQuery(
+      ? await executeQuery<PageDatabaseRow>(
           tx,
-          "insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values ($1, $2, to_tsvector('english', $2), $3, $4, $5, $6) returning *",
-          [parentId, title, nextPosition, user.id, ydocBuffer, JSON.stringify(properties)],
+          sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties) values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}, ${JSON.stringify(properties)}) returning *`,
         )
-      : await executeQuery(
+      : await executeQuery<PageDatabaseRow>(
           tx,
-          "insert into pages (parent_id, title, title_search, position, created_by, ydoc) values ($1, $2, to_tsvector('english', $2), $3, $4, $5) returning *",
-          [parentId, title, nextPosition, user.id, ydocBuffer],
+          sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc) values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}) returning *`,
         );
-    const createdPageId = result.rows[0]?.id as string | undefined;
+    const createdPageId = result.rows[0]?.id;
     if (createdPageId) {
       const metaUserIds = await getEntityMetaUserIds(tx, 'page', createdPageId);
       await notifyShareRecompute(
@@ -265,14 +241,16 @@ importRoute.post('/markdown', async (c) => {
         tx,
       );
     }
-    return result;
+    return { result, ownerId };
   });
 
-  if (insertResult.rowCount === 0) {
+  if (insertResult.result.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to create page' });
   }
 
-  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
+  const createdRow = insertResult.result.rows[0];
+  if (!createdRow) throw new HTTPException(500, { message: 'Failed to create page' });
+  const created = normalizePageRow(createdRow, insertResult.ownerId);
   return c.json(created, 201);
 });
 

@@ -1,8 +1,10 @@
 import { MAX_FOLDER_NAME_LENGTH, MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestFolder,
@@ -170,6 +172,7 @@ describe('folders API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.name).toBe('New Folder');
+      expect(body.ownerId).toBe(user.id);
     });
 
     it('creates a nested folder', async () => {
@@ -415,7 +418,10 @@ describe('folders API', () => {
       });
       const blocker = db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, owner.id);
-        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pidResult = await executeQuery<{ pid: number }>(
+          tx,
+          sql.raw('select pg_backend_pid() as pid'),
+        );
         const pid = pidResult.rows[0]?.pid;
         if (pid === undefined) throw new Error('Failed to resolve blocker PID');
         signalBlockerReady(pid);
@@ -1617,7 +1623,10 @@ describe('folders API', () => {
       });
       const blocker = db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, owner.id);
-        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pidResult = await executeQuery<{ pid: number }>(
+          tx,
+          sql.raw('select pg_backend_pid() as pid'),
+        );
         const pid = pidResult.rows[0]?.pid;
         if (!pid) throw new Error('Failed to resolve trash lock blocker PID');
         reportBlockerPid(pid);

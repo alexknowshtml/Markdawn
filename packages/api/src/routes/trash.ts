@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { db } from '../db/connection';
 import { executeQuery } from '../db/query';
@@ -13,7 +14,7 @@ import {
 const trashRoute = new Hono();
 trashRoute.use('*', requireAuth);
 
-const deletedFolderOwnerSql = `coalesce(
+const deletedFolderOwnerSql = sql`coalesce(
   (
     select root.created_by
     from folder_closure fc
@@ -33,15 +34,14 @@ trashRoute.delete('/empty-all', async (c) => {
 
     const roots = await executeQuery<{ id: string }>(
       tx,
-      `select f.id
+      sql`select f.id
        from folders f
        left join folders parent on parent.id = f.parent_id
        where f.is_deleted = true
-         and ${deletedFolderOwnerSql} = $1
+         and ${deletedFolderOwnerSql} = ${user.id}
          and coalesce(parent.is_deleted, false) = false
        order by f.id
        for update of f`,
-      [user.id],
     );
     const folderCounts = await purgeFolderSubtrees(
       tx,
@@ -50,23 +50,23 @@ trashRoute.delete('/empty-all', async (c) => {
 
     const standalonePages = await executeQuery<{ id: string }>(
       tx,
-      `select p.id
+      sql`select p.id
        from pages p
        left join folders parent on parent.id = p.parent_id
        where p.is_deleted = true
-         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = $1
+         and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = ${user.id}
          and coalesce(parent.is_deleted, false) = false
        order by p.id
        for update of p`,
-      [user.id],
     );
     const standalonePageIds = standalonePages.rows.map((row) => row.id);
     await purgeUnreferencedUploadsForPages(tx, standalonePageIds);
     await purgeEntityAccessMetadata(tx, 'page', standalonePageIds);
     if (standalonePageIds.length > 0) {
-      await executeQuery(tx, 'delete from pages where id = any($1::uuid[]) and is_deleted = true', [
-        standalonePageIds,
-      ]);
+      await executeQuery(
+        tx,
+        sql`delete from pages where id = any(${sql.param(standalonePageIds)}::uuid[]) and is_deleted = true`,
+      );
     }
 
     return {

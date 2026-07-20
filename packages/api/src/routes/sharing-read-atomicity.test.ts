@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 
@@ -53,8 +55,11 @@ async function runRevocationBarrier(
     reportBlockerPid = resolve;
   });
   const tableBlocker = db.transaction(async (tx) => {
-    await executeQuery(tx, 'lock table shares in access exclusive mode');
-    const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+    await executeQuery(tx, sql.raw('lock table shares in access exclusive mode'));
+    const pidResult = await executeQuery<{ pid: number }>(
+      tx,
+      sql.raw('select pg_backend_pid() as pid'),
+    );
     const pid = pidResult.rows[0]?.pid;
     if (!pid) throw new Error('Failed to resolve sharing read blocker PID');
     reportBlockerPid(pid);
@@ -68,16 +73,14 @@ async function runRevocationBarrier(
     await lockWorkspaceAccessMutation(tx, owner.id);
     await executeQuery(
       tx,
-      `delete from shares
-       where entity_type = 'page' and entity_id = $1 and recipient_user_id = $2`,
-      [page.id, revokedUser.id],
+      sql`delete from shares
+       where entity_type = 'page' and entity_id = ${page.id} and recipient_user_id = ${revokedUser.id}`,
     );
     await executeQuery(
       tx,
-      `insert into shares (
+      sql`insert into shares (
          entity_type, entity_id, shared_by, recipient_user_id, permission
-       ) values ('page', $1, $2, $3, 'view')`,
-      [page.id, owner.id, secretUser.id],
+       ) values ('page', ${page.id}, ${owner.id}, ${secretUser.id}, 'view')`,
     );
   });
 

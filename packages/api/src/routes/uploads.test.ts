@@ -1,6 +1,8 @@
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestFolder,
@@ -9,6 +11,7 @@ import {
   createTestUser,
   enableTestPagePublicAccess,
 } from '../test-utils';
+import { MAX_IMAGE_SIZE_BYTES } from '../utils/image-upload';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 
 const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -45,7 +48,10 @@ async function runUploadReadBarrier(
   });
   const blocker = db.transaction(async (tx) => {
     await lockWorkspaceAccessMutation(tx, ownerId);
-    const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+    const pidResult = await executeQuery<{ pid: number }>(
+      tx,
+      sql.raw('select pg_backend_pid() as pid'),
+    );
     const pid = pidResult.rows[0]?.pid;
     if (!pid) throw new Error('Failed to resolve upload read blocker PID');
     reportBlockerPid(pid);
@@ -103,6 +109,30 @@ describe('uploads API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.url).toMatch(/^\/api\/uploads\//);
+    });
+
+    it('rejects oversized multipart bodies before parsing the upload', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File([new Uint8Array(MAX_IMAGE_SIZE_BYTES + 512 * 1024)], 'oversized.png', {
+          type: 'image/png',
+        }),
+      );
+      formData.append('pageId', page.id);
+
+      const response = await app.request('/api/uploads', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ message: 'Request body is too large' });
     });
 
     it('rejects active content disguised as an image', async () => {
@@ -330,9 +360,8 @@ describe('uploads API', () => {
             await lockWorkspaceAccessMutation(tx, owner.id);
             await executeQuery(
               tx,
-              `DELETE FROM shares
-               WHERE entity_type = 'page' AND entity_id = $1 AND recipient_user_id = $2`,
-              [page.id, recipient.id],
+              sql`DELETE FROM shares
+               WHERE entity_type = 'page' AND entity_id = ${page.id} AND recipient_user_id = ${recipient.id}`,
             );
           }),
       );
@@ -546,10 +575,9 @@ describe('uploads API', () => {
             await lockWorkspaceAccessMutation(tx, owner.id);
             await executeQuery(
               tx,
-              `UPDATE pages
+              sql`UPDATE pages
                SET public_permission = null, updated_at = now()
-               WHERE id = $1`,
-              [page.id],
+               WHERE id = ${page.id}`,
             );
           }),
       );

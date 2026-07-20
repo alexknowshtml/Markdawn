@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { HTTPException } from 'hono/http-exception';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 
@@ -41,11 +42,8 @@ export const ensurePageAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement = 'SELECT * FROM get_effective_page_permission($1, $2)';
-  const parameters = [pageId, userId];
-  const result = executor
-    ? await executeQuery(executor, statement, parameters)
-    : await query(statement, parameters);
+  const statement = sql`SELECT * FROM get_effective_page_permission(${pageId}, ${userId})`;
+  const result = executor ? await executeQuery(executor, statement) : await query(statement);
   const row = result.rows[0] as { permission: string | null; full_access: boolean } | undefined;
 
   if (!row || row.permission === null) {
@@ -74,11 +72,8 @@ export const ensureFolderAccess = async (
   mode: AccessMode = 'view',
   executor?: QueryExecutor,
 ) => {
-  const statement = 'SELECT * FROM get_effective_folder_permission($1, $2)';
-  const parameters = [folderId, userId];
-  const result = executor
-    ? await executeQuery(executor, statement, parameters)
-    : await query(statement, parameters);
+  const statement = sql`SELECT * FROM get_effective_folder_permission(${folderId}, ${userId})`;
+  const result = executor ? await executeQuery(executor, statement) : await query(statement);
   const row = result.rows[0] as { permission: string | null; full_access: boolean } | undefined;
 
   if (!row || row.permission === null) {
@@ -105,9 +100,10 @@ export const lockWorkspaceAccess = async (
   executor: QueryExecutor,
   workspaceOwnerId: string,
 ): Promise<void> => {
-  await executeQuery(executor, 'select pg_advisory_xact_lock(hashtextextended($1, 0))', [
-    `workspace-access:${workspaceOwnerId}`,
-  ]);
+  await executeQuery(
+    executor,
+    sql`select pg_advisory_xact_lock(hashtextextended(${`workspace-access:${workspaceOwnerId}`}, 0))`,
+  );
 };
 
 export const lockWorkspaceAccessMutation = async (
@@ -117,11 +113,10 @@ export const lockWorkspaceAccessMutation = async (
   await lockWorkspaceAccess(executor, workspaceOwnerId);
   await executeQuery(
     executor,
-    `insert into workspace_access_versions (workspace_owner_id, version)
-     values ($1, nextval('workspace_access_revision_seq'))
+    sql`insert into workspace_access_versions (workspace_owner_id, version)
+     values (${workspaceOwnerId}, nextval('workspace_access_revision_seq'))
      on conflict (workspace_owner_id) do update
      set version = nextval('workspace_access_revision_seq')`,
-    [workspaceOwnerId],
   );
 };
 
@@ -133,13 +128,13 @@ const resolveEntityOwnerIds = async (
   for (const { entityType, entityId } of entities) {
     const statement =
       entityType === 'page'
-        ? `select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+        ? sql`select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
            from pages p
-           where p.id = $1 and p.is_deleted = false`
-        : `select get_root_folder_owner(f.id) as owner_id
+           where p.id = ${entityId} and p.is_deleted = false`
+        : sql`select get_root_folder_owner(f.id) as owner_id
            from folders f
-           where f.id = $1 and f.is_deleted = false`;
-    const result = await executeQuery(executor, statement, [entityId]);
+           where f.id = ${entityId} and f.is_deleted = false`;
+    const result = await executeQuery(executor, statement);
     const row = result.rows[0] as { owner_id: string | null } | undefined;
     if (!row) {
       throw new HTTPException(404, {
@@ -250,13 +245,10 @@ export const ensureWorkspaceAdmin = async (
     return { fullAccess: true, permission: 'admin' as const };
   }
 
-  const statement = `select role from workspace_members
-     where workspace_owner_id = $1 and member_id = $2
+  const statement = sql`select role from workspace_members
+     where workspace_owner_id = ${workspaceOwnerId} and member_id = ${userId}
      limit 1`;
-  const parameters = [workspaceOwnerId, userId];
-  const result = executor
-    ? await executeQuery(executor, statement, parameters)
-    : await query(statement, parameters);
+  const result = executor ? await executeQuery(executor, statement) : await query(statement);
   if (result.rows[0]?.role !== 'admin') {
     throw new HTTPException(403, { message: 'You need admin access to manage this workspace' });
   }

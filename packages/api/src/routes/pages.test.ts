@@ -1,10 +1,12 @@
 import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
+import { sql } from 'drizzle-orm';
 import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
   createTestFolder,
@@ -163,6 +165,7 @@ describe('pages API', () => {
       const body = await res.json();
       expect(body.title).toBe('My Test Page');
       expect(body.id).toBeTruthy();
+      expect(body.ownerId).toBe(user.id);
       expect(body.createdAt).toBeTruthy();
       expect(body.updatedAt).toBeTruthy();
     });
@@ -620,7 +623,10 @@ describe('pages API', () => {
       });
       const blocker = db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, originalOwner.id);
-        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pidResult = await executeQuery<{ pid: number }>(
+          tx,
+          sql.raw('select pg_backend_pid() as pid'),
+        );
         const pid = pidResult.rows[0]?.pid;
         if (!pid) throw new Error('Failed to resolve page restore blocker PID');
         reportBlockerPid(pid);
@@ -1734,7 +1740,10 @@ describe('pages API', () => {
       });
       const blocker = db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, owner.id);
-        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pidResult = await executeQuery<{ pid: number }>(
+          tx,
+          sql.raw('select pg_backend_pid() as pid'),
+        );
         const pid = pidResult.rows[0]?.pid;
         if (pid === undefined) throw new Error('Failed to resolve blocker PID');
         signalBlockerReady(pid);
@@ -1781,6 +1790,21 @@ describe('pages API', () => {
         },
       );
       expect(res.status).toBe(404);
+    });
+
+    it('rejects oversized copy bodies before resolving the page or destination', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+
+      const response = await app.request('/api/pages/00000000-0000-0000-0000-000000000000/copy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ padding: 'x'.repeat(5 * 1024) }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.json()).toEqual({ message: 'Request body is too large' });
     });
   });
 
@@ -1888,7 +1912,10 @@ describe('pages API', () => {
       });
       const blocker = db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, owner.id);
-        const pidResult = await executeQuery<{ pid: number }>(tx, 'select pg_backend_pid() as pid');
+        const pidResult = await executeQuery<{ pid: number }>(
+          tx,
+          sql.raw('select pg_backend_pid() as pid'),
+        );
         const pid = pidResult.rows[0]?.pid;
         if (pid === undefined) throw new Error('Failed to resolve blocker PID');
         signalBlockerReady(pid);
@@ -1988,6 +2015,7 @@ describe('pages API', () => {
       const body = await res.json();
       expect(body.title).toBe('Copy of Original');
       expect(body.id).not.toBe(page.id);
+      expect(body.ownerId).toBe(user.id);
     });
 
     it('keeps copied titles within the collaboration title limit', async () => {

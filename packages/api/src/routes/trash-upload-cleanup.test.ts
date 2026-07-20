@@ -1,8 +1,10 @@
 import { access, rm } from 'node:fs/promises';
 import path from 'node:path';
+import { sql } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { db } from '../db/connection';
-import { executeQuery, query } from '../db/query';
+import { executeQuery } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import { uploadsDir } from '../env';
 import {
   createTestApp,
@@ -208,11 +210,10 @@ describe('permanent purge upload cleanup', () => {
     const uploadBlocker = db.transaction(async (tx) => {
       const result = await executeQuery<{ pid: number }>(
         tx,
-        `select pg_backend_pid() as pid
+        sql`select pg_backend_pid() as pid
          from uploads
-         where filename = $1
+         where filename = ${upload.filename}
          for update`,
-        [upload.filename],
       );
       const pid = result.rows[0]?.pid;
       if (!pid) throw new Error('Failed to resolve shared upload blocker PID');
@@ -413,7 +414,7 @@ describe('permanent purge upload cleanup', () => {
       await trashPage(app, session.Cookie, page.id);
       await db.transaction(async (tx) => {
         await purgeUnreferencedUploadsForPages(tx, [page.id]);
-        await executeQuery(tx, 'delete from pages where id = $1 and is_deleted = true', [page.id]);
+        await executeQuery(tx, sql`delete from pages where id = ${page.id} and is_deleted = true`);
       });
 
       const failed = await processUploadDeletionQueue(db, async () => {

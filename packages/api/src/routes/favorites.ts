@@ -1,4 +1,5 @@
 import type { ShareEntityType } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
@@ -41,7 +42,7 @@ favoritesRoute.get('/', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    `select
+    sql`select
        uf.entity_type,
        uf.entity_id,
        case when uf.entity_type = 'folder' then f.name else p.title end as title,
@@ -54,18 +55,17 @@ favoritesRoute.get('/', async (c) => {
      from user_favorites uf
      left join pages p on p.id = uf.entity_id and uf.entity_type = 'page' and p.is_deleted = false
      left join folders f on f.id = uf.entity_id and uf.entity_type = 'folder' and f.is_deleted = false
-     where uf.user_id = $1
+     where uf.user_id = ${user.id}
        and ((uf.entity_type = 'page' and p.id is not null) or (uf.entity_type = 'folder' and f.id is not null))
        and case
          when uf.entity_type = 'folder' then exists (
-           select 1 from get_effective_folder_permission(f.id, $1) access where access.permission is not null
+           select 1 from get_effective_folder_permission(f.id, ${user.id}) access where access.permission is not null
          )
          else exists (
-           select 1 from get_effective_page_permission(p.id, $1) access where access.permission is not null
+           select 1 from get_effective_page_permission(p.id, ${user.id}) access where access.permission is not null
          )
        end
      order by uf.created_at desc nulls last`,
-    [user.id],
   );
 
   const favorites = (result.rows as FavoriteRow[]).map((row) => ({
@@ -102,9 +102,8 @@ favoritesRoute.post('/', async (c) => {
 
   const existsResult = await query(
     entityType === 'page'
-      ? 'select id, is_deleted from pages where id = $1 limit 1'
-      : 'select id, is_deleted from folders where id = $1 limit 1',
-    [entityId],
+      ? sql`select id, is_deleted from pages where id = ${entityId} limit 1`
+      : sql`select id, is_deleted from folders where id = ${entityId} limit 1`,
   );
   const entity = existsResult.rows[0] as { id: string; is_deleted: boolean | null } | undefined;
   if (!entity || entity.is_deleted) {
@@ -117,8 +116,7 @@ favoritesRoute.post('/', async (c) => {
   await ensureEntityAccess(entityType, entityId, user.id);
 
   const insertResult = await query(
-    'insert into user_favorites (user_id, entity_type, entity_id) values ($1, $2, $3) on conflict (user_id, entity_type, entity_id) do nothing returning id',
-    [user.id, entityType, entityId],
+    sql`insert into user_favorites (user_id, entity_type, entity_id) values (${user.id}, ${entityType}, ${entityId}) on conflict (user_id, entity_type, entity_id) do nothing returning id`,
   );
 
   if (insertResult.rowCount === 0) {
@@ -135,8 +133,7 @@ favoritesRoute.delete('/:entityType/:entityId', async (c) => {
 
   await ensureEntityAccess(entityType, entityId, user.id);
   await query(
-    'delete from user_favorites where user_id = $1 and entity_type = $2 and entity_id = $3',
-    [user.id, entityType, entityId],
+    sql`delete from user_favorites where user_id = ${user.id} and entity_type = ${entityType} and entity_id = ${entityId}`,
   );
 
   return c.json({ deleted: true });
@@ -144,7 +141,7 @@ favoritesRoute.delete('/:entityType/:entityId', async (c) => {
 
 favoritesRoute.delete('/:pageId', async (c) => {
   const pageId = c.req.param('pageId');
-  const pageResult = await query('select id from pages where id = $1 limit 1', [pageId]);
+  const pageResult = await query(sql`select id from pages where id = ${pageId} limit 1`);
   if (!pageResult.rows[0]) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
@@ -153,8 +150,7 @@ favoritesRoute.delete('/:pageId', async (c) => {
   await ensurePageAccess(pageId, user.id);
 
   await query(
-    'delete from user_favorites where user_id = $1 and entity_type = $2 and entity_id = $3',
-    [user.id, 'page', pageId],
+    sql`delete from user_favorites where user_id = ${user.id} and entity_type = 'page' and entity_id = ${pageId}`,
   );
 
   return c.json({ deleted: true });

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
@@ -11,8 +12,7 @@ templatesRoute.get('/', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    'select id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where created_by = $1 order by created_at desc',
-    [user.id],
+    sql`select id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where created_by = ${user.id} order by created_at desc`,
   );
 
   return c.json(result.rows);
@@ -33,10 +33,9 @@ templatesRoute.post('/', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    `insert into templates (title, icon, description, content_blocks, created_by)
-     values ($1, $2, $3, $4, $5)
+    sql`insert into templates (title, icon, description, content_blocks, created_by)
+     values (${title.trim()}, ${icon ?? null}, ${description ?? null}, ${JSON.stringify(contentBlocks)}, ${user.id})
      returning id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt"`,
-    [title.trim(), icon ?? null, description ?? null, JSON.stringify(contentBlocks), user.id],
   );
 
   return c.json(result.rows[0], 201);
@@ -46,9 +45,9 @@ templatesRoute.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user') as { id: string };
 
-  const templateResult = await query('select created_by from templates where id = $1 limit 1', [
-    id,
-  ]);
+  const templateResult = await query(
+    sql`select created_by from templates where id = ${id} limit 1`,
+  );
 
   if (templateResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Template not found' });
@@ -64,7 +63,7 @@ templatesRoute.delete('/:id', async (c) => {
     throw new HTTPException(403, { message: 'You can only delete your own templates' });
   }
 
-  await query('delete from templates where id = $1', [id]);
+  await query(sql`delete from templates where id = ${id}`);
 
   return c.json({ success: true });
 });

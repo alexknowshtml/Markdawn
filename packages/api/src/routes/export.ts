@@ -1,4 +1,5 @@
 import { extractWikiLinkTargetIds } from '@markdawn/shared/yjs-helpers';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import JSZip from 'jszip';
 import { query } from '../db/query';
@@ -25,7 +26,7 @@ exportRoute.get('/export', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    `
+    sql`
       select p.id,
         coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId",
         p.title, p.ydoc, p.properties, p.icon,
@@ -40,10 +41,9 @@ exportRoute.get('/export', async (c) => {
         ) as "uploadFilenames"
       from pages p
       where p.is_deleted = false
-        and p.id in (select page_id from get_accessible_page_ids($1))
+        and p.id in (select page_id from get_accessible_page_ids(${user.id}))
       order by p.parent_id nulls first, p.position::numeric asc
     `,
-    [user.id],
   );
 
   const pages = result.rows as PageExportRow[];
@@ -61,13 +61,12 @@ exportRoute.get('/export', async (c) => {
   const exportTargets = new Map<string, { title: string; ownerId: string }>();
   if (targetIds.length > 0) {
     const targets = await query<{ id: string; title: string; ownerId: string }>(
-      `select p.id, p.title,
+      sql`select p.id, p.title,
               coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId"
        from pages p
-       where p.id = any($1::uuid[])
+       where p.id = any(${sql.param(targetIds)}::uuid[])
          and p.is_deleted = false
-         and p.id in (select page_id from get_accessible_page_ids($2))`,
-      [targetIds, user.id],
+         and p.id in (select page_id from get_accessible_page_ids(${user.id}))`,
     );
     for (const target of targets.rows) exportTargets.set(target.id, target);
   }

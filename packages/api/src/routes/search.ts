@@ -1,3 +1,4 @@
+import { type SQL, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
@@ -48,60 +49,50 @@ searchRoute.get('/', async (c) => {
   }
   const searchPattern = `%${textQuery}%`;
 
-  const filters: string[] = [];
-  const params: unknown[] = [user.id, textQuery, searchPattern];
-  let paramIndex = 4;
+  const filters: SQL[] = [];
 
   if (createdAfter) {
-    filters.push(`p.created_at >= $${paramIndex}`);
-    params.push(createdAfter);
-    paramIndex += 1;
+    filters.push(sql`p.created_at >= ${createdAfter}`);
   }
 
   if (createdBefore) {
-    filters.push(`p.created_at <= $${paramIndex}`);
-    params.push(createdBefore);
-    paramIndex += 1;
+    filters.push(sql`p.created_at <= ${createdBefore}`);
   }
 
   if (parentId === 'root') {
-    filters.push(`(
+    filters.push(sql`(
       p.parent_id is null
-      or p.parent_id not in (select folder_id from get_enumerable_folder_ids($1))
+      or p.parent_id not in (select folder_id from get_enumerable_folder_ids(${user.id}))
     )`);
   } else if (parentId) {
-    filters.push(`(
-      p.parent_id = $${paramIndex}
-      and $${paramIndex}::uuid in (select folder_id from get_enumerable_folder_ids($1))
+    filters.push(sql`(
+      p.parent_id = ${parentId}
+      and ${parentId}::uuid in (select folder_id from get_enumerable_folder_ids(${user.id}))
     )`);
-    params.push(parentId);
-    paramIndex += 1;
   }
 
   if (tagSlugs.length > 0) {
-    filters.push(`p.id in (
+    filters.push(sql`p.id in (
       select c.source_id
       from connections c
       where c.connection_type = 'tag'
-        and c.target_slug = any($${paramIndex}::text[])
+        and c.target_slug = any(${sql.param(tagSlugs)}::text[])
       group by c.source_id
-      having count(distinct c.target_slug) = $${paramIndex + 1}
+      having count(distinct c.target_slug) = ${tagSlugs.length}
     )`);
-    params.push(tagSlugs, tagSlugs.length);
-    paramIndex += 2;
   }
 
-  const whereClause = filters.length > 0 ? ` and ${filters.join(' and ')}` : '';
+  const whereClause = filters.length > 0 ? sql`and ${sql.join(filters, sql` and `)}` : sql.empty();
   const textSearchClause = textQuery
-    ? `and (p.title_search @@ plainto_tsquery('english', $2) or p.title ilike $3)`
-    : '';
+    ? sql`and (p.title_search @@ plainto_tsquery('english', ${textQuery}) or p.title ilike ${searchPattern})`
+    : sql.empty();
 
   const result = await query(
-    `select p.id,
+    sql`select p.id,
       p.title,
       p.icon,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
-      ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
+      ts_rank(p.title_search, plainto_tsquery('english', ${textQuery})) as rank
     from pages p
     left join lateral (
       with recursive visible_path as (
@@ -109,7 +100,7 @@ searchRoute.get('/', async (c) => {
         from folders f
         where f.id = p.parent_id
           and f.is_deleted = false
-          and f.id in (select folder_id from get_enumerable_folder_ids($1))
+          and f.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
 
         union all
 
@@ -117,18 +108,17 @@ searchRoute.get('/', async (c) => {
         from visible_path child
         join folders parent on parent.id = child.parent_id
         where parent.is_deleted = false
-          and parent.id in (select folder_id from get_enumerable_folder_ids($1))
+          and parent.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
       )
       select array_agg(name order by depth desc) as breadcrumb
       from visible_path
     ) breadcrumbs on true
     where p.is_deleted = false
-      and p.id in (select page_id from get_accessible_page_ids($1))
+      and p.id in (select page_id from get_accessible_page_ids(${user.id}))
       ${textSearchClause}
       ${whereClause}
     order by rank desc nulls last
     limit 20`,
-    params,
   );
 
   const results = (result.rows as SearchRow[]).map((row) => ({

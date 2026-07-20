@@ -1,7 +1,7 @@
 import { MAX_FOLDER_NAME_LENGTH, MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
-import { query } from '../db/query';
+import { testQuery as query } from '../db/testQuery';
 import { createTestApp, createTestSession, createTestUser } from '../test-utils';
 
 describe('obsidian import API', () => {

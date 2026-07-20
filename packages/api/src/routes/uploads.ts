@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { auth } from '../auth';
 import { db } from '../db/connection';
@@ -22,6 +24,7 @@ import {
 import { lockEntityAccess, lockWorkspaceAccess } from '../utils/share-access';
 
 const uploadsRoute = new Hono();
+const MAX_UPLOAD_REQUEST_BYTES = MAX_IMAGE_SIZE_BYTES + 256 * 1024;
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -38,8 +41,7 @@ type UploadRow = {
 const getUploadByFilename = async (filename: string, executor: QueryExecutor = db) => {
   const result = await executeQuery<UploadRow>(
     executor,
-    'select * from uploads where filename = $1 limit 1',
-    [filename],
+    sql`select * from uploads where filename = ${filename} limit 1`,
   );
   return result.rows[0] ?? null;
 };
@@ -56,20 +58,19 @@ const getUploadAccess = async (
 ): Promise<UploadAccess> => {
   const result = await executeQuery<UploadAccess>(
     executor,
-    `SELECT
+    sql`SELECT
        EXISTS (
          SELECT 1
          FROM upload_page_refs
-         WHERE upload_id = $1
+         WHERE upload_id = ${uploadId}
        ) AS has_references,
        EXISTS (
          SELECT 1
          FROM upload_page_refs upr
-         JOIN LATERAL get_effective_page_permission(upr.page_id, $2) access ON true
-         WHERE upr.upload_id = $1
+         JOIN LATERAL get_effective_page_permission(upr.page_id, ${userId}) access ON true
+         WHERE upr.upload_id = ${uploadId}
            AND access.permission IS NOT NULL
        ) AS has_accessible_reference`,
-    [uploadId, userId],
   );
   const access = result.rows[0];
   if (!access) {
@@ -81,13 +82,12 @@ const getUploadAccess = async (
 const isUploadPublic = async (executor: QueryExecutor, uploadId: string): Promise<boolean> => {
   const result = await executeQuery(
     executor,
-    `SELECT 1
+    sql`SELECT 1
      FROM upload_page_refs reference
      JOIN pages page ON page.id = reference.page_id AND page.is_deleted = false
-     WHERE reference.upload_id = $1
+     WHERE reference.upload_id = ${uploadId}
        AND get_public_page_permission(page.id) IS NOT NULL
      LIMIT 1`,
-    [uploadId],
   );
   return (result.rowCount ?? 0) > 0;
 };
@@ -98,100 +98,109 @@ const getUploadWorkspaceOwnerIds = async (
 ): Promise<string[]> => {
   const result = await executeQuery<{ owner_id: string }>(
     executor,
-    `SELECT DISTINCT COALESCE(get_root_folder_owner(p.parent_id), p.created_by) AS owner_id
+    sql`SELECT DISTINCT COALESCE(get_root_folder_owner(p.parent_id), p.created_by) AS owner_id
      FROM upload_page_refs upr
      JOIN pages p ON p.id = upr.page_id
-     WHERE upr.upload_id = $1
+     WHERE upr.upload_id = ${uploadId}
      ORDER BY owner_id`,
-    [uploadId],
   );
   return result.rows.map((row) => row.owner_id);
 };
 
-uploadsRoute.post('/', async (c) => {
-  const actor = await getRequestActor(c);
-  const body = await c.req.parseBody().catch(() => null);
-  if (!body || typeof body !== 'object') {
-    throw new HTTPException(400, { message: 'Invalid form data' });
-  }
-
-  const file = (body as Record<string, unknown>).file;
-  const pageId = (body as Record<string, unknown>).pageId;
-
-  if (typeof pageId !== 'string' || !UUID_PATTERN.test(pageId)) {
-    throw new HTTPException(400, { message: 'Page ID is required' });
-  }
-
-  await ensureActorPageAccess(actor, pageId, 'edit');
-
-  if (!(file instanceof File)) {
-    throw new HTTPException(400, { message: 'File is required' });
-  }
-
-  if (!isSafeImageMime(file.type)) {
-    throw new HTTPException(400, { message: 'Only JPEG, PNG, GIF, and WebP images are allowed' });
-  }
-
-  if (file.size > MAX_IMAGE_SIZE_BYTES) {
-    throw new HTTPException(400, { message: 'File must be 10MB or less' });
-  }
-
-  const buffer = Buffer.from(await file.arrayBuffer());
-  if (!hasValidImageSignature(buffer, file.type)) {
-    throw new HTTPException(400, { message: 'File contents do not match the selected image type' });
-  }
-
-  await mkdir(uploadsDir, { recursive: true });
-
-  const extension = IMAGE_EXTENSION_BY_MIME.get(file.type);
-  if (!extension) {
-    throw new HTTPException(400, { message: 'Unsupported image type' });
-  }
-  const filename = `${randomUUID()}.${extension}`;
-  const filePath = path.join(uploadsDir, filename);
-  await writeFile(filePath, buffer);
-
-  try {
-    await db.transaction(async (tx) => {
-      await lockEntityAccess(tx, 'page', pageId);
-      await ensureActorPageAccess(actor, pageId, 'edit', tx);
-      await persistGuestIdentity(actor, tx);
-      const uploader = actorColumns(actor);
-      const uploadResult = await executeQuery<{ id: string }>(
-        tx,
-        `insert into uploads
-           (filename, original_name, mime_type, size, uploaded_by, uploaded_by_guest_id)
-         values ($1, $2, $3, $4, $5, $6)
-         returning id`,
-        [filename, file.name, file.type, file.size, uploader.userId, uploader.guestId],
-      );
-      const uploadId = uploadResult.rows[0]?.id;
-      if (!uploadId) {
-        throw new HTTPException(500, { message: 'Failed to create upload' });
-      }
-
-      await executeQuery(
-        tx,
-        `insert into upload_page_refs (upload_id, page_id)
-         values ($1, $2)
-         on conflict (upload_id, page_id) do nothing`,
-        [uploadId, pageId],
-      );
+uploadsRoute.post(
+  '/',
+  bodyLimit({
+    maxSize: MAX_UPLOAD_REQUEST_BYTES,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    const actor = await getRequestActor(c);
+    const body = await c.req.parseBody().catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+      return null;
     });
-  } catch (error) {
-    try {
-      await unlink(filePath);
-    } catch (cleanupError) {
-      throw new AggregateError(
-        [error, cleanupError],
-        'Upload failed and file cleanup was unsuccessful',
-      );
+    if (!body || typeof body !== 'object') {
+      throw new HTTPException(400, { message: 'Invalid form data' });
     }
-    throw error;
-  }
 
-  return c.json({ url: `/api/uploads/${filename}` });
-});
+    const file = (body as Record<string, unknown>).file;
+    const pageId = (body as Record<string, unknown>).pageId;
+
+    if (typeof pageId !== 'string' || !UUID_PATTERN.test(pageId)) {
+      throw new HTTPException(400, { message: 'Page ID is required' });
+    }
+
+    await ensureActorPageAccess(actor, pageId, 'edit');
+
+    if (!(file instanceof File)) {
+      throw new HTTPException(400, { message: 'File is required' });
+    }
+
+    if (!isSafeImageMime(file.type)) {
+      throw new HTTPException(400, { message: 'Only JPEG, PNG, GIF, and WebP images are allowed' });
+    }
+
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      throw new HTTPException(400, { message: 'File must be 10MB or less' });
+    }
+
+    const buffer = Buffer.from(await file.arrayBuffer());
+    if (!hasValidImageSignature(buffer, file.type)) {
+      throw new HTTPException(400, {
+        message: 'File contents do not match the selected image type',
+      });
+    }
+
+    await mkdir(uploadsDir, { recursive: true });
+
+    const extension = IMAGE_EXTENSION_BY_MIME.get(file.type);
+    if (!extension) {
+      throw new HTTPException(400, { message: 'Unsupported image type' });
+    }
+    const filename = `${randomUUID()}.${extension}`;
+    const filePath = path.join(uploadsDir, filename);
+    await writeFile(filePath, buffer);
+
+    try {
+      await db.transaction(async (tx) => {
+        await lockEntityAccess(tx, 'page', pageId);
+        await ensureActorPageAccess(actor, pageId, 'edit', tx);
+        await persistGuestIdentity(actor, tx);
+        const uploader = actorColumns(actor);
+        const uploadResult = await executeQuery<{ id: string }>(
+          tx,
+          sql`insert into uploads
+           (filename, original_name, mime_type, size, uploaded_by, uploaded_by_guest_id)
+         values (${filename}, ${file.name}, ${file.type}, ${file.size}, ${uploader.userId}, ${uploader.guestId})
+         returning id`,
+        );
+        const uploadId = uploadResult.rows[0]?.id;
+        if (!uploadId) {
+          throw new HTTPException(500, { message: 'Failed to create upload' });
+        }
+
+        await executeQuery(
+          tx,
+          sql`insert into upload_page_refs (upload_id, page_id)
+         values (${uploadId}, ${pageId})
+         on conflict (upload_id, page_id) do nothing`,
+        );
+      });
+    } catch (error) {
+      try {
+        await unlink(filePath);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          'Upload failed and file cleanup was unsuccessful',
+        );
+      }
+      throw error;
+    }
+
+    return c.json({ url: `/api/uploads/${filename}` });
+  },
+);
 
 uploadsRoute.get('/:filename', async (c) => {
   const filename = c.req.param('filename');

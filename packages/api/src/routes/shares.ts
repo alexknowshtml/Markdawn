@@ -7,6 +7,7 @@ import {
   type SharedWithMeItem,
   type ShareSummary,
 } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
@@ -166,12 +167,11 @@ async function resolveEntity(
           public_permission: PublicPermission | null;
         }>(
           executor,
-          `select page.id,
+          sql`select page.id,
                   coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id,
                   page.title, page.inheritance_policy, page.public_permission
            from pages page
-           where page.id = $1 and page.is_deleted = false`,
-          [entityId],
+           where page.id = ${entityId} and page.is_deleted = false`,
         )
       : await executeQuery<{
           id: string;
@@ -181,11 +181,10 @@ async function resolveEntity(
           public_permission: PublicPermission | null;
         }>(
           executor,
-          `select folder.id, get_root_folder_owner(folder.id) as owner_id,
+          sql`select folder.id, get_root_folder_owner(folder.id) as owner_id,
                   folder.name as title, folder.inheritance_policy, folder.public_permission
            from folders folder
-           where folder.id = $1 and folder.is_deleted = false`,
-          [entityId],
+           where folder.id = ${entityId} and folder.is_deleted = false`,
         );
   const entity = result.rows[0];
   if (!entity) {
@@ -237,7 +236,7 @@ async function getDirectGrants(
 ): Promise<EntityShare[]> {
   const result = await executeQuery<GrantRow>(
     executor,
-    `select share.id, share.entity_type, share.entity_id, share.permission,
+    sql`select share.id, share.entity_type, share.entity_id, share.permission,
             share.recipient_user_id, recipient.email as recipient_email,
             recipient.name as recipient_name,
             coalesce(recipient.avatar_url, recipient.image) as recipient_avatar_url,
@@ -246,9 +245,8 @@ async function getDirectGrants(
      from shares share
      join users recipient on recipient.id = share.recipient_user_id
      left join users sharer on sharer.id = share.shared_by
-     where share.entity_type = $1 and share.entity_id = $2
+     where share.entity_type = ${entityType} and share.entity_id = ${entityId}
      order by lower(coalesce(recipient.name, recipient.email)), share.created_at`,
-    [entityType, entityId],
   );
   return result.rows.map(normalizeGrant);
 }
@@ -262,11 +260,11 @@ async function getAccessSources(
     entityType === 'page'
       ? await executeQuery<SourceRow>(
           executor,
-          `with page_info as (
+          sql`with page_info as (
              select page.parent_id,
                     coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id
              from pages page
-             where page.id = $1 and page.is_deleted = false
+             where page.id = ${entityId} and page.is_deleted = false
            ), sources as (
              select 'owner'::text as kind, null::uuid as share_id, info.owner_id as user_id,
                     'admin'::text as permission, null::uuid as folder_id,
@@ -278,7 +276,7 @@ async function getAccessSources(
 
              select 'direct', share.id, share.recipient_user_id, share.permission, null, null
              from shares share
-             where share.entity_type = 'page' and share.entity_id = $1
+             where share.entity_type = 'page' and share.entity_id = ${entityId}
 
              union all
 
@@ -288,7 +286,7 @@ async function getAccessSources(
              join folder_closure path on path.descendant_id = info.parent_id
              join folders folder on folder.id = path.ancestor_id and folder.is_deleted = false
              join shares share on share.entity_type = 'folder' and share.entity_id = folder.id
-             where not is_page_folder_inheritance_blocked(folder.id, $1)
+             where not is_page_folder_inheritance_blocked(folder.id, ${entityId})
 
              union all
 
@@ -297,19 +295,18 @@ async function getAccessSources(
                     null, null
              from page_info info
              join workspace_members member on member.workspace_owner_id = info.owner_id
-             where not is_page_path_restricted($1)
+             where not is_page_path_restricted(${entityId})
            )
            select sources.kind, sources.share_id, sources.user_id,
                   users.name, users.email, coalesce(users.avatar_url, users.image) as avatar_url,
                   sources.permission, sources.folder_id, sources.folder_name
            from sources
            join users on users.id = sources.user_id`,
-          [entityId],
         )
       : await executeQuery<SourceRow>(
           executor,
-          `with folder_info as (
-             select get_root_folder_owner($1) as owner_id
+          sql`with folder_info as (
+             select get_root_folder_owner(${entityId}) as owner_id
            ), sources as (
              select 'owner'::text as kind, null::uuid as share_id, info.owner_id as user_id,
                     'admin'::text as permission, null::uuid as folder_id,
@@ -321,7 +318,7 @@ async function getAccessSources(
 
              select 'direct', share.id, share.recipient_user_id, share.permission, null, null
              from shares share
-             where share.entity_type = 'folder' and share.entity_id = $1
+             where share.entity_type = 'folder' and share.entity_id = ${entityId}
 
              union all
 
@@ -330,8 +327,8 @@ async function getAccessSources(
              from folder_closure path
              join folders folder on folder.id = path.ancestor_id and folder.is_deleted = false
              join shares share on share.entity_type = 'folder' and share.entity_id = folder.id
-             where path.descendant_id = $1 and path.depth > 0
-               and not is_folder_inheritance_blocked(folder.id, $1)
+             where path.descendant_id = ${entityId} and path.depth > 0
+               and not is_folder_inheritance_blocked(folder.id, ${entityId})
 
              union all
 
@@ -340,14 +337,13 @@ async function getAccessSources(
                     null, null
              from folder_info info
              join workspace_members member on member.workspace_owner_id = info.owner_id
-             where not is_folder_path_restricted($1)
+             where not is_folder_path_restricted(${entityId})
            )
            select sources.kind, sources.share_id, sources.user_id,
                   users.name, users.email, coalesce(users.avatar_url, users.image) as avatar_url,
                   sources.permission, sources.folder_id, sources.folder_name
            from sources
            join users on users.id = sources.user_id`,
-          [entityId],
         );
 
   const winningPermission = new Map<string, SharePermission>();
@@ -429,18 +425,17 @@ async function getInheritedPublicAccess(
           permission: PublicPermission;
         }>(
           executor,
-          `select folder.id as entity_id, folder.name as entity_title,
+          sql`select folder.id as entity_id, folder.name as entity_title,
                   folder.public_permission as permission
            from pages page
            join folder_closure path on path.descendant_id = page.parent_id
            join folders folder on folder.id = path.ancestor_id
-           where page.id = $1 and page.is_deleted = false
+           where page.id = ${entityId} and page.is_deleted = false
              and folder.is_deleted = false
              and folder.public_permission is not null
              and not is_page_folder_inheritance_blocked(folder.id, page.id)
            order by case folder.public_permission when 'edit' then 2 else 1 end desc,
                     path.depth asc`,
-          [entityId],
         )
       : await executeQuery<{
           entity_id: string;
@@ -448,17 +443,16 @@ async function getInheritedPublicAccess(
           permission: PublicPermission;
         }>(
           executor,
-          `select folder.id as entity_id, folder.name as entity_title,
+          sql`select folder.id as entity_id, folder.name as entity_title,
                   folder.public_permission as permission
            from folder_closure path
            join folders folder on folder.id = path.ancestor_id
-           where path.descendant_id = $1 and path.depth > 0
+           where path.descendant_id = ${entityId} and path.depth > 0
              and folder.is_deleted = false
              and folder.public_permission is not null
-             and not is_folder_inheritance_blocked(folder.id, $1)
+             and not is_folder_inheritance_blocked(folder.id, ${entityId})
            order by case folder.public_permission when 'edit' then 2 else 1 end desc,
                     path.depth asc`,
-          [entityId],
         );
   return result.rows.map((row) => ({
     entityId: row.entity_id,
@@ -481,12 +475,12 @@ async function removeNestedSharedRoots(
   const folderIds = rows.filter((row) => row.entity_type === 'folder').map((row) => row.entity_id);
   const hiddenResult = await executeQuery<{ entity_type: ShareEntityType; entity_id: string }>(
     executor,
-    `with folder_roots as (
-       select distinct unnest($1::uuid[]) as folder_id
+    sql`with folder_roots as (
+       select distinct unnest(${sql.param(folderRootIds)}::uuid[]) as folder_id
      ), page_items as (
-       select id, parent_id from pages where id = any($2::uuid[]) and is_deleted = false
+       select id, parent_id from pages where id = any(${sql.param(pageIds)}::uuid[]) and is_deleted = false
      ), folder_items as (
-       select id from folders where id = any($3::uuid[]) and is_deleted = false
+       select id from folders where id = any(${sql.param(folderIds)}::uuid[]) and is_deleted = false
      )
      select distinct 'page'::text as entity_type, page.id as entity_id
      from page_items page
@@ -501,7 +495,6 @@ async function removeNestedSharedRoots(
      join folder_closure path on path.descendant_id = folder.id and path.depth > 0
      join folder_roots root on root.folder_id = path.ancestor_id
      where not is_folder_inheritance_blocked(root.folder_id, folder.id)`,
-    [folderRootIds, pageIds, folderIds],
   );
   const hidden = new Set(hiddenResult.rows.map((row) => `${row.entity_type}:${row.entity_id}`));
   return rows.filter((row) => !hidden.has(`${row.entity_type}:${row.entity_id}`));
@@ -510,7 +503,7 @@ async function removeNestedSharedRoots(
 async function getSharedRoots(userId: string, executor: QueryExecutor): Promise<SharedRootRow[]> {
   const result = await executeQuery<SharedRootRow>(
     executor,
-    `with candidates as (
+    sql`with candidates as (
        select share.id, share.entity_type, share.entity_id, access.permission,
               share.recipient_user_id, recipient.email as recipient_email,
               recipient.name as recipient_name,
@@ -530,15 +523,15 @@ async function getSharedRoots(userId: string, executor: QueryExecutor): Promise<
        left join folders folder on share.entity_type = 'folder' and folder.id = share.entity_id and folder.is_deleted = false
        join users recipient on recipient.id = share.recipient_user_id
        left join users sharer on sharer.id = share.shared_by
-       left join page_visits page_visit on page_visit.page_id = page.id and page_visit.user_id = $1
+       left join page_visits page_visit on page_visit.page_id = page.id and page_visit.user_id = ${userId}
        join lateral (
-         select permission from get_effective_page_permission(share.entity_id, $1)
+         select permission from get_effective_page_permission(share.entity_id, ${userId})
          where share.entity_type = 'page'
          union all
-         select permission from get_effective_folder_permission(share.entity_id, $1)
+         select permission from get_effective_folder_permission(share.entity_id, ${userId})
          where share.entity_type = 'folder'
        ) access on true
-       where share.recipient_user_id = $1
+       where share.recipient_user_id = ${userId}
          and access.permission is not null
          and ((share.entity_type = 'page' and page.id is not null)
            or (share.entity_type = 'folder' and folder.id is not null))
@@ -555,8 +548,8 @@ async function getSharedRoots(userId: string, executor: QueryExecutor): Promise<
        from page_public_access_visits visit
        join users on users.id = visit.user_id
        join pages page on page.id = visit.page_id and page.is_deleted = false
-       join lateral get_effective_page_permission(page.id, $1) access on true
-       where visit.user_id = $1
+       join lateral get_effective_page_permission(page.id, ${userId}) access on true
+       where visit.user_id = ${userId}
          and get_public_page_permission(page.id) is not null
          and access.permission is not null
 
@@ -571,8 +564,8 @@ async function getSharedRoots(userId: string, executor: QueryExecutor): Promise<
        from folder_public_access_visits visit
        join users on users.id = visit.user_id
        join folders folder on folder.id = visit.folder_id and folder.is_deleted = false
-       join lateral get_effective_folder_permission(folder.id, $1) access on true
-       where visit.user_id = $1
+       join lateral get_effective_folder_permission(folder.id, ${userId}) access on true
+       where visit.user_id = ${userId}
          and get_public_folder_permission(folder.id) is not null
          and access.permission is not null
      )
@@ -582,9 +575,8 @@ async function getSharedRoots(userId: string, executor: QueryExecutor): Promise<
             shared_by_name, shared_by_email, created_at, updated_at,
             entity_title, entity_icon, owner_id, entity_updated_at, sort_at, source
      from candidates
-     where owner_id is distinct from $1
+     where owner_id is distinct from ${userId}
      order by entity_type, entity_id, source_rank, sort_at desc nulls last`,
-    [userId],
   );
   const visibleRows = await removeNestedSharedRoots(result.rows, executor);
   return visibleRows.sort(
@@ -660,15 +652,14 @@ sharesRoute.get('/with-me/tree', async (c) => {
           permission: SharePermission | null;
         }>(
           tx,
-          `select folder.id, folder.parent_id, folder.name, folder.icon,
+          sql`select folder.id, folder.parent_id, folder.name, folder.icon,
                 folder.created_by, folder.updated_at,
                 get_root_folder_owner(folder.id) as owner_id, access.permission
          from folder_closure path
          join folders folder on folder.id = path.descendant_id and folder.is_deleted = false
-         join lateral get_effective_folder_permission(folder.id, $2) access on true
-         where path.ancestor_id = $1 and access.permission is not null
+         join lateral get_effective_folder_permission(folder.id, ${user.id}) access on true
+         where path.ancestor_id = ${root.entity_id} and access.permission is not null
            order by path.depth, folder.position::numeric`,
-          [root.entity_id, user.id],
         );
         const pageResult = await executeQuery<{
           id: string;
@@ -681,17 +672,16 @@ sharesRoute.get('/with-me/tree', async (c) => {
           permission: SharePermission | null;
         }>(
           tx,
-          `select page.id, page.parent_id, page.title, page.icon,
+          sql`select page.id, page.parent_id, page.title, page.icon,
                 page.created_by, page.updated_at,
                 coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id,
                 access.permission
          from pages page
          join folder_closure path on path.descendant_id = page.parent_id
-         join lateral get_effective_page_permission(page.id, $2) access on true
-         where path.ancestor_id = $1 and page.is_deleted = false
+         join lateral get_effective_page_permission(page.id, ${user.id}) access on true
+         where path.ancestor_id = ${root.entity_id} and page.is_deleted = false
            and access.permission is not null
            order by path.depth, page.position::numeric`,
-          [root.entity_id, user.id],
         );
 
         const folders = new Map<string, SharedNavigationFolder>();
@@ -923,9 +913,8 @@ sharesRoute.patch('/entity/:entityType/:entityId/inheritance', async (c) => {
     await executeQuery(
       tx,
       entityType === 'page'
-        ? 'update pages set inheritance_policy = $1, updated_at = now() where id = $2'
-        : 'update folders set inheritance_policy = $1, updated_at = now() where id = $2',
-      [policy, entityId],
+        ? sql`update pages set inheritance_policy = ${policy}, updated_at = now() where id = ${entityId}`
+        : sql`update folders set inheritance_policy = ${policy}, updated_at = now() where id = ${entityId}`,
     );
     const affectedAfter = await getEntityMetaUserIds(tx, entityType, entityId);
     await notifyShareRecompute(
@@ -969,35 +958,31 @@ sharesRoute.patch('/entity/:entityType/:entityId/public-access', async (c) => {
     await executeQuery(
       tx,
       entityType === 'page'
-        ? 'update pages set public_permission = $1, updated_at = now() where id = $2'
-        : 'update folders set public_permission = $1, updated_at = now() where id = $2',
-      [nextPermission, entityId],
+        ? sql`update pages set public_permission = ${nextPermission}, updated_at = now() where id = ${entityId}`
+        : sql`update folders set public_permission = ${nextPermission}, updated_at = now() where id = ${entityId}`,
     );
 
     if (nextPermission === null) {
       if (entityType === 'page') {
         await executeQuery(
           tx,
-          `delete from page_public_access_visits visit
-           where visit.page_id = $1 and get_public_page_permission(visit.page_id) is null`,
-          [entityId],
+          sql`delete from page_public_access_visits visit
+           where visit.page_id = ${entityId} and get_public_page_permission(visit.page_id) is null`,
         );
       } else {
         await executeQuery(
           tx,
-          `delete from folder_public_access_visits visit
+          sql`delete from folder_public_access_visits visit
            where visit.folder_id in (
-             select descendant_id from folder_closure where ancestor_id = $1
+             select descendant_id from folder_closure where ancestor_id = ${entityId}
            )`,
-          [entityId],
         );
         await executeQuery(
           tx,
-          `delete from page_public_access_visits visit
+          sql`delete from page_public_access_visits visit
            using pages page, folder_closure path
            where visit.page_id = page.id
-             and path.ancestor_id = $1 and path.descendant_id = page.parent_id`,
-          [entityId],
+             and path.ancestor_id = ${entityId} and path.descendant_id = page.parent_id`,
         );
       }
     }
@@ -1050,8 +1035,7 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
   await ensureCanAdminEntity(entityType, entityId, user.id);
 
   const recipientResult = await query<{ id: string; email: string }>(
-    'select id, email from users where lower(email) = lower($1) limit 1',
-    [email.trim()],
+    sql`select id, email from users where lower(email) = lower(${email.trim()}) limit 1`,
   );
   const recipient = recipientResult.rows[0];
   if (!recipient) throw new HTTPException(404, { message: 'User not found' });
@@ -1062,9 +1046,9 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
     throw new HTTPException(400, { message: 'Owner already has full access' });
   }
 
-  const sharer = await query<{ name: string | null }>('select name from users where id = $1', [
-    user.id,
-  ]);
+  const sharer = await query<{ name: string | null }>(
+    sql`select name from users where id = ${user.id}`,
+  );
   const sharedByName = sharer.rows[0]?.name ?? 'Someone';
   let created = false;
   await db.transaction(async (tx) => {
@@ -1075,10 +1059,9 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
     }
     const existing = await executeQuery<{ id: string; permission: SharePermission }>(
       tx,
-      `select id, permission from shares
-       where entity_type = $1 and entity_id = $2 and recipient_user_id = $3
+      sql`select id, permission from shares
+       where entity_type = ${entityType} and entity_id = ${entityId} and recipient_user_id = ${recipient.id}
        for update`,
-      [entityType, entityId, recipient.id],
     );
     const current = existing.rows[0];
     if (current?.permission === 'admin' && !actorAccess.fullAccess) {
@@ -1087,22 +1070,17 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
     if (current) {
       await executeQuery(
         tx,
-        'update shares set permission = $1, shared_by = $2, updated_at = now() where id = $3',
-        [nextPermission, user.id, current.id],
+        sql`update shares set permission = ${nextPermission}, shared_by = ${user.id}, updated_at = now() where id = ${current.id}`,
       );
     } else {
       created = true;
       await executeQuery(
         tx,
-        `insert into shares
+        sql`insert into shares
            (entity_type, entity_id, shared_by, recipient_user_id, permission)
-         values ($1, $2, $3, $4, $5)`,
-        [entityType, entityId, user.id, recipient.id, nextPermission],
+         values (${entityType}, ${entityId}, ${user.id}, ${recipient.id}, ${nextPermission})`,
       );
     }
-    const message = created
-      ? `Granted ${nextPermission} access to ${recipient.email} on ${entity.title}`
-      : `Updated ${recipient.email}'s access to ${nextPermission} on ${entity.title}`;
     const notification = {
       entityType,
       entityId,
@@ -1110,7 +1088,6 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
       targetUserId: recipient.id,
       entityTitle: entity.title,
       sharedByName,
-      message,
     };
     if (created) await notifyShareGrant(notification, tx);
     else await notifyShareUpdate(notification, tx);
@@ -1134,19 +1111,27 @@ sharesRoute.patch('/grants/:grantId', async (c) => {
   const grantResult = await query<{
     entity_type: ShareEntityType;
     entity_id: string;
-  }>('select entity_type, entity_id from shares where id = $1', [grantId]);
+  }>(sql`select entity_type, entity_id from shares where id = ${grantId}`);
   const grant = grantResult.rows[0];
   if (!grant) throw new HTTPException(404, { message: 'Grant not found' });
   const entity = await resolveEntity(grant.entity_type, grant.entity_id);
   await ensureCanAdminEntity(grant.entity_type, grant.entity_id, user.id);
 
-  await db.transaction(async (tx) => {
+  const responseMessage = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, grant.entity_type, grant.entity_id);
     const actorAccess = await ensureCanAdminEntity(grant.entity_type, grant.entity_id, user.id, tx);
     const target = await executeQuery<{
       permission: SharePermission;
       recipient_user_id: string;
-    }>(tx, 'select permission, recipient_user_id from shares where id = $1 for update', [grantId]);
+      recipient_email: string;
+    }>(
+      tx,
+      sql`select share.permission, share.recipient_user_id, recipient.email as recipient_email
+       from shares share
+       join users recipient on recipient.id = share.recipient_user_id
+       where share.id = ${grantId}
+       for update of share`,
+    );
     const current = target.rows[0];
     if (!current) throw new HTTPException(404, { message: 'Grant not found' });
     if ((current.permission === 'admin' || nextPermission === 'admin') && !actorAccess.fullAccess) {
@@ -1154,22 +1139,22 @@ sharesRoute.patch('/grants/:grantId', async (c) => {
         message: 'Only the owner can grant or change admin access',
       });
     }
-    await executeQuery(tx, 'update shares set permission = $1, updated_at = now() where id = $2', [
-      nextPermission,
-      grantId,
-    ]);
+    await executeQuery(
+      tx,
+      sql`update shares set permission = ${nextPermission}, updated_at = now() where id = ${grantId}`,
+    );
     await notifyShareUpdate(
       {
         entityType: grant.entity_type,
         entityId: grant.entity_id,
         permission: nextPermission,
         targetUserId: current.recipient_user_id,
-        message: `Updated access to ${nextPermission} on ${entity.title}`,
       },
       tx,
     );
+    return `Updated ${current.recipient_email}’s access to ${nextPermission} on ${entity.title}`;
   });
-  return c.json({ ok: true, message: `Updated access to ${nextPermission} on ${entity.title}` });
+  return c.json({ ok: true, message: responseMessage });
 });
 
 sharesRoute.delete('/grants/:grantId', async (c) => {
@@ -1180,16 +1165,16 @@ sharesRoute.delete('/grants/:grantId', async (c) => {
     entity_id: string;
     recipient_user_id: string;
     permission: SharePermission;
-  }>('select entity_type, entity_id, recipient_user_id, permission from shares where id = $1', [
-    grantId,
-  ]);
+  }>(
+    sql`select entity_type, entity_id, recipient_user_id, permission from shares where id = ${grantId}`,
+  );
   const grant = grantResult.rows[0];
   if (!grant) throw new HTTPException(404, { message: 'Grant not found' });
   const selfRemoval = grant.recipient_user_id === user.id;
   if (!selfRemoval) await ensureCanAdminEntity(grant.entity_type, grant.entity_id, user.id);
   const entity = await resolveEntity(grant.entity_type, grant.entity_id);
 
-  await db.transaction(async (tx) => {
+  const responseMessage = await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, grant.entity_type, grant.entity_id);
     const actorAccess = selfRemoval
       ? null
@@ -1197,28 +1182,35 @@ sharesRoute.delete('/grants/:grantId', async (c) => {
     const target = await executeQuery<{
       recipient_user_id: string;
       permission: SharePermission;
-    }>(tx, 'select recipient_user_id, permission from shares where id = $1 for update', [grantId]);
+      recipient_email: string;
+    }>(
+      tx,
+      sql`select share.recipient_user_id, share.permission, recipient.email as recipient_email
+       from shares share
+       join users recipient on recipient.id = share.recipient_user_id
+       where share.id = ${grantId}
+       for update of share`,
+    );
     const current = target.rows[0];
     if (!current) throw new HTTPException(404, { message: 'Grant not found' });
     if (!selfRemoval && current.permission === 'admin' && !actorAccess?.fullAccess) {
       throw new HTTPException(403, { message: 'Only the owner can remove an admin' });
     }
-    await executeQuery(tx, 'delete from shares where id = $1', [grantId]);
+    await executeQuery(tx, sql`delete from shares where id = ${grantId}`);
     await notifyShareRevoke(
       {
         entityType: grant.entity_type,
         entityId: grant.entity_id,
         targetUserId: current.recipient_user_id,
         ...(selfRemoval && entity.ownerId ? { metaUserIds: [entity.ownerId] } : {}),
-        message: selfRemoval ? `Left ${entity.title}` : `Removed access to ${entity.title}`,
       },
       tx,
     );
+    return selfRemoval
+      ? `Removed ${entity.title} from your view`
+      : `Removed ${current.recipient_email}’s access to ${entity.title}`;
   });
-  return c.json({
-    ok: true,
-    message: selfRemoval ? `Left ${entity.title}` : `Removed access to ${entity.title}`,
-  });
+  return c.json({ ok: true, message: responseMessage });
 });
 
 export default sharesRoute;

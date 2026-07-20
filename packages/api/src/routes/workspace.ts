@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
@@ -24,15 +25,14 @@ const parseWorkspaceRole = (value: unknown, defaultRole?: WorkspaceRole): Worksp
 workspaceRoute.get('/memberships', async (c) => {
   const user = c.get('user') as { id: string };
   const result = await query(
-    `select wm.workspace_owner_id as "ownerId",
+    sql`select wm.workspace_owner_id as "ownerId",
             owner.name as "ownerName",
             wm.role,
             wm.created_at as "joinedAt"
      from workspace_members wm
      join users owner on owner.id = wm.workspace_owner_id
-     where wm.member_id = $1
+     where wm.member_id = ${user.id}
      order by wm.created_at asc`,
-    [user.id],
   );
   return c.json(result.rows);
 });
@@ -45,7 +45,7 @@ workspaceRoute.get('/members', async (c) => {
   const user = c.get('user') as { id: string };
 
   const result = await query(
-    `SELECT
+    sql`SELECT
        wm.id,
        wm.workspace_owner_id,
        wm.member_id,
@@ -56,9 +56,8 @@ workspaceRoute.get('/members', async (c) => {
        wm.created_at
      FROM workspace_members wm
      JOIN users u ON u.id = wm.member_id
-     WHERE wm.workspace_owner_id = $1
+     WHERE wm.workspace_owner_id = ${user.id}
      ORDER BY wm.created_at ASC`,
-    [user.id],
   );
 
   return c.json(result.rows);
@@ -84,8 +83,7 @@ workspaceRoute.post('/members/invite', async (c) => {
 
   // Find the user by email
   const userResult = await query(
-    'SELECT id, name FROM users WHERE lower(email) = lower($1) LIMIT 1',
-    [email.trim()],
+    sql`SELECT id, name FROM users WHERE lower(email) = lower(${email.trim()}) LIMIT 1`,
   );
   const targetUser = userResult.rows[0] as { id: string; name: string } | undefined;
   if (!targetUser) {
@@ -99,10 +97,9 @@ workspaceRoute.post('/members/invite', async (c) => {
 
   // Membership uniqueness is directional: each user owns an independent workspace.
   const existingResult = await query(
-    `SELECT id FROM workspace_members
-     WHERE workspace_owner_id = $1 AND member_id = $2
+    sql`SELECT id FROM workspace_members
+     WHERE workspace_owner_id = ${user.id} AND member_id = ${targetUser.id}
      LIMIT 1`,
-    [user.id, targetUser.id],
   );
   if (existingResult.rowCount && existingResult.rowCount > 0) {
     throw new HTTPException(409, { message: 'User is already a member of this workspace' });
@@ -114,10 +111,9 @@ workspaceRoute.post('/members/invite', async (c) => {
     await lockWorkspaceAccessMutation(tx, user.id);
     const insertResult = await executeQuery(
       tx,
-      `INSERT INTO workspace_members (workspace_owner_id, member_id, role)
-       VALUES ($1, $2, $3)
+      sql`INSERT INTO workspace_members (workspace_owner_id, member_id, role)
+       VALUES (${user.id}, ${targetUser.id}, ${role})
        RETURNING id`,
-      [user.id, targetUser.id, role],
     );
 
     if (!insertResult.rowCount || insertResult.rowCount === 0) {
@@ -150,7 +146,7 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
   const { role: rawRole } = body as { role?: string };
   const role = parseWorkspaceRole(rawRole);
 
-  const memberResult = await query('SELECT name FROM users WHERE id = $1', [memberId]);
+  const memberResult = await query(sql`SELECT name FROM users WHERE id = ${memberId}`);
   const memberName =
     (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
 
@@ -160,10 +156,9 @@ workspaceRoute.patch('/members/:memberId/role', async (c) => {
     await lockWorkspaceAccessMutation(tx, user.id);
     const updateResult = await executeQuery(
       tx,
-      `UPDATE workspace_members SET role = $1
-       WHERE workspace_owner_id = $2 AND member_id = $3
+      sql`UPDATE workspace_members SET role = ${role}
+       WHERE workspace_owner_id = ${user.id} AND member_id = ${memberId}
        RETURNING id`,
-      [role, user.id, memberId],
     );
 
     if (!updateResult.rowCount || updateResult.rowCount === 0) {
@@ -195,15 +190,14 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
 
   if (!isSelfRemoval) {
     const ownerCheck = await query(
-      'SELECT id FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 LIMIT 1',
-      [workspaceOwnerId, memberId],
+      sql`SELECT id FROM workspace_members WHERE workspace_owner_id = ${workspaceOwnerId} AND member_id = ${memberId} LIMIT 1`,
     );
     if (!ownerCheck.rowCount || ownerCheck.rowCount === 0) {
       throw new HTTPException(403, { message: 'Only the workspace owner can remove members' });
     }
   }
 
-  const memberResult = await query('SELECT name FROM users WHERE id = $1', [memberId]);
+  const memberResult = await query(sql`SELECT name FROM users WHERE id = ${memberId}`);
   const memberName =
     (memberResult.rows[0] as { name: string | null } | undefined)?.name ?? 'Member';
 
@@ -215,8 +209,7 @@ workspaceRoute.delete('/members/:memberId', async (c) => {
     await lockWorkspaceAccessMutation(tx, workspaceOwnerId);
     const deleteResult = await executeQuery(
       tx,
-      'DELETE FROM workspace_members WHERE workspace_owner_id = $1 AND member_id = $2 RETURNING id',
-      [workspaceOwnerId, memberId],
+      sql`DELETE FROM workspace_members WHERE workspace_owner_id = ${workspaceOwnerId} AND member_id = ${memberId} RETURNING id`,
     );
 
     if (!deleteResult.rowCount || deleteResult.rowCount === 0) {
