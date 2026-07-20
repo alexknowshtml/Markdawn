@@ -40,6 +40,70 @@ export interface ShareEventPayload {
   message?: string;
 }
 
+/** Best-effort realtime signal that a direct account grant was created. */
+export interface GrantReceivedNotificationPayload {
+  type: 'grant_received';
+  entityType: ShareEntityType;
+  entityId: string;
+  entityTitle: string;
+  sharedByName: string;
+  targetUserId: string;
+  permission: SharePermission;
+  message?: string;
+}
+
+/** Canonical workspace-membership invalidation sent from API to collaboration. */
+export interface WorkspaceNotificationPayload {
+  type: 'workspace_event';
+  action: 'member_added' | 'member_removed' | 'role_changed';
+  ownerId: string;
+  memberId: string;
+  message?: string;
+}
+
+export type AccessNotificationPayload =
+  | ShareEventPayload
+  | GrantReceivedNotificationPayload
+  | WorkspaceNotificationPayload;
+
+/** Best-effort direct-grant signal sent from collaboration to the browser. */
+export interface GrantReceivedMessage {
+  type: 'grant_received';
+  entityType: ShareEntityType;
+  entityId: string;
+  entityTitle: string;
+  sharedByName: string;
+  message?: string;
+  refreshViaAccessVersion?: true;
+}
+
+/** Browser compatibility signal for a canonical workspace metadata refresh. */
+export interface WorkspaceMembershipMessage {
+  type: 'workspace_membership_event';
+  action: WorkspaceNotificationPayload['action'];
+  ownerId: string;
+  refreshViaAccessVersion?: true;
+}
+
+export interface ShareAccessMessage {
+  type: 'share_access_event';
+  action: ShareEventAction;
+  entityType: ShareEntityType;
+  entityId: string;
+}
+
+export interface FolderDeletedMessage {
+  type: 'entity_deleted';
+  entityType: 'folder';
+  entityId: string;
+}
+
+export type PageMetaStatelessMessage =
+  | WorkspaceMembershipMessage
+  | FolderDeletedMessage
+  | ShareAccessMessage
+  | GrantReceivedMessage;
+
 /**
  * Stateless message sent over WebSocket from the collab server to affected
  * client connections. Clients use this to update their readOnly state,
