@@ -21,7 +21,7 @@
    - **Breaking reset note**: the Drizzle v1 migration reset replaced the legacy migration history. Any database created before this reset must be dropped/recreated before running `db:migrate`; do not apply the new baseline migrations over an old dirty DB.
    - For a fresh dev setup or new server: `setup.sh` runs `db:migrate`. No `db:push` or legacy stub tables are needed.
 9. The default branch in this repo is `master`.
-10. Never run lsp diagnostics. Instead run pnpm typecheck and pnpm format. Iterate until fixed. 
+10. Never run lsp diagnostics. Instead run pnpm typecheck and pnpm format. Iterate until fixed.
 
 ## Code Style
 
