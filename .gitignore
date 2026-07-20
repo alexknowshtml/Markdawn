@@ -16,6 +16,7 @@ coverage/
 e2e/.auth/
 
 # agent skills
+.pi/
 
 # Playwright MCP artifacts
 .playwright-mcp/
