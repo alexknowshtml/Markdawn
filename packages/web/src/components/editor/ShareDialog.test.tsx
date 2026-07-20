@@ -130,6 +130,24 @@ describe('ShareDialog admin self-removal', () => {
     consumeSelfLeave('page-1');
   });
 
+  it('does not show explanatory warning copy for public Edit links', () => {
+    const summary = adminSummary();
+    summary.publicAccess.permission = 'edit';
+    mocks.summary = summary;
+
+    render(
+      <ShareDialog
+        entityType="page"
+        entityId="page-1"
+        title="Shared page"
+        embedded
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByText(/No sign-in is required/)).not.toBeInTheDocument();
+  });
+
   it('lets a directly granted admin leave without controlling another admin', async () => {
     const summary = adminSummary();
     summary.accessSources.push({
@@ -257,9 +275,8 @@ describe('ShareDialog admin self-removal', () => {
 
     expect(screen.getAllByText('Recipient')).toHaveLength(2);
     expect(screen.getByText('Direct Grant')).toBeInTheDocument();
-    expect(screen.getByText('· Fallback')).toBeInTheDocument();
     expect(screen.getByText('via Project Folder')).toBeInTheDocument();
-    expect(screen.getByText('· Effective')).toBeInTheDocument();
+    expect(screen.queryByText(/Effective|Fallback/)).not.toBeInTheDocument();
   });
 
   it('discloses inherited public access when direct public access is restricted', () => {

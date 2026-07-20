@@ -320,19 +320,37 @@ describe('wikiLinkNodeView', () => {
     unregister();
   });
 
-  it('fails closed with a disabled unavailable state when resolution fails', async () => {
+  it('keeps resolver failures distinct and automatically retries transient failures', async () => {
     const view = {} as EditorView;
-    const unregister = registerWikiLinkPresentationResolver(view, async () => {
-      throw new Error('offline');
+    let offline = true;
+    const resolver = vi.fn(async (requests: Array<{ key: string }>) => {
+      if (offline) throw new Error('offline');
+      return requests.map((request) => ({
+        key: request.key,
+        state: 'accessible' as const,
+        target: { id: TARGET_ID, title: 'Roadmap' },
+      }));
     });
-    const nodeView = createNodeView(createNode({ targetId: TARGET_ID }), view);
-    const link = nodeView.dom as HTMLAnchorElement;
+    const unregister = registerWikiLinkPresentationResolver(view, resolver);
+    const firstNodeView = createNodeView(createNode({ targetId: TARGET_ID }), view);
+    const secondNodeView = createNodeView(createNode({ targetId: SECOND_TARGET_ID }), view);
+    const firstLink = firstNodeView.dom as HTMLAnchorElement;
+    const secondLink = secondNodeView.dom as HTMLAnchorElement;
 
-    await waitFor(() => expect(link).toHaveTextContent('Link unavailable'));
-    expect(link).toHaveAttribute('aria-disabled', 'true');
-    expect(link).not.toHaveAttribute('href');
-    expect(link).not.toHaveAttribute('data-target-id');
-    nodeView.destroy?.();
+    await waitFor(() => expect(firstLink).toHaveTextContent('Couldn’t check link'));
+    expect(secondLink).toHaveTextContent('Couldn’t check link');
+    expect(firstLink).toHaveAttribute('data-state', 'error');
+    expect(firstLink).toHaveAttribute('aria-disabled', 'true');
+    expect(firstLink).not.toHaveAttribute('href');
+    expect(firstLink).not.toHaveAttribute('data-target-id');
+
+    offline = false;
+    await waitFor(() => expect(firstLink).toHaveTextContent('Roadmap'));
+    expect(secondLink).toHaveTextContent('Roadmap');
+    expect(firstLink).toHaveAttribute('data-state', 'accessible');
+    expect(resolver.mock.calls.every(([requests]) => requests.length === 2)).toBe(true);
+    firstNodeView.destroy?.();
+    secondNodeView.destroy?.();
     unregister();
   });
 });

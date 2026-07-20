@@ -60,6 +60,7 @@ vi.mock('./PageTreeRow', () => ({
     editTitle,
     onEditChange,
     onEditSave,
+    userPermission,
   }: {
     title: string;
     onRename?: () => void;
@@ -67,10 +68,12 @@ vi.mock('./PageTreeRow', () => ({
     editTitle?: string;
     onEditChange?: (value: string) => void;
     onEditSave?: () => void;
+    userPermission?: 'view' | 'edit' | 'admin' | null;
   }) => {
     if (isEditing && onEditSave) mocks.capturedRenameSave = onEditSave;
     return (
       <div>
+        <span data-testid={`sidebar-permission-${title}`}>{userPermission ?? 'none'}</span>
         {isEditing ? (
           <input
             aria-label={`Rename ${title}`}
@@ -213,5 +216,35 @@ describe('PageTree workspace navigation', () => {
     expect(screen.queryByRole('textbox', { name: 'Rename Workspace page' })).toBeNull();
     act(() => staleSave?.());
     expect(mocks.updatePage).not.toHaveBeenCalled();
+  });
+
+  it('uses the canonical page-tree permission when shared navigation is stale', () => {
+    mocks.pages = [
+      createMockPageTreeNode({
+        id: 'shared-page',
+        title: 'Canonical title',
+        ownerId: 'workspace-1',
+        userPermission: 'edit',
+      }),
+    ];
+    mocks.shared = [
+      {
+        entityType: 'page',
+        id: 'shared-page',
+        title: 'Canonical title',
+        icon: null,
+        parentId: null,
+        ownerId: 'workspace-1',
+        createdBy: 'workspace-1',
+        updatedAt: null,
+        userPermission: 'view',
+        source: 'direct',
+      },
+    ];
+
+    render(<PageTree />);
+
+    expect(screen.getByRole('button', { name: 'Rename Canonical title' })).toBeInTheDocument();
+    expect(screen.getByTestId('sidebar-permission-Canonical title')).toHaveTextContent('edit');
   });
 });

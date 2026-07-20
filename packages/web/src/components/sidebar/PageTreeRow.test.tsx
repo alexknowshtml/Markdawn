@@ -45,6 +45,19 @@ vi.mock('../ui/PageContextMenu', () => ({
 import { PageTreeRow } from './PageTreeRow';
 
 describe('PageTreeRow keyboard actions', () => {
+  it.each([
+    ['page', false, '/app/entity-page-1'],
+    ['folder', true, '/app/folder/entity-folder-1'],
+  ] as const)('uses the canonical %s path when the row is activated', async (_type, isFolder, path) => {
+    const user = userEvent.setup();
+    mocks.navigate.mockReset();
+    render(<PageTreeRow id={`${_type}-1`} title="Entity" isFolder={isFolder} />);
+
+    await user.click(screen.getByTestId('page-tree-row'));
+
+    expect(mocks.navigate).toHaveBeenCalledWith(path);
+  });
+
   it('opens the action menu without activating row navigation', async () => {
     const user = userEvent.setup();
     const onNavigate = vi.fn();

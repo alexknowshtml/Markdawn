@@ -168,13 +168,13 @@ describe('PageContextMenu permissions', () => {
       role: 'viewer',
       permission: 'view' as const,
       expected: ['Favorite', 'Share', 'Export', 'Copy'],
-      absent: ['Rename', 'Move', 'Move to Trash', 'Remove from my view'],
+      absent: ['Rename', 'Move', 'Move to Trash', 'Remove for me'],
     },
     {
       role: 'editor',
       permission: 'edit' as const,
       expected: ['Favorite', 'Rename', 'Share', 'Export', 'Copy'],
-      absent: ['Move', 'Move to Trash', 'Remove from my view'],
+      absent: ['Move', 'Move to Trash', 'Remove for me'],
     },
     {
       role: 'admin',
@@ -205,10 +205,10 @@ describe('PageContextMenu permissions', () => {
     const user = userEvent.setup();
     renderMenu({ permission: 'view', shareSource });
 
-    await user.click(lastButton('Remove from my view'));
+    await user.click(lastButton('Remove for me'));
     expect(mocks.removeFromView).not.toHaveBeenCalled();
     expect(screen.getByText('Remove “Test page” from your view?')).toBeInTheDocument();
-    await user.click(lastButton('Remove from my view'));
+    await user.click(lastButton('Remove for me'));
 
     await waitFor(() =>
       expect(mocks.removeFromView).toHaveBeenCalledWith(
@@ -221,21 +221,21 @@ describe('PageContextMenu permissions', () => {
   it('does not offer personal removal for workspace-inherited access', () => {
     renderMenu({ permission: 'view', shareSource: 'workspace' });
 
-    expect(screen.queryByRole('button', { name: 'Remove from my view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove for me' })).not.toBeInTheDocument();
   });
 
   it('offers a direct-share admin distinct trash and personal-removal actions', () => {
     renderMenu({ permission: 'admin', shareSource: 'direct' });
 
     expect(screen.getByRole('button', { name: 'Move to Trash' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Remove from my view' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove for me' })).toBeInTheDocument();
     expect(screen.getByRole('separator')).toBeInTheDocument();
   });
 
   it('never offers personal removal to the owner', () => {
     renderMenu({ ownerId: 'current-user', shareSource: 'direct' });
 
-    expect(screen.queryByRole('button', { name: 'Remove from my view' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove for me' })).not.toBeInTheDocument();
   });
 
   it('confirms before moving a folder and its contents to Trash', async () => {
@@ -275,8 +275,8 @@ describe('PageContextMenu permissions', () => {
     const onDeleted = vi.fn();
     renderMenu({ permission: 'admin', shareSource: 'direct', onDeleted });
 
-    await user.click(lastButton('Remove from my view'));
-    await user.click(lastButton('Remove from my view'));
+    await user.click(lastButton('Remove for me'));
+    await user.click(lastButton('Remove for me'));
 
     await waitFor(() => expect(mocks.removeFromView).toHaveBeenCalledOnce());
     expect(mocks.moveToTrash).not.toHaveBeenCalled();

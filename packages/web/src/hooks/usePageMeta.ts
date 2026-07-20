@@ -3,7 +3,7 @@ import {
   type onAuthenticationFailedParameters,
   type onCloseParameters,
 } from '@hocuspocus/provider';
-import { COLLAB_TERMINAL_REASONS } from '@markdawn/shared';
+import { COLLAB_TERMINAL_REASONS, type PageMetaStatelessMessage } from '@markdawn/shared';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import * as Y from 'yjs';
@@ -12,6 +12,7 @@ import { authClient } from '../lib/auth-client';
 import { retireQueryClient } from '../lib/query-client';
 import { getLogger } from '../logger-init';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
+import { formatGrantNotification } from '../utils/grantNotification';
 import { showInfoToast } from '../utils/toast';
 import { invalidateWorkspaceAccessQueries, WORKSPACE_ACCESS_QUERY_KEYS } from './use-workspace';
 
@@ -61,42 +62,6 @@ export async function refreshPageMetaQueriesAfterSync(queryClient: QueryClient):
     PAGE_META_SYNC_QUERY_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
   );
 }
-
-type WorkspaceMembershipEvent = {
-  type: 'workspace_membership_event';
-  action: 'member_added' | 'member_removed' | 'role_changed';
-  ownerId: string;
-  refreshViaAccessVersion?: true;
-};
-
-type FolderDeletionEvent = {
-  type: 'entity_deleted';
-  entityType: 'folder';
-  entityId: string;
-};
-
-type ShareAccessEvent = {
-  type: 'share_access_event';
-  action: 'grant' | 'update' | 'revoke' | 'recompute';
-  entityType: 'page' | 'folder';
-  entityId: string;
-};
-
-type GrantReceivedEvent = {
-  type: 'grant_received';
-  entityType: 'page' | 'folder';
-  entityId: string;
-  entityTitle: string;
-  sharedByName: string;
-  message?: string;
-  refreshViaAccessVersion?: true;
-};
-
-type PageMetaStatelessMessage =
-  | WorkspaceMembershipEvent
-  | FolderDeletionEvent
-  | ShareAccessEvent
-  | GrantReceivedEvent;
 
 export function applyPageMetaStatelessMessage(
   message: PageMetaStatelessMessage,
@@ -375,6 +340,10 @@ export function usePageMeta() {
       }
       if (!message) return;
 
+      if (message.type === 'grant_received') {
+        showInfoToast(formatGrantNotification(message.sharedByName, message.entityTitle));
+      }
+
       if (
         applyPageMetaStatelessMessage(
           message,
@@ -384,11 +353,6 @@ export function usePageMeta() {
         )
       ) {
         navigate('/app', { replace: true });
-      }
-      if (message.type === 'grant_received') {
-        showInfoToast(
-          message.message ?? `${message.sharedByName} shared ${message.entityTitle} with you.`,
-        );
       }
     };
     provider.on('stateless', handleStateless);

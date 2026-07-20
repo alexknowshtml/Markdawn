@@ -448,7 +448,7 @@ export default function Page() {
               </div>
             )}
             <div className="flex items-center gap-2">
-              {!effectiveCapabilities.canEdit && (
+              {collabPermission === 'view' && !effectiveCapabilities.canEdit && (
                 <span className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-zinc-500 dark:text-zinc-400 bg-zinc-100 dark:bg-zinc-800 rounded-full">
                   View only
                 </span>

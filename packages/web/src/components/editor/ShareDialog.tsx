@@ -372,11 +372,6 @@ export function ShareDialog({
                 ariaLabel="Public access"
               />
             )}
-            {summary?.publicAccess.permission === 'edit' && (
-              <p className="mt-2 text-[11px] leading-relaxed text-amber-700 dark:text-amber-400">
-                No sign-in is required. Anyone with this URL can make normal editor changes.
-              </p>
-            )}
             {accessHelpOpen && !canGrant && !isLoading && (
               <FloatingPortal>
                 <div
@@ -572,15 +567,6 @@ export function ShareDialog({
                     )}
                     <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
                       {formatSource(entry.source, entry)}
-                      {!entry.isOwner && (
-                        <span
-                          className={
-                            entry.isWinning ? 'text-emerald-600 dark:text-emerald-400' : undefined
-                          }
-                        >
-                          {entry.isWinning ? ' · Effective' : ' · Fallback'}
-                        </span>
-                      )}
                     </span>
                   </div>
                 );

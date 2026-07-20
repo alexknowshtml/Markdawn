@@ -9,13 +9,13 @@ import { ChevronDown, ChevronRight, FileText, Plus } from 'lucide-react';
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import { useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
-import { buildFolderPath, buildPagePath } from '../../utils/url';
+import { buildEntityPath, buildFolderPath } from '../../utils/url';
 import { PageContextMenu } from '../ui/PageContextMenu';
 
 interface PageTreeRowProps {
   id: string;
   title: string;
-  icon?: string | null;
+  icon?: string | null | undefined;
   ownerId?: string | null | undefined;
   createdBy?: string | null | undefined;
   userPermission?: SharePermission | null | undefined;
@@ -85,7 +85,7 @@ export function PageTreeRow({
     if (onNavigate) {
       onNavigate();
     } else {
-      navigate(buildPagePath(title, id));
+      navigate(buildEntityPath(isFolder ? 'folder' : 'page', title, id));
     }
   };
 

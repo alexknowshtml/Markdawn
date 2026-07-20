@@ -530,6 +530,26 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(invalidateSpy).not.toHaveBeenCalled();
   });
 
+  it('shows a verified grant notification and refreshes recipient access', () => {
+    const { queryClient } = renderEditor();
+    const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
+    mocks.showInfoToast.mockClear();
+
+    act(() => {
+      mocks.providerHandlers.get('stateless')?.({
+        payload: JSON.stringify({
+          type: 'grant_received',
+          sharedByName: 'Owner',
+          entityTitle: 'Shared page',
+          message: 'Actor-only copy must not be shown to the recipient',
+        }),
+      });
+    });
+
+    expect(invalidateSpy).toHaveBeenCalled();
+    expect(mocks.showInfoToast).toHaveBeenCalledWith('Owner shared Shared page with you');
+  });
+
   it('drops delayed authentication failures after the identity retires', () => {
     const { getByTestId, lifecycle, queryClient } = renderEditor();
     const pageQueryKey = ['pages', 'detail', 'page-1'];

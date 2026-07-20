@@ -5,6 +5,7 @@ import {
   type WikiLinkPresentationResponse,
 } from '@markdawn/shared';
 import type { EditorView } from '@milkdown/kit/prose/view';
+import { getLogger } from '../logger-init';
 
 export type WikiLinkReference = { targetId?: string; path?: string };
 export type WikiLinkNavigationTarget = { id: string; title: string; heading?: string };
@@ -12,6 +13,7 @@ export type ResolvedWikiLinkPresentation =
   | { state: 'loading' }
   | { state: 'accessible'; target: { id: string; title: string } }
   | { state: 'restricted' }
+  | { state: 'error' }
   | { state: 'unavailable' };
 
 type PresentationResolver = (
@@ -35,6 +37,8 @@ type PresentationCoordinator = {
   scheduled: boolean;
   generation: number;
   nextRequestKey: number;
+  retryAttempt: number;
+  retryTimer: ReturnType<typeof setTimeout> | null;
 };
 
 const coordinators = new WeakMap<EditorView, PresentationCoordinator>();
@@ -48,9 +52,48 @@ function getCoordinator(view: EditorView): PresentationCoordinator {
     scheduled: false,
     generation: 0,
     nextRequestKey: 0,
+    retryAttempt: 0,
+    retryTimer: null,
   };
   coordinators.set(view, coordinator);
   return coordinator;
+}
+
+const WIKI_LINK_RETRY_BASE_MS = 250;
+const WIKI_LINK_RETRY_MAX_MS = 30_000;
+
+function clearCoordinatorRetry(coordinator: PresentationCoordinator): void {
+  if (coordinator.retryTimer !== null) clearTimeout(coordinator.retryTimer);
+  coordinator.retryTimer = null;
+}
+
+function hasRetryableEntries(coordinator: PresentationCoordinator): boolean {
+  return [...coordinator.entries.values()].some(
+    (entry) => entry.listeners.size > 0 && entry.presentation.state === 'error',
+  );
+}
+
+function scheduleCoordinatorRetry(
+  coordinator: PresentationCoordinator,
+  resolver: PresentationResolver,
+  generation: number,
+): void {
+  if (coordinator.retryTimer !== null) return;
+  coordinator.retryAttempt += 1;
+  const delay = Math.min(
+    WIKI_LINK_RETRY_BASE_MS * 2 ** (coordinator.retryAttempt - 1),
+    WIKI_LINK_RETRY_MAX_MS,
+  );
+  coordinator.retryTimer = setTimeout(() => {
+    coordinator.retryTimer = null;
+    if (coordinator.resolver !== resolver || coordinator.generation !== generation) return;
+    for (const entry of coordinator.entries.values()) {
+      if (entry.listeners.size > 0 && entry.presentation.state === 'error' && !entry.resolving) {
+        entry.needsResolution = true;
+      }
+    }
+    scheduleResolution(coordinator);
+  }, delay);
 }
 
 function referenceKey(reference: WikiLinkReference): string {
@@ -91,15 +134,23 @@ async function resolveEntries(
         : { state: 'unavailable' };
       notify(entry);
     }
-  } catch {
+  } catch (error) {
     if (generation !== coordinator.generation || coordinator.resolver !== resolver) return;
+    getLogger().error('Failed to resolve wiki-link presentations', {
+      error: error instanceof Error ? error.message : String(error),
+    });
     for (const entry of entries) {
       if (entry.version !== versions.get(entry)) continue;
-      entry.presentation = { state: 'unavailable' };
+      entry.presentation = { state: 'error' };
       notify(entry);
     }
+    scheduleCoordinatorRetry(coordinator, resolver, generation);
   } finally {
     for (const entry of entries) entry.resolving = false;
+    if (!hasRetryableEntries(coordinator)) {
+      clearCoordinatorRetry(coordinator);
+      coordinator.retryAttempt = 0;
+    }
     scheduleResolution(coordinator);
   }
 }
@@ -128,6 +179,8 @@ export function registerWikiLinkPresentationResolver(
   const coordinator = getCoordinator(view);
   coordinator.resolver = resolver;
   coordinator.generation += 1;
+  clearCoordinatorRetry(coordinator);
+  coordinator.retryAttempt = 0;
   for (const entry of coordinator.entries.values()) {
     entry.needsResolution = true;
   }
@@ -137,6 +190,8 @@ export function registerWikiLinkPresentationResolver(
     if (coordinator.resolver !== resolver) return;
     coordinator.resolver = null;
     coordinator.generation += 1;
+    clearCoordinatorRetry(coordinator);
+    coordinator.retryAttempt = 0;
   };
 }
 
@@ -166,6 +221,13 @@ export function subscribeToWikiLinkPresentation(
 
   return () => {
     entry?.listeners.delete(listener);
+    if (entry && entry.listeners.size === 0 && coordinator.entries.get(key) === entry) {
+      coordinator.entries.delete(key);
+    }
+    if (!hasRetryableEntries(coordinator)) {
+      clearCoordinatorRetry(coordinator);
+      coordinator.retryAttempt = 0;
+    }
   };
 }
 
@@ -193,6 +255,10 @@ export function refreshWikiLinkPresentations(
     entry.presentation = { state: 'loading' };
     entry.needsResolution = true;
     notify(entry);
+  }
+  if (!hasRetryableEntries(coordinator)) {
+    clearCoordinatorRetry(coordinator);
+    coordinator.retryAttempt = 0;
   }
   scheduleResolution(coordinator);
 }

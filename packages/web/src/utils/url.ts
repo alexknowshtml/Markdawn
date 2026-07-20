@@ -23,6 +23,16 @@ export function buildFolderPath(name: string, folderId: string): string {
   return `/app/folder/${slug}-${folderId}`;
 }
 
+export function buildEntityPath(
+  entityType: 'page' | 'folder',
+  title: string,
+  entityId: string,
+): string {
+  return entityType === 'folder'
+    ? buildFolderPath(title, entityId)
+    : buildPagePath(title, entityId);
+}
+
 const SAFE_LINK_SCHEMES = new Set(['http', 'https', 'mailto', 'tel', 'sms', 'fax']);
 const URL_SCHEME_REGEX = /^([a-zA-Z][a-zA-Z0-9+.-]*):/;
 

@@ -311,7 +311,7 @@ describe('Page permission presentation', () => {
     );
   });
 
-  it('fails every editor surface closed on disconnect until a fresh snapshot arrives', async () => {
+  it('fails closed without labeling unresolved permission as confirmed View access', async () => {
     vi.stubGlobal('fetch', mockPageFetch('edit'));
     await renderPage();
 
@@ -329,13 +329,17 @@ describe('Page permission presentation', () => {
       expect(screen.getByTestId('page-icon')).toHaveAttribute('data-read-only', 'true');
       expect(screen.getByTestId('properties')).toHaveAttribute('data-read-only', 'true');
     });
-    expect(screen.getByText('View only')).toBeInTheDocument();
+    expect(screen.queryByText('View only')).not.toBeInTheDocument();
 
     act(() => mocks.statusChange?.(WebSocketStatus.Connected));
     expect(screen.getByTestId('page-body')).toHaveAttribute('data-read-only', 'true');
     expect(screen.getByTestId('page-icon')).toHaveAttribute('data-read-only', 'true');
+    expect(screen.queryByText('View only')).not.toBeInTheDocument();
 
-    act(() => mocks.permissionSnapshot?.('edit', '2'));
+    act(() => mocks.permissionSnapshot?.('view', '2'));
+    expect(screen.getByText('View only')).toBeInTheDocument();
+
+    act(() => mocks.permissionSnapshot?.('edit', '3'));
     await waitFor(() => {
       expect(screen.getByTestId('page-body')).toHaveAttribute('data-read-only', 'false');
       expect(screen.getByTestId('page-title')).toHaveAttribute('data-read-only', 'false');

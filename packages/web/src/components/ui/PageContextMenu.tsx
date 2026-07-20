@@ -212,7 +212,7 @@ export function PageContextMenu({
       onClick: () => setPendingRemovalAction('trash'),
     },
     canRemoveFromView && {
-      label: 'Remove from my view',
+      label: 'Remove for me',
       icon: <EyeOff size={14} className="text-red-600 dark:text-red-400" />,
       className: '!text-red-600 dark:!text-red-400 hover:!bg-red-500/10',
       dividerBefore: isAdmin,
@@ -275,7 +275,7 @@ export function PageContextMenu({
               : 'This page will be moved to Trash. You can restore it later.'
             : 'This item will disappear from your workspace. The owner can share it with you again.'
         }
-        confirmText={pendingRemovalAction === 'trash' ? 'Move to Trash' : 'Remove from my view'}
+        confirmText={pendingRemovalAction === 'trash' ? 'Move to Trash' : 'Remove for me'}
         onConfirm={() => void confirmRemoval()}
         onCancel={() => setPendingRemovalAction(null)}
         loading={isRemovalPending}

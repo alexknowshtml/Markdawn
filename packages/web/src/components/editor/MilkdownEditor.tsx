@@ -36,6 +36,7 @@ import { useWikiLinkSuggestions } from '../../hooks/useWikiLinkSuggestions';
 import { authClient } from '../../lib/auth-client';
 import { getLogger } from '../../logger-init';
 import { getAnonymousId } from '../../utils/anonymous-cookie';
+import { formatGrantNotification } from '../../utils/grantNotification';
 import { consumeSelfLeave } from '../../utils/leave-page';
 import { showInfoToast } from '../../utils/toast';
 import { buildFolderPath, ensureAbsoluteUrl } from '../../utils/url';
@@ -1326,17 +1327,11 @@ export function MilkdownEditor({
           invalidateWorkspaceAccessQueries(queryClient);
         }
         if (
-          permission !== null &&
+          permission === 'view' &&
           previousPermission !== undefined &&
-          previousPermission !== permission
+          previousPermission !== 'view'
         ) {
-          showInfoToast(
-            permission === 'view'
-              ? 'This page is now view-only'
-              : permission === 'admin'
-                ? 'You are now an admin'
-                : 'You can now edit this page',
-          );
+          showInfoToast('This page is now view-only');
         }
         return;
       }
@@ -1358,7 +1353,6 @@ export function MilkdownEditor({
           setAccessPermission('edit');
           setCapabilities(deriveCapabilities('edit'));
           syncPagePermission('edit');
-          showInfoToast('You can now edit this page');
         } else if (permission === 'private') {
           evictPage('access_revoked', isSelfLeaveTransition);
         }
@@ -1410,15 +1404,13 @@ export function MilkdownEditor({
       if (message.type === 'grant_received') {
         const sharedByName = message.sharedByName as string | undefined;
         const entityTitle = message.entityTitle as string | undefined;
-        const toastMessage = (message as { message?: string }).message;
         logger.info`[collab] grant received: ${sharedByName} shared ${entityTitle}`;
+        if (sharedByName && entityTitle) {
+          showInfoToast(formatGrantNotification(sharedByName, entityTitle));
+        }
         queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
         queryClient.invalidateQueries({ queryKey: ['pageTree'] });
         queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-        showInfoToast(
-          toastMessage ??
-            `${sharedByName ?? 'Someone'} shared ${entityTitle ?? 'something'} with you. Refresh to see it.`,
-        );
         return;
       }
     };

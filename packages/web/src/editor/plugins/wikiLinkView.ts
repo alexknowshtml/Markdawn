@@ -95,9 +95,19 @@ export const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos)
       return;
     }
 
-    dom.textContent = presentation.state === 'loading' ? 'Loading link…' : 'Link unavailable';
+    dom.textContent =
+      presentation.state === 'loading'
+        ? 'Loading link…'
+        : presentation.state === 'error'
+          ? 'Couldn’t check link'
+          : 'Link unavailable';
     dom.dataset.state = presentation.state;
-    dom.title = presentation.state === 'loading' ? 'Resolving link' : 'This link is unavailable.';
+    dom.title =
+      presentation.state === 'loading'
+        ? 'Resolving link'
+        : presentation.state === 'error'
+          ? 'Could not verify this link. It will retry.'
+          : 'This link is unavailable.';
     dom.classList.add('wiki-link-unavailable');
   };
 

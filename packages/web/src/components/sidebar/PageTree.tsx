@@ -1,4 +1,3 @@
-import type { FolderTreeNode, PageTreeNode, SharedNavigationItem } from '@markdawn/shared';
 import {
   ChevronDown,
   ChevronRight,
@@ -10,7 +9,7 @@ import {
   Home,
   LogOut,
 } from 'lucide-react';
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useIdentityLifecycle, useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { useShareContext } from '../../contexts/ShareContext';
@@ -28,31 +27,22 @@ import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-work
 import { useAuth } from '../../hooks/useAuth';
 import { useEntityCreationActions } from '../../hooks/useEntityCreationActions';
 import { useStableValueWhile } from '../../hooks/useStableValue';
-import { canRenameEntity, resolveRemovalShareSource } from '../../utils/entity-actions';
-import { buildPagesByFolder, collectAllFolderIds, getRootPages } from '../../utils/page-tree';
 import { showErrorToast } from '../../utils/toast';
-import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../../utils/url';
-import { PageTreeRow } from './PageTreeRow';
-
-type EditingTarget =
-  | { kind: 'page'; id: string; value: string }
-  | { kind: 'folder'; id: string; value: string }
-  | null;
+import { buildPagePath, extractUuidFromSlug } from '../../utils/url';
+import { SidebarEntityRow } from './SidebarEntityRow';
+import { SidebarAliasSection } from './SidebarSections';
+import {
+  OwnedFolderBranch,
+  SharedNavigationBranch,
+  WorkspaceFolderBranch,
+  WorkspacePageRow,
+} from './SidebarTreeBranches';
+import type { SidebarTreeRuntime } from './sidebarRuntime';
+import { useSidebarController } from './useSidebarController';
+import { useSidebarEditing } from './useSidebarEditing';
+import { useSidebarModel } from './useSidebarModel';
 
 const SIDEBAR_PREVIEW_LIMIT = 8;
-
-const collectSharedNavigationFolderIds = (items: SharedNavigationItem[]): string[] => {
-  const ids: string[] = [];
-  const walk = (nodes: SharedNavigationItem[]) => {
-    for (const item of nodes) {
-      if (item.entityType !== 'folder') continue;
-      ids.push(item.id);
-      walk(item.children);
-    }
-  };
-  walk(items);
-  return ids;
-};
 
 export function PageTree() {
   const navigate = useIdentityNavigate();
@@ -121,15 +111,54 @@ export function PageTree() {
   const updatePageMutation = useUpdatePage();
   const updateFolderMutation = useUpdateFolder();
   const importMarkdownMutation = useImportMarkdown();
+  const renamePage = useCallback(
+    (pageId: string, title: string, onSettled: () => void) => {
+      updatePageMutation.mutate({ pageId, updates: { title } }, { onSettled });
+    },
+    [updatePageMutation],
+  );
+  const renameFolder = useCallback(
+    (folderId: string, name: string, onSettled: () => void) => {
+      updateFolderMutation.mutate({ folderId, updates: { name } }, { onSettled });
+    },
+    [updateFolderMutation],
+  );
+  const {
+    allPagesByFolder,
+    canRenameSidebarEntity,
+    directSharedNavigation,
+    favoriteRows,
+    foldersByParent,
+    getSidebarAuthorization,
+    getSidebarCapabilities,
+    ownedFolders,
+    pagesByFolder,
+    recentRows,
+    rootPages,
+    sidebarFolderIds,
+    workspaceGroups,
+  } = useSidebarModel({
+    currentUserId,
+    pages: pages ?? [],
+    folders: folders ?? [],
+    favorites: favorites ?? [],
+    recentPages: recentPages ?? [],
+    sharedNavigation: sharedNavigation ?? [],
+    workspaceMemberships: workspaceMemberships ?? [],
+  });
 
-  const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
-  const [favoritesCollapsed, setFavoritesCollapsed] = useState(false);
-  const [recentsCollapsed, setRecentsCollapsed] = useState(false);
-  const [sharedCollapsed, setSharedCollapsed] = useState(false);
-  const [collapsedWorkspaceIds, setCollapsedWorkspaceIds] = useState<Set<string>>(new Set());
-  const [ownedByMeCollapsed, setOwnedByMeCollapsed] = useState(false);
-  const [editingTarget, setEditingTarget] = useState<EditingTarget>(null);
-  const [hasInitializedExpansion, setHasInitializedExpansion] = useState(false);
+  const {
+    target: editingTarget,
+    setTarget: setEditingTarget,
+    save: saveRename,
+    onKeyDown: onRenameKeyDown,
+  } = useSidebarEditing({
+    canRenameEntity: canRenameSidebarEntity,
+    renamePage,
+    renameFolder,
+  });
+
+  const sidebar = useSidebarController(sidebarFolderIds);
 
   const handleCreateRootPage = useCallback(async () => {
     try {
@@ -139,266 +168,43 @@ export function PageTree() {
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
-  }, [createPageAndNavigate]);
+  }, [createPageAndNavigate, setEditingTarget]);
 
   const handleCreateRootFolder = useCallback(async () => {
     try {
       const folder = await createFolder();
       if (!folder) return;
-      setExpandedFolderIds((prev) => {
-        const next = new Set(prev);
-        next.add(folder.id);
-        return next;
-      });
+      sidebar.expandFolder(folder.id);
       setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
     } catch {
       // Error toast handled globally by MutationCache.onError
     }
-  }, [createFolder]);
+  }, [createFolder, setEditingTarget, sidebar.expandFolder]);
 
   useEffect(() => {
-    const onCreateNote = () => {
-      void handleCreateRootPage();
-    };
-
-    const onCreateFolder = () => {
-      void handleCreateRootFolder();
-    };
-
+    const onCreateNote = () => void handleCreateRootPage();
+    const onCreateFolder = () => void handleCreateRootFolder();
     window.addEventListener('markdawn:create-note', onCreateNote);
     window.addEventListener('markdawn:create-folder', onCreateFolder);
-
     return () => {
       window.removeEventListener('markdawn:create-note', onCreateNote);
       window.removeEventListener('markdawn:create-folder', onCreateFolder);
     };
   }, [handleCreateRootPage, handleCreateRootFolder]);
 
-  const pageById = useMemo(() => new Map((pages ?? []).map((page) => [page.id, page])), [pages]);
-
-  const sharedNavigationByKey = useMemo(() => {
-    const map = new Map<string, SharedNavigationItem>();
-    const walk = (items: SharedNavigationItem[]) => {
-      for (const item of items) {
-        map.set(`${item.entityType}:${item.id}`, item);
-        if (item.entityType === 'folder') walk(item.children);
+  const handleCreatePageInFolder = useCallback(
+    async (folderId: string) => {
+      try {
+        const newPage = await createPageAndNavigate({ parentId: folderId });
+        if (!newPage) return;
+        sidebar.expandFolder(folderId);
+        setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
+      } catch {
+        // Error toast handled globally by MutationCache.onError
       }
-    };
-    walk(sharedNavigation ?? []);
-    return map;
-  }, [sharedNavigation]);
-
-  const folderById = useMemo(() => {
-    const map = new Map<string, FolderTreeNode>();
-    const walk = (nodes: FolderTreeNode[] | undefined) => {
-      for (const folder of nodes ?? []) {
-        map.set(folder.id, folder);
-        walk(folder.children);
-      }
-    };
-    walk(folders);
-    return map;
-  }, [folders]);
-
-  const renamePageById = useMemo(
-    () => new Map((refreshedPages ?? []).map((page) => [page.id, page])),
-    [refreshedPages],
-  );
-  const renameFolderById = useMemo(() => {
-    const map = new Map<string, FolderTreeNode>();
-    const walk = (nodes: FolderTreeNode[] | undefined) => {
-      for (const folder of nodes ?? []) {
-        map.set(folder.id, folder);
-        walk(folder.children);
-      }
-    };
-    walk(refreshedFolders);
-    return map;
-  }, [refreshedFolders]);
-  const renameSharedNavigationByKey = useMemo(() => {
-    const map = new Map<string, SharedNavigationItem>();
-    const walk = (items: SharedNavigationItem[]) => {
-      for (const item of items) {
-        map.set(`${item.entityType}:${item.id}`, item);
-        if (item.entityType === 'folder') walk(item.children);
-      }
-    };
-    walk(refreshedSharedNavigation ?? []);
-    return map;
-  }, [refreshedSharedNavigation]);
-
-  const getRenameCapability = useCallback(
-    (kind: 'page' | 'folder', id: string): { exists: boolean; allowed: boolean } => {
-      const treeEntity = kind === 'page' ? renamePageById.get(id) : renameFolderById.get(id);
-      const sharedEntity = renameSharedNavigationByKey.get(`${kind}:${id}`);
-      const candidates = [
-        ...(treeEntity ? [{ ...treeEntity, type: kind }] : []),
-        ...(sharedEntity
-          ? [
-              {
-                type: kind,
-                ownerId: sharedEntity.ownerId,
-                createdBy: sharedEntity.createdBy,
-                userPermission: sharedEntity.userPermission,
-              },
-            ]
-          : []),
-      ];
-      return {
-        exists: candidates.length > 0,
-        // If two live navigation queries momentarily disagree during a
-        // downgrade, fail closed until both reflect rename access.
-        allowed:
-          candidates.length > 0 &&
-          candidates.every((candidate) => canRenameEntity(candidate, currentUserId)),
-      };
     },
-    [currentUserId, renameFolderById, renamePageById, renameSharedNavigationByKey],
+    [createPageAndNavigate, setEditingTarget, sidebar.expandFolder],
   );
-
-  const editingCapability = editingTarget
-    ? getRenameCapability(editingTarget.kind, editingTarget.id)
-    : { exists: false, allowed: false };
-  const renameCapabilityRef = useRef(getRenameCapability);
-  renameCapabilityRef.current = getRenameCapability;
-
-  useEffect(() => {
-    if (editingTarget && editingCapability.exists && !editingCapability.allowed) {
-      setEditingTarget(null);
-    }
-  }, [editingCapability.allowed, editingCapability.exists, editingTarget]);
-
-  const ownedFolders = useMemo(() => {
-    const filterOwned = (nodes: FolderTreeNode[]): FolderTreeNode[] =>
-      nodes
-        .filter((folder) => folder.ownerId === currentUserId)
-        .map((folder) => ({ ...folder, children: filterOwned(folder.children ?? []) }));
-    return filterOwned(folders ?? []);
-  }, [folders, currentUserId]);
-
-  const ownedPages = useMemo(
-    () => (pages ?? []).filter((page) => page.ownerId === currentUserId),
-    [pages, currentUserId],
-  );
-
-  const allFolderIds = useMemo(() => collectAllFolderIds(ownedFolders), [ownedFolders]);
-  const sharedNavigationFolderIds = useMemo(
-    () => collectSharedNavigationFolderIds(sharedNavigation ?? []),
-    [sharedNavigation],
-  );
-  const visibleFolderIds = useMemo(() => new Set(allFolderIds), [allFolderIds]);
-
-  const pagesByFolder = useMemo(
-    () => buildPagesByFolder(ownedPages, visibleFolderIds),
-    [ownedPages, visibleFolderIds],
-  );
-
-  const rootPages = useMemo(
-    () => getRootPages(ownedPages, visibleFolderIds),
-    [ownedPages, visibleFolderIds],
-  );
-  const visibleRecentPages = useMemo(
-    () => (recentPages ?? []).filter((page) => pageById.has(page.id)),
-    [recentPages, pageById],
-  );
-
-  const buildFoldersByParentMap = useCallback((nodes: FolderTreeNode[]) => {
-    const map = new Map<string | null, FolderTreeNode[]>();
-    const walk = (folderNodes: FolderTreeNode[]) => {
-      for (const folder of folderNodes) {
-        const key = folder.parentId ?? null;
-        const list = map.get(key) ?? [];
-        list.push(folder);
-        map.set(key, list);
-        if (folder.children && folder.children.length > 0) {
-          walk(folder.children);
-        }
-      }
-    };
-    walk(nodes);
-    return map;
-  }, []);
-
-  const foldersByParent = useMemo(
-    () => buildFoldersByParentMap(ownedFolders),
-    [buildFoldersByParentMap, ownedFolders],
-  );
-
-  const allFolderIdsSet = useMemo(() => new Set(folderById.keys()), [folderById]);
-  const allPagesByFolder = useMemo(
-    () => buildPagesByFolder(pages ?? [], allFolderIdsSet),
-    [pages, allFolderIdsSet],
-  );
-  const workspaceGroups = useMemo(
-    () =>
-      (workspaceMemberships ?? []).map((membership) => ({
-        ...membership,
-        folders: (folders ?? []).filter(
-          (folder) => folder.ownerId === membership.ownerId && folder.workspaceAccess === true,
-        ),
-        pages: (pages ?? []).filter(
-          (page) =>
-            page.ownerId === membership.ownerId &&
-            page.workspaceAccess === true &&
-            page.parentId === null,
-        ),
-      })),
-    [workspaceMemberships, folders, pages],
-  );
-  const workspaceFolderIds = useMemo(
-    () => workspaceGroups.flatMap((group) => collectAllFolderIds(group.folders)),
-    [workspaceGroups],
-  );
-  const sidebarFolderIds = useMemo(
-    () =>
-      Array.from(new Set([...allFolderIds, ...sharedNavigationFolderIds, ...workspaceFolderIds])),
-    [allFolderIds, sharedNavigationFolderIds, workspaceFolderIds],
-  );
-
-  useEffect(() => {
-    if (!hasInitializedExpansion && sidebarFolderIds.length > 0) {
-      setExpandedFolderIds(new Set(sidebarFolderIds));
-      setHasInitializedExpansion(true);
-    }
-  }, [sidebarFolderIds, hasInitializedExpansion]);
-
-  const toggleFolderExpanded = (folderId: string) => {
-    setExpandedFolderIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderId)) {
-        next.delete(folderId);
-      } else {
-        next.add(folderId);
-      }
-      return next;
-    });
-  };
-
-  const isAllExpanded =
-    sidebarFolderIds.length > 0 && sidebarFolderIds.every((id) => expandedFolderIds.has(id));
-
-  const toggleExpandAll = () => {
-    if (isAllExpanded) {
-      setExpandedFolderIds(new Set());
-    } else {
-      setExpandedFolderIds(new Set(sidebarFolderIds));
-    }
-  };
-
-  const handleCreatePageInFolder = async (folderId: string) => {
-    try {
-      const newPage = await createPageAndNavigate({ parentId: folderId });
-      if (!newPage) return;
-      setExpandedFolderIds((prev) => {
-        const next = new Set(prev);
-        next.add(folderId);
-        return next;
-      });
-      setEditingTarget({ kind: 'page', id: newPage.id, value: newPage.title ?? 'Untitled' });
-    } catch {
-      // Error toast handled globally by MutationCache.onError
-    }
-  };
 
   const handleImportMarkdown = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -420,321 +226,35 @@ export function PageTree() {
     event.target.value = '';
   };
 
-  const beginRenameFolder = (folder: FolderTreeNode) => {
-    if (!canRenameEntity({ ...folder, type: 'folder' }, currentUserId)) return;
-    setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
-  };
-
-  const beginRenamePage = (page: PageTreeNode) => {
-    if (!canRenameEntity({ ...page, type: 'page' }, currentUserId)) return;
-    setEditingTarget({ kind: 'page', id: page.id, value: page.title });
-  };
-
-  const saveRename = () => {
-    if (!editingTarget) {
-      return;
-    }
-    if (!renameCapabilityRef.current(editingTarget.kind, editingTarget.id).allowed) {
-      setEditingTarget(null);
-      return;
-    }
-    const trimmed = editingTarget.value.trim();
-
-    if (editingTarget.kind === 'folder') {
-      const finalName = trimmed.length > 0 ? trimmed : 'New Folder';
-      updateFolderMutation.mutate(
-        { folderId: editingTarget.id, updates: { name: finalName } },
-        { onSettled: () => setEditingTarget(null) },
-      );
-      return;
-    }
-
-    const finalTitle = trimmed.length > 0 ? trimmed : 'Untitled';
-    updatePageMutation.mutate(
-      { pageId: editingTarget.id, updates: { title: finalTitle } },
-      { onSettled: () => setEditingTarget(null) },
-    );
-  };
-
-  const onRenameKeyDown = (event: React.KeyboardEvent) => {
-    if (event.key === 'Enter') {
-      saveRename();
-      return;
-    }
-    if (event.key === 'Escape') {
-      setEditingTarget(null);
-    }
-  };
-
-  const renderFolderBranch = (folder: FolderTreeNode, depth = 0) => {
-    const childFolders = foldersByParent.get(folder.id) ?? [];
-    const childPages = pagesByFolder.get(folder.id) ?? [];
-    const isExpanded = expandedFolderIds.has(folder.id);
-    const isEditingFolder =
-      editingCapability.allowed &&
-      editingTarget?.kind === 'folder' &&
-      editingTarget.id === folder.id;
-
-    return (
-      <div key={`folder-${folder.id}`}>
-        <PageTreeRow
-          id={folder.id}
-          title={folder.name}
-          icon={folder.icon}
-          ownerId={folder.ownerId}
-          createdBy={folder.createdBy}
-          userPermission={folder.userPermission}
-          parentId={folder.parentId}
-          canMove={true}
-          depth={depth}
-          isActive={activePageId === folder.id}
-          hasChildren={childFolders.length > 0 || childPages.length > 0}
-          isExpanded={isExpanded}
-          onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          {...(folder.userPermission === 'edit' || folder.userPermission === 'admin'
-            ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
-            : {})}
-          {...(folder.userPermission === 'admin'
-            ? { onRename: () => beginRenameFolder(folder) }
-            : {})}
-          onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
-          isEditing={isEditingFolder}
-          isFolder={true}
-          editTitle={isEditingFolder ? editingTarget.value : folder.name}
-          onEditChange={(value) => setEditingTarget({ kind: 'folder', id: folder.id, value })}
-          onEditSave={() => {
-            saveRename();
-          }}
-          onEditKeyDown={onRenameKeyDown}
-        />
-        {isExpanded && (
-          <>
-            {childFolders.map((childFolder) => renderFolderBranch(childFolder, depth + 1))}
-            {childPages.map((page) => {
-              const isEditingPage =
-                editingCapability.allowed &&
-                editingTarget?.kind === 'page' &&
-                editingTarget.id === page.id;
-              return (
-                <PageTreeRow
-                  key={page.id}
-                  id={page.id}
-                  title={page.title}
-                  icon={page.icon}
-                  ownerId={page.ownerId}
-                  createdBy={page.createdBy}
-                  userPermission={page.userPermission}
-                  parentId={page.parentId}
-                  canMove={true}
-                  depth={depth + 1}
-                  isActive={activePageId === page.id}
-                  isFavorite={isFavoriteEntity('page', page.id)}
-                  onRename={() => beginRenamePage(page)}
-                  isEditing={isEditingPage}
-                  editTitle={isEditingPage ? editingTarget.value : page.title}
-                  onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-                  onEditSave={() => {
-                    saveRename();
-                  }}
-                  onEditKeyDown={onRenameKeyDown}
-                />
-              );
-            })}
-          </>
-        )}
-      </div>
-    );
-  };
-
-  const renderWorkspacePage = (page: PageTreeNode, depth = 0, sourceIsAdmin = false): ReactNode => {
-    const isEditingPage =
-      editingCapability.allowed && editingTarget?.kind === 'page' && editingTarget.id === page.id;
-    const canRename = page.userPermission === 'edit' || page.userPermission === 'admin';
-    return (
-      <PageTreeRow
-        key={`workspace-page-${page.id}`}
-        id={page.id}
-        title={page.title}
-        icon={page.icon}
-        ownerId={page.ownerId}
-        createdBy={page.createdBy}
-        userPermission={page.userPermission}
-        shareSource="workspace"
-        parentId={page.parentId}
-        canMove={page.userPermission === 'admin' && sourceIsAdmin}
-        depth={depth}
-        isActive={activePageId === page.id}
-        isFavorite={isFavoriteEntity('page', page.id)}
-        {...(canRename ? { onRename: () => beginRenamePage(page) } : {})}
-        isEditing={isEditingPage}
-        editTitle={isEditingPage ? editingTarget.value : page.title}
-        onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-        onEditSave={() => {
-          saveRename();
-        }}
-        onEditKeyDown={onRenameKeyDown}
-      />
-    );
-  };
-
-  const renderWorkspaceFolder = (
-    folder: FolderTreeNode,
-    workspaceOwnerId: string,
-    depth = 0,
-    sourceIsAdmin = false,
-  ): ReactNode => {
-    const childFolders = (folder.children ?? []).filter(
-      (child) => child.ownerId === workspaceOwnerId && child.workspaceAccess === true,
-    );
-    const childPages = (allPagesByFolder.get(folder.id) ?? []).filter(
-      (page) => page.ownerId === workspaceOwnerId && page.workspaceAccess === true,
-    );
-    const isExpanded = expandedFolderIds.has(folder.id);
-    const isEditingFolder =
-      editingCapability.allowed &&
-      editingTarget?.kind === 'folder' &&
-      editingTarget.id === folder.id;
-    const isAdmin = folder.userPermission === 'admin';
-
-    return (
-      <div key={`workspace-folder-${folder.id}`}>
-        <PageTreeRow
-          id={folder.id}
-          title={folder.name}
-          icon={folder.icon}
-          ownerId={folder.ownerId}
-          createdBy={folder.createdBy}
-          userPermission={folder.userPermission}
-          shareSource="workspace"
-          parentId={folder.parentId}
-          canMove={isAdmin && sourceIsAdmin}
-          depth={depth}
-          isActive={activePageId === folder.id}
-          hasChildren={childFolders.length > 0 || childPages.length > 0}
-          isExpanded={isExpanded}
-          isFavorite={isFavoriteEntity('folder', folder.id)}
-          onToggleExpand={() => toggleFolderExpanded(folder.id)}
-          {...(folder.userPermission === 'edit' || isAdmin
-            ? { onCreateChild: () => handleCreatePageInFolder(folder.id) }
-            : {})}
-          {...(isAdmin ? { onRename: () => beginRenameFolder(folder) } : {})}
-          onNavigate={() => navigate(buildFolderPath(folder.name, folder.id))}
-          isEditing={isEditingFolder}
-          isFolder={true}
-          editTitle={isEditingFolder ? editingTarget.value : folder.name}
-          onEditChange={(value) => setEditingTarget({ kind: 'folder', id: folder.id, value })}
-          onEditSave={() => {
-            saveRename();
-          }}
-          onEditKeyDown={onRenameKeyDown}
-        />
-        {isExpanded && (
-          <>
-            {childFolders.map((child) =>
-              renderWorkspaceFolder(child, workspaceOwnerId, depth + 1, isAdmin),
-            )}
-            {childPages.map((page) => renderWorkspacePage(page, depth + 1, isAdmin))}
-          </>
-        )}
-      </div>
-    );
-  };
-
-  const renderSharedNavigationItem = (
-    item: SharedNavigationItem,
-    depth = 0,
-    sourceIsAdmin = false,
-  ): ReactNode => {
-    if (item.entityType === 'folder') {
-      const isExpanded = expandedFolderIds.has(item.id);
-      const isEditingFolder =
-        editingCapability.allowed &&
-        editingTarget?.kind === 'folder' &&
-        editingTarget.id === item.id;
-      const canCreateChild = item.userPermission === 'edit' || item.userPermission === 'admin';
-      return (
-        <div key={`shared-folder-${item.id}`}>
-          <PageTreeRow
-            id={item.id}
-            title={item.title}
-            icon={item.icon}
-            ownerId={item.ownerId}
-            createdBy={item.createdBy}
-            userPermission={item.userPermission}
-            shareSource={item.source}
-            parentId={item.parentId}
-            canMove={item.userPermission === 'admin' && sourceIsAdmin}
-            depth={depth}
-            isActive={activePageId === item.id}
-            hasChildren={item.children.length > 0}
-            isExpanded={isExpanded}
-            isFavorite={isFavoriteEntity('folder', item.id)}
-            onToggleExpand={() => toggleFolderExpanded(item.id)}
-            {...(canCreateChild ? { onCreateChild: () => handleCreatePageInFolder(item.id) } : {})}
-            {...(item.userPermission === 'admin'
-              ? {
-                  onRename: () =>
-                    setEditingTarget({ kind: 'folder', id: item.id, value: item.title }),
-                }
-              : {})}
-            onNavigate={() => navigate(buildFolderPath(item.title, item.id))}
-            isEditing={isEditingFolder}
-            isFolder={true}
-            editTitle={isEditingFolder ? editingTarget.value : item.title}
-            onEditChange={(value) => setEditingTarget({ kind: 'folder', id: item.id, value })}
-            onEditSave={() => {
-              saveRename();
-            }}
-            onEditKeyDown={onRenameKeyDown}
-          />
-          {isExpanded &&
-            item.children.map((child) =>
-              renderSharedNavigationItem(child, depth + 1, item.userPermission === 'admin'),
-            )}
-        </div>
-      );
-    }
-
-    const isEditingPage =
-      editingCapability.allowed && editingTarget?.kind === 'page' && editingTarget.id === item.id;
-    return (
-      <PageTreeRow
-        key={`shared-page-${item.id}`}
-        id={item.id}
-        title={item.title}
-        icon={item.icon}
-        ownerId={item.ownerId}
-        createdBy={item.createdBy}
-        userPermission={item.userPermission}
-        shareSource={item.source}
-        parentId={item.parentId}
-        canMove={item.userPermission === 'admin' && sourceIsAdmin}
-        depth={depth}
-        isActive={activePageId === item.id}
-        isFavorite={isFavoriteEntity('page', item.id)}
-        onRename={
-          canRenameEntity(
-            {
-              type: 'page',
-              ownerId: item.ownerId,
-              createdBy: item.createdBy,
-              userPermission: item.userPermission,
-            },
-            currentUserId,
-          )
-            ? () => setEditingTarget({ kind: 'page', id: item.id, value: item.title })
-            : undefined
-        }
-        isEditing={isEditingPage}
-        editTitle={isEditingPage ? editingTarget.value : item.title}
-        onEditChange={(value) => setEditingTarget({ kind: 'page', id: item.id, value })}
-        onEditSave={() => {
-          saveRename();
-        }}
-        onEditKeyDown={onRenameKeyDown}
-      />
-    );
-  };
+  const sidebarTreeRuntime = useMemo<SidebarTreeRuntime>(
+    () => ({
+      activePageId,
+      expandedFolderIds: sidebar.expandedFolderIds,
+      editingTarget,
+      getAuthorization: getSidebarAuthorization,
+      getCapabilities: getSidebarCapabilities,
+      isFavoriteEntity,
+      toggleFolderExpanded: sidebar.toggleFolder,
+      createPageInFolder: handleCreatePageInFolder,
+      startEditing: (kind, id, value) => setEditingTarget({ kind, id, value }),
+      setEditingValue: (kind, id, value) => setEditingTarget({ kind, id, value }),
+      saveRename,
+      onRenameKeyDown,
+    }),
+    [
+      activePageId,
+      editingTarget,
+      getSidebarAuthorization,
+      getSidebarCapabilities,
+      handleCreatePageInFolder,
+      isFavoriteEntity,
+      onRenameKeyDown,
+      saveRename,
+      setEditingTarget,
+      sidebar.expandedFolderIds,
+      sidebar.toggleFolder,
+    ],
+  );
 
   if (isPagesLoading || isFoldersLoading) {
     return (
@@ -812,13 +332,6 @@ export function PageTree() {
   }
 
   const rootFolders = ownedFolders;
-  const directSharedNavigation = (sharedNavigation ?? []).filter((item) => {
-    const workspaceAccess =
-      item.entityType === 'folder'
-        ? folderById.get(item.id)?.workspaceAccess
-        : pageById.get(item.id)?.workspaceAccess;
-    return workspaceAccess !== true;
-  });
   const sharedPreview = directSharedNavigation.slice(0, SIDEBAR_PREVIEW_LIMIT);
   const hasMoreShared = directSharedNavigation.length > SIDEBAR_PREVIEW_LIMIT;
   const visibleWorkspaceGroups = workspaceGroups;
@@ -870,181 +383,57 @@ export function PageTree() {
           </button>
           <button
             type="button"
-            onClick={toggleExpandAll}
+            onClick={sidebar.toggleAll}
             className="p-1.5 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-all text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-            title={isAllExpanded ? 'Collapse all folders' : 'Expand all folders'}
+            title={sidebar.allExpanded ? 'Collapse all folders' : 'Expand all folders'}
             data-testid="toggle-expand-all-btn"
           >
-            {isAllExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
+            {sidebar.allExpanded ? <ChevronsUp size={16} /> : <ChevronsDown size={16} />}
           </button>
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-2 py-2 space-y-3">
-        {favorites && favorites.length > 0 && (
-          <div className="mb-2">
-            <button
-              type="button"
-              onClick={() => setFavoritesCollapsed((prev) => !prev)}
-              aria-expanded={!favoritesCollapsed}
-              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
-            >
-              {favoritesCollapsed ? (
-                <ChevronRight size={14} className="mr-1 shrink-0" />
-              ) : (
-                <ChevronDown size={14} className="mr-1 shrink-0" />
-              )}
-              <span>Favorites</span>
-            </button>
-            {!favoritesCollapsed && (
-              <div className="space-y-0.5">
-                {favorites.map((fav) => {
-                  const isFolder = fav.entityType === 'folder';
-                  const favPage = isFolder ? undefined : pageById.get(fav.entityId);
-                  const favFolder = isFolder ? folderById.get(fav.entityId) : undefined;
-                  const sharedItem = sharedNavigationByKey.get(`${fav.entityType}:${fav.entityId}`);
-                  const shareSource = resolveRemovalShareSource(
-                    sharedItem?.source,
-                    favPage?.workspaceAccess === true || favFolder?.workspaceAccess === true,
-                  );
-                  const isEditing =
-                    editingCapability.allowed &&
-                    editingTarget?.kind === fav.entityType &&
-                    editingTarget.id === fav.entityId;
-                  return (
-                    <PageTreeRow
-                      key={`${fav.entityType}-${fav.entityId}`}
-                      id={fav.entityId}
-                      title={fav.title}
-                      icon={fav.icon}
-                      ownerId={fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId ?? null}
-                      createdBy={favPage?.createdBy ?? favFolder?.createdBy ?? null}
-                      userPermission={favPage?.userPermission ?? favFolder?.userPermission ?? null}
-                      parentId={favPage?.parentId ?? favFolder?.parentId ?? sharedItem?.parentId}
-                      {...(shareSource ? { shareSource } : {})}
-                      canMove={
-                        (fav.ownerId ?? favPage?.ownerId ?? favFolder?.ownerId) === currentUserId
-                      }
-                      isFolder={isFolder}
-                      isActive={activePageId === fav.entityId}
-                      isFavorite={true}
-                      onNavigate={
-                        isFolder
-                          ? () => navigate(buildFolderPath(fav.title, fav.entityId))
-                          : undefined
-                      }
-                      onRename={
-                        favPage
-                          ? () => beginRenamePage(favPage)
-                          : favFolder
-                            ? () => beginRenameFolder(favFolder)
-                            : undefined
-                      }
-                      isEditing={isEditing}
-                      editTitle={isEditing ? editingTarget.value : fav.title}
-                      onEditChange={(value) =>
-                        setEditingTarget({ kind: fav.entityType, id: fav.entityId, value })
-                      }
-                      onEditSave={saveRename}
-                      onEditKeyDown={onRenameKeyDown}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {visibleRecentPages.length > 0 && (
-          <div className="mb-2">
-            <button
-              type="button"
-              onClick={() => setRecentsCollapsed((prev) => !prev)}
-              aria-expanded={!recentsCollapsed}
-              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
-            >
-              {recentsCollapsed ? (
-                <ChevronRight size={14} className="mr-1 shrink-0" />
-              ) : (
-                <ChevronDown size={14} className="mr-1 shrink-0" />
-              )}
-              <span>Recents</span>
-            </button>
-            {!recentsCollapsed && (
-              <div className="space-y-0.5">
-                {visibleRecentPages.map((page) => {
-                  const treePage = pageById.get(page.id);
-                  const sharedItem = sharedNavigationByKey.get(`page:${page.id}`);
-                  const shareSource = resolveRemovalShareSource(
-                    sharedItem?.source,
-                    treePage?.workspaceAccess === true,
-                  );
-                  const isEditing =
-                    editingCapability.allowed &&
-                    editingTarget?.kind === 'page' &&
-                    editingTarget.id === page.id;
-                  return (
-                    <PageTreeRow
-                      key={page.id}
-                      id={page.id}
-                      title={page.title}
-                      icon={page.icon}
-                      ownerId={page.ownerId}
-                      createdBy={page.createdBy}
-                      userPermission={treePage?.userPermission ?? null}
-                      parentId={treePage?.parentId ?? sharedItem?.parentId}
-                      {...(shareSource ? { shareSource } : {})}
-                      canMove={page.ownerId === currentUserId}
-                      isActive={activePageId === page.id}
-                      isFavorite={isFavoriteEntity('page', page.id)}
-                      onRename={treePage ? () => beginRenamePage(treePage) : undefined}
-                      isEditing={isEditing}
-                      editTitle={isEditing ? editingTarget.value : page.title}
-                      onEditChange={(value) =>
-                        setEditingTarget({ kind: 'page', id: page.id, value })
-                      }
-                      onEditSave={saveRename}
-                      onEditKeyDown={onRenameKeyDown}
-                    />
-                  );
-                })}
-              </div>
-            )}
-          </div>
-        )}
+        <SidebarAliasSection
+          title="Favorites"
+          collapsed={sidebar.collapsedSections.has('favorites')}
+          onToggle={() => sidebar.toggleSection('favorites')}
+          rows={favoriteRows}
+          runtime={sidebarTreeRuntime}
+        />
+        <SidebarAliasSection
+          title="Recents"
+          collapsed={sidebar.collapsedSections.has('recents')}
+          onToggle={() => sidebar.toggleSection('recents')}
+          rows={recentRows}
+          runtime={sidebarTreeRuntime}
+        />
 
         {hasSharedContent && (
           <div className="mb-2">
             <button
               type="button"
-              onClick={() => setSharedCollapsed((prev) => !prev)}
-              aria-expanded={!sharedCollapsed}
+              onClick={() => sidebar.toggleSection('shared')}
+              aria-expanded={!sidebar.collapsedSections.has('shared')}
               className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
             >
-              {sharedCollapsed ? (
+              {sidebar.collapsedSections.has('shared') ? (
                 <ChevronRight size={14} className="mr-1 shrink-0" />
               ) : (
                 <ChevronDown size={14} className="mr-1 shrink-0" />
               )}
               <span>Shared With Me</span>
             </button>
-            {!sharedCollapsed && (
+            {!sidebar.collapsedSections.has('shared') && (
               <div className="space-y-1">
                 {visibleWorkspaceGroups.map((group) => {
-                  const isCollapsed = collapsedWorkspaceIds.has(group.ownerId);
+                  const isCollapsed = sidebar.collapsedWorkspaceIds.has(group.ownerId);
                   return (
                     <div key={`workspace-${group.ownerId}`}>
                       <div className="flex items-center gap-1 px-3 py-1">
                         <button
                           type="button"
-                          onClick={() =>
-                            setCollapsedWorkspaceIds((previous) => {
-                              const next = new Set(previous);
-                              if (next.has(group.ownerId)) next.delete(group.ownerId);
-                              else next.add(group.ownerId);
-                              return next;
-                            })
-                          }
+                          onClick={() => sidebar.toggleWorkspace(group.ownerId)}
                           className="flex min-w-0 flex-1 items-center text-left text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
                         >
                           {isCollapsed ? (
@@ -1077,18 +466,36 @@ export function PageTree() {
                       </div>
                       {!isCollapsed && (
                         <div className="space-y-0.5">
-                          {group.folders.map((folder) =>
-                            renderWorkspaceFolder(folder, group.ownerId, 0, group.role === 'admin'),
-                          )}
-                          {group.pages.map((page) =>
-                            renderWorkspacePage(page, 0, group.role === 'admin'),
-                          )}
+                          {group.folders.map((folder) => (
+                            <WorkspaceFolderBranch
+                              runtime={sidebarTreeRuntime}
+                              key={folder.id}
+                              folder={folder}
+                              workspaceOwnerId={group.ownerId}
+                              allPagesByFolder={allPagesByFolder}
+                              sourceIsAdmin={group.role === 'admin'}
+                            />
+                          ))}
+                          {group.pages.map((page) => (
+                            <WorkspacePageRow
+                              runtime={sidebarTreeRuntime}
+                              key={page.id}
+                              page={page}
+                              sourceIsAdmin={group.role === 'admin'}
+                            />
+                          ))}
                         </div>
                       )}
                     </div>
                   );
                 })}
-                {sharedPreview.map((item) => renderSharedNavigationItem(item))}
+                {sharedPreview.map((item) => (
+                  <SharedNavigationBranch
+                    key={`${item.entityType}-${item.id}`}
+                    item={item}
+                    runtime={sidebarTreeRuntime}
+                  />
+                ))}
                 {hasMoreShared && (
                   <button
                     type="button"
@@ -1106,49 +513,45 @@ export function PageTree() {
         <div>
           <button
             type="button"
-            onClick={() => setOwnedByMeCollapsed((prev) => !prev)}
-            aria-expanded={!ownedByMeCollapsed}
+            onClick={() => sidebar.toggleSection('owned')}
+            aria-expanded={!sidebar.collapsedSections.has('owned')}
             className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
           >
-            {ownedByMeCollapsed ? (
+            {sidebar.collapsedSections.has('owned') ? (
               <ChevronRight size={14} className="mr-1 shrink-0" />
             ) : (
               <ChevronDown size={14} className="mr-1 shrink-0" />
             )}
             <span>Owned By Me</span>
           </button>
-          {!ownedByMeCollapsed && (
+          {!sidebar.collapsedSections.has('owned') && (
             <div className="space-y-0.5">
-              {rootFolders.map((folder) => renderFolderBranch(folder, 0))}
-              {rootPages.map((page) => {
-                const isEditingPage =
-                  editingCapability.allowed &&
-                  editingTarget?.kind === 'page' &&
-                  editingTarget.id === page.id;
-                return (
-                  <PageTreeRow
-                    key={page.id}
-                    id={page.id}
-                    title={page.title}
-                    icon={page.icon}
-                    ownerId={page.ownerId}
-                    createdBy={page.createdBy}
-                    userPermission={page.userPermission}
-                    parentId={page.parentId}
-                    canMove={true}
-                    isActive={activePageId === page.id}
-                    isFavorite={isFavoriteEntity('page', page.id)}
-                    onRename={() => beginRenamePage(page)}
-                    isEditing={isEditingPage}
-                    editTitle={isEditingPage ? editingTarget.value : page.title}
-                    onEditChange={(value) => setEditingTarget({ kind: 'page', id: page.id, value })}
-                    onEditSave={() => {
-                      saveRename();
-                    }}
-                    onEditKeyDown={onRenameKeyDown}
-                  />
-                );
-              })}
+              {rootFolders.map((folder) => (
+                <OwnedFolderBranch
+                  runtime={sidebarTreeRuntime}
+                  key={folder.id}
+                  folder={folder}
+                  foldersByParent={foldersByParent}
+                  pagesByFolder={pagesByFolder}
+                />
+              ))}
+              {rootPages.map((page) => (
+                <SidebarEntityRow
+                  runtime={sidebarTreeRuntime}
+                  key={page.id}
+                  entity={{
+                    entityType: 'page',
+                    id: page.id,
+                    title: page.title,
+                    icon: page.icon,
+                    ownerId: page.ownerId,
+                    createdBy: page.createdBy,
+                    userPermission: page.userPermission,
+                    parentId: page.parentId,
+                  }}
+                  placement="owned"
+                />
+              ))}
               {rootFolders.length === 0 && rootPages.length === 0 && (
                 <div className="pl-10 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
                   No notes yet
