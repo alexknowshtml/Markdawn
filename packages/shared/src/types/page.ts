@@ -77,14 +77,14 @@ export interface EntityAccessor {
   isOwner: boolean;
 }
 
-/** Non-manageable collaborator presence safe to show to ordinary viewers. */
-export interface CollaboratorPresence {
-  presenceId: string;
+/** Identity and effective role safe to display in an entity's collaborator list. */
+export interface CollaboratorDisplay {
+  userId: string;
   name: string | null;
   avatarUrl: string | null;
+  permission: SharePermission;
+  isOwner: boolean;
 }
-
-export type CollaboratorDisplay = EntityAccessor | CollaboratorPresence;
 
 /**
  * One independently manageable source of account access.
@@ -122,6 +122,104 @@ export interface CapabilitySet {
   canDelete: boolean;
   canCopy: boolean;
 }
+
+interface PublicPageFields {
+  accessScope: 'public';
+  id: string;
+  title: string;
+  icon: string | null;
+  updatedAt: string | null;
+  publicPermission: PublicPermission;
+  userPermission: PublicPermission;
+}
+
+interface AccountPageFields {
+  accessScope: 'account';
+  id: string;
+  parentId: string | null;
+  title: string;
+  icon: string | null;
+  createdBy: string | null;
+  ownerId: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  publicPermission: PublicPermission | null;
+  userPermission: SharePermission;
+}
+
+/** The complete page detail response for a public caller. */
+export interface PublicPagePayload extends PublicPageFields {
+  coverType: string | null;
+  coverValue: string | null;
+  properties: Record<string, unknown> | null;
+  capabilities: CapabilitySet;
+}
+
+/** The complete page detail response for a signed-in caller. */
+export interface AccountPagePayload extends AccountPageFields {
+  position: string;
+  coverType: string | null;
+  coverValue: string | null;
+  properties: Record<string, unknown> | null;
+  inheritancePolicy: InheritancePolicy;
+  capabilities: CapabilitySet;
+}
+
+export type PageDetailPayload = PublicPagePayload | AccountPagePayload;
+
+/** A page listed for a caller who has only public access. */
+export type PublicFolderPageDto = PublicPageFields;
+
+/** A page listed for a caller with account access. */
+export type AccountFolderPageDto = AccountPageFields;
+
+export type FolderPageDto = PublicFolderPageDto | AccountFolderPageDto;
+
+/** A child folder listed for a caller who has only public access. */
+export interface PublicFolderChildDto {
+  accessScope: 'public';
+  id: string;
+  name: string;
+  icon: string | null;
+  updatedAt: string | null;
+  publicPermission: PublicPermission;
+  userPermission: PublicPermission;
+}
+
+/** A child folder listed for a caller with account access. */
+export interface AccountFolderChildDto {
+  accessScope: 'account';
+  id: string;
+  parentId: string | null;
+  name: string;
+  icon: string | null;
+  createdAt: string | null;
+  updatedAt: string | null;
+  publicPermission: PublicPermission | null;
+  createdBy: string | null;
+  ownerId: string | null;
+  userPermission: SharePermission;
+}
+
+export type FolderChildDto = PublicFolderChildDto | AccountFolderChildDto;
+
+/** The complete, access-filtered folder response for a public caller. */
+export interface PublicFolderPayload extends PublicFolderChildDto {
+  capabilities: CapabilitySet;
+  pages: PublicFolderPageDto[];
+  folders: PublicFolderChildDto[];
+}
+
+/** The complete, access-filtered folder response for a signed-in caller. */
+export interface AccountFolderPayload extends AccountFolderChildDto {
+  position: string;
+  inheritancePolicy: InheritancePolicy;
+  capabilities: CapabilitySet;
+  pages: AccountFolderPageDto[];
+  folders: AccountFolderChildDto[];
+}
+
+export type FolderDetailPayload = PublicFolderPayload | AccountFolderPayload;
 
 export function deriveCapabilities(
   permission: SharePermission | null,
@@ -170,9 +268,10 @@ export interface InheritedAccessor {
 }
 
 export interface ShareSummary {
-  /** Limited summaries intentionally omit sharing identities and topology. */
+  /** Limited summaries omit sharing management data and inheritance topology. */
   visibility?: 'full' | 'limited';
-  collaboratorCount?: number;
+  /** Display-safe identities and effective roles visible to anyone with entity access. */
+  collaborators: CollaboratorDisplay[];
   entity: {
     type: ShareEntityType;
     id: string;

@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "echo 'dev not configured yet'",
+    "dev": "echo 'shared source is consumed through the development export'",
     "build": "tsc --project tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src",
@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@logtape/logtape": "^2.0.5",
+    "yaml": "^2.9.0",
     "yjs": "^13.6.29"
   },
   "devDependencies": {
