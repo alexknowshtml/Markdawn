@@ -1,6 +1,5 @@
 import {
   deriveCapabilities,
-  type EntityAccessor,
   type EntityAccessSource,
   type EntityShare,
   type InheritedPublicAccess,
@@ -32,6 +31,7 @@ import {
   notifyShareRevoke,
   notifyShareUpdate,
 } from '../utils/share-notify';
+import { getAccessors, getAccessSources, toCollaboratorDisplays } from '../utils/shareAccessors';
 import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
 
 type PublicPermission = 'view' | 'edit';
@@ -56,18 +56,6 @@ type GrantRow = {
   shared_by_email: string | null;
   created_at: Date | null;
   updated_at: Date | null;
-};
-
-type SourceRow = {
-  kind: 'owner' | 'direct' | 'folder' | 'workspace';
-  share_id: string | null;
-  user_id: string;
-  name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-  permission: SharePermission;
-  folder_id: string | null;
-  folder_name: string | null;
 };
 
 type SharedRootRow = {
@@ -139,9 +127,6 @@ const buildEntityPath = (entity: EntityInfo, entityType: ShareEntityType) =>
   entityType === 'page'
     ? buildPagePath(entity.title, entity.id)
     : buildFolderPath(entity.title, entity.id);
-
-const permissionRank = (permission: SharePermission): number =>
-  permission === 'admin' ? 3 : permission === 'edit' ? 2 : 1;
 
 const timestampValue = (value: unknown): number => {
   if (value instanceof Date) return value.getTime();
@@ -249,167 +234,6 @@ async function getDirectGrants(
      order by lower(coalesce(recipient.name, recipient.email)), share.created_at`,
   );
   return result.rows.map(normalizeGrant);
-}
-
-async function getAccessSources(
-  entityType: ShareEntityType,
-  entityId: string,
-  executor: QueryExecutor,
-): Promise<EntityAccessSource[]> {
-  const result =
-    entityType === 'page'
-      ? await executeQuery<SourceRow>(
-          executor,
-          sql`with page_info as (
-             select page.parent_id,
-                    coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id
-             from pages page
-             where page.id = ${entityId} and page.is_deleted = false
-           ), sources as (
-             select 'owner'::text as kind, null::uuid as share_id, info.owner_id as user_id,
-                    'admin'::text as permission, null::uuid as folder_id,
-                    null::text as folder_name
-             from page_info info
-             where info.owner_id is not null
-
-             union all
-
-             select 'direct', share.id, share.recipient_user_id, share.permission, null, null
-             from shares share
-             where share.entity_type = 'page' and share.entity_id = ${entityId}
-
-             union all
-
-             select 'folder', share.id, share.recipient_user_id, share.permission,
-                    folder.id, folder.name
-             from page_info info
-             join folder_closure path on path.descendant_id = info.parent_id
-             join folders folder on folder.id = path.ancestor_id and folder.is_deleted = false
-             join shares share on share.entity_type = 'folder' and share.entity_id = folder.id
-             where not is_page_folder_inheritance_blocked(folder.id, ${entityId})
-
-             union all
-
-             select 'workspace', null, member.member_id,
-                    case member.role when 'viewer' then 'view' when 'editor' then 'edit' else 'admin' end,
-                    null, null
-             from page_info info
-             join workspace_members member on member.workspace_owner_id = info.owner_id
-             where not is_page_path_restricted(${entityId})
-           )
-           select sources.kind, sources.share_id, sources.user_id,
-                  users.name, users.email, coalesce(users.avatar_url, users.image) as avatar_url,
-                  sources.permission, sources.folder_id, sources.folder_name
-           from sources
-           join users on users.id = sources.user_id`,
-        )
-      : await executeQuery<SourceRow>(
-          executor,
-          sql`with folder_info as (
-             select get_root_folder_owner(${entityId}) as owner_id
-           ), sources as (
-             select 'owner'::text as kind, null::uuid as share_id, info.owner_id as user_id,
-                    'admin'::text as permission, null::uuid as folder_id,
-                    null::text as folder_name
-             from folder_info info
-             where info.owner_id is not null
-
-             union all
-
-             select 'direct', share.id, share.recipient_user_id, share.permission, null, null
-             from shares share
-             where share.entity_type = 'folder' and share.entity_id = ${entityId}
-
-             union all
-
-             select 'folder', share.id, share.recipient_user_id, share.permission,
-                    folder.id, folder.name
-             from folder_closure path
-             join folders folder on folder.id = path.ancestor_id and folder.is_deleted = false
-             join shares share on share.entity_type = 'folder' and share.entity_id = folder.id
-             where path.descendant_id = ${entityId} and path.depth > 0
-               and not is_folder_inheritance_blocked(folder.id, ${entityId})
-
-             union all
-
-             select 'workspace', null, member.member_id,
-                    case member.role when 'viewer' then 'view' when 'editor' then 'edit' else 'admin' end,
-                    null, null
-             from folder_info info
-             join workspace_members member on member.workspace_owner_id = info.owner_id
-             where not is_folder_path_restricted(${entityId})
-           )
-           select sources.kind, sources.share_id, sources.user_id,
-                  users.name, users.email, coalesce(users.avatar_url, users.image) as avatar_url,
-                  sources.permission, sources.folder_id, sources.folder_name
-           from sources
-           join users on users.id = sources.user_id`,
-        );
-
-  const winningPermission = new Map<string, SharePermission>();
-  for (const row of result.rows) {
-    const current = winningPermission.get(row.user_id);
-    if (!current || permissionRank(row.permission) > permissionRank(current)) {
-      winningPermission.set(row.user_id, row.permission);
-    }
-  }
-
-  return result.rows
-    .map((row) => {
-      const effectivePermission = winningPermission.get(row.user_id) ?? row.permission;
-      return {
-        kind: row.kind,
-        grantId: row.share_id,
-        userId: row.user_id,
-        name: row.name,
-        email: row.email,
-        avatarUrl: row.avatar_url,
-        permission: row.permission,
-        effectivePermission,
-        isWinning: row.permission === effectivePermission,
-        isOwner: row.kind === 'owner',
-        isManageable: row.kind === 'direct',
-        ...(row.folder_id ? { folderId: row.folder_id, folderName: row.folder_name } : {}),
-      } satisfies EntityAccessSource;
-    })
-    .sort((left, right) => {
-      const kindOrder = { owner: 0, direct: 1, folder: 2, workspace: 3 } as const;
-      return (
-        kindOrder[left.kind] - kindOrder[right.kind] ||
-        (left.name ?? left.email ?? '').localeCompare(right.name ?? right.email ?? '')
-      );
-    });
-}
-
-function getAccessors(sources: readonly EntityAccessSource[]): EntityAccessor[] {
-  const byUser = new Map<string, EntityAccessor>();
-  for (const source of sources) {
-    const current = byUser.get(source.userId);
-    if (
-      current &&
-      permissionRank(current.permission) >= permissionRank(source.effectivePermission)
-    ) {
-      continue;
-    }
-    byUser.set(source.userId, {
-      grantId: source.kind === 'direct' ? source.grantId : null,
-      userId: source.userId,
-      name: source.name,
-      email: source.email,
-      avatarUrl: source.avatarUrl,
-      permission: source.effectivePermission,
-      source:
-        source.kind === 'owner'
-          ? 'Owner'
-          : source.kind === 'direct'
-            ? 'Direct grant'
-            : source.kind === 'folder'
-              ? `Inherited from ${source.folderName ?? 'folder'}`
-              : 'Workspace',
-      isOwner: source.isOwner,
-    });
-  }
-  return [...byUser.values()];
 }
 
 async function getInheritedPublicAccess(
@@ -599,8 +423,11 @@ function rootToSharedItem(row: SharedRootRow): SharedWithMeItem {
 sharesRoute.get('/with-me', async (c) => {
   const user = c.get('user') as { id: string };
   const limitParam = c.req.query('limit');
-  const limit = limitParam ? Number.parseInt(limitParam, 10) : null;
-  if (limit !== null && (!Number.isFinite(limit) || limit <= 0)) {
+  if (limitParam && !/^\d+$/.test(limitParam)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+  const limit = limitParam ? Number(limitParam) : null;
+  if (limit !== null && (!Number.isSafeInteger(limit) || limit <= 0)) {
     throw new HTTPException(400, { message: 'limit must be a positive integer' });
   }
   const roots = await db.transaction((tx) => getSharedRoots(user.id, tx), {
@@ -613,8 +440,11 @@ sharesRoute.get('/with-me', async (c) => {
 sharesRoute.get('/with-me/tree', async (c) => {
   const user = c.get('user') as { id: string };
   const limitParam = c.req.query('limit');
-  const limit = limitParam ? Number.parseInt(limitParam, 10) : null;
-  if (limit !== null && (!Number.isFinite(limit) || limit <= 0)) {
+  if (limitParam && !/^\d+$/.test(limitParam)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+  const limit = limitParam ? Number(limitParam) : null;
+  if (limit !== null && (!Number.isSafeInteger(limit) || limit <= 0)) {
     throw new HTTPException(400, { message: 'limit must be a positive integer' });
   }
   const result = await db.transaction(
@@ -731,74 +561,6 @@ sharesRoute.get('/with-me/tree', async (c) => {
   return c.json(result);
 });
 
-async function getCollaborators(
-  entityType: ShareEntityType,
-  entityId: string,
-  userId: string,
-): Promise<EntityAccessor[] | Array<{ presenceId: string; name: null; avatarUrl: null }>> {
-  return db.transaction(async (tx) => {
-    await lockEntityAccess(tx, entityType, entityId);
-    const access = await ensureEntityAccess(entityType, entityId, userId, tx);
-    const accessors = getAccessors(await getAccessSources(entityType, entityId, tx));
-    if (access.fullAccess || access.permission === 'admin') return accessors;
-    return accessors
-      .filter((accessor) => accessor.userId !== userId)
-      .map((_accessor, index) => ({
-        presenceId: `presence-${index + 1}`,
-        name: null,
-        avatarUrl: null,
-      }));
-  });
-}
-
-function parseIds(value: string | undefined): string[] {
-  if (!value) return [];
-  return [
-    ...new Set(
-      value
-        .split(',')
-        .map((id) => id.trim())
-        .filter(Boolean),
-    ),
-  ].slice(0, 100);
-}
-
-sharesRoute.get('/pages/collaborators', async (c) => {
-  const user = c.get('user') as { id: string };
-  const ids = parseIds(c.req.query('ids'));
-  const entries = await Promise.all(
-    ids.map(async (id) => {
-      try {
-        return [id, await getCollaborators('page', id, user.id)] as const;
-      } catch (error) {
-        if (error instanceof HTTPException && (error.status === 403 || error.status === 404)) {
-          return [id, []] as const;
-        }
-        throw error;
-      }
-    }),
-  );
-  return c.json(Object.fromEntries(entries));
-});
-
-sharesRoute.get('/folders/collaborators', async (c) => {
-  const user = c.get('user') as { id: string };
-  const ids = parseIds(c.req.query('ids'));
-  const entries = await Promise.all(
-    ids.map(async (id) => {
-      try {
-        return [id, await getCollaborators('folder', id, user.id)] as const;
-      } catch (error) {
-        if (error instanceof HTTPException && (error.status === 403 || error.status === 404)) {
-          return [id, []] as const;
-        }
-        throw error;
-      }
-    }),
-  );
-  return c.json(Object.fromEntries(entries));
-});
-
 sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   const entityType = parseEntityType(c.req.param('entityType'));
   const entityId = c.req.param('entityId');
@@ -815,9 +577,10 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
 
     if (!hasManagementAccess) {
       const sources = await getAccessSources(entityType, entityId, tx);
+      const collaborators = toCollaboratorDisplays(getAccessors(sources));
       return c.json({
         visibility: 'limited',
-        collaboratorCount: getAccessors(sources).filter((item) => item.userId !== user.id).length,
+        collaborators,
         entity: { type: entityType, id: entity.id, title: entity.title, ownerId: null },
         publicAccess,
         inheritance: { policy: 'inherit' },
@@ -850,7 +613,7 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
 
     return c.json({
       visibility: 'full',
-      collaboratorCount: accessors.filter((item) => item.userId !== user.id).length,
+      collaborators: toCollaboratorDisplays(accessors),
       entity: {
         type: entityType,
         id: entity.id,

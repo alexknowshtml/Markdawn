@@ -102,7 +102,7 @@ export const lockWorkspaceAccess = async (
 ): Promise<void> => {
   await executeQuery(
     executor,
-    sql`select pg_advisory_xact_lock(hashtextextended(${`workspace-access:${workspaceOwnerId}`}, 0))`,
+    sql`select pg_advisory_xact_lock_shared(hashtextextended(${`workspace-access:${workspaceOwnerId}`}, 0))`,
   );
 };
 
@@ -110,7 +110,10 @@ export const lockWorkspaceAccessMutation = async (
   executor: QueryExecutor,
   workspaceOwnerId: string,
 ): Promise<void> => {
-  await lockWorkspaceAccess(executor, workspaceOwnerId);
+  await executeQuery(
+    executor,
+    sql`select pg_advisory_xact_lock(hashtextextended(${`workspace-access:${workspaceOwnerId}`}, 0))`,
+  );
   await executeQuery(
     executor,
     sql`insert into workspace_access_versions (workspace_owner_id, version)
@@ -120,42 +123,112 @@ export const lockWorkspaceAccessMutation = async (
   );
 };
 
-const resolveEntityOwnerIds = async (
+type EntityAccessTarget = { entityType: ShareEntityType; entityId: string };
+type ResolvedEntityAccessTarget = EntityAccessTarget & { ownerId: string };
+type MissingEntityPolicy = 'omit' | 'reject';
+
+const entityAccessKey = ({ entityType, entityId }: EntityAccessTarget): string =>
+  `${entityType}:${entityId.toLowerCase()}`;
+
+const resolveExistingEntityOwners = async (
   executor: QueryExecutor,
-  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
-): Promise<string[]> => {
-  const resolvedOwnerIds: string[] = [];
-  for (const { entityType, entityId } of entities) {
-    const statement =
-      entityType === 'page'
-        ? sql`select coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
-           from pages p
-           where p.id = ${entityId} and p.is_deleted = false`
-        : sql`select get_root_folder_owner(f.id) as owner_id
-           from folders f
-           where f.id = ${entityId} and f.is_deleted = false`;
-    const result = await executeQuery(executor, statement);
-    const row = result.rows[0] as { owner_id: string | null } | undefined;
-    if (!row) {
+  entities: ReadonlyArray<EntityAccessTarget>,
+): Promise<Array<ResolvedEntityAccessTarget | null>> => {
+  const pageIds = [
+    ...new Set(
+      entities
+        .filter((entity) => entity.entityType === 'page')
+        .map((entity) => entity.entityId.toLowerCase()),
+    ),
+  ];
+  const folderIds = [
+    ...new Set(
+      entities
+        .filter((entity) => entity.entityType === 'folder')
+        .map((entity) => entity.entityId.toLowerCase()),
+    ),
+  ];
+  const resolvedByEntity = new Map<string, string>();
+
+  if (pageIds.length > 0) {
+    const result = await executeQuery<{ entity_id: string; owner_id: string | null }>(
+      executor,
+      sql`select p.id as entity_id,
+                 coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+          from pages p
+          where p.id = any(${sql.param(pageIds)}::uuid[]) and p.is_deleted = false`,
+    );
+    for (const row of result.rows) {
+      if (!row.owner_id) {
+        throw new HTTPException(409, { message: 'Entity owner could not be determined' });
+      }
+      resolvedByEntity.set(
+        entityAccessKey({ entityType: 'page', entityId: row.entity_id }),
+        row.owner_id,
+      );
+    }
+  }
+
+  if (folderIds.length > 0) {
+    const result = await executeQuery<{ entity_id: string; owner_id: string | null }>(
+      executor,
+      sql`select f.id as entity_id, get_root_folder_owner(f.id) as owner_id
+          from folders f
+          where f.id = any(${sql.param(folderIds)}::uuid[]) and f.is_deleted = false`,
+    );
+    for (const row of result.rows) {
+      if (!row.owner_id) {
+        throw new HTTPException(409, { message: 'Entity owner could not be determined' });
+      }
+      resolvedByEntity.set(
+        entityAccessKey({ entityType: 'folder', entityId: row.entity_id }),
+        row.owner_id,
+      );
+    }
+  }
+
+  return entities.map((entity) => {
+    const ownerId = resolvedByEntity.get(entityAccessKey(entity));
+    return ownerId ? { ...entity, ownerId } : null;
+  });
+};
+
+const applyMissingEntityPolicy = (
+  entities: ReadonlyArray<EntityAccessTarget>,
+  resolvedEntities: ReadonlyArray<ResolvedEntityAccessTarget | null>,
+  policy: MissingEntityPolicy,
+): ResolvedEntityAccessTarget[] => {
+  const existing: ResolvedEntityAccessTarget[] = [];
+  for (let index = 0; index < resolvedEntities.length; index += 1) {
+    const resolved = resolvedEntities[index];
+    if (resolved) {
+      existing.push(resolved);
+      continue;
+    }
+    if (policy === 'reject') {
+      const missing = entities[index];
+      if (!missing) throw new Error('Entity owner resolution lost a required entity');
       throw new HTTPException(404, {
-        message: entityType === 'page' ? 'Page not found' : 'Folder not found',
+        message: missing.entityType === 'page' ? 'Page not found' : 'Folder not found',
       });
     }
-    if (!row.owner_id) {
-      throw new HTTPException(409, { message: 'Entity owner could not be determined' });
-    }
-    resolvedOwnerIds.push(row.owner_id);
   }
-  return resolvedOwnerIds;
+  return existing;
 };
 
 const lockStableEntityAccess = async (
   executor: QueryExecutor,
-  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+  entities: ReadonlyArray<EntityAccessTarget>,
   additionalWorkspaceOwnerIds: readonly string[],
   lockWorkspace: (executor: QueryExecutor, workspaceOwnerId: string) => Promise<void>,
-): Promise<string[]> => {
-  const ownerIds = await resolveEntityOwnerIds(executor, entities);
+  missingEntityPolicy: MissingEntityPolicy,
+): Promise<ResolvedEntityAccessTarget[]> => {
+  const initiallyExisting = applyMissingEntityPolicy(
+    entities,
+    await resolveExistingEntityOwners(executor, entities),
+    missingEntityPolicy,
+  );
+  const ownerIds = initiallyExisting.map((entity) => entity.ownerId);
   const lockedOwnerIds = [...new Set([...ownerIds, ...additionalWorkspaceOwnerIds])].sort();
   for (const ownerId of lockedOwnerIds) {
     await lockWorkspace(executor, ownerId);
@@ -164,26 +237,34 @@ const lockStableEntityAccess = async (
   // Supported organization routes never change an entity's workspace owner,
   // but re-resolve after the advisory locks so a future route or direct SQL
   // writer cannot make us continue under only a stale workspace key.
-  const currentOwnerIds = await resolveEntityOwnerIds(executor, entities);
+  const currentlyExisting = applyMissingEntityPolicy(
+    initiallyExisting,
+    await resolveExistingEntityOwners(executor, initiallyExisting),
+    missingEntityPolicy,
+  );
   const lockedOwnerIdSet = new Set(lockedOwnerIds);
-  if (currentOwnerIds.some((ownerId) => !lockedOwnerIdSet.has(ownerId))) {
+  if (currentlyExisting.some((entity) => !lockedOwnerIdSet.has(entity.ownerId))) {
     throw new HTTPException(409, {
       message: 'Entity workspace changed while acquiring access lock; retry the request',
     });
   }
-  return currentOwnerIds;
+  return currentlyExisting;
 };
 
 export const lockEntityAccesses = async (
   executor: QueryExecutor,
-  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
-  additionalWorkspaceOwnerIds: readonly string[] = [],
-): Promise<string[]> => {
+  entities: ReadonlyArray<EntityAccessTarget>,
+  options: {
+    additionalWorkspaceOwnerIds?: readonly string[];
+    missingEntities?: MissingEntityPolicy;
+  } = {},
+): Promise<ResolvedEntityAccessTarget[]> => {
   return lockStableEntityAccess(
     executor,
     entities,
-    additionalWorkspaceOwnerIds,
+    options.additionalWorkspaceOwnerIds ?? [],
     lockWorkspaceAccess,
+    options.missingEntities ?? 'reject',
   );
 };
 
@@ -192,22 +273,23 @@ export const lockEntityAccess = async (
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<string> => {
-  const ownerIds = await lockEntityAccesses(executor, [{ entityType, entityId }]);
-  const ownerId = ownerIds[0];
-  if (!ownerId) throw new Error('Entity access lock did not resolve an owner');
-  return ownerId;
+  const entities = await lockEntityAccesses(executor, [{ entityType, entityId }]);
+  const lockedEntity = entities[0];
+  if (!lockedEntity) throw new Error('Entity access lock did not resolve an owner');
+  return lockedEntity.ownerId;
 };
 
 export const lockEntityAccessMutations = async (
   executor: QueryExecutor,
-  entities: ReadonlyArray<{ entityType: ShareEntityType; entityId: string }>,
+  entities: ReadonlyArray<EntityAccessTarget>,
   additionalWorkspaceOwnerIds: readonly string[] = [],
-): Promise<string[]> => {
+): Promise<ResolvedEntityAccessTarget[]> => {
   return lockStableEntityAccess(
     executor,
     entities,
     additionalWorkspaceOwnerIds,
     lockWorkspaceAccessMutation,
+    'reject',
   );
 };
 
@@ -216,10 +298,10 @@ export const lockEntityAccessMutation = async (
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<string> => {
-  const ownerIds = await lockEntityAccessMutations(executor, [{ entityType, entityId }]);
-  const ownerId = ownerIds[0];
-  if (!ownerId) throw new Error('Entity access lock did not resolve an owner');
-  return ownerId;
+  const entities = await lockEntityAccessMutations(executor, [{ entityType, entityId }]);
+  const lockedEntity = entities[0];
+  if (!lockedEntity) throw new Error('Entity access lock did not resolve an owner');
+  return lockedEntity.ownerId;
 };
 
 export const ensureCanAdminEntity = async (

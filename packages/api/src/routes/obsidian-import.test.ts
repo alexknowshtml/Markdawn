@@ -1,8 +1,20 @@
 import { MAX_FOLDER_NAME_LENGTH, MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
 import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
+import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 import { testQuery as query } from '../db/testQuery';
 import { createTestApp, createTestSession, createTestUser } from '../test-utils';
+
+async function flushPageContentNotifications(payloads: string[]): Promise<string[]> {
+  const marker = `page-content-notification-marker:${crypto.randomUUID()}`;
+  await query("select pg_notify('page_content_replaced', $1)", [marker]);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const markerIndex = payloads.indexOf(marker);
+    if (markerIndex >= 0) return payloads.splice(0, markerIndex + 1).slice(0, -1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out flushing page content replacement notifications');
+}
 
 describe('obsidian import API', () => {
   describe('auth guard', () => {
@@ -145,7 +157,7 @@ describe('obsidian import API', () => {
       expect(body.pagesCreated).toBe(2);
     });
 
-    it('imports tags from frontmatter', async () => {
+    it('keeps frontmatter and inline tags indexed after resolving imported links', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
@@ -157,7 +169,8 @@ describe('obsidian import API', () => {
           files: [
             {
               path: 'tagged.md',
-              content: '---\ntags:\n  - review\n  - urgent\n---\n\n# Tagged Note',
+              content:
+                '---\ntags:\n  - review\n  - urgent\nmetadata:\n  author: Alice\n  published: true\n---\n\n# Tagged Note\n\n#inline',
             },
           ],
         }),
@@ -166,6 +179,24 @@ describe('obsidian import API', () => {
       expect(res.status).toBe(201);
       const body = await res.json();
       expect(body.pagesCreated).toBeGreaterThanOrEqual(1);
+
+      const tags = await app.request('/api/tags', { headers: { Cookie: session.Cookie } });
+      expect(tags.status).toBe(200);
+      expect(await tags.json()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: '#inline', page_count: '1' }),
+          expect.objectContaining({ id: '#review', page_count: '1' }),
+          expect.objectContaining({ id: '#urgent', page_count: '1' }),
+        ]),
+      );
+      const persisted = await query<{ properties: unknown }>(
+        'select properties from pages where title = $1',
+        ['tagged'],
+      );
+      expect(persisted.rows[0]?.properties).toEqual({
+        tags: ['review', 'urgent'],
+        metadata: { author: 'Alice', published: true },
+      });
     });
 
     it('imports images as base64', async () => {
@@ -267,6 +298,51 @@ describe('obsidian import API', () => {
       });
       expect(pageA?.ydoc.includes(Buffer.from(pageB?.id ?? ''))).toBe(true);
       expect(pageA?.ydoc.includes(Buffer.from('Page B'))).toBe(false);
+    });
+
+    it('notifies collaborators when deferred link binding replaces page content', async () => {
+      const connectionString = process.env.DATABASE_URL;
+      if (!connectionString) throw new Error('DATABASE_URL is required');
+
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const listener = new Client({ connectionString });
+      const payloads: string[] = [];
+      listener.on('notification', (notification) => {
+        if (notification.channel === 'page_content_replaced' && notification.payload) {
+          payloads.push(notification.payload);
+        }
+      });
+      await listener.connect();
+      await listener.query('listen page_content_replaced');
+
+      try {
+        const response = await app.request('/api/import/obsidian', {
+          method: 'POST',
+          headers: { Cookie: session.Cookie, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            files: [
+              { path: 'source.md', content: '# Source\n\nSee [[Target]]' },
+              { path: 'target.md', content: '# Target' },
+            ],
+          }),
+        });
+        expect(response.status).toBe(201);
+
+        const source = await query<{ id: string }>(
+          'select id from pages where created_by = $1 and title = $2',
+          [user.id, 'Source'],
+        );
+        const sourcePageId = source.rows[0]?.id;
+        if (!sourcePageId) throw new Error('Imported source page was not found');
+        const notifications = await flushPageContentNotifications(payloads);
+        expect(notifications.map((payload) => JSON.parse(payload))).toContainEqual({
+          pageId: sourcePageId,
+        });
+      } finally {
+        await listener.end();
+      }
     });
 
     it('handles invalid body gracefully', async () => {

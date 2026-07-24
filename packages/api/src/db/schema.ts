@@ -353,12 +353,29 @@ export const folderPublicAccessVisits = pgTable(
   }),
 );
 
-export const guestIdentities = pgTable('guest_identities', {
-  id: uuid('id').primaryKey(),
-  name: text('name').notNull(),
-  createdAt: timestamp('created_at').defaultNow().notNull(),
-  lastSeenAt: timestamp('last_seen_at').defaultNow().notNull(),
-});
+export const guestIdentities = pgTable(
+  'guest_identities',
+  {
+    id: uuid('id').primaryKey(),
+    name: text('name').notNull(),
+    createdAt: timestamp('created_at').defaultNow().notNull(),
+    lastSeenAt: timestamp('last_seen_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    lastSeenIdx: index('guest_identities_last_seen_idx').on(table.lastSeenAt),
+  }),
+);
+
+export const guestIdentityTombstones = pgTable(
+  'guest_identity_tombstones',
+  {
+    id: uuid('id').primaryKey(),
+    expiredAt: timestamp('expired_at').defaultNow().notNull(),
+  },
+  (table) => ({
+    expiredAtIdx: index('guest_identity_tombstones_expired_at_idx').on(table.expiredAt),
+  }),
+);
 
 export const comments = pgTable(
   'comments',

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { getAnonymousName } from '@markdawn/shared';
 import { sql } from 'drizzle-orm';
 import type { Context } from 'hono';
@@ -8,11 +9,17 @@ import { executeQuery, type QueryExecutor } from '../db/query';
 import { ensureFolderAccess, ensurePageAccess, type SharePermission } from './share-access';
 
 const GUEST_COOKIE_NAME = 'markdawn_anon_id';
+const GUEST_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-export type RequestActor =
-  | { kind: 'user'; id: string }
-  | { kind: 'guest'; id: string; name: string };
+type GuestActor = {
+  kind: 'guest';
+  id: string;
+  name: string;
+  rotate(): void;
+};
+
+export type RequestActor = { kind: 'user'; id: string } | GuestActor;
 
 function readGuestId(cookieHeader: string | undefined): string | null {
   if (!cookieHeader) return null;
@@ -38,7 +45,37 @@ export async function getRequestActor(c: Context): Promise<RequestActor> {
   if (!guestId) {
     throw new HTTPException(401, { message: 'A guest identity is required' });
   }
-  return { kind: 'guest', id: guestId, name: getAnonymousName(guestId) };
+  const tombstone = await executeQuery<{ exists: boolean }>(
+    db,
+    sql`select exists(
+      select 1 from guest_identity_tombstones where id = ${guestId}
+    ) as exists`,
+  );
+  return createGuestActor(c, tombstone.rows[0]?.exists ? rotateGuestIdentity(c) : guestId);
+}
+
+function rotateGuestIdentity(c: Context): string {
+  const guestId = randomUUID();
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  c.header(
+    'Set-Cookie',
+    `${GUEST_COOKIE_NAME}=${guestId}; Max-Age=${GUEST_COOKIE_MAX_AGE_SECONDS}; Path=/; SameSite=Lax${secure}`,
+  );
+  return guestId;
+}
+
+function createGuestActor(c: Context, guestId: string): GuestActor {
+  const actor: GuestActor = {
+    kind: 'guest',
+    id: guestId,
+    name: getAnonymousName(guestId),
+    rotate: () => {
+      const nextGuestId = rotateGuestIdentity(c);
+      actor.id = nextGuestId;
+      actor.name = getAnonymousName(nextGuestId);
+    },
+  };
+  return actor;
 }
 
 export async function persistGuestIdentity(
@@ -46,12 +83,25 @@ export async function persistGuestIdentity(
   executor: QueryExecutor = db,
 ): Promise<void> {
   if (actor.kind !== 'guest') return;
-  await executeQuery(
-    executor,
-    sql`insert into guest_identities (id, name, created_at, last_seen_at)
-     values (${actor.id}, ${actor.name}, now(), now())
-     on conflict (id) do update set last_seen_at = excluded.last_seen_at`,
-  );
+  if (executor === db) {
+    await db.transaction((tx) => persistGuestIdentity(actor, tx));
+    return;
+  }
+  // The database function owns the cleanup lock/tombstone/upsert invariant.
+  // Keep the actor mutable only at this request boundary so callers observe a
+  // replacement ID when an expired cookie is rotated.
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const result = await executeQuery<{ established: boolean }>(
+      executor,
+      sql`select establish_guest_identity(${actor.id}, ${actor.name}) as established`,
+    );
+    if (!result.rows[0]?.established) {
+      actor.rotate();
+      continue;
+    }
+    return;
+  }
+  throw new Error('Unable to establish a replacement guest identity');
 }
 
 const permissionRank = (permission: SharePermission): number =>
@@ -77,6 +127,7 @@ export async function ensureActorPageAccess(
   if (permissionRank(permission) < permissionRank(mode)) {
     throw new HTTPException(403, { message: 'Forbidden' });
   }
+  await persistGuestIdentity(actor, executor);
   return permission;
 }
 
@@ -100,6 +151,7 @@ export async function ensureActorFolderAccess(
   if (permissionRank(permission) < permissionRank(mode)) {
     throw new HTTPException(403, { message: 'Forbidden' });
   }
+  await persistGuestIdentity(actor, executor);
   return permission;
 }
 
@@ -109,6 +161,11 @@ export async function ensureActorCanCreateInFolder(
   folderId: string,
   executor: QueryExecutor = db,
 ): Promise<void> {
+  if (actor.kind === 'guest') {
+    throw new HTTPException(403, {
+      message: 'Guest editors cannot create or copy pages or folders',
+    });
+  }
   await ensureActorFolderAccess(actor, folderId, 'edit', executor);
 }
 

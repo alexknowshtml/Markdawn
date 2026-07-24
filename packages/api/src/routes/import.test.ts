@@ -1,5 +1,5 @@
 import { MAX_PAGE_TITLE_LENGTH, MAX_YDOC_BYTES } from '@markdawn/shared';
-import { extractConnectionsFromYDoc } from '@markdawn/shared/yjs-helpers';
+import { extractConnectionsFromYDoc, yDocToMarkdown } from '@markdawn/shared/yjs-helpers';
 import { describe, expect, it } from 'vitest';
 import { testQuery as query } from '../db/testQuery';
 import {
@@ -45,7 +45,8 @@ describe('markdown import API', () => {
 
       expect(res.status).toBe(201);
       const body = await res.json();
-      expect(body.title).toBe('Hello World');
+      expect(body.page).toEqual({ id: expect.any(String), title: 'Hello World' });
+      expect(body.warnings).toEqual([]);
     });
 
     it('imports markdown with frontmatter', async () => {
@@ -71,7 +72,36 @@ Body text`;
 
       expect(res.status).toBe(201);
       const body = await res.json();
-      expect(body.title).toBe('Frontmatter Title');
+      expect(body.page.title).toBe('Frontmatter Title');
+    });
+
+    it('preserves nested JSON-compatible frontmatter properties', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const formData = new FormData();
+      formData.append(
+        'file',
+        new File(['---\nauthor:\n  name: Alice\n  verified: true\n---\nBody'], 'note.md', {
+          type: 'text/markdown',
+        }),
+      );
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(201);
+      const body = await res.json();
+      const persisted = await query<{ properties: unknown }>(
+        'select properties from pages where id = $1',
+        [body.page.id],
+      );
+      expect(persisted.rows[0]?.properties).toEqual({
+        author: { name: 'Alice', verified: true },
+      });
     });
 
     it('rejects an imported title above the collaboration title limit', async () => {
@@ -107,7 +137,9 @@ Body text`;
       const formData = new FormData();
       formData.append(
         'file',
-        new File(['# Imported\n\nSee [[Roadmap]]'], 'imported.md', { type: 'text/markdown' }),
+        new File(['# Imported\n\nSee [[Roadmap]] and [[Roadmap|Plan]]'], 'imported.md', {
+          type: 'text/markdown',
+        }),
       );
 
       const res = await app.request('/api/import/markdown', {
@@ -117,9 +149,9 @@ Body text`;
       });
 
       expect(res.status).toBe(201);
-      const imported = (await res.json()) as { id: string };
+      const imported = (await res.json()) as { page: { id: string } };
       const ydocResult = await query<{ ydoc: Buffer }>('SELECT ydoc FROM pages WHERE id = $1', [
-        imported.id,
+        imported.page.id,
       ]);
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
@@ -132,6 +164,16 @@ Body text`;
       );
       expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(ownTarget.id))).toBe(true);
       expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from('Roadmap'))).toBe(false);
+      const indexed = await query<{ occurrence_count: number; context: string | null }>(
+        `select c.occurrence_count, co.context
+         from connections c
+         join connection_occurrences co on co.connection_id = c.id
+         where c.source_id = $1 and c.target_id = $2`,
+        [imported.page.id, ownTarget.id],
+      );
+      expect(indexed.rows).toHaveLength(2);
+      expect(indexed.rows.every((row) => row.occurrence_count === 2)).toBe(true);
+      expect(indexed.rows.every((row) => typeof row.context === 'string')).toBe(true);
     });
 
     it('binds only targets the importer can access inside a shared folder', async () => {
@@ -168,9 +210,9 @@ Body text`;
       });
 
       expect(res.status).toBe(201);
-      const imported = (await res.json()) as { id: string };
+      const imported = (await res.json()) as { page: { id: string } };
       const ydocResult = await query<{ ydoc: Buffer }>('select ydoc from pages where id = $1', [
-        imported.id,
+        imported.page.id,
       ]);
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
@@ -215,9 +257,9 @@ Body text`;
       });
 
       expect(res.status).toBe(201);
-      const imported = (await res.json()) as { id: string };
+      const imported = (await res.json()) as { page: { id: string } };
       const ydocResult = await query<{ ydoc: Buffer }>('SELECT ydoc FROM pages WHERE id = $1', [
-        imported.id,
+        imported.page.id,
       ]);
       const connections = extractConnectionsFromYDoc(
         new Uint8Array(ydocResult.rows[0]?.ydoc ?? []),
@@ -231,6 +273,45 @@ Body text`;
       const ambiguous = connections.find((connection) => connection.targetSlug === 'roadmap');
       expect(ambiguous?.targetId).toBeUndefined();
       expect(ydocResult.rows[0]?.ydoc.includes(Buffer.from(pathTarget.id))).toBe(true);
+    });
+
+    it('preserves image references and warns when local image files were not provided', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const content = [
+        '# Images',
+        '',
+        '![Local](images/diagram.png)',
+        '![Remote](https://example.com/logo.png)',
+        '<img src="file:///tmp/photo.jpg">',
+        '![[assets/sketch.webp]]',
+      ].join('\n');
+      const formData = new FormData();
+      formData.append('file', new File([content], 'images.md', { type: 'text/markdown' }));
+
+      const res = await app.request('/api/import/markdown', {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+        body: formData,
+      });
+
+      expect(res.status).toBe(201);
+      const imported = (await res.json()) as {
+        page: { id: string };
+        warnings: { code: string; count: number }[];
+      };
+      expect(imported.warnings).toEqual([
+        expect.objectContaining({ code: 'LOCAL_IMAGES_NOT_IMPORTED', count: 3 }),
+      ]);
+
+      const stored = await query<{ ydoc: Buffer }>('select ydoc from pages where id = $1', [
+        imported.page.id,
+      ]);
+      const markdown = yDocToMarkdown(new Uint8Array(stored.rows[0]?.ydoc ?? []));
+      expect(markdown).toContain('images/diagram.png');
+      expect(markdown).toContain('https://example.com/logo.png');
+      expect(markdown).not.toContain('/uploads/');
     });
 
     it('rejects oversized markdown before creating a page', async () => {

@@ -14,6 +14,16 @@ import {
   createTestWorkspaceMember,
 } from '../test-utils';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
+import { serializeTimestamp } from './folders';
+
+describe('serializeTimestamp', () => {
+  it('serializes both Date and raw SQL string timestamps', () => {
+    expect(serializeTimestamp(new Date('2026-01-02T03:04:05.000Z'))).toBe(
+      '2026-01-02T03:04:05.000Z',
+    );
+    expect(serializeTimestamp('2026-01-02 03:04:05')).toBe('2026-01-02 03:04:05');
+  });
+});
 
 async function readWorkspaceAccessVersion(workspaceOwnerId: string): Promise<string> {
   const result = await query<{ version: string }>(
@@ -322,7 +332,7 @@ describe('folders API', () => {
       expect(await res.json()).toMatchObject({ parentId: parent.id, name: 'Editor child' });
     });
 
-    it('lets a persistent guest create a folder beneath public Edit access', async () => {
+    it('denies guest folder creation beneath public Edit access', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const parent = await createTestFolder(owner.id);
@@ -339,36 +349,9 @@ describe('folders API', () => {
         body: JSON.stringify({ parentId: parent.id, name: 'Guest folder' }),
       });
 
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string; parentId: string; name: string };
-      expect(body).toMatchObject({ parentId: parent.id, name: 'Guest folder' });
-      const stored = await query<{
-        created_by: string | null;
-        closure_depth: number;
-        guest_persisted: boolean;
-      }>(
-        `select folder.created_by, path.depth as closure_depth,
-                exists(select 1 from guest_identities where id = $3) as guest_persisted
-         from folders folder
-         join folder_closure path
-           on path.ancestor_id = $1 and path.descendant_id = folder.id
-         where folder.id = $2`,
-        [parent.id, body.id, guestId],
-      );
-      expect(stored.rows[0]).toEqual({
-        created_by: null,
-        closure_depth: 1,
-        guest_persisted: true,
-      });
-
-      const readResponse = await app.request(`/api/folders/${body.id}`, {
-        headers: { Cookie: `markdawn_anon_id=${guestId}` },
-      });
-      expect(readResponse.status).toBe(200);
-      expect(await readResponse.json()).toMatchObject({
-        id: body.id,
-        publicPermission: 'edit',
-        userPermission: 'edit',
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        message: 'Guest editors cannot create or copy pages or folders',
       });
     });
   });
@@ -1050,7 +1033,7 @@ describe('folders API', () => {
       );
     });
 
-    it('lets a persistent guest copy an accessible subtree into a public Edit folder', async () => {
+    it('denies guest folder copies into a public Edit folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const destination = await createTestFolder(owner.id, { name: 'Public destination' });
@@ -1072,32 +1055,10 @@ describe('folders API', () => {
         body: JSON.stringify({ parentId: destination.id }),
       });
 
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string; parentId: string; name: string };
-      expect(body).toMatchObject({
-        parentId: destination.id,
-        name: 'Copy of Guest copy source',
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        message: 'Guest editors cannot create or copy pages or folders',
       });
-      const copied = await query<{
-        folder_creator: string | null;
-        page_creator: string | null;
-        page_title: string;
-      }>(
-        `select folder.created_by as folder_creator,
-                page.created_by as page_creator,
-                page.title as page_title
-         from folders folder
-         join pages page on page.parent_id = folder.id
-         where folder.id = $1`,
-        [body.id],
-      );
-      expect(copied.rows).toEqual([
-        {
-          folder_creator: null,
-          page_creator: null,
-          page_title: 'Copy of Nested page',
-        },
-      ]);
     });
 
     it('returns 404 for non-existent folder', async () => {

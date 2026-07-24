@@ -194,7 +194,7 @@ describe('uploads API', () => {
       expect(res.status).toBe(400);
     });
 
-    it('persists guest upload attribution on publicly editable pages', async () => {
+    it('denies guest uploads on publicly editable pages', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const page = await createTestPage(owner.id);
@@ -210,14 +210,10 @@ describe('uploads API', () => {
         body: formData,
       });
 
-      expect(response.status).toBe(200);
-      const url = ((await response.json()) as { url: string }).url;
-      const filename = url.split('/').at(-1);
-      const upload = await query<{
-        uploaded_by: string | null;
-        uploaded_by_guest_id: string | null;
-      }>('select uploaded_by, uploaded_by_guest_id from uploads where filename = $1', [filename]);
-      expect(upload.rows[0]).toEqual({ uploaded_by: null, uploaded_by_guest_id: guestId });
+      expect(response.status).toBe(403);
+      expect(await response.json()).toMatchObject({
+        message: 'Guest editors cannot upload files',
+      });
     });
 
     it('denies guest uploads on public view-only pages', async () => {

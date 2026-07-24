@@ -275,10 +275,10 @@ describe('sharing API', () => {
       headers: guestHeaders,
       body: JSON.stringify({ icon: 'G', coverType: 'color', coverValue: 'blue' }),
     });
-    expect(editedMetadata.status).toBe(200);
-    expect(await editedMetadata.json()).toEqual(
-      expect.objectContaining({ icon: 'G', coverType: 'color', coverValue: 'blue' }),
-    );
+    expect(editedMetadata.status).toBe(403);
+    expect(await editedMetadata.json()).toEqual({
+      message: 'Guest editors cannot change page icons or covers',
+    });
 
     const manageResponse = await app.request(`/api/shares/entity/page/${page.id}`, {
       headers: { Cookie: `markdawn_anon_id=${guestId}` },

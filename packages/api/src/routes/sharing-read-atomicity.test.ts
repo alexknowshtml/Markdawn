@@ -6,15 +6,19 @@ import { testQuery as query } from '../db/testQuery';
 import { createTestApp, createTestPage, createTestSession, createTestUser } from '../test-utils';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 
-async function waitForBlockedPid(blockerPid: number): Promise<number> {
+async function waitForBlockedPid(
+  blockerPid: number,
+  excludedPids: readonly number[] = [],
+): Promise<number> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
     const result = await query<{ pid: number }>(
       `select pid
        from pg_stat_activity
        where $1 = any(pg_blocking_pids(pid))
+         and not (pid = any($2::int[]))
        order by pid
        limit 1`,
-      [blockerPid],
+      [blockerPid, excludedPids],
     );
     const pid = result.rows[0]?.pid;
     if (pid !== undefined) return pid;
@@ -25,6 +29,9 @@ async function waitForBlockedPid(blockerPid: number): Promise<number> {
 
 async function runRevocationBarrier(
   request: (pageId: string, sessionCookie: string) => Response | Promise<Response>,
+  readOrdering:
+    | 'locks-before-reading-shares'
+    | 'prefilters-before-locking' = 'locks-before-reading-shares',
 ): Promise<{
   response: Response;
   ownerId: string;
@@ -86,7 +93,14 @@ async function runRevocationBarrier(
 
   let orchestrationError: unknown = null;
   try {
-    await waitForBlockedPid(responsePid);
+    if (readOrdering === 'locks-before-reading-shares') {
+      await waitForBlockedPid(responsePid);
+    } else {
+      // Collaborator reads intentionally prefilter inaccessible IDs before
+      // taking workspace locks, then recheck access under those locks. The
+      // mutation therefore waits on the table barrier rather than the reader.
+      await waitForBlockedPid(blockerPid, [responsePid]);
+    }
   } catch (error) {
     orchestrationError = error;
   } finally {
@@ -136,10 +150,12 @@ describe('sharing management read atomicity', () => {
 
   it('does not mix collaborator authorization with post-revoke identities', async () => {
     const app = await createTestApp();
-    const result = await runRevocationBarrier((pageId, sessionCookie) =>
-      app.request(`/api/shares/pages/collaborators?ids=${pageId}`, {
-        headers: { Cookie: sessionCookie },
-      }),
+    const result = await runRevocationBarrier(
+      (pageId, sessionCookie) =>
+        app.request(`/api/shares/pages/collaborators?ids=${pageId}`, {
+          headers: { Cookie: sessionCookie },
+        }),
+      'prefilters-before-locking',
     );
 
     expect(result.response.status).toBe(200);
@@ -157,5 +173,62 @@ describe('sharing management read atomicity', () => {
     });
     expect(afterRevoke.status).toBe(200);
     expect(await afterRevoke.json()).toEqual({ [result.pageId]: [] });
+  });
+
+  it('omits an entity deleted while collaborator workspace locks are pending', async () => {
+    const app = await createTestApp();
+    const owner = await createTestUser();
+    const viewer = await createTestUser();
+    const session = await createTestSession(viewer.id);
+    const deletedPage = await createTestPage(owner.id);
+    const survivingPage = await createTestPage(owner.id);
+    await query(
+      `insert into shares (entity_type, entity_id, shared_by, recipient_user_id, permission)
+       values
+         ('page', $1, $3, $4, 'view'),
+         ('page', $2, $3, $4, 'view')`,
+      [deletedPage.id, survivingPage.id, owner.id, viewer.id],
+    );
+
+    let releaseWorkspaceLock = (): void => undefined;
+    let reportBlockerPid = (_pid: number): void => undefined;
+    const workspaceLockReleased = new Promise<void>((resolve) => {
+      releaseWorkspaceLock = resolve;
+    });
+    const blockerReady = new Promise<number>((resolve) => {
+      reportBlockerPid = resolve;
+    });
+    const workspaceBlocker = db.transaction(async (tx) => {
+      await lockWorkspaceAccessMutation(tx, owner.id);
+      const pidResult = await executeQuery<{ pid: number }>(
+        tx,
+        sql.raw('select pg_backend_pid() as pid'),
+      );
+      const pid = pidResult.rows[0]?.pid;
+      if (!pid) throw new Error('Failed to resolve collaborator workspace blocker PID');
+      reportBlockerPid(pid);
+      await workspaceLockReleased;
+    });
+
+    const blockerPid = await blockerReady;
+    const responsePromise = app.request(
+      `/api/shares/pages/collaborators?ids=${deletedPage.id},${survivingPage.id}`,
+      { headers: { Cookie: session.Cookie } },
+    );
+    try {
+      await waitForBlockedPid(blockerPid);
+      await query('delete from pages where id = $1', [deletedPage.id]);
+    } finally {
+      releaseWorkspaceLock();
+      await workspaceBlocker;
+    }
+
+    const response = await responsePromise;
+    expect(response.status).toBe(200);
+    const collaborators = (await response.json()) as Record<string, Array<{ userId: string }>>;
+    expect(collaborators[deletedPage.id]).toEqual([]);
+    expect(collaborators[survivingPage.id]).toContainEqual(
+      expect.objectContaining({ userId: owner.id }),
+    );
   });
 });

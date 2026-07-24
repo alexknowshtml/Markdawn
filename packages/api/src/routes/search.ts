@@ -49,14 +49,32 @@ searchRoute.get('/', async (c) => {
   }
   const searchPattern = `%${textQuery}%`;
 
-  const filters: SQL[] = [];
-
-  if (createdAfter) {
-    filters.push(sql`p.created_at >= ${createdAfter}`);
+  const parseDateFilter = (value: string | undefined, field: string): string | undefined => {
+    if (!value) return undefined;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new HTTPException(400, { message: `${field} must be a valid date` });
+    }
+    return parsed.toISOString();
+  };
+  const normalizedCreatedAfter = parseDateFilter(createdAfter, 'createdAfter');
+  const normalizedCreatedBefore = parseDateFilter(createdBefore, 'createdBefore');
+  if (
+    normalizedCreatedAfter &&
+    normalizedCreatedBefore &&
+    normalizedCreatedAfter > normalizedCreatedBefore
+  ) {
+    throw new HTTPException(400, { message: 'createdAfter must not be after createdBefore' });
   }
 
-  if (createdBefore) {
-    filters.push(sql`p.created_at <= ${createdBefore}`);
+  const filters: SQL[] = [];
+
+  if (normalizedCreatedAfter) {
+    filters.push(sql`p.created_at >= ${normalizedCreatedAfter}`);
+  }
+
+  if (normalizedCreatedBefore) {
+    filters.push(sql`p.created_at <= ${normalizedCreatedBefore}`);
   }
 
   if (parentId === 'root') {

@@ -47,13 +47,13 @@ workspaceRoute.get('/members', async (c) => {
   const result = await query(
     sql`SELECT
        wm.id,
-       wm.workspace_owner_id,
-       wm.member_id,
-       u.name AS member_name,
-       u.email AS member_email,
-       u.avatar_url AS member_avatar_url,
+       wm.workspace_owner_id AS "workspaceOwnerId",
+       wm.member_id AS "memberId",
+       u.name AS "memberName",
+       u.email AS "memberEmail",
+       u.avatar_url AS "memberAvatarUrl",
        wm.role,
-       wm.created_at
+       wm.created_at AS "createdAt"
      FROM workspace_members wm
      JOIN users u ON u.id = wm.member_id
      WHERE wm.workspace_owner_id = ${user.id}
@@ -113,11 +113,12 @@ workspaceRoute.post('/members/invite', async (c) => {
       tx,
       sql`INSERT INTO workspace_members (workspace_owner_id, member_id, role)
        VALUES (${user.id}, ${targetUser.id}, ${role})
+       ON CONFLICT (workspace_owner_id, member_id) DO NOTHING
        RETURNING id`,
     );
 
     if (!insertResult.rowCount || insertResult.rowCount === 0) {
-      throw new HTTPException(500, { message: 'Failed to add workspace member' });
+      throw new HTTPException(409, { message: 'User is already a member of this workspace' });
     }
 
     await notifyWorkspaceEvent('member_added', user.id, targetUser.id, inviteMessage, tx);

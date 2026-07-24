@@ -1,8 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
-import { normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
+import {
+  aggregateIndexedPageConnections,
+  extractInlineTags,
+  extractPropertyTagConnections,
+  normalizeWikiLinkLookupKey,
+} from '@markdawn/shared';
+import { type ConnectionDraft, normalizeTagSlug } from '@markdawn/shared/yjs-helpers';
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
@@ -24,6 +29,7 @@ import {
   isMarkdownFile,
   parseFrontmatter,
 } from '../utils/obsidian-parsers';
+import { replacePageConnectionIndex, replacePageConnections } from '../utils/pageConnectionIndex';
 import { normalizePageTitle } from '../utils/pageTitle';
 import { getNextPosition } from '../utils/position';
 import { lockWorkspaceAccess, lockWorkspaceAccessMutation } from '../utils/share-access';
@@ -103,27 +109,6 @@ const extractEmbedLinks = (content: string): WikilinkMatch[] => {
   return results;
 };
 
-const extractInlineTags = (content: string): string[] => {
-  const tags = new Set<string>();
-  const hexOnly = /^[0-9a-fA-F]+$/;
-  const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-/]+)/g);
-
-  for (const match of inlineTags) {
-    const rawTag = match[1];
-    if (!rawTag) continue;
-    if (
-      hexOnly.test(rawTag) &&
-      (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
-    ) {
-      continue;
-    }
-    const slug = normalizeTagSlug(rawTag);
-    if (slug) tags.add(slug);
-  }
-
-  return [...tags];
-};
-
 const processMarkdownContent = (content: string, imageMap: Map<string, string>): string => {
   let result = content;
 
@@ -169,18 +154,6 @@ obsidianImportRoute.post('/', async (c) => {
     backlinksCreated: 0,
     errors: [],
   };
-
-  const hasPropertiesColumn = await query(
-    sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'pages' AND column_name = 'properties' LIMIT 1`,
-  )
-    .then((r) => (r.rowCount ?? 0) > 0)
-    .catch(() => false);
-
-  const hasConnectionsTable = await query(
-    sql`SELECT 1 FROM information_schema.tables WHERE table_name = 'connections' LIMIT 1`,
-  )
-    .then((r) => (r.rowCount ?? 0) > 0)
-    .catch(() => false);
 
   const markdownFiles: VaultFile[] = [];
   const imageFiles: VaultFile[] = [];
@@ -316,7 +289,7 @@ obsidianImportRoute.post('/', async (c) => {
       if (!file.content) continue;
       ensureDocumentInputSize(file.content);
 
-      const { frontmatter, body, tags, title: frontmatterTitle } = parseFrontmatter(file.content);
+      const { frontmatter, body, title: frontmatterTitle } = parseFrontmatter(file.content);
       const fileName = path.basename(file.path, '.md');
       const title = normalizePageTitle(frontmatterTitle || fileName);
 
@@ -332,25 +305,14 @@ obsidianImportRoute.post('/', async (c) => {
       const contentForEditor = stripLeadingH1(processedBody, title);
       const ydocBuffer = Buffer.from(markdownToYjsState(contentForEditor));
       ensureYdocSize(ydocBuffer);
-      const pageTagSlugs = new Set([
-        ...tags.map((tag) => normalizeTagSlug(tag)).filter(Boolean),
-        ...extractInlineTags(file.content),
-      ]);
-
       const pageId = await db.transaction(async (tx) => {
         await lockWorkspaceAccessMutation(tx, user.id);
         const nextPosition = await getNextPosition('pages', parentId, user.id, tx);
-        const insertResult = hasPropertiesColumn
-          ? await executeQuery(
-              tx,
-              sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
-               values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}, ${JSON.stringify(frontmatter)}) returning *`,
-            )
-          : await executeQuery(
-              tx,
-              sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc)
-               values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}) returning *`,
-            );
+        const insertResult = await executeQuery(
+          tx,
+          sql`insert into pages (parent_id, title, title_search, position, created_by, ydoc, properties)
+           values (${parentId}, ${title}, to_tsvector('english', ${title}), ${nextPosition}, ${user.id}, ${ydocBuffer}, ${JSON.stringify(frontmatter)}) returning *`,
+        );
         const insertedPageId = insertResult.rows[0]?.id;
         if (typeof insertedPageId !== 'string') {
           throw new Error('Failed to create page');
@@ -366,24 +328,13 @@ obsidianImportRoute.post('/', async (c) => {
           );
         }
 
-        for (const tagSlug of pageTagSlugs) {
-          await executeQuery(
-            tx,
-            sql`insert into connections (
-               source_type, source_id, target_type, target_slug,
-               target_label, connection_type, link_text, occurrence_count, updated_at
-             )
-             values ('page', ${insertedPageId}, 'tag', ${tagSlug}, ${tagSlug}, 'tag', ${tagSlug}, 1, now())
-             on conflict (source_type, source_id, target_type, target_slug, connection_type)
-             do update set updated_at = now(), occurrence_count = excluded.occurrence_count`,
-          );
-        }
+        await replacePageConnectionIndex(tx, insertedPageId, ydocBuffer, frontmatter);
 
         return insertedPageId;
       });
 
       // Store only committed pages for deferred DB connection resolution. A failure
-      // while creating refs or tags rolls the page back instead of returning a
+      // while creating upload refs rolls the page back instead of returning a
       // partial import that is absent from the result counters.
       pagePathToId.set(file.path, pageId);
       pageYdocs.set(file.path, ydocBuffer);
@@ -409,9 +360,12 @@ obsidianImportRoute.post('/', async (c) => {
     try {
       const backlinksCreated = await db.transaction(async (tx) => {
         await lockWorkspaceAccess(tx, user.id);
-        const pageResult = await executeQuery<{ ydoc: Buffer | null }>(
+        const pageResult = await executeQuery<{
+          ydoc: Buffer | null;
+          properties: Record<string, unknown> | null;
+        }>(
           tx,
-          sql`select ydoc
+          sql`select ydoc, properties
            from pages
            where id = ${pageId} and is_deleted = false
            for update`,
@@ -434,43 +388,57 @@ obsidianImportRoute.post('/', async (c) => {
               tx,
               sql`update pages set ydoc = ${boundYdoc}, updated_at = now() where id = ${pageId}`,
             );
+            await executeQuery(
+              tx,
+              sql`select pg_notify(${'page_content_replaced'}, ${JSON.stringify({ pageId })})`,
+            );
           }
         }
 
         // Do not index the original markdown after a user has already changed
         // the page. The current Yjs state is preserved and the collaboration
         // indexer remains authoritative for that newer content.
-        if (hasConnectionsTable && !pageWasEdited) {
+        if (!pageWasEdited) {
           const wikilinks = extractWikilinks(fileContent);
           const embeds = extractEmbedLinks(fileContent);
           const allLinks = [...wikilinks, ...embeds];
-
-          for (const link of allLinks) {
-            if (link.isEmbed && isImageFile(link.page)) continue;
-
-            const targetTitleLower = normalizeWikiLinkLookupKey(link.page);
-            const targetPageId = workspacePageLookup.get(targetTitleLower) ?? null;
-            const targetSlug = targetPageId ? `id:${targetPageId}` : targetTitleLower;
-            const connectionType = link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink';
-
-            await executeQuery(
-              tx,
-              sql`insert into connections (
-                 source_type, source_id, target_type, target_id, target_slug,
-                 target_label, connection_type, link_text, occurrence_count, updated_at
-               )
-               values ('page', ${pageId}, 'page', ${targetPageId}, ${targetSlug}, ${link.page}, ${connectionType}, ${link.alias || link.page}, 1, now())
-               on conflict (source_type, source_id, target_type, target_slug, connection_type)
-               do update set
-                 target_id = excluded.target_id,
-                 target_label = excluded.target_label,
-                 link_text = excluded.link_text,
-                 occurrence_count = connections.occurrence_count + 1,
-                 updated_at = now()`,
-            );
-
-            if (targetPageId) createdBacklinks += 1;
-          }
+          const connectionDrafts: ConnectionDraft[] = [
+            ...extractPropertyTagConnections(pageResult.rows[0]?.properties ?? null),
+            ...extractInlineTags(fileContent)
+              .map(normalizeTagSlug)
+              .filter((tag): tag is string => Boolean(tag))
+              .map(
+                (tag): ConnectionDraft => ({
+                  targetType: 'tag',
+                  targetSlug: tag,
+                  targetLabel: tag,
+                  connectionType: 'tag',
+                  linkText: tag,
+                }),
+              ),
+            ...allLinks.flatMap((link): ConnectionDraft[] => {
+              if (link.isEmbed && isImageFile(link.page)) return [];
+              const targetTitleLower = normalizeWikiLinkLookupKey(link.page);
+              const targetPageId = workspacePageLookup.get(targetTitleLower);
+              if (targetPageId) createdBacklinks += 1;
+              return [
+                {
+                  targetType: 'page',
+                  ...(targetPageId ? { targetId: targetPageId } : {}),
+                  targetSlug: targetPageId ? `id:${targetPageId}` : targetTitleLower,
+                  targetLabel: link.page,
+                  connectionType: link.isEmbed ? 'embed' : link.heading ? 'heading' : 'wikilink',
+                  linkText: link.alias || link.page,
+                  linkContext: link.alias || link.page,
+                },
+              ];
+            }),
+          ];
+          await replacePageConnections(
+            tx,
+            pageId,
+            aggregateIndexedPageConnections(connectionDrafts),
+          );
         }
 
         return createdBacklinks;

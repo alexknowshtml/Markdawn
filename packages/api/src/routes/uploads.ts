@@ -115,6 +115,9 @@ uploadsRoute.post(
   }),
   async (c) => {
     const actor = await getRequestActor(c);
+    if (actor.kind === 'guest') {
+      throw new HTTPException(403, { message: 'Guest editors cannot upload files' });
+    }
     const body = await c.req.parseBody().catch((error: unknown) => {
       if (error instanceof Error && error.name === 'BodyLimitError') throw error;
       return null;

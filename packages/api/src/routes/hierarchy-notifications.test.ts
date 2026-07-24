@@ -174,8 +174,9 @@ describe('hierarchy creation notifications', () => {
         body: markdown,
       });
       expect(importRes.status).toBe(201);
-      const importedPage = (await importRes.json()) as { id: string };
-      expectSingleMetaOnlyEvent(await flushNotifications(payloads), 'page', importedPage.id, [
+      const imported = (await importRes.json()) as { page: { id: string }; warnings: unknown[] };
+      expect(imported.warnings).toEqual([]);
+      expectSingleMetaOnlyEvent(await flushNotifications(payloads), 'page', imported.page.id, [
         owner.id,
         workspaceMember.id,
         folderRecipient.id,

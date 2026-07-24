@@ -1,4 +1,8 @@
-import { deriveCapabilities } from '@markdawn/shared';
+import {
+  type AccountFolderPayload,
+  deriveCapabilities,
+  type PublicFolderPayload,
+} from '@markdawn/shared';
 import { sql } from 'drizzle-orm';
 import { type Context, Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
@@ -8,6 +12,7 @@ import { db } from '../db/connection';
 import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { getDestinationOwnerId } from '../utils/destinationOwner';
+import { moveFolderToTrash, removeFolderFromView } from '../utils/entityRemoval';
 import { copyFolderRecursive } from '../utils/folderCopy';
 import { getEnumerableFolderIds, redactParentId } from '../utils/folderEnumeration';
 import { normalizeFolderName } from '../utils/folderName';
@@ -31,7 +36,6 @@ import {
   resolveEntityAccess,
 } from '../utils/publicAccess';
 import {
-  ensureCanAdminEntity,
   ensureFolderAccess,
   ensureWorkspaceAdmin,
   lockEntityAccess,
@@ -40,7 +44,7 @@ import {
   lockWorkspaceAccessMutation,
   type SharePermission,
 } from '../utils/share-access';
-import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
+import { notifyShareRecompute } from '../utils/share-notify';
 import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
 import { purgeFolderSubtrees } from '../utils/trashLifecycle';
 import { processUploadDeletionQueue } from '../utils/uploadCleanup';
@@ -80,33 +84,27 @@ const toFolderDto = (folder: NormalizedFolderRow, parentId: string | null) => ({
   inheritancePolicy: folder.inheritancePolicy,
 });
 
-type PublicFolderPageDto = {
-  id: string;
-  title: string;
-  icon: string | null;
-  updatedAt: Date | null;
-  publicPermission: PublicPermission;
-};
-
-type PublicFolderChildDto = {
-  id: string;
-  name: string;
-  icon: string | null;
-  updatedAt: Date | null;
-  publicPermission: PublicPermission;
-};
+/** Raw SQL result timestamps may be strings while Drizzle rows are Dates. */
+export function serializeTimestamp(value: Date | string): string;
+export function serializeTimestamp(value: null | undefined): null;
+export function serializeTimestamp(value: Date | string | null | undefined): string | null;
+export function serializeTimestamp(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' ? value : value.toISOString();
+}
 
 const toPublicFolderDto = (
   folder: NormalizedFolderRow,
   publicPermission: PublicPermission,
-  userPermission: SharePermission,
-  pages: readonly PublicFolderPageDto[],
-  childFolders: readonly PublicFolderChildDto[],
-) => ({
+  userPermission: PublicPermission,
+  pages: PublicFolderPayload['pages'],
+  childFolders: PublicFolderPayload['folders'],
+): PublicFolderPayload => ({
+  accessScope: 'public',
   id: folder.id,
   name: folder.name,
   icon: folder.icon,
-  updatedAt: folder.updatedAt,
+  updatedAt: serializeTimestamp(folder.updatedAt),
   publicPermission,
   userPermission,
   capabilities: deriveCapabilities(userPermission),
@@ -729,122 +727,9 @@ foldersPublicRoute.post(':id/copy', publicFolderBodyLimit, async (c) => {
 
 foldersRoute.delete(':id', async (c) => {
   const folderId = c.req.param('id');
-  const folder = await getFolderById(folderId);
-
-  if (!folder) {
-    throw new HTTPException(404, { message: 'Folder not found' });
-  }
   const user = c.get('user') as { id: string };
-  await ensureCanAdminEntity('folder', folder.id, user.id);
-
   const force = c.req.query('force') === 'true';
-  const deletionResult = await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'folder', folderId);
-    const lockedRoot = await executeQuery(
-      tx,
-      sql`select id from folders where id = ${folderId} and is_deleted = false for update`,
-    );
-    if ((lockedRoot.rowCount ?? 0) === 0) {
-      throw new HTTPException(404, { message: 'Folder not found' });
-    }
-
-    await ensureCanAdminEntity('folder', folderId, user.id, tx);
-    const metaUserIds = await getEntityMetaUserIds(tx, 'folder', folderId);
-
-    // Lock the subtree itself instead of taking a table-wide lock. Inserts,
-    // restores, and moves take a shared lock on their old/new parent through
-    // ensure_active_folder_parent(), so repeat discovery until every active
-    // descendant visible after waiting has been locked.
-    const lockedFolderIds = new Set<string>([folderId]);
-    while (true) {
-      const subtree = await executeQuery<{ id: string }>(
-        tx,
-        sql`select f.id
-         from folder_closure fc
-         join folders f on f.id = fc.descendant_id and f.is_deleted = false
-         where fc.ancestor_id = ${folderId}
-         order by f.id
-         for update of f`,
-      );
-      const previousSize = lockedFolderIds.size;
-      for (const row of subtree.rows) lockedFolderIds.add(row.id);
-      if (lockedFolderIds.size === previousSize) break;
-    }
-
-    const childFolderIds = Array.from(lockedFolderIds).filter((id) => id !== folderId);
-    const descendantPages = await executeQuery<{ id: string }>(
-      tx,
-      sql`select p.id
-       from pages p
-       where p.parent_id = any(${sql.param(Array.from(lockedFolderIds))}::uuid[])
-         and p.is_deleted = false
-       order by p.id
-       for update of p`,
-    );
-    const childPageIds = descendantPages.rows.map((row) => row.id);
-
-    const inaccessibleDescendants = await executeQuery(
-      tx,
-      sql`select 1
-       from folders f
-       join lateral get_effective_folder_permission(f.id, ${user.id}) access on true
-       where f.id = any(${sql.param(childFolderIds)}::uuid[])
-         and not coalesce(access.full_access or access.permission = 'admin', false)
-       union all
-       select 1
-       from pages p
-       join lateral get_effective_page_permission(p.id, ${user.id}) access on true
-       where p.id = any(${sql.param(childPageIds)}::uuid[])
-         and not coalesce(access.full_access or access.permission = 'admin', false)
-       limit 1`,
-    );
-    if ((inaccessibleDescendants.rowCount ?? 0) > 0) {
-      throw new HTTPException(403, {
-        message: 'This folder contains restricted items you do not have admin access to',
-      });
-    }
-
-    const childFolders = childFolderIds.length;
-    const childPages = childPageIds.length;
-    if ((childFolders > 0 || childPages > 0) && !force) {
-      return { requiresForce: true as const, childFolders, childPages };
-    }
-    const deletionBatchId = crypto.randomUUID();
-    if (childFolderIds.length > 0) {
-      await executeQuery(
-        tx,
-        sql`update folders
-         set is_deleted = true, deleted_at = now(), deletion_batch_id = ${deletionBatchId}, updated_at = now()
-         where id = any(${sql.param(childFolderIds)}::uuid[])`,
-      );
-    }
-    if (childPageIds.length > 0) {
-      await executeQuery(
-        tx,
-        sql`update pages
-         set is_deleted = true, deleted_at = now(), deletion_batch_id = ${deletionBatchId}, updated_at = now()
-         where id = any(${sql.param(childPageIds)}::uuid[])`,
-      );
-    }
-
-    const updateResult = await executeQuery(
-      tx,
-      sql`update folders
-       set is_deleted = true, deleted_at = now(), deletion_batch_id = ${deletionBatchId}, updated_at = now()
-       where id = ${folderId} and is_deleted = false
-       returning id`,
-    );
-    if ((updateResult.rowCount ?? 0) === 0) {
-      throw new HTTPException(409, { message: 'Folder was deleted concurrently' });
-    }
-
-    await executeQuery(
-      tx,
-      sql`select pg_notify(${'folder_deleted'}, ${JSON.stringify({ folderId })})`,
-    );
-    await notifyShareRevoke({ entityType: 'folder', entityId: folderId, metaUserIds }, tx);
-    return { deleted: true as const };
-  });
+  const deletionResult = await moveFolderToTrash(folderId, user.id, force);
 
   if ('requiresForce' in deletionResult) {
     return c.json(
@@ -862,49 +747,8 @@ foldersRoute.delete(':id', async (c) => {
 
 foldersRoute.post(':id/leave', async (c) => {
   const folderId = c.req.param('id');
-  const folder = await getFolderById(folderId);
-
-  if (!folder) {
-    throw new HTTPException(404, { message: 'Folder not found' });
-  }
-
   const user = c.get('user') as { id: string };
-
-  const rootOwnerResult = await query(sql`SELECT get_root_folder_owner(${folderId}) as owner_id`);
-  const rootOwnerId = rootOwnerResult.rows[0]?.owner_id as string | undefined;
-  if (rootOwnerId === user.id) {
-    throw new HTTPException(400, { message: 'Cannot leave your own folder' });
-  }
-
-  await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'folder', folderId);
-    const shareResult = await executeQuery(
-      tx,
-      sql`delete from shares where entity_type = 'folder' and entity_id = ${folderId} and recipient_user_id = ${user.id} returning id, recipient_user_id`,
-    );
-    const eventResult = await executeQuery(
-      tx,
-      sql`delete from folder_public_access_visits where folder_id = ${folderId} and user_id = ${user.id} returning id`,
-    );
-
-    const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
-    if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
-      throw new HTTPException(409, {
-        message: 'This folder is inherited from a parent or workspace and cannot be left directly',
-      });
-    }
-
-    await notifyShareRevoke(
-      {
-        entityType: 'folder',
-        entityId: folderId,
-        targetUserId: shareRow?.recipient_user_id ?? user.id,
-        ...(rootOwnerId ? { metaUserIds: [rootOwnerId] } : {}),
-      },
-      tx,
-    );
-  });
-
+  await removeFolderFromView(folderId, user.id);
   return c.json({ ok: true });
 });
 
@@ -956,8 +800,8 @@ foldersPublicRoute.get(
         icon: string | null;
         created_by: string | null;
         owner_id: string | null;
-        created_at: Date | null;
-        updated_at: Date | null;
+        created_at: Date | string;
+        updated_at: Date | string;
         public_permission: PublicPermission | null;
         user_permission: SharePermission;
       };
@@ -968,8 +812,8 @@ foldersPublicRoute.get(
         icon: string | null;
         created_by: string | null;
         owner_id: string | null;
-        created_at: Date | null;
-        updated_at: Date | null;
+        created_at: Date | string;
+        updated_at: Date | string;
         public_permission: PublicPermission | null;
         user_permission: SharePermission;
       };
@@ -1005,31 +849,33 @@ foldersPublicRoute.get(
 
       const pages = pagesResult.rows.map((page) => {
         return {
+          accessScope: 'account' as const,
           id: page.id,
           parentId: page.parent_id,
           title: page.title,
           icon: page.icon,
           createdBy: page.created_by,
           ownerId: page.owner_id,
-          createdAt: page.created_at,
-          updatedAt: page.updated_at,
+          createdAt: serializeTimestamp(page.created_at),
+          updatedAt: serializeTimestamp(page.updated_at),
           publicPermission: page.public_permission,
           userPermission: page.user_permission,
-        };
+        } satisfies AccountFolderPayload['pages'][number];
       });
       const childFolders = foldersResult.rows.map((folder) => {
         return {
+          accessScope: 'account' as const,
           id: folder.id,
           parentId: folder.parent_id,
           name: folder.name,
           icon: folder.icon,
           createdBy: folder.created_by,
           ownerId: folder.owner_id,
-          createdAt: folder.created_at,
-          updatedAt: folder.updated_at,
+          createdAt: serializeTimestamp(folder.created_at),
+          updatedAt: serializeTimestamp(folder.updated_at),
           publicPermission: folder.public_permission,
           userPermission: folder.user_permission,
-        };
+        } satisfies AccountFolderPayload['folders'][number];
       });
 
       if (!hasAccountAccess) {
@@ -1040,12 +886,14 @@ foldersPublicRoute.get(
           page.publicPermission
             ? [
                 {
+                  accessScope: 'public',
                   id: page.id,
                   title: page.title,
                   icon: page.icon,
-                  updatedAt: page.updatedAt,
+                  updatedAt: serializeTimestamp(page.updatedAt),
                   publicPermission: page.publicPermission,
-                } satisfies PublicFolderPageDto,
+                  userPermission: page.publicPermission,
+                } satisfies PublicFolderPayload['pages'][number],
               ]
             : [],
         );
@@ -1053,32 +901,37 @@ foldersPublicRoute.get(
           folder.publicPermission
             ? [
                 {
+                  accessScope: 'public',
                   id: folder.id,
                   name: folder.name,
                   icon: folder.icon,
-                  updatedAt: folder.updatedAt,
+                  updatedAt: serializeTimestamp(folder.updatedAt),
                   publicPermission: folder.publicPermission,
-                } satisfies PublicFolderChildDto,
+                  userPermission: folder.publicPermission,
+                } satisfies PublicFolderPayload['folders'][number],
               ]
             : [],
         );
         return toPublicFolderDto(
           lockedFolder,
           publicPermission,
-          userPermission,
+          publicPermission,
           publicPages,
           publicChildFolders,
         );
       }
 
       return {
+        accessScope: 'account' as const,
         ...toFolderDto(lockedFolder, redactParentId(lockedFolder.parentId, enumerableFolderIds)),
+        createdAt: serializeTimestamp(lockedFolder.createdAt),
+        updatedAt: serializeTimestamp(lockedFolder.updatedAt),
         publicPermission,
         userPermission,
         capabilities: deriveCapabilities(userPermission, fullAccess),
         pages,
         folders: childFolders,
-      };
+      } satisfies AccountFolderPayload;
     });
 
     return c.json(result);

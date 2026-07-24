@@ -1,11 +1,14 @@
 import './env';
 import { honoLogger } from '@logtape/hono';
+import { getApiLogger, setupLogger } from '@markdawn/shared';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { HTTPException } from 'hono/http-exception';
 import { timing } from 'hono/timing';
 import { authRoutes } from './routes';
 import backlinksRoute from './routes/backlinks';
+import bulkRemovalRoute from './routes/bulk-removal';
+import collaboratorDisplayRoute from './routes/collaborators';
 import exportRoute from './routes/export';
 import favoritesRoute from './routes/favorites';
 import foldersRoute, { foldersPublicRoute } from './routes/folders';
@@ -23,7 +26,6 @@ import versionsRoute from './routes/versions';
 import workspaceRoute from './routes/workspace';
 
 export async function createApp() {
-  const { setupLogger, getApiLogger } = await import('@markdawn/shared');
   await setupLogger();
   const appLogger = getApiLogger();
 
@@ -77,6 +79,7 @@ export async function createApp() {
 
   app.route('/api/search', searchRoute);
 
+  app.route('/api/shares', collaboratorDisplayRoute);
   app.route('/api/shares', sharesRoute);
 
   app.route('/api/favorites', favoritesRoute);
@@ -90,6 +93,7 @@ export async function createApp() {
   app.route('/api/import/obsidian', obsidianImportRoute);
   app.route('/api/tags', tagsRoute);
   app.route('/api/backlinks', backlinksRoute);
+  app.route('/api/bulk-removal', bulkRemovalRoute);
 
   app.route('/api/workspace', workspaceRoute);
 

@@ -1,7 +1,9 @@
 import {
+  type AccountPagePayload,
   deriveCapabilities,
   MAX_WIKI_LINK_PRESENTATION_REQUESTS,
   normalizeWikiLinkLookupKey,
+  type PublicPagePayload,
   type WikiLinkPresentation,
   type WikiLinkPresentationRequest,
   type WikiLinkPresentationResponse,
@@ -21,6 +23,7 @@ import { requireAuth } from '../middleware/auth';
 import { getDestinationOwnerId } from '../utils/destinationOwner';
 import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
 import { purgeEntityAccessMetadata } from '../utils/entityCleanup';
+import { movePageToTrash, removePageFromView } from '../utils/entityRemoval';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 import { slugifyFilename } from '../utils/filename';
 import { getEnumerableFolderIds, redactParentId } from '../utils/folderEnumeration';
@@ -35,7 +38,12 @@ import {
   createEmptyYjsDoc,
   createYjsDocWithTitle,
 } from '../utils/markdown-to-yjs';
+import {
+  replacePageConnectionIndex,
+  replacePageTagConnectionIndex,
+} from '../utils/pageConnectionIndex';
 import { copyPageContent } from '../utils/pageCopy';
+import { validatePageProperties } from '../utils/pageProperties';
 import {
   type NormalizedPageRow,
   normalizePageRow,
@@ -51,7 +59,6 @@ import {
   resolveEntityAccess,
 } from '../utils/publicAccess';
 import {
-  ensureCanAdminEntity,
   ensureFolderAccess,
   ensurePageAccess,
   ensureWorkspaceAdmin,
@@ -61,7 +68,7 @@ import {
   lockWorkspaceAccessMutation,
   type SharePermission,
 } from '../utils/share-access';
-import { notifyShareRecompute, notifyShareRevoke } from '../utils/share-notify';
+import { notifyShareRecompute } from '../utils/share-notify';
 import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
 import {
   processUploadDeletionQueue,
@@ -204,18 +211,38 @@ const toPageDto = (page: NormalizedPageRow, parentId: string | null) => ({
   inheritancePolicy: page.inheritancePolicy,
 });
 
+const serializeTimestamp = (value: Date | string | null): string | null =>
+  value === null ? null : typeof value === 'string' ? value : value.toISOString();
+
+const toAccountPagePayload = (
+  page: NormalizedPageRow,
+  parentId: string | null,
+  publicPermission: PublicPermission | null,
+  userPermission: SharePermission,
+  fullAccess: boolean,
+): AccountPagePayload => ({
+  accessScope: 'account',
+  ...toPageDto(page, parentId),
+  createdAt: serializeTimestamp(page.createdAt),
+  updatedAt: serializeTimestamp(page.updatedAt),
+  publicPermission,
+  userPermission,
+  capabilities: deriveCapabilities(userPermission, fullAccess),
+});
+
 const toPublicPageDto = (
   page: NormalizedPageRow,
   publicPermission: PublicPermission,
-  userPermission: SharePermission,
-) => ({
+  userPermission: PublicPermission,
+): PublicPagePayload => ({
+  accessScope: 'public' as const,
   id: page.id,
   title: page.title,
   icon: page.icon,
   coverType: page.coverType,
   coverValue: page.coverValue,
   properties: page.properties,
-  updatedAt: page.updatedAt,
+  updatedAt: serializeTimestamp(page.updatedAt),
   publicPermission,
   userPermission,
   capabilities: deriveCapabilities(userPermission),
@@ -412,8 +439,11 @@ pagesRoute.delete('/trash/empty-all', async (c) => {
 
 pagesRoute.get('/recent', async (c) => {
   const limitParam = c.req.query('limit');
-  const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 10;
-  if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+  if (limitParam && !/^\d+$/.test(limitParam)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+  const parsedLimit = limitParam ? Number(limitParam) : 10;
+  if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
     throw new HTTPException(400, { message: 'limit must be a positive integer' });
   }
 
@@ -480,10 +510,15 @@ pagesPublicRoute.patch(
     const hasCoverValue = Object.hasOwn(body, 'coverValue');
     const hasProperties = Object.hasOwn(body, 'properties');
 
+    if (actor.kind === 'guest' && (hasIcon || hasCoverType || hasCoverValue)) {
+      throw new HTTPException(403, {
+        message: 'Guest editors cannot change page icons or covers',
+      });
+    }
+
     const result = await db.transaction(async (tx) => {
       await lockEntityAccess(tx, 'page', pageId);
       await ensureActorPageAccess(actor, pageId, 'edit', tx);
-      await persistGuestIdentity(actor, tx);
       const page = await getPageById(pageId, tx);
       if (!page) throw new HTTPException(404, { message: 'Page not found' });
       const nextTitle = hasTitle
@@ -515,12 +550,9 @@ pagesPublicRoute.patch(
       const nextCoverValue = hasCoverValue
         ? normalizeOptionalText(coverValue, 'coverValue')
         : page.coverValue;
-      if (
-        hasProperties &&
-        properties !== null &&
-        (typeof properties !== 'object' || Array.isArray(properties))
-      ) {
-        throw new HTTPException(400, { message: 'properties must be an object or null' });
+      const propertiesError = hasProperties ? validatePageProperties(properties) : null;
+      if (propertiesError) {
+        throw new HTTPException(400, { message: propertiesError });
       }
       const nextProperties = hasProperties ? JSON.stringify(properties) : page.properties;
       const updated = await executeQuery<PageDatabaseRow>(
@@ -532,14 +564,17 @@ pagesPublicRoute.patch(
          where id = ${pageId}
          returning *`,
       );
+      const updatedRow = updated.rows[0];
+      if (!updatedRow) throw new HTTPException(500, { message: 'Failed to update page' });
+      if (hasProperties) {
+        await replacePageTagConnectionIndex(tx, pageId, updatedRow.ydoc, properties);
+      }
       if (page.title !== nextTitle) {
         await executeQuery(
           tx,
           sql`select pg_notify(${'page_renamed'}, ${JSON.stringify({ pageId })})`,
         );
       }
-      const updatedRow = updated.rows[0];
-      if (!updatedRow) throw new HTTPException(500, { message: 'Failed to update page' });
       return normalizePageRow(updatedRow, page.ownerId);
     });
     return c.json(toPublicPageMetadataDto(result));
@@ -581,7 +616,6 @@ pagesPublicRoute.patch(
         throw new HTTPException(404, { message: 'Page not found' });
       }
       await ensureActorPageAccess(actor, pageId, 'edit', tx);
-      await persistGuestIdentity(actor, tx);
 
       if (page.title !== nextTitle) {
         await executeQuery(
@@ -854,15 +888,16 @@ pagesPublicRoute.get(
         if (!publicPermission) {
           throw new HTTPException(403, { message: 'You do not have public access to this page' });
         }
-        return toPublicPageDto(page, publicPermission, userPermission);
+        return toPublicPageDto(page, publicPermission, publicPermission);
       }
 
-      return {
-        ...toPageDto(page, redactParentId(page.parentId, enumerableFolderIds)),
+      return toAccountPagePayload(
+        page,
+        redactParentId(page.parentId, enumerableFolderIds),
         publicPermission,
         userPermission,
-        capabilities: deriveCapabilities(userPermission, fullAccess),
-      };
+        fullAccess,
+      );
     });
 
     return c.json(result);
@@ -1014,6 +1049,10 @@ pagesRoute.patch(':id', async (c) => {
   const hasCoverType = Object.hasOwn(body, 'coverType');
   const hasCoverValue = Object.hasOwn(body, 'coverValue');
   const hasProperties = Object.hasOwn(body, 'properties');
+  const propertiesError = hasProperties ? validatePageProperties(properties) : null;
+  if (propertiesError) {
+    throw new HTTPException(400, { message: propertiesError });
+  }
   const normalizedRequestedTitle =
     typeof title === 'string' ? normalizePageTitle(title) : undefined;
 
@@ -1082,8 +1121,12 @@ pagesRoute.patch(':id', async (c) => {
            where id = ${pageId} returning *`,
         );
 
-    if (result.rowCount === 0) {
+    const updatedPage = result.rows[0];
+    if (!updatedPage) {
       throw new HTTPException(500, { message: 'Failed to update page' });
+    }
+    if (hasProperties) {
+      await replacePageTagConnectionIndex(tx, pageId, updatedPage.ydoc, properties);
     }
 
     // Keep the payload bounded; the collaboration server reloads the title
@@ -1343,15 +1386,9 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     );
     ensureYdocSize(ydocBuffer);
 
-    // The canonical content replacement invalidates every old source mapping.
-    // Clear them atomically so click-time resolution cannot authorize a stale
-    // target until the collaboration indexer processes this new document.
-    await executeQuery(
-      tx,
-      sql`delete from connections where source_type = 'page' and source_id = ${pageId}`,
-    );
+    await replacePageConnectionIndex(tx, pageId, ydocBuffer, currentPage.properties);
 
-    return executeQuery(
+    const updated = await executeQuery(
       tx,
       sql`update pages
        set ydoc = ${ydocBuffer},
@@ -1361,6 +1398,11 @@ pagesRoute.post(':id/import/markdown', async (c) => {
            updated_at = now()
        where id = ${pageId}`,
     );
+    await executeQuery(
+      tx,
+      sql`select pg_notify(${'page_content_replaced'}, ${JSON.stringify({ pageId })})`,
+    );
+    return updated;
   });
 
   if (updateResult.rowCount === 0) {
@@ -1372,85 +1414,15 @@ pagesRoute.post(':id/import/markdown', async (c) => {
 
 pagesRoute.delete(':id', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureCanAdminEntity('page', page.id, user.id);
-
-  await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
-    await ensureCanAdminEntity('page', pageId, user.id, tx);
-    const metaUserIds = await getEntityMetaUserIds(tx, 'page', pageId);
-    const updateResult = await executeQuery(
-      tx,
-      sql`update pages
-       set is_deleted = true, deleted_at = now(), deletion_batch_id = gen_random_uuid(), updated_at = now()
-       where id = ${pageId}`,
-    );
-
-    if (updateResult.rowCount === 0) {
-      throw new HTTPException(500, { message: 'Failed to delete page' });
-    }
-
-    // Notify the collab server so it removes the page from the meta room.
-    await executeQuery(tx, sql`select pg_notify(${'page_deleted'}, ${JSON.stringify({ pageId })})`);
-    await notifyShareRevoke({ entityType: 'page', entityId: pageId, metaUserIds }, tx);
-  });
-
+  await movePageToTrash(pageId, user.id);
   return c.json({ deleted: true });
 });
 
 pagesRoute.post(':id/leave', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
   const user = c.get('user') as { id: string };
-
-  const ownerResult = await query(
-    sql`SELECT COALESCE(get_root_folder_owner(${page.parentId}), (SELECT created_by FROM pages WHERE id = ${pageId})) as owner_id`,
-  );
-  const ownerId = ownerResult.rows[0]?.owner_id as string | undefined;
-  if (ownerId === user.id) {
-    throw new HTTPException(400, { message: 'Cannot leave your own page' });
-  }
-
-  await db.transaction(async (tx) => {
-    await lockEntityAccessMutation(tx, 'page', pageId);
-    const shareResult = await executeQuery(
-      tx,
-      sql`delete from shares where entity_type = 'page' and entity_id = ${pageId} and recipient_user_id = ${user.id} returning id, recipient_user_id`,
-    );
-    const eventResult = await executeQuery(
-      tx,
-      sql`delete from page_public_access_visits where page_id = ${pageId} and user_id = ${user.id} returning id`,
-    );
-
-    const shareRow = shareResult.rows[0] as { id: string; recipient_user_id: string } | undefined;
-    if (!shareRow && (eventResult.rowCount ?? 0) === 0) {
-      throw new HTTPException(409, {
-        message: 'This page is inherited from a folder or workspace and cannot be left directly',
-      });
-    }
-
-    await notifyShareRevoke(
-      {
-        entityType: 'page',
-        entityId: pageId,
-        targetUserId: shareRow?.recipient_user_id ?? user.id,
-        ...(ownerId ? { metaUserIds: [ownerId] } : {}),
-      },
-      tx,
-    );
-  });
-
+  await removePageFromView(pageId, user.id);
   return c.json({ ok: true });
 });
 

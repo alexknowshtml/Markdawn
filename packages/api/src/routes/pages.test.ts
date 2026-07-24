@@ -288,7 +288,7 @@ describe('pages API', () => {
       expect(await res.json()).toMatchObject({ title: 'Editor child', parentId: folder.id });
     });
 
-    it('lets a persistent guest create a page inside a publicly editable folder', async () => {
+    it('denies guest page creation inside a publicly editable folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const folder = await createTestFolder(owner.id);
@@ -305,25 +305,9 @@ describe('pages API', () => {
         body: JSON.stringify({ title: 'Guest child', parentId: folder.id }),
       });
 
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string; parentId: string; title: string };
-      expect(body).toMatchObject({ parentId: folder.id, title: 'Guest child' });
-      const stored = await query<{ created_by: string | null; guest_persisted: boolean }>(
-        `select page.created_by,
-                exists(select 1 from guest_identities where id = $2) as guest_persisted
-         from pages page where page.id = $1`,
-        [body.id, guestId],
-      );
-      expect(stored.rows[0]).toEqual({ created_by: null, guest_persisted: true });
-
-      const readResponse = await app.request(`/api/pages/${body.id}`, {
-        headers: { Cookie: `markdawn_anon_id=${guestId}` },
-      });
-      expect(readResponse.status).toBe(200);
-      expect(await readResponse.json()).toMatchObject({
-        id: body.id,
-        publicPermission: 'edit',
-        userPermission: 'edit',
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        message: 'Guest editors cannot create or copy pages or folders',
       });
     });
 
@@ -1120,7 +1104,11 @@ describe('pages API', () => {
         });
         expect(response.status).toBe(200);
         const body = (await response.json()) as Record<string, unknown>;
-        expect(body).toMatchObject({ id: page.id, title: 'Signed public page' });
+        expect(body).toMatchObject({
+          accessScope: 'public',
+          id: page.id,
+          title: 'Signed public page',
+        });
         expectFieldsAbsent(body, PRIVATE_PAGE_DETAIL_FIELDS);
       }
       expect(await readVersion()).toBe(before);
@@ -1146,6 +1134,7 @@ describe('pages API', () => {
       expect(response.status).toBe(200);
       const body = (await response.json()) as Record<string, unknown>;
       expect(body).toMatchObject({
+        accessScope: 'account',
         id: page.id,
         createdBy: owner.id,
         ownerId: owner.id,
@@ -1164,7 +1153,7 @@ describe('pages API', () => {
   });
 
   describe('PATCH /api/pages/:id/metadata public access', () => {
-    it('returns a public-safe DTO after a guest metadata update', async () => {
+    it('forbids guest icon and cover updates', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const parent = await createTestFolder(owner.id, { name: 'Private parent details' });
@@ -1185,20 +1174,28 @@ describe('pages API', () => {
         }),
       });
 
-      expect(response.status).toBe(200);
-      const body = (await response.json()) as Record<string, unknown>;
-      expect(body).toMatchObject({
-        id: page.id,
-        title: 'Guest metadata page',
-        icon: 'G',
-        coverType: 'color',
-        coverValue: 'blue',
-        properties: { status: 'public' },
+      expect(response.status).toBe(403);
+    });
+
+    it('updates the tag connection index for a guest editor', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const page = await createTestPage(owner.id, { title: 'Guest tag page' });
+      await query("update pages set public_permission = 'edit' where id = $1", [page.id]);
+
+      const response = await app.request(`/api/pages/${page.id}/metadata`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', Cookie: guestCookie() },
+        body: JSON.stringify({ properties: { tags: ['Public tag'] } }),
       });
-      expect(Object.keys(body).sort()).toEqual(
-        ['coverType', 'coverValue', 'icon', 'id', 'properties', 'title', 'updatedAt'].sort(),
+
+      expect(response.status).toBe(200);
+      const indexed = await query<{ target_slug: string }>(
+        `select target_slug from connections
+         where source_type = 'page' and source_id = $1 and connection_type = 'tag'`,
+        [page.id],
       );
-      expectFieldsAbsent(body, PRIVATE_PAGE_DETAIL_FIELDS);
+      expect(indexed.rows).toEqual([{ target_slug: '#public tag' }]);
     });
   });
 
@@ -1876,6 +1873,14 @@ describe('pages API', () => {
       );
       expect(stored.rows[0]?.ydoc.includes(Buffer.from(visibleTarget.id))).toBe(true);
       expect(stored.rows[0]?.ydoc.includes(Buffer.from('Visible reference'))).toBe(false);
+      const occurrences = await query<{ context: string | null }>(
+        `select co.context
+         from connection_occurrences co
+         join connections c on c.id = co.connection_id
+         where c.source_id = $1 and c.target_id = $2`,
+        [destination.id, visibleTarget.id],
+      );
+      expect(occurrences.rows).toEqual([expect.objectContaining({ context: expect.any(String) })]);
     });
 
     it('resolves targets after a queued revoke has linearized', async () => {
@@ -2154,7 +2159,7 @@ describe('pages API', () => {
       });
     });
 
-    it('lets a persistent guest duplicate a page inside a publicly editable folder', async () => {
+    it('denies guest page copies inside a publicly editable folder', async () => {
       const app = await createTestApp();
       const owner = await createTestUser();
       const folder = await createTestFolder(owner.id);
@@ -2175,17 +2180,10 @@ describe('pages API', () => {
         body: JSON.stringify({ parentId: folder.id }),
       });
 
-      expect(res.status).toBe(201);
-      const body = (await res.json()) as { id: string; parentId: string; title: string };
-      expect(body).toMatchObject({
-        parentId: folder.id,
-        title: 'Copy of Guest copy source',
+      expect(res.status).toBe(403);
+      expect(await res.json()).toMatchObject({
+        message: 'Guest editors cannot create or copy pages or folders',
       });
-      const stored = await query<{ created_by: string | null }>(
-        'select created_by from pages where id = $1',
-        [body.id],
-      );
-      expect(stored.rows[0]?.created_by).toBeNull();
     });
 
     it('returns 404 for non-existent page', async () => {
@@ -2496,6 +2494,77 @@ describe('pages API', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.properties).toEqual({ status: 'done', priority: 1 });
+    });
+
+    it('replaces tag connections when properties change', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+      await query(
+        `insert into connections (
+           source_type, source_id, target_type, target_slug, target_label,
+           connection_type, occurrence_count
+         ) values ('page', $1, 'page', 'existing-link', 'Existing link', 'wiki-link', 1)`,
+        [page.id],
+      );
+
+      for (const tags of [['first'], ['second'], []] as const) {
+        const response = await app.request(`/api/pages/${page.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+          body: JSON.stringify({ properties: { tags } }),
+        });
+        expect(response.status).toBe(200);
+
+        const indexed = await query<{ target_slug: string }>(
+          `select target_slug from connections
+           where source_type = 'page' and source_id = $1 and connection_type = 'tag'
+           order by target_slug`,
+          [page.id],
+        );
+        expect(indexed.rows.map((row) => row.target_slug)).toEqual(tags.map((tag) => `#${tag}`));
+      }
+      const contentConnections = await query<{ count: string }>(
+        `select count(*)::text as count from connections
+         where source_type = 'page' and source_id = $1 and connection_type = 'wiki-link'`,
+        [page.id],
+      );
+      expect(contentConnections.rows[0]?.count).toBe('1');
+    });
+
+    it('keeps inline tags indexed when properties change', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+      const doc = new Y.Doc();
+      const paragraph = new Y.XmlElement('paragraph');
+      const inlineTag = new Y.XmlElement('tag');
+      inlineTag.setAttribute('name', 'inline');
+      paragraph.push([inlineTag]);
+      doc.getXmlFragment('prosemirror').push([paragraph]);
+      await query('update pages set ydoc = $1 where id = $2', [
+        Buffer.from(Y.encodeStateAsUpdate(doc)),
+        page.id,
+      ]);
+
+      for (const tags of [['property'], ['replacement']] as const) {
+        const response = await app.request(`/api/pages/${page.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+          body: JSON.stringify({ properties: { tags } }),
+        });
+        expect(response.status).toBe(200);
+
+        const indexed = await query<{ target_slug: string }>(
+          `select target_slug from connections
+           where source_type = 'page' and source_id = $1 and connection_type = 'tag'
+           order by target_slug`,
+          [page.id],
+        );
+        expect(indexed.rows.map((row) => row.target_slug)).toEqual(['#inline', `#${tags[0]}`]);
+      }
     });
   });
 
