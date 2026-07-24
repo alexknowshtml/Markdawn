@@ -4,9 +4,14 @@ import { useTheme } from './useTheme';
 
 describe('useTheme', () => {
   let store: Record<string, string> = {};
+  let themeColor: HTMLMetaElement;
 
   beforeEach(() => {
     store = {};
+    themeColor = document.createElement('meta');
+    themeColor.name = 'theme-color';
+    themeColor.content = '#ffffff';
+    document.head.append(themeColor);
     Object.defineProperty(window, 'localStorage', {
       value: {
         getItem: (key: string) => store[key] ?? null,
@@ -30,6 +35,7 @@ describe('useTheme', () => {
 
   afterEach(() => {
     store = {};
+    themeColor.remove();
   });
 
   it('defaults to "system" theme when nothing is stored', () => {
@@ -82,6 +88,16 @@ describe('useTheme', () => {
     });
 
     expect(document.documentElement.classList.contains('dark')).toBe(false);
+  });
+
+  it('updates the browser theme color when the theme changes', () => {
+    const { result } = renderHook(() => useTheme());
+
+    act(() => result.current.setTheme('dark'));
+    expect(themeColor.content).toBe('#09090b');
+
+    act(() => result.current.setTheme('light'));
+    expect(themeColor.content).toBe('#ffffff');
   });
 
   it('cycles through light -> dark -> system -> light', () => {
