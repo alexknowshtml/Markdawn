@@ -1,21 +1,18 @@
+import type {
+  BulkRemovalFailure,
+  BulkRemovalOperation,
+  BulkRemovalRequest,
+  BulkRemovalResult,
+} from '@markdawn/shared';
+import { MAX_BULK_REMOVAL_OPERATIONS_PER_REQUEST } from '@markdawn/shared';
 import { useIsMutating, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useIdentityLifecycle } from '../contexts/IdentityLifecycleContext';
 import { beginBulkRemoval } from '../utils/bulkRemovalState';
-import { isOwnedByUser, leaveEntity, useBulkLeaveEntities } from '../utils/entity-actions';
+import { isOwnedByUser } from '../utils/entity-actions';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 const BULK_REMOVAL_MUTATION_KEY = ['bulk-removal'] as const;
-
-async function deletePage(pageId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/pages/${pageId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete page');
-}
-
-async function deleteFolder(folderId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/folders/${folderId}?force=true`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Failed to delete folder');
-}
 
 async function movePage(pageId: string, parentId: string | null): Promise<void> {
   const res = await fetch(`${API_BASE}/pages/${pageId}/move`, {
@@ -35,12 +32,7 @@ async function moveFolder(folderId: string, parentId: string | null): Promise<vo
   if (!res.ok) throw new Error('Failed to move folder');
 }
 
-export interface BulkRemovalInput {
-  pageIdsToDelete: string[];
-  folderIdsToDelete: string[];
-  pageIdsToLeave: string[];
-  folderIdsToLeave: string[];
-}
+export type BulkRemovalInput = BulkRemovalRequest;
 
 export interface BulkRemovalCandidate {
   id: string;
@@ -55,24 +47,19 @@ export function buildBulkRemovalInput(
   items: BulkRemovalCandidate[],
   currentUserId?: string,
 ): BulkRemovalInput {
-  const input: BulkRemovalInput = {
-    pageIdsToDelete: [],
-    folderIdsToDelete: [],
-    pageIdsToLeave: [],
-    folderIdsToLeave: [],
-  };
+  const operations: BulkRemovalOperation[] = [];
   for (const item of items) {
     const isOwned = !!currentUserId && isOwnedByUser(item, currentUserId);
     const canRemoveFromView =
       !isOwned && (item.shareSource === 'direct' || item.shareSource === 'public');
     if (!isOwned && !canRemoveFromView) continue;
-    if (item.type === 'page') {
-      (isOwned ? input.pageIdsToDelete : input.pageIdsToLeave).push(item.id);
-    } else {
-      (isOwned ? input.folderIdsToDelete : input.folderIdsToLeave).push(item.id);
-    }
+    operations.push({
+      entityType: item.type,
+      entityId: item.id,
+      action: isOwned ? 'trash' : 'remove-from-view',
+    });
   }
-  return input;
+  return { operations };
 }
 
 export function getBulkRemovalCounts(input: BulkRemovalInput): {
@@ -80,37 +67,14 @@ export function getBulkRemovalCounts(input: BulkRemovalInput): {
   removeFromViewCount: number;
 } {
   return {
-    trashCount: input.pageIdsToDelete.length + input.folderIdsToDelete.length,
-    removeFromViewCount: input.pageIdsToLeave.length + input.folderIdsToLeave.length,
+    trashCount: input.operations.filter((operation) => operation.action === 'trash').length,
+    removeFromViewCount: input.operations.filter(
+      (operation) => operation.action === 'remove-from-view',
+    ).length,
   };
 }
 
-export interface BulkRemovalItem {
-  id: string;
-  type: 'page' | 'folder';
-}
-
-export interface BulkRemovalResult {
-  removedItems: BulkRemovalItem[];
-  failedItems: BulkRemovalItem[];
-  trashedCount: number;
-  removedFromViewCount: number;
-}
-
-export class BulkRemovalError extends Error {
-  readonly result: BulkRemovalResult;
-
-  constructor(result: BulkRemovalResult) {
-    super(`${result.removedItems.length} removed, ${result.failedItems.length} failed`);
-    this.name = 'BulkRemovalError';
-    this.result = result;
-  }
-}
-
-type BulkRemovalOperation = BulkRemovalItem & {
-  outcome: 'trash' | 'remove-from-view';
-  run: () => Promise<unknown>;
-};
+export type { BulkRemovalFailure, BulkRemovalResult } from '@markdawn/shared';
 
 const formatBulkRemovalSuccess = ({
   trashedCount,
@@ -127,6 +91,17 @@ const formatBulkRemovalSuccess = ({
   }
   return outcomes.join('; ');
 };
+
+export function formatBulkRemovalFailure(result: BulkRemovalResult): string {
+  const total = result.removedItems.length + result.failedItems.length;
+  const summary = `${result.removedItems.length} of ${total} items were removed. ${result.failedItems.length} item${result.failedItems.length === 1 ? '' : 's'} could not be removed and remain selected.`;
+  const reasons = [...new Set(result.failedItems.map((failure) => failure.message))].slice(0, 3);
+  return reasons.length > 0 ? `${summary} ${reasons.join(' ')}` : summary;
+}
+
+export function canRetryBulkRemoval(result: BulkRemovalResult): boolean {
+  return result.failedItems.some((failure) => failure.code === 'INTERNAL_ERROR');
+}
 
 const BULK_REMOVAL_QUERY_KEYS = [
   ['folderTree'],
@@ -145,65 +120,127 @@ const BULK_REMOVAL_QUERY_KEYS = [
   ['folderCollaborators'],
 ] as const;
 
+function isOperation(value: unknown): value is BulkRemovalOperation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    (candidate.entityType === 'page' || candidate.entityType === 'folder') &&
+    typeof candidate.entityId === 'string' &&
+    (candidate.action === 'trash' || candidate.action === 'remove-from-view')
+  );
+}
+
+function isFailure(value: unknown): value is BulkRemovalFailure {
+  if (!isOperation(value)) return false;
+  const candidate = value as BulkRemovalOperation & Record<string, unknown>;
+  return (
+    (candidate.code === 'BAD_REQUEST' ||
+      candidate.code === 'CONFLICT' ||
+      candidate.code === 'FORBIDDEN' ||
+      candidate.code === 'INTERNAL_ERROR' ||
+      candidate.code === 'NOT_FOUND') &&
+    typeof candidate.message === 'string'
+  );
+}
+
+function parseBulkRemovalResult(value: unknown): BulkRemovalResult {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('Invalid bulk removal response');
+  }
+  const candidate = value as Record<string, unknown>;
+  if (
+    !Array.isArray(candidate.removedItems) ||
+    !candidate.removedItems.every(isOperation) ||
+    !Array.isArray(candidate.failedItems) ||
+    !candidate.failedItems.every(isFailure) ||
+    typeof candidate.trashedCount !== 'number' ||
+    typeof candidate.removedFromViewCount !== 'number'
+  ) {
+    throw new Error('Invalid bulk removal response');
+  }
+  return {
+    removedItems: candidate.removedItems,
+    failedItems: candidate.failedItems,
+    trashedCount: candidate.trashedCount,
+    removedFromViewCount: candidate.removedFromViewCount,
+  };
+}
+
+class BulkRemovalBatchError extends Error {
+  constructor(
+    message: string,
+    readonly code: BulkRemovalFailure['code'],
+  ) {
+    super(message);
+    this.name = 'BulkRemovalBatchError';
+  }
+}
+
+function requestFailureCode(status: number): BulkRemovalFailure['code'] {
+  if (status === 400 || status === 413) return 'BAD_REQUEST';
+  if (status === 401 || status === 403) return 'FORBIDDEN';
+  if (status === 404) return 'NOT_FOUND';
+  if (status === 409) return 'CONFLICT';
+  return 'INTERNAL_ERROR';
+}
+
+async function removeEntityBatch(input: BulkRemovalInput): Promise<BulkRemovalResult> {
+  const response = await fetch(`${API_BASE}/bulk-removal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const message =
+      body && typeof body === 'object' && 'message' in body && typeof body.message === 'string'
+        ? body.message
+        : 'Bulk removal failed';
+    throw new BulkRemovalBatchError(message, requestFailureCode(response.status));
+  }
+  return parseBulkRemovalResult(body);
+}
+
 async function removeEntities(
   input: BulkRemovalInput,
   isIdentityActive: () => boolean,
 ): Promise<BulkRemovalResult> {
-  const operationGroups: BulkRemovalOperation[][] = [
-    input.pageIdsToDelete.map((id) => ({
-      id,
-      type: 'page',
-      outcome: 'trash',
-      run: () => deletePage(id),
-    })),
-    input.folderIdsToDelete.map((id) => ({
-      id,
-      type: 'folder',
-      outcome: 'trash',
-      run: () => deleteFolder(id),
-    })),
-    input.pageIdsToLeave.map((id) => ({
-      id,
-      type: 'page',
-      outcome: 'remove-from-view',
-      run: () => leaveEntity('page', id),
-    })),
-    input.folderIdsToLeave.map((id) => ({
-      id,
-      type: 'folder',
-      outcome: 'remove-from-view',
-      run: () => leaveEntity('folder', id),
-    })),
-  ];
-  const result: BulkRemovalResult = {
+  const aggregate: BulkRemovalResult = {
     removedItems: [],
     failedItems: [],
     trashedCount: 0,
     removedFromViewCount: 0,
   };
-
-  // Preserve the existing per-entity-type request concurrency while delaying
-  // all cache refreshes and user feedback until every group has settled.
-  for (const operations of operationGroups) {
-    // Each fetch captures the browser's cookie when it starts. Do not let a
-    // mixed bulk operation begin a later request group after another identity
-    // has taken over the tab.
+  for (
+    let offset = 0;
+    offset < input.operations.length;
+    offset += MAX_BULK_REMOVAL_OPERATIONS_PER_REQUEST
+  ) {
     if (!isIdentityActive()) throw new Error('Identity retired during bulk removal');
-    const settled = await Promise.allSettled(operations.map((operation) => operation.run()));
-    settled.forEach((operationResult, index) => {
-      const operation = operations[index];
-      if (!operation) throw new Error('Bulk removal result did not match its operation');
-      const item = { id: operation.id, type: operation.type };
-      if (operationResult.status === 'fulfilled') {
-        result.removedItems.push(item);
-        if (operation.outcome === 'trash') result.trashedCount += 1;
-        else result.removedFromViewCount += 1;
-      } else result.failedItems.push(item);
-    });
+    try {
+      const result = await removeEntityBatch({
+        operations: input.operations.slice(
+          offset,
+          offset + MAX_BULK_REMOVAL_OPERATIONS_PER_REQUEST,
+        ),
+      });
+      aggregate.removedItems.push(...result.removedItems);
+      aggregate.failedItems.push(...result.failedItems);
+      aggregate.trashedCount += result.trashedCount;
+      aggregate.removedFromViewCount += result.removedFromViewCount;
+    } catch (error) {
+      const code = error instanceof BulkRemovalBatchError ? error.code : 'INTERNAL_ERROR';
+      const message =
+        error instanceof BulkRemovalBatchError
+          ? error.message
+          : 'Removal could not be confirmed. Retry the remaining items.';
+      aggregate.failedItems.push(
+        ...input.operations.slice(offset).map((operation) => ({ ...operation, code, message })),
+      );
+      return aggregate;
+    }
   }
-
-  if (result.failedItems.length > 0) throw new BulkRemovalError(result);
-  return result;
+  return aggregate;
 }
 
 export function useIsBulkRemovalPending(): boolean {
@@ -234,52 +271,12 @@ export function useBulkRemoveEntities() {
           BULK_REMOVAL_QUERY_KEYS.map((queryKey) => queryClient.invalidateQueries({ queryKey })),
         );
         if (!identityLifecycle.isActive()) return;
-        if (result) {
+        if (result && result.failedItems.length === 0) {
           showSuccessToast(formatBulkRemovalSuccess(result));
         }
       } finally {
         endBulkRemoval?.();
       }
-    },
-  });
-}
-
-export function useBulkDeletePages() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ pageIds }: { pageIds: string[] }) => {
-      await Promise.all(pageIds.map((id) => deletePage(id)));
-    },
-    onSuccess: (_result, { pageIds }) => {
-      showSuccessToast(`Moved ${pageIds.length} page${pageIds.length === 1 ? '' : 's'} to Trash`);
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['trashPages'] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
-    },
-  });
-}
-
-export function useBulkDeleteFolders() {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: async ({ folderIds }: { folderIds: string[] }) => {
-      await Promise.all(folderIds.map((id) => deleteFolder(id)));
-    },
-    onSuccess: (_result, { folderIds }) => {
-      showSuccessToast(
-        `Moved ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'} to Trash`,
-      );
-    },
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
-      queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
-      queryClient.invalidateQueries({ queryKey: ['pages', 'recent'] });
-      queryClient.invalidateQueries({ queryKey: ['favorites'] });
     },
   });
 }
@@ -321,12 +318,4 @@ export function useBulkMoveFolders() {
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
     },
   });
-}
-
-export function useBulkLeavePages() {
-  return useBulkLeaveEntities('page');
-}
-
-export function useBulkLeaveFolders() {
-  return useBulkLeaveEntities('folder');
 }

@@ -1,20 +1,20 @@
-import type { CapabilitySet } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileQuestion, RefreshCw, ShieldOff } from 'lucide-react';
 import { type ReactNode, useEffect, useMemo, useRef } from 'react';
 import { Navigate, useLocation, useParams } from 'react-router-dom';
-import { type PublicFolderPayload, ShareProvider } from '../../contexts/ShareContext';
+import { ShareProvider } from '../../contexts/ShareContext';
 import { invalidateWorkspaceAccessQueries } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { ApiError } from '../../utils/api';
+import {
+  isFolderDetailPayload,
+  parseShareableEntityPayload,
+  type ShareableEntityPayload,
+  type ShareableEntityType,
+} from '../../utils/shareableEntityPayload';
 
-type EntityType = 'page' | 'folder';
-type PublicEntityPayload = PublicFolderPayload & {
-  title?: string;
-  ydoc?: unknown;
-  userPermission?: 'view' | 'edit' | 'admin' | null;
-  capabilities?: CapabilitySet;
-};
+type EntityType = ShareableEntityType;
+type PublicEntityPayload = ShareableEntityPayload;
 
 function extractUuid(slugAndId: string): string | null {
   const match = slugAndId.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i);
@@ -31,7 +31,8 @@ async function fetchEntity(entityType: EntityType, entityId: string): Promise<Pu
         : `Failed to fetch ${entityType}`;
     throw new ApiError(res.status, message);
   }
-  return (await res.json()) as PublicEntityPayload;
+  const payload: unknown = await res.json();
+  return parseShareableEntityPayload(entityType, payload);
 }
 
 type ShareablePageRouteProps = {
@@ -165,7 +166,7 @@ export function ShareablePageRoute({ entityType, children }: ShareablePageRouteP
     <ShareProvider
       publicPermission={entity?.publicPermission ?? null}
       {...(entity?.capabilities ? { capabilities: entity.capabilities } : {})}
-      publicEntity={entityType === 'folder' ? (entity ?? null) : null}
+      publicEntity={entityType === 'folder' && isFolderDetailPayload(entity) ? entity : null}
     >
       {children}
     </ShareProvider>

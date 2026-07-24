@@ -1,12 +1,12 @@
 import type { HocuspocusProvider } from '@hocuspocus/provider';
 import { WebSocketStatus } from '@hocuspocus/provider';
 import {
-  type CapabilitySet,
   deriveCapabilities,
   type Folder,
   type FolderTreeNode,
+  type PageDetailPayload,
   type PageTreeNode,
-  type Page as PageType,
+  parsePageDetailPayload,
   type SharePermission,
 } from '@markdawn/shared';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -41,13 +41,7 @@ import { buildPagePath, extractUuidFromSlug } from '../utils/url';
 
 const API_BASE = '/api';
 
-type PageDetail = PageType & {
-  userPermission?: SharePermission | null;
-  capabilities?: CapabilitySet;
-  publicPermission?: 'view' | 'edit' | null;
-};
-
-async function fetchPage(pageId: string): Promise<PageDetail> {
+async function fetchPage(pageId: string): Promise<PageDetailPayload> {
   const res = await fetch(`${API_BASE}/pages/${pageId}`);
   if (!res.ok) {
     const body = await res.json().catch(() => null);
@@ -57,7 +51,8 @@ async function fetchPage(pageId: string): Promise<PageDetail> {
         : 'Failed to fetch page';
     throw new ApiError(res.status, message);
   }
-  return res.json();
+  const payload: unknown = await res.json();
+  return parsePageDetailPayload(payload);
 }
 
 export default function Page() {
@@ -70,6 +65,7 @@ export default function Page() {
   const [collabPermission, setCollabPermission] = useState<SharePermission | null | undefined>(
     undefined,
   );
+  const [editorGeneration, setEditorGeneration] = useState(0);
   const accessRecordedRef = useRef<string | null>(null);
   const isFirstMount = useRef(true);
   const prevPageIdRef = useRef<string | undefined>(pageId);
@@ -118,6 +114,15 @@ export default function Page() {
     enabled: !!pageId,
     retry: false,
   });
+
+  const handleDocumentReloadRequired = useCallback(() => {
+    setProvider(null);
+    setCollabStatus(WebSocketStatus.Connecting);
+    setCollabPermission(undefined);
+    queryClient.invalidateQueries({ queryKey: ['backlinks'] });
+    void refetchPage();
+    setEditorGeneration((generation) => generation + 1);
+  }, [queryClient, refetchPage]);
 
   const pagePermission =
     collabPermission !== undefined ? collabPermission : (page?.userPermission ?? accessPermission);
@@ -194,7 +199,7 @@ export default function Page() {
   }, [editorElement, location.hash]);
 
   useEffect(() => {
-    if (!page || !pageId || isAnonymous) {
+    if (!page || page.accessScope !== 'account' || !pageId || isAnonymous) {
       return;
     }
     if (accessRecordedRef.current === pageId) {
@@ -212,7 +217,7 @@ export default function Page() {
           icon: page.icon,
           createdBy: page.createdBy,
           ownerId: page.ownerId ?? null,
-          updatedAt: page.updatedAt,
+          updatedAt: page.updatedAt ?? page.createdAt ?? visitedAt,
           visitedAt,
         },
         ...old.filter((recentPage) => recentPage.id !== page.id),
@@ -317,7 +322,7 @@ export default function Page() {
 
   const flatPages = useMemo(() => {
     if (isAnonymous) return [];
-    const result: PageType[] = [];
+    const result: Pick<PageTreeNode, 'id' | 'parentId' | 'title'>[] = [];
     const visit = (nodes: PageTreeNode[] | undefined) => {
       if (!nodes) return;
       for (const node of nodes) {
@@ -328,7 +333,7 @@ export default function Page() {
       }
     };
     visit(pageTree as PageTreeNode[] | undefined);
-    if (page && !result.some((item) => item.id === page.id)) {
+    if (page?.accessScope === 'account' && !result.some((item) => item.id === page.id)) {
       result.push(page);
     }
     return result;
@@ -482,8 +487,9 @@ export default function Page() {
         </EditorReadOnlyProvider>
         {page && pageId ? (
           <MilkdownEditor
-            key={pageId}
+            key={`${pageId}:${editorGeneration}`}
             pageId={pageId}
+            onDocumentReloadRequired={handleDocumentReloadRequired}
             onProviderReady={setProvider}
             onStatusChange={handleStatusChange}
             onWikiLinkClick={handleWikiLinkClick}

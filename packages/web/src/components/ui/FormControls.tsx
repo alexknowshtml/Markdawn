@@ -1,8 +1,9 @@
+import { FloatingPortal } from '@floating-ui/react';
 import clsx from 'clsx';
 import { Check, ChevronDown } from 'lucide-react';
 import type React from 'react';
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useFloatingMenu } from '../../hooks/useFloatingMenu';
 
 type TextBoxProps = Omit<
   React.InputHTMLAttributes<HTMLInputElement>,
@@ -68,63 +69,24 @@ type DropdownProps<TValue extends string> = {
   value: TValue;
   options: Array<DropdownOption<TValue>>;
   onChange: (value: TValue) => void;
+  ariaLabel: string;
   disabled?: boolean;
   className?: string;
   triggerClassName?: string;
 };
 
-type DropdownMenuPosition = {
-  left: number;
-  top: number;
-  minWidth: number;
-  maxWidth: number;
-  maxHeight: number;
-};
-
-export function calculateDropdownMenuPosition(
-  trigger: Pick<DOMRect, 'bottom' | 'left' | 'top' | 'width'>,
-  menu: { height: number; width: number },
-  viewport: { height: number; width: number },
-): DropdownMenuPosition {
-  const gap = 4;
-  const viewportPadding = 8;
-  const spaceBelow = Math.max(0, viewport.height - trigger.bottom - gap - viewportPadding);
-  const spaceAbove = Math.max(0, trigger.top - gap - viewportPadding);
-  const openAbove = spaceBelow < menu.height && spaceAbove > spaceBelow;
-  const maxHeight = openAbove ? spaceAbove : spaceBelow;
-  const renderedHeight = Math.min(menu.height, maxHeight);
-  const maxWidth = Math.max(0, viewport.width - viewportPadding * 2);
-  const minWidth = Math.min(Math.max(trigger.width, menu.width, 80), maxWidth);
-  const maxLeft = Math.max(viewportPadding, viewport.width - minWidth - viewportPadding);
-  const left = Math.min(Math.max(viewportPadding, trigger.left), maxLeft);
-
-  return {
-    left,
-    top: openAbove ? trigger.top - gap - renderedHeight : trigger.bottom + gap,
-    minWidth,
-    maxWidth,
-    maxHeight,
-  };
-}
-
 export function Dropdown<TValue extends string>({
   value,
   options,
   onChange,
+  ariaLabel,
   disabled = false,
   className,
   triggerClassName,
 }: DropdownProps<TValue>) {
-  const [open, setOpen] = useState(false);
   const [highlightedIndex, setHighlightedIndex] = useState(0);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const listboxId = useId();
-  const [menuStyle, setMenuStyle] = useState<React.CSSProperties>({
-    position: 'fixed',
-    visibility: 'hidden',
-  });
 
   const currentLabel = useMemo(
     () => options.find((option) => option.value === value)?.label ?? '',
@@ -136,17 +98,25 @@ export function Dropdown<TValue extends string>({
     return index >= 0 ? index : 0;
   }, [options, value]);
 
+  const menu = useFloatingMenu({
+    align: 'start',
+    matchReferenceWidth: true,
+    role: 'listbox',
+    onOpen: () => setHighlightedIndex(selectedIndex),
+  });
+  const open = menu.isOpen;
+
   const openMenu = (preferredIndex = selectedIndex) => {
-    setMenuStyle({ position: 'fixed', visibility: 'hidden' });
     setHighlightedIndex(preferredIndex);
-    setOpen(true);
+    menu.open();
   };
 
   const closeMenu = (restoreFocus = false) => {
     if (restoreFocus) {
-      triggerRef.current?.focus();
+      const reference = menu.refs.domReference.current;
+      if (reference instanceof HTMLElement) reference.focus();
     }
-    setOpen(false);
+    menu.close();
   };
 
   const selectOption = (index: number) => {
@@ -167,80 +137,36 @@ export function Dropdown<TValue extends string>({
     window.requestAnimationFrame(() => optionRefs.current[highlightedIndex]?.focus());
   }, [open, highlightedIndex]);
 
-  useLayoutEffect(() => {
-    if (!open || !triggerRef.current || !menuRef.current) return undefined;
-
-    const updateMenuPosition = () => {
-      if (!triggerRef.current || !menuRef.current) return;
-      const triggerRect = triggerRef.current.getBoundingClientRect();
-      const menuRect = menuRef.current.getBoundingClientRect();
-      const position = calculateDropdownMenuPosition(
-        triggerRect,
-        { height: menuRef.current.scrollHeight || menuRect.height, width: menuRect.width },
-        { height: window.innerHeight, width: window.innerWidth },
-      );
-      setMenuStyle({
-        position: 'fixed',
-        ...position,
-        visibility: 'visible',
-      });
-    };
-
-    updateMenuPosition();
-    window.addEventListener('resize', updateMenuPosition);
-    document.addEventListener('scroll', updateMenuPosition, true);
-    return () => {
-      window.removeEventListener('resize', updateMenuPosition);
-      document.removeEventListener('scroll', updateMenuPosition, true);
-    };
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-
-    const handleClickOutside = (event: MouseEvent) => {
-      if (triggerRef.current && !triggerRef.current.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-    };
-  }, [open]);
-
   return (
     <div className={clsx('inline-flex items-center', className)}>
       <button
-        ref={triggerRef}
+        ref={menu.refs.setReference}
         type="button"
         disabled={disabled}
+        aria-label={ariaLabel}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={open ? listboxId : undefined}
-        onClick={() => {
-          if (open) closeMenu();
-          else openMenu();
-        }}
-        onKeyDown={(event) => {
-          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-            event.preventDefault();
-            if (!open) {
-              const offset = event.key === 'ArrowDown' ? 0 : -1;
-              openMenu((selectedIndex + offset + options.length) % options.length);
-            } else {
-              focusOption(highlightedIndex + (event.key === 'ArrowDown' ? 1 : -1));
+        {...menu.getReferenceProps({
+          onKeyDown: (event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+              event.preventDefault();
+              if (!open) {
+                const offset = event.key === 'ArrowDown' ? 0 : -1;
+                openMenu((selectedIndex + offset + options.length) % options.length);
+              } else {
+                focusOption(highlightedIndex + (event.key === 'ArrowDown' ? 1 : -1));
+              }
+            } else if (event.key === 'Home' || event.key === 'End') {
+              event.preventDefault();
+              if (!open) openMenu(event.key === 'Home' ? 0 : options.length - 1);
+              else focusOption(event.key === 'Home' ? 0 : options.length - 1);
+            } else if (event.key === 'Escape' && open) {
+              event.preventDefault();
+              closeMenu();
             }
-          } else if (event.key === 'Home' || event.key === 'End') {
-            event.preventDefault();
-            if (!open) openMenu(event.key === 'Home' ? 0 : options.length - 1);
-            else focusOption(event.key === 'Home' ? 0 : options.length - 1);
-          } else if (event.key === 'Escape' && open) {
-            event.preventDefault();
-            closeMenu();
-          }
-        }}
+          },
+        })}
         className={clsx(
           'inline-flex h-6 w-fit items-center justify-between gap-1.5 rounded-lg border border-zinc-200 bg-white px-2 text-[11px] font-medium text-zinc-700 transition-colors hover:border-zinc-300 hover:bg-zinc-50 focus:border-zinc-400 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-200 dark:hover:border-zinc-700 dark:hover:bg-zinc-900 dark:focus:border-zinc-600 cursor-pointer disabled:cursor-default disabled:opacity-60',
           triggerClassName,
@@ -253,14 +179,15 @@ export function Dropdown<TValue extends string>({
         />
       </button>
 
-      {open &&
-        createPortal(
+      {menu.isMounted && (
+        <FloatingPortal>
           <div
-            ref={menuRef}
+            ref={menu.refs.setFloating}
             id={listboxId}
             role="listbox"
             aria-label="Choose an option"
-            style={menuStyle}
+            style={{ ...menu.floatingStyles, ...menu.transitionStyles }}
+            {...menu.getFloatingProps()}
             className="z-50 overflow-y-auto overflow-x-hidden rounded-lg border border-zinc-200 bg-white py-1 shadow-xl dark:border-zinc-800 dark:bg-zinc-900"
             onMouseDown={(event) => event.stopPropagation()}
           >
@@ -314,9 +241,9 @@ export function Dropdown<TValue extends string>({
                 </button>
               );
             })}
-          </div>,
-          document.body,
-        )}
+          </div>
+        </FloatingPortal>
+      )}
     </div>
   );
 }

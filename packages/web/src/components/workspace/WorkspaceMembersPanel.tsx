@@ -85,6 +85,7 @@ export function WorkspaceMembersPanel() {
             <Dropdown
               value={inviteRole}
               onChange={setInviteRole}
+              ariaLabel="Role for new workspace member"
               options={[
                 { value: 'viewer', label: 'Viewer' },
                 { value: 'editor', label: 'Editor' },
@@ -129,10 +130,8 @@ export function WorkspaceMembersPanel() {
               <span />
             </div>
             {memberList.map((member) => {
-              const isCurrentUser = member.member_id === currentUserId;
-              const displayName = isCurrentUser
-                ? 'You'
-                : (member.member_name ?? member.member_email);
+              const isCurrentUser = member.memberId === currentUserId;
+              const displayName = isCurrentUser ? 'You' : (member.memberName ?? member.memberEmail);
               const canRemove = !isCurrentUser;
 
               return (
@@ -144,13 +143,13 @@ export function WorkspaceMembersPanel() {
                     <div
                       className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full overflow-hidden"
                       style={{
-                        backgroundColor: member.member_avatar_url ? undefined : '#71717a',
+                        backgroundColor: member.memberAvatarUrl ? undefined : '#71717a',
                       }}
                     >
-                      {member.member_avatar_url ? (
+                      {member.memberAvatarUrl ? (
                         <img
-                          src={member.member_avatar_url}
-                          alt={member.member_name ?? 'User'}
+                          src={member.memberAvatarUrl}
+                          alt={member.memberName ?? 'User'}
                           className="h-full w-full object-cover"
                           referrerPolicy="no-referrer"
                         />
@@ -177,14 +176,15 @@ export function WorkspaceMembersPanel() {
                         { value: 'admin', label: 'Admin' },
                         { value: 'remove', label: 'Remove' },
                       ]}
+                      ariaLabel={`Role for ${displayName}`}
                       onChange={(role) => {
                         if (role === 'remove') {
                           if (canRemove) {
-                            removeMemberMutation.mutate(member.member_id);
+                            removeMemberMutation.mutate(member.memberId);
                           }
                         } else {
                           changeRoleMutation.mutate({
-                            memberId: member.member_id,
+                            memberId: member.memberId,
                             role: role as 'viewer' | 'editor' | 'admin',
                           });
                         }
@@ -194,7 +194,7 @@ export function WorkspaceMembersPanel() {
                     />
                   )}
                   <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                    {member.member_email}
+                    {member.memberEmail}
                   </span>
                 </div>
               );

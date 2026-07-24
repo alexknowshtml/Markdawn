@@ -2,7 +2,7 @@ import { FloatingPortal } from '@floating-ui/react';
 import { MoreHorizontal } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { useEffect, useId, useRef } from 'react';
-import { useKebabMenu } from '../../hooks/useKebabMenu';
+import { useFloatingMenu } from '../../hooks/useFloatingMenu';
 
 export type KebabMenuItem = {
   label: string;
@@ -32,7 +32,7 @@ export function KebabMenu({
   menuClassName,
   onOpenChange,
 }: KebabMenuProps) {
-  const kebab = useKebabMenu();
+  const kebab = useFloatingMenu();
   const menuId = useId();
   const itemRefs = useRef<Array<HTMLButtonElement | null>>([]);
 

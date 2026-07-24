@@ -1,4 +1,9 @@
-import type { Page, PageTreeNode } from '@markdawn/shared';
+import {
+  type MarkdownImportResult,
+  type Page,
+  type PageTreeNode,
+  parseMarkdownImportResult,
+} from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useMemo } from 'react';
 import { useShareContext } from '../contexts/ShareContext';
@@ -8,7 +13,7 @@ import {
   addCreatedPageToNavigationCache,
   updatePageNavigationCache,
 } from '../utils/navigationCache';
-import { showSuccessToast } from '../utils/toast';
+import { showInfoToast, showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -120,7 +125,7 @@ async function movePage(pageId: string, parentId: string | null, position: strin
   return res.json();
 }
 
-async function importMarkdown(file: File): Promise<Page> {
+async function importMarkdown(file: File): Promise<MarkdownImportResult> {
   const formData = new FormData();
   formData.append('file', file);
 
@@ -129,10 +134,14 @@ async function importMarkdown(file: File): Promise<Page> {
     body: formData,
   });
   if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to import markdown' }));
-    throw new Error(error.message);
+    const error: unknown = await res.json().catch(() => null);
+    const message =
+      error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+        ? error.message
+        : 'Failed to import markdown';
+    throw new Error(message);
   }
-  return res.json();
+  return parseMarkdownImportResult(await res.json());
 }
 
 export function usePageTree({ enabled = true }: { enabled?: boolean } = {}) {
@@ -281,11 +290,14 @@ export function useImportMarkdown() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ file }: { file: File }) => importMarkdown(file),
-    onSuccess: () => {
+    onSuccess: ({ warnings }) => {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'content'] });
       showSuccessToast('Note imported');
+      for (const warning of warnings) {
+        showInfoToast(warning.message);
+      }
     },
   });
 }

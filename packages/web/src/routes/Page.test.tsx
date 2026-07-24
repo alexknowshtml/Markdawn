@@ -120,6 +120,7 @@ function LocationProbe() {
 
 function pageResponse(permission: 'view' | 'edit') {
   return {
+    accessScope: 'account',
     id: PAGE_ID,
     parentId: null,
     title: 'Test Page',
@@ -133,6 +134,8 @@ function pageResponse(permission: 'view' | 'edit') {
     ownerId: 'owner-1',
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
+    publicPermission: null,
+    inheritancePolicy: 'inherit',
     userPermission: permission,
     capabilities: permission === 'edit' ? EDIT_CAPABILITIES : VIEW_CAPABILITIES,
   };

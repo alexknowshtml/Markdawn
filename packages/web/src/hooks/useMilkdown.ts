@@ -9,7 +9,7 @@ import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { commonmark, syncHeadingIdPlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
-import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
+import { insert } from '@milkdown/utils';
 import Papa from 'papaparse';
 import { goToNextCell, isInTable } from 'prosemirror-tables';
 import { useEffect, useRef, useState } from 'react';
@@ -416,6 +416,7 @@ export function useMilkdown({
               link: createSafeLinkView,
             },
             handlePaste: (_view, event) => {
+              if (readOnly) return false;
               const text = event.clipboardData?.getData('text/plain') ?? '';
               if (!text) return false;
 
@@ -434,6 +435,7 @@ export function useMilkdown({
             },
             handleDOMEvents: {
               keydown: (view, event) => {
+                if (readOnly) return false;
                 const { state, dispatch } = view;
                 if (!isInTable(state)) return false;
 
@@ -645,23 +647,6 @@ export function useMilkdown({
       return next;
     };
 
-    const bindWindowApi = () => {
-      window.getEditorMarkdown = () => {
-        if (!editorRef.current) return '';
-        return editorRef.current.action(getMarkdown());
-      };
-
-      window.insertMarkdown = (content: string) => {
-        if (!editorRef.current) return;
-        editorRef.current.action(insert(content));
-      };
-
-      window.replaceAllMarkdown = (content: string) => {
-        if (!editorRef.current) return;
-        editorRef.current.action(replaceAll(content));
-      };
-    };
-
     const init = async () => {
       const shouldUseCollab = hasCollab;
       getLogger()
@@ -704,13 +689,12 @@ export function useMilkdown({
 
       editorRef.current = runtimeEditor;
       setEditorInstance(runtimeEditor);
-      bindWindowApi();
 
       runtimeEditor.action((ctx) => {
         const view = ctx.get(editorViewCtx) as
           | import('@milkdown/kit/prose/view').EditorView
           | undefined;
-        if (view) {
+        if (view && !readOnly) {
           setTimeout(() => {
             if (disposed) return;
             repairDocument(view);

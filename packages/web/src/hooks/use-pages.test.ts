@@ -586,7 +586,7 @@ describe('useImportMarkdown', () => {
     const file = new File(['# Hello'], 'test.md', { type: 'text/markdown' });
     fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: () => Promise.resolve({ id: 'p-new', title: 'test' }),
+      json: () => Promise.resolve({ page: { id: 'p-new', title: 'test' }, warnings: [] }),
     });
 
     const { result } = renderHook(() => useImportMarkdown(), {

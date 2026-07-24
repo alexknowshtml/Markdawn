@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { Menu } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
+import { EntityCommandProvider, useEntityCommands } from '../contexts/EntityCommandContext';
 import { useShortcut } from '../contexts/KeyboardShortcutContext';
 import { useShareContext } from '../contexts/ShareContext';
 import { usePageMeta } from '../hooks/usePageMeta';
@@ -12,12 +13,21 @@ import { ProfilePill } from './ProfilePill';
 import { Sidebar } from './Sidebar';
 
 export function AppShell() {
+  return (
+    <EntityCommandProvider>
+      <AppShellContent />
+    </EntityCommandProvider>
+  );
+}
+
+function AppShellContent() {
   const { collapsed, toggleCollapsed } = useSidebarCollapsed();
   const [isHovered, setIsHovered] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { setTheme, isDark } = useTheme();
   const location = useLocation();
   const { isAnonymous } = useShareContext();
+  const entityCommands = useEntityCommands();
 
   useShortcut({
     key: 'mod+/',
@@ -25,21 +35,15 @@ export function AppShell() {
     whenInputFocused: 'allow',
     description: 'Toggle sidebar',
   });
-  const createNote = () => {
-    window.dispatchEvent(new CustomEvent('markdawn:create-note'));
-  };
-  const createFolder = () => {
-    window.dispatchEvent(new CustomEvent('markdawn:create-folder'));
-  };
   useShortcut({
     key: 'alt+n',
-    handler: createNote,
+    handler: entityCommands.createNote,
     whenInputFocused: 'allow',
     description: 'Create new note',
   });
   useShortcut({
     key: 'alt+shift+n',
-    handler: createFolder,
+    handler: entityCommands.createFolder,
     whenInputFocused: 'allow',
     description: 'Create new folder',
   });
@@ -69,32 +73,6 @@ export function AppShell() {
             )}
           />
 
-          {/* Visual Sidebar - handles the slide/fade animation and hover overlay */}
-          <section
-            aria-label="Sidebar"
-            className={clsx(
-              'hidden md:flex flex-col flex-shrink-0 items-center pl-3 py-3 gap-3 h-screen transition-all duration-500 ease-[cubic-bezier(0.16,1,0.3,1)] z-40 w-[252px] fixed left-0',
-              collapsed
-                ? isHovered
-                  ? 'opacity-100 translate-x-0 bg-zinc-50/80 dark:bg-zinc-950/80 backdrop-blur-xl pointer-events-auto'
-                  : 'opacity-0 -translate-x-full pointer-events-none'
-                : 'opacity-100 translate-x-0 pointer-events-auto',
-            )}
-            onMouseLeave={() => collapsed && setIsHovered(false)}
-          >
-            <Sidebar
-              className="flex-1 w-full"
-              collapsed={collapsed && !isHovered}
-              onToggleCollapsed={toggleCollapsed}
-            />
-            <ProfilePill
-              collapsed={collapsed && !isHovered}
-              isActuallyCollapsed={collapsed}
-              onToggleCollapsed={toggleCollapsed}
-              className="flex-shrink-0"
-            />
-          </section>
-
           {collapsed && !isHovered && (
             <button
               type="button"
@@ -113,29 +91,48 @@ export function AppShell() {
       )}
 
       {!isAnonymous && isMobileMenuOpen && (
-        <div className="md:hidden fixed inset-0 z-50 flex">
-          <button
-            type="button"
-            className="fixed inset-0 bg-zinc-900/50 backdrop-blur-sm animate-fade-in border-none p-0 cursor-pointer"
-            onClick={() => setIsMobileMenuOpen(false)}
-            onKeyDown={(e) => {
-              if (e.key === 'Escape') setIsMobileMenuOpen(false);
-            }}
-            aria-label="Close menu"
+        <button
+          type="button"
+          className="md:hidden fixed inset-0 z-50 bg-zinc-900/50 backdrop-blur-sm animate-fade-in border-none p-0 cursor-pointer"
+          onClick={() => setIsMobileMenuOpen(false)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setIsMobileMenuOpen(false);
+          }}
+          aria-label="Close menu"
+        />
+      )}
+
+      {!isAnonymous && (
+        <section
+          aria-label="Sidebar"
+          className={clsx(
+            'fixed left-0 top-0 bottom-0 z-[51] w-[min(80vw,252px)] flex-col flex-shrink-0 items-center p-3 gap-3',
+            'md:z-40 md:flex md:w-[252px] md:pl-3 md:py-3 md:pr-0 md:transition-all md:duration-500 md:ease-[cubic-bezier(0.16,1,0.3,1)]',
+            isMobileMenuOpen ? 'flex animate-slide-right' : 'hidden',
+            collapsed
+              ? isHovered
+                ? 'md:opacity-100 md:translate-x-0 md:bg-zinc-50/80 md:dark:bg-zinc-950/80 md:backdrop-blur-xl md:pointer-events-auto'
+                : 'md:opacity-0 md:-translate-x-full md:pointer-events-none'
+              : 'md:opacity-100 md:translate-x-0 md:pointer-events-auto',
+          )}
+          onMouseLeave={() => collapsed && setIsHovered(false)}
+        >
+          <Sidebar
+            className="flex-1 w-full"
+            collapsed={!isMobileMenuOpen && collapsed && !isHovered}
+            onToggleCollapsed={
+              isMobileMenuOpen ? () => setIsMobileMenuOpen(false) : toggleCollapsed
+            }
           />
-          <div className="relative flex w-auto max-w-[80%] flex-col p-3 gap-3 animate-slide-right h-[100vh]">
-            <Sidebar
-              className="flex-1 w-full"
-              collapsed={false}
-              onToggleCollapsed={() => setIsMobileMenuOpen(false)}
-            />
-            <ProfilePill
-              collapsed={false}
-              onToggleCollapsed={() => setIsMobileMenuOpen(false)}
-              className="flex-shrink-0"
-            />
-          </div>
-        </div>
+          <ProfilePill
+            collapsed={!isMobileMenuOpen && collapsed && !isHovered}
+            isActuallyCollapsed={!isMobileMenuOpen && collapsed}
+            onToggleCollapsed={
+              isMobileMenuOpen ? () => setIsMobileMenuOpen(false) : toggleCollapsed
+            }
+            className="flex-shrink-0"
+          />
+        </section>
       )}
 
       <main className="flex min-w-0 flex-1 flex-col h-full overflow-hidden relative">

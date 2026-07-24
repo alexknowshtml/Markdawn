@@ -3,7 +3,11 @@ import {
   type onAuthenticationFailedParameters,
   type onCloseParameters,
 } from '@hocuspocus/provider';
-import { COLLAB_TERMINAL_REASONS, type PageMetaStatelessMessage } from '@markdawn/shared';
+import {
+  COLLAB_TERMINAL_REASONS,
+  getPageMetaRoomName,
+  type PageMetaStatelessMessage,
+} from '@markdawn/shared';
 import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
 import * as Y from 'yjs';
@@ -12,13 +16,13 @@ import { authClient } from '../lib/auth-client';
 import { retireQueryClient } from '../lib/query-client';
 import { getLogger } from '../logger-init';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
+import { getCollaborationUrl } from '../utils/collaborationUrl';
 import { formatGrantNotification } from '../utils/grantNotification';
 import { showInfoToast } from '../utils/toast';
+import { shareQueryKeys } from './use-share';
 import { invalidateWorkspaceAccessQueries, WORKSPACE_ACCESS_QUERY_KEYS } from './use-workspace';
 
-const COLLAB_URL = import.meta.env.VITE_COLLAB_URL ?? 'ws://localhost:1234';
-const META_ROOM_PREFIX = 'page-meta:';
-
+const COLLAB_URL = getCollaborationUrl();
 function isTerminalMetaClose({ event }: onCloseParameters): boolean {
   return (
     event.code === 4401 ||
@@ -27,22 +31,6 @@ function isTerminalMetaClose({ event }: onCloseParameters): boolean {
     event.reason === COLLAB_TERMINAL_REASONS.SESSION_EXPIRED ||
     event.reason === COLLAB_TERMINAL_REASONS.PERMISSION_VERIFICATION_FAILED
   );
-}
-
-/**
- * Module-level reference to the current pageIndex Y.Map.
- *
- * Set by `usePageMeta` when the meta room connects and used by account-scoped
- * navigation surfaces. Wiki links use the source-page presentation endpoint
- * so signed-in, signed-out, web, and future native clients share one policy.
- *
- * An effect-local ID (`effectIdRef`) prevents the cleanup from nulling
- * the map during a user switch.
- */
-let _pageIndex: Y.Map<unknown> | null = null;
-
-export function getPageIndexMap(): Y.Map<unknown> | null {
-  return _pageIndex;
 }
 
 const PAGE_META_SYNC_QUERY_KEYS = [...WORKSPACE_ACCESS_QUERY_KEYS] as const;
@@ -75,7 +63,7 @@ export function applyPageMetaStatelessMessage(
       exact: true,
     });
     queryClient.removeQueries({
-      queryKey: ['shares', 'entity', 'folder', message.entityId],
+      queryKey: shareQueryKeys.summary('folder', message.entityId),
       exact: true,
     });
   }
@@ -200,26 +188,20 @@ export function usePageMeta() {
   const { data: session, refetch: refetchSession } = authClient.useSession();
   const userId = session?.user?.id;
 
-  const effectIdRef = useRef(0);
   const refetchSessionRef = useRef(refetchSession);
   refetchSessionRef.current = refetchSession;
 
   useEffect(() => {
     if (!userId || !identityLifecycle.isActive()) return undefined;
 
-    const effectId = ++effectIdRef.current;
-
     const doc = new Y.Doc();
     const map = doc.getMap('pageIndex');
-    _pageIndex = map;
     let hasTerminatedIdentity = false;
 
     const terminateIdentity = (reason: string) => {
       if (hasTerminatedIdentity || !identityLifecycle.isActive()) return;
       hasTerminatedIdentity = true;
       getLogger().warn('Page metadata authentication ended; retiring identity state', { reason });
-      if (effectId === effectIdRef.current) _pageIndex = null;
-
       // Navigation must run before retirement because useIdentityNavigate is
       // intentionally inert for a retired identity. Clearing and retiring the
       // identity-scoped client immediately prevents already-rendered private
@@ -246,7 +228,7 @@ export function usePageMeta() {
 
     const provider = new HocuspocusProvider({
       url: COLLAB_URL,
-      name: `${META_ROOM_PREFIX}${userId}`,
+      name: getPageMetaRoomName(userId),
       document: doc,
       onClose: handleClose,
       onAuthenticationFailed: handleAuthenticationFailed,
@@ -358,9 +340,6 @@ export function usePageMeta() {
     provider.on('stateless', handleStateless);
 
     return () => {
-      if (effectId === effectIdRef.current) {
-        _pageIndex = null;
-      }
       if (pageTreeTimerRef.current) clearTimeout(pageTreeTimerRef.current);
       try {
         bv.unobserve(bvObserver);

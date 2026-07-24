@@ -23,8 +23,6 @@ import {
   IconTable,
   IconTrash,
 } from '@tabler/icons-react';
-import type React from 'react';
-import { useRef } from 'react';
 
 export interface FloatingToolbarProps {
   onBold: () => void;
@@ -33,7 +31,6 @@ export interface FloatingToolbarProps {
   onCode: () => void;
   onLink: () => void;
   onBlockquote: () => void;
-  onImageUpload: (file: File) => void;
   onInsertTable: () => void;
   onAddRowBefore: () => void;
   onAddRowAfter: () => void;
@@ -78,7 +75,6 @@ export function FloatingToolbar({
   onCode,
   onLink,
   onBlockquote,
-  onImageUpload,
   onInsertTable,
   onAddRowBefore,
   onAddRowAfter,
@@ -115,20 +111,6 @@ export function FloatingToolbar({
   isTaskListActive,
   isInTableActive,
 }: FloatingToolbarProps) {
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  const _handleImageClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      onImageUpload(file);
-      e.target.value = '';
-    }
-  };
-
   return (
     <div
       className={`floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl ${visible ? '' : 'invisible'}`}
@@ -332,13 +314,6 @@ export function FloatingToolbar({
           </button>
         </>
       )}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept="image/*"
-        className="hidden"
-        onChange={handleFileChange}
-      />
     </div>
   );
 }

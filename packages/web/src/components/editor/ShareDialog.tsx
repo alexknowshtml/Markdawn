@@ -2,20 +2,14 @@ import {
   FloatingFocusManager,
   FloatingOverlay,
   FloatingPortal,
-  flip,
-  offset,
-  shift,
   useDismiss,
   useFloating,
-  useFocus,
-  useHover,
   useInteractions,
-  useRole,
 } from '@floating-ui/react';
 import type { ShareEntityType, SharePermission } from '@markdawn/shared';
-import { Check, Copy, Globe2, Info, Lock, Mail, Shield, UserRound, X } from 'lucide-react';
+import { Check, Copy, Globe2, Lock, Mail, Shield, UserRound, X } from 'lucide-react';
 import type React from 'react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useIdentityLifecycle } from '../../contexts/IdentityLifecycleContext';
 import {
   useGrantEntityAccess,
@@ -36,8 +30,6 @@ type ShareDialogProps = {
   entityId: string;
   title: string;
   onClose: () => void;
-  /** Render inline without floating dialog wrapper */
-  embedded?: boolean;
 };
 
 const permissionOptions: Array<{
@@ -64,19 +56,62 @@ type AccessEntry = {
   isOwner: boolean;
 };
 
-export function ShareDialog({
-  entityType,
-  entityId,
-  title,
-  onClose,
-  embedded = false,
-}: ShareDialogProps) {
+function CollaboratorIdentity({
+  name,
+  avatarUrl,
+  displayName,
+}: {
+  name: string | null;
+  avatarUrl: string | null;
+  displayName: string;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      <div
+        className="flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full"
+        style={{ backgroundColor: avatarUrl ? undefined : '#71717a' }}
+      >
+        {avatarUrl ? (
+          <img
+            src={avatarUrl}
+            alt={name ?? ''}
+            className="h-full w-full object-cover"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <span className="text-[9px] font-bold text-white">
+            {getInitial(name ?? 'Unknown user')}
+          </span>
+        )}
+      </div>
+      <p className="max-w-[18ch] truncate text-sm text-zinc-900 dark:text-zinc-100">
+        {displayName}
+      </p>
+    </div>
+  );
+}
+
+function permissionLabel(permission: SharePermission): string {
+  if (permission === 'admin') return 'Admin';
+  if (permission === 'edit') return 'Edit';
+  return 'View';
+}
+
+export function ShareDialog({ entityType, entityId, title, onClose }: ShareDialogProps) {
   const identityLifecycle = useIdentityLifecycle();
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const [email, setEmail] = useState('');
   const [grantPermission, setGrantPermission] = useState<SharePermission>('view');
   const [copied, setCopied] = useState(false);
+  const [pendingLeaveGrantId, setPendingLeaveGrantId] = useState<string | null>(null);
+  const leaveCancelRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (pendingLeaveGrantId === null) return;
+    const frame = window.requestAnimationFrame(() => leaveCancelRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [pendingLeaveGrantId]);
 
   const {
     data: summary,
@@ -94,6 +129,7 @@ export function ShareDialog({
   const isAdmin = summary?.userPermission === 'admin';
   const canGrant = isOwner || isAdmin;
   const isLimitedSummary = summary?.visibility === 'limited';
+  const collaborators = summary?.collaborators ?? [];
 
   const accessEntries: AccessEntry[] = (summary?.accessSources ?? []).map((source, index) => ({
     key: `${source.kind}:${source.grantId ?? source.folderId ?? source.userId}:${index}`,
@@ -146,6 +182,18 @@ export function ShareDialog({
     removeGrantMutation.mutate(grantId);
   };
 
+  const confirmLeave = () => {
+    const grantId = pendingLeaveGrantId;
+    if (!grantId) return;
+    setPendingLeaveGrantId(null);
+    if (entityType === 'page') markSelfLeave(entityId);
+    removeGrantMutation.mutate(grantId, {
+      onError: () => {
+        if (entityType === 'page') consumeSelfLeave(entityId);
+      },
+    });
+  };
+
   const handleToggleRestriction = () => {
     if (!canGrant) return;
     updateInheritanceMutation.mutate({
@@ -157,51 +205,15 @@ export function ShareDialog({
 
   const { refs, context } = useFloating({
     open: true,
-    onOpenChange: () => onClose(),
+    onOpenChange: (open) => {
+      if (open) return;
+      if (pendingLeaveGrantId !== null) setPendingLeaveGrantId(null);
+      else onClose();
+    },
   });
 
   const dismiss = useDismiss(context, { outsidePressEvent: 'mousedown' });
-  const role = useRole(context, { role: 'dialog' });
-  const { getFloatingProps } = useInteractions([dismiss, role]);
-
-  const [infoOpen, setInfoOpen] = useState(false);
-  const {
-    refs: infoRefs,
-    floatingStyles: infoFloatingStyles,
-    context: infoContext,
-  } = useFloating({
-    open: infoOpen,
-    onOpenChange: setInfoOpen,
-    placement: 'top',
-    middleware: [offset(4), flip(), shift({ padding: 8 })],
-  });
-  const infoHover = useHover(infoContext, { move: false });
-  const infoFocus = useFocus(infoContext);
-  const infoDismiss = useDismiss(infoContext);
-  const infoRole = useRole(infoContext, { role: 'tooltip' });
-  const infoInteractions = useInteractions([infoHover, infoFocus, infoDismiss, infoRole]);
-
-  const [accessHelpOpen, setAccessHelpOpen] = useState(false);
-  const {
-    refs: accessHelpRefs,
-    floatingStyles: accessHelpFloatingStyles,
-    context: accessHelpContext,
-  } = useFloating({
-    open: accessHelpOpen,
-    onOpenChange: setAccessHelpOpen,
-    placement: 'top',
-    middleware: [offset(4), flip(), shift({ padding: 8 })],
-  });
-  const accessHelpHover = useHover(accessHelpContext, { move: false });
-  const accessHelpFocus = useFocus(accessHelpContext);
-  const accessHelpDismiss = useDismiss(accessHelpContext);
-  const accessHelpRole = useRole(accessHelpContext, { role: 'tooltip' });
-  const accessHelpInteractions = useInteractions([
-    accessHelpHover,
-    accessHelpFocus,
-    accessHelpDismiss,
-    accessHelpRole,
-  ]);
+  const { getFloatingProps } = useInteractions([dismiss]);
 
   const formatSource = (source: string, entry: AccessEntry) => {
     if (entry.isOwner) return 'Owner';
@@ -210,7 +222,6 @@ export function ShareDialog({
     return 'Workspace Member';
   };
 
-  // ── Content rendered both floating and embedded ────────────────
   const content =
     summaryError && !summary ? (
       <div
@@ -266,6 +277,7 @@ export function ShareDialog({
                   <Dropdown
                     value={grantPermission}
                     onChange={setGrantPermission}
+                    ariaLabel="Permission for new collaborator"
                     options={[
                       { value: 'view', label: 'View' },
                       { value: 'edit', label: 'Edit' },
@@ -286,54 +298,6 @@ export function ShareDialog({
               </div>
             </form>
 
-            <div className="flex items-center justify-between px-0 py-1 mt-4">
-              <div className="flex items-center gap-2">
-                <Shield size={14} className="text-zinc-500 dark:text-zinc-400" />
-                <span className="text-sm text-zinc-900 dark:text-zinc-100">
-                  Restrict inherited access
-                </span>
-                <button
-                  type="button"
-                  ref={infoRefs.setReference}
-                  {...infoInteractions.getReferenceProps()}
-                  className="text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 cursor-pointer"
-                >
-                  <Info size={13} />
-                </button>
-                {infoOpen && (
-                  <FloatingPortal>
-                    <div
-                      ref={infoRefs.setFloating}
-                      style={infoFloatingStyles}
-                      {...infoInteractions.getFloatingProps()}
-                      className="z-[9999] max-w-[320px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
-                    >
-                      When enabled, only people you directly add can access this {entityType}.
-                      Inherited access won't work.
-                    </div>
-                  </FloatingPortal>
-                )}
-              </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={isRestricted}
-                onClick={handleToggleRestriction}
-                disabled={updateInheritanceMutation.isPending}
-                data-testid="share-restrict-toggle"
-                aria-label="Restrict inherited access"
-                className={`relative h-[22px] w-[40px] rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
-                  isRestricted ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-600'
-                }`}
-              >
-                <span
-                  className={`absolute top-[3px] left-[3px] h-[16px] w-[16px] rounded-full bg-white shadow-sm transition-transform ${
-                    isRestricted ? 'translate-x-[18px]' : 'translate-x-0'
-                  }`}
-                />
-              </button>
-            </div>
-
             <div className="h-4" />
           </>
         )}
@@ -347,14 +311,10 @@ export function ShareDialog({
               <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">Public access</p>
             </div>
           </div>
-          <div
-            ref={!canGrant && !isLoading ? accessHelpRefs.setReference : undefined}
-            {...(!canGrant && !isLoading ? accessHelpInteractions.getReferenceProps() : {})}
-            data-testid="share-public-access-permissions"
-          >
+          <div data-testid="share-public-access-permissions">
             {isLimitedSummary ? (
               <p className="rounded-lg bg-zinc-100 px-3 py-2 text-xs text-zinc-600 dark:bg-zinc-900 dark:text-zinc-400">
-                Only admins can view public access settings and sharing details.
+                Only admins can view or change public access settings.
               </p>
             ) : (
               <ChoiceGroup
@@ -371,18 +331,6 @@ export function ShareDialog({
                 className="w-full justify-between"
                 ariaLabel="Public access"
               />
-            )}
-            {accessHelpOpen && !canGrant && !isLoading && (
-              <FloatingPortal>
-                <div
-                  ref={accessHelpRefs.setFloating}
-                  style={accessHelpFloatingStyles}
-                  {...accessHelpInteractions.getFloatingProps()}
-                  className="z-[9999] max-w-[280px] rounded-lg border border-zinc-200 bg-white px-3 py-2 text-[11px] leading-relaxed text-zinc-600 shadow-lg dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-400"
-                >
-                  You can see public access, but you need admin access to change it.
-                </div>
-              </FloatingPortal>
             )}
           </div>
           {publicUrl && (
@@ -403,30 +351,44 @@ export function ShareDialog({
               </div>
             </div>
           )}
-          {inheritedPublicAccess.length > 0 && (
-            <div
-              data-testid="inherited-public-access"
-              className="rounded-xl border border-blue-200 bg-blue-50 p-3 dark:border-blue-900/40 dark:bg-blue-950/20"
-            >
-              <p className="text-xs font-medium text-blue-800 dark:text-blue-200">
-                Inherited public access
-              </p>
-              <div className="mt-2 space-y-1.5">
-                {inheritedPublicAccess.map((access) => (
-                  <div
-                    key={access.entityId}
-                    className="flex items-center justify-between gap-3 text-[11px] text-blue-700 dark:text-blue-300"
-                  >
-                    <span className="truncate">via {access.entityTitle}</span>
-                    <span className="shrink-0 font-medium">
-                      Anyone can {access.permission === 'edit' ? 'edit' : 'view'}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
+
+        {canGrant && (
+          <div className="mt-4 space-y-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-zinc-100 text-zinc-500 dark:bg-zinc-900 dark:text-zinc-400">
+                <Shield size={16} />
+              </div>
+              <p className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+                Restrict inherited access
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-4 rounded-xl border border-zinc-200 bg-zinc-50 p-2 dark:border-zinc-800 dark:bg-zinc-950/40">
+              <p className="text-[11px] leading-relaxed text-zinc-600 dark:text-zinc-400">
+                When enabled, only people you directly add can access this {entityType}. Inherited
+                access won&apos;t work.
+              </p>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={isRestricted}
+                onClick={handleToggleRestriction}
+                disabled={updateInheritanceMutation.isPending}
+                data-testid="share-restrict-toggle"
+                aria-label="Restrict inherited access"
+                className={`relative h-[22px] w-[40px] shrink-0 rounded-full transition-colors cursor-pointer disabled:opacity-50 ${
+                  isRestricted ? 'bg-blue-600' : 'bg-zinc-300 dark:bg-zinc-600'
+                }`}
+              >
+                <span
+                  className={`absolute top-[3px] left-[3px] h-[16px] w-[16px] rounded-full bg-white shadow-sm transition-transform ${
+                    isRestricted ? 'translate-x-[18px]' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+          </div>
+        )}
 
         <div className="h-4" />
 
@@ -443,21 +405,49 @@ export function ShareDialog({
           </div>
 
           <div className="overflow-hidden rounded-xl border border-zinc-200 dark:border-zinc-800">
-            <div className="grid grid-cols-[minmax(0,1.2fr)_0.5fr_0.7fr] gap-2 border-b border-zinc-200 px-3 py-2 text-[11px] font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400">
+            <div
+              className={`grid gap-2 border-b border-zinc-200 px-3 py-2 text-[11px] font-medium text-zinc-500 dark:border-zinc-800 dark:text-zinc-400 ${
+                isLimitedSummary
+                  ? 'grid-cols-[minmax(0,1fr)_auto]'
+                  : 'grid-cols-[minmax(0,1.2fr)_0.5fr_0.7fr]'
+              }`}
+            >
               <span>Name</span>
               <span>Access</span>
-              <span>Source</span>
+              {!isLimitedSummary && <span>Source</span>}
             </div>
             {isLoading ? (
               <p className="px-3 py-2.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
                 Loading access…
               </p>
             ) : isLimitedSummary ? (
-              <p className="px-3 py-2.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
-                {summary?.collaboratorCount ?? 0} other{' '}
-                {(summary?.collaboratorCount ?? 0) === 1 ? 'person has' : 'people have'} access.
-                Details are visible to admins only.
-              </p>
+              collaborators.length === 0 ? (
+                <p className="px-3 py-2.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
+                  No one has account access.
+                </p>
+              ) : (
+                collaborators.map((collaborator) => {
+                  const displayName =
+                    collaborator.userId === currentUserId
+                      ? 'You'
+                      : (collaborator.name ?? 'Unknown user');
+                  return (
+                    <div
+                      key={collaborator.userId}
+                      className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 border-b border-zinc-200 px-3 py-1.5 last:border-b-0 dark:border-zinc-800"
+                    >
+                      <CollaboratorIdentity
+                        name={collaborator.name}
+                        avatarUrl={collaborator.avatarUrl}
+                        displayName={displayName}
+                      />
+                      <span className="text-xs text-zinc-600 dark:text-zinc-300">
+                        {collaborator.isOwner ? 'Owner' : permissionLabel(collaborator.permission)}
+                      </span>
+                    </div>
+                  );
+                })
+              )
             ) : accessEntries.length === 0 ? (
               <p className="px-3 py-2.5 text-center text-xs text-zinc-500 dark:text-zinc-400">
                 No one has access yet.
@@ -486,30 +476,11 @@ export function ShareDialog({
                     key={entry.key}
                     className="grid grid-cols-[minmax(0,1.2fr)_0.5fr_0.7fr] items-center gap-2 border-b border-zinc-200 px-3 py-1.5 last:border-b-0 dark:border-zinc-800"
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <div
-                        className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full overflow-hidden"
-                        style={{
-                          backgroundColor: entry.avatarUrl ? undefined : '#71717a',
-                        }}
-                      >
-                        {entry.avatarUrl ? (
-                          <img
-                            src={entry.avatarUrl}
-                            alt={entry.name}
-                            className="h-full w-full object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <span className="text-[9px] font-bold text-white">
-                            {getInitial(entry.name)}
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-zinc-900 dark:text-zinc-100 truncate max-w-[18ch]">
-                        {displayName}
-                      </p>
-                    </div>
+                    <CollaboratorIdentity
+                      name={entry.name}
+                      avatarUrl={entry.avatarUrl}
+                      displayName={displayName}
+                    />
                     {entry.isOwner ? (
                       <span className="text-xs text-zinc-600 dark:text-zinc-300">Owner</span>
                     ) : entry.grantId && canChangePermission ? (
@@ -521,12 +492,11 @@ export function ShareDialog({
                           ...(isOwner ? [{ value: 'admin' as const, label: 'Admin' }] : []),
                           { value: 'remove', label: 'Remove' },
                         ]}
+                        ariaLabel={`Permission for ${displayName}`}
                         onChange={(permission) => {
                           if (permission === 'remove') {
                             if (canSelfRemove && entry.grantId) {
-                              if (window.confirm('Are you sure you want to leave?')) {
-                                handleRemove(entry.grantId);
-                              }
+                              setPendingLeaveGrantId(entry.grantId);
                             } else if (entry.grantId) {
                               handleRemove(entry.grantId);
                             }
@@ -543,26 +513,14 @@ export function ShareDialog({
                     ) : canSelfRemove && entry.grantId ? (
                       <button
                         type="button"
-                        onClick={() => {
-                          if (!window.confirm('Are you sure you want to leave?')) return;
-                          if (entityType === 'page') markSelfLeave(entityId);
-                          removeGrantMutation.mutate(entry.grantId as string, {
-                            onError: () => {
-                              if (entityType === 'page') consumeSelfLeave(entityId);
-                            },
-                          });
-                        }}
+                        onClick={() => setPendingLeaveGrantId(entry.grantId)}
                         className="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 cursor-pointer"
                       >
                         Leave
                       </button>
                     ) : (
                       <span className="text-xs text-zinc-600 dark:text-zinc-300">
-                        {entry.permission === 'admin'
-                          ? 'Admin'
-                          : entry.permission === 'edit'
-                            ? 'Edit'
-                            : 'View'}
+                        {permissionLabel(entry.permission)}
                       </span>
                     )}
                     <span className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
@@ -577,9 +535,42 @@ export function ShareDialog({
       </div>
     );
 
-  if (embedded) {
-    return <div data-testid="share-dialog-embedded">{content}</div>;
-  }
+  const leaveConfirmation = (
+    <div
+      className="p-6"
+      role="alertdialog"
+      aria-labelledby="leave-share-title"
+      aria-describedby="leave-share-description"
+      data-testid="leave-share-confirmation"
+    >
+      <h2 id="leave-share-title" className="text-lg font-semibold text-zinc-900 dark:text-zinc-50">
+        Leave this {entityType}?
+      </h2>
+      <p id="leave-share-description" className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
+        You will lose direct access to this {entityType}. You may retain access if it is shared
+        through a folder or workspace.
+      </p>
+      <div className="mt-6 flex items-center justify-end gap-2">
+        <button
+          ref={leaveCancelRef}
+          type="button"
+          disabled={removeGrantMutation.isPending}
+          onClick={() => setPendingLeaveGrantId(null)}
+          className="px-3 py-2 text-sm text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-50 cursor-pointer disabled:cursor-not-allowed"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={removeGrantMutation.isPending}
+          onClick={confirmLeave}
+          className="px-4 py-2 text-sm font-medium text-white bg-red-600 dark:bg-red-700 rounded-md hover:bg-red-700 dark:hover:bg-red-800 transition-colors disabled:opacity-60 cursor-pointer disabled:cursor-not-allowed"
+        >
+          {removeGrantMutation.isPending ? 'Leaving...' : 'Leave'}
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <FloatingPortal>
@@ -587,43 +578,57 @@ export function ShareDialog({
         lockScroll
         className="bg-zinc-900/40 backdrop-blur-sm grid place-items-center z-50 px-4"
       >
-        <FloatingFocusManager context={context}>
+        <FloatingFocusManager
+          context={context}
+          {...(pendingLeaveGrantId === null ? {} : { initialFocus: leaveCancelRef })}
+        >
           <div
             ref={refs.setFloating}
-            {...getFloatingProps()}
-            onClick={(e) => e.stopPropagation()}
-            onKeyDown={(e) => e.stopPropagation()}
+            {...getFloatingProps({
+              onClick: (event) => event.stopPropagation(),
+              onKeyDown: (event) => event.stopPropagation(),
+            })}
             role="dialog"
-            aria-labelledby="share-dialog-title"
+            aria-label={
+              pendingLeaveGrantId === null
+                ? `Share ${title || entityType}`
+                : `Leave this ${entityType}`
+            }
             data-testid="share-dialog"
             className="w-full max-w-lg flex max-h-[min(620px,calc(100vh-96px))] flex-col rounded-2xl border border-zinc-200 bg-white shadow-2xl dark:border-zinc-800 dark:bg-zinc-950 animate-scale-in"
           >
-            <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <h2
-                    id="share-dialog-title"
-                    className="text-sm font-semibold text-zinc-950 dark:text-zinc-50"
-                  >
-                    Share {title || entityType}
-                  </h2>
-                  <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                    Grant account access or enable public access for this {entityType}.
-                  </p>
+            {pendingLeaveGrantId !== null ? (
+              leaveConfirmation
+            ) : (
+              <>
+                <div className="border-b border-zinc-200 px-4 py-3 dark:border-zinc-800">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h2
+                        id="share-dialog-title"
+                        className="text-sm font-semibold text-zinc-950 dark:text-zinc-50"
+                      >
+                        Share {title || entityType}
+                      </h2>
+                      <p className="mt-0.5 text-[11px] text-zinc-500 dark:text-zinc-400">
+                        Grant account access or enable public access for this {entityType}.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onClose}
+                      data-testid="share-close-btn"
+                      className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
+                      aria-label="Close sharing panel"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={onClose}
-                  data-testid="share-close-btn"
-                  className="flex h-8 w-8 items-center justify-center rounded-lg text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 dark:hover:bg-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
-                  aria-label="Close sharing panel"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-            </div>
 
-            <div className="overflow-y-auto px-4 py-3.5">{content}</div>
+                <div className="overflow-y-auto px-4 py-3.5">{content}</div>
+              </>
+            )}
           </div>
         </FloatingFocusManager>
       </FloatingOverlay>

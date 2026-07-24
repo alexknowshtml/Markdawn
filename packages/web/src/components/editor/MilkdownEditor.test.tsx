@@ -92,6 +92,7 @@ vi.mock('../../lib/auth-client', () => ({
 }));
 vi.mock('../../contexts/KeyboardShortcutContext', () => ({
   useShortcut: vi.fn(),
+  useShortcuts: vi.fn(),
 }));
 vi.mock('../../hooks/useAwareness', () => ({ useAwareness: vi.fn() }));
 vi.mock('../../hooks/useFloatingToolbar', () => ({
@@ -117,8 +118,11 @@ vi.mock('../../hooks/useMilkdown', () => ({
   }),
 }));
 vi.mock('../../hooks/useSlashMenu', () => ({
-  useSlashMenu: (_editorRef: unknown, options: { handleImageUploadFromSlash: () => void }) => {
-    mocks.imageUploadFromSlash = options.handleImageUploadFromSlash;
+  useSlashMenu: (
+    _editorRef: unknown,
+    options: { commands: { command: (id: string) => { execute: () => void } } },
+  ) => {
+    mocks.imageUploadFromSlash = options.commands.command('image').execute;
     return {
       slashMenuState: { isOpen: false, query: '', position: null, range: null },
       slashCommands: [],
@@ -150,10 +154,7 @@ vi.mock('../../utils/toast', () => ({
   showInfoToast: mocks.showInfoToast,
 }));
 vi.mock('./FloatingToolbar', () => ({
-  FloatingToolbar: ({ onImageUpload }: { onImageUpload: (file: File) => Promise<void> }) => {
-    mocks.imageUpload = onImageUpload;
-    return null;
-  },
+  FloatingToolbar: () => null,
 }));
 vi.mock('./SlashMenu', () => ({ SlashMenu: () => null }));
 vi.mock('./WikiLinkSuggestions', () => ({ WikiLinkSuggestions: () => null }));
@@ -169,10 +170,12 @@ function renderEditor({
   readOnly = true,
   lifecycle = createIdentityLifecycle(),
   strictMode = false,
+  onDocumentReloadRequired,
 }: {
   readOnly?: boolean;
   lifecycle?: IdentityLifecycle;
   strictMode?: boolean;
+  onDocumentReloadRequired?: () => void;
 } = {}) {
   const queryClient = createTestQueryClient();
   const editor = (
@@ -181,7 +184,10 @@ function renderEditor({
         <LocationProbe />
         <IdentityLifecycleProvider lifecycle={lifecycle}>
           <EditorReadOnlyProvider readOnly={readOnly}>
-            <MilkdownEditor pageId="page-1" />
+            <MilkdownEditor
+              pageId="page-1"
+              {...(onDocumentReloadRequired ? { onDocumentReloadRequired } : {})}
+            />
           </EditorReadOnlyProvider>
         </IdentityLifecycleProvider>
       </MemoryRouter>
@@ -227,7 +233,7 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(mocks.providerConstructions).toBe(1);
   });
 
-  it('opens the image picker for anonymous public editors', () => {
+  it('does not open the image picker for anonymous public editors', () => {
     renderEditor();
     const fileInput = document.createElement('input');
     const inputClickSpy = vi.spyOn(fileInput, 'click').mockImplementation(() => undefined);
@@ -238,38 +244,20 @@ describe('MilkdownEditor anonymous uploads', () => {
       mocks.imageUploadFromSlash?.();
     });
 
-    expect(createElementSpy).toHaveBeenCalledWith('input');
-    expect(inputClickSpy).toHaveBeenCalledOnce();
-    expect(mocks.showInfoToast).not.toHaveBeenCalledWith('Sign in to upload images');
+    expect(createElementSpy).not.toHaveBeenCalled();
+    expect(inputClickSpy).not.toHaveBeenCalled();
   });
 
-  it('uploads images for anonymous public editors', async () => {
+  it('does not upload images for anonymous public editors', () => {
     mocks.currentUserId = null;
     mocks.hasEditor = true;
-    const fetchSpy = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        ({
-          ok: true,
-          json: () => Promise.resolve({ url: '/api/uploads/guest.png' }),
-        }) as Response,
-    );
+    const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
     renderEditor({ readOnly: false });
     mocks.editorAction.mockClear();
 
-    await act(async () => {
-      await mocks.imageUpload?.(new File(['guest image'], 'guest.png', { type: 'image/png' }));
-    });
-
-    expect(fetchSpy).toHaveBeenCalledWith(
-      '/api/uploads',
-      expect.objectContaining({ method: 'POST', credentials: 'include' }),
-    );
-    const request = fetchSpy.mock.calls[0]?.[1];
-    expect(request?.body).toBeInstanceOf(FormData);
-    expect((request?.body as FormData).get('pageId')).toBe('page-1');
-    expect((request?.body as FormData).get('file')).toBeInstanceOf(File);
-    expect(mocks.editorAction).toHaveBeenCalledOnce();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(mocks.editorAction).not.toHaveBeenCalled();
   });
 
   it('drops a delayed image upload after its identity retires', async () => {
@@ -403,6 +391,19 @@ describe('MilkdownEditor anonymous uploads', () => {
     expect(queryClient.getQueryData(pageQueryKey)).toEqual(cachedPage);
     expect(mocks.setAccessPermission).not.toHaveBeenCalledWith(null);
     expect(mocks.showInfoToast).not.toHaveBeenCalled();
+  });
+
+  it('requests a fresh provider after a server-directed document reload', () => {
+    const onDocumentReloadRequired = vi.fn();
+    renderEditor({ onDocumentReloadRequired });
+
+    act(() => {
+      mocks.providerHandlers.get('close')?.({
+        event: new CloseEvent('close', { code: 1000, reason: 'Document content was replaced' }),
+      });
+    });
+
+    expect(onDocumentReloadRequired).toHaveBeenCalledOnce();
   });
 
   it('handles a terminal close that arrives before effect subscriptions are ready', () => {

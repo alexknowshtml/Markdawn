@@ -1,3 +1,4 @@
+import { extractInlineTags, parseMarkdownFrontmatter } from '@markdawn/shared';
 import { directoryOpen } from 'browser-fs-access';
 import { AlertCircle, CheckCircle, FileText, FolderOpen, Image, Loader2, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
@@ -20,57 +21,6 @@ interface ImportPreview {
 interface ObsidianImportDialogProps {
   onClose: () => void;
   onSuccess: () => void;
-}
-
-/**
- * Extracts tags from YAML frontmatter in Obsidian markdown files.
- * Works reliably in browser environment without gray-matter.
- *
- * Supports:
- * - tags:\n  - experience\n  - life\n  - tech\n
- * - tag: single-tag
- * - tags: [tag1, tag2]
- */
-function extractFrontmatterTags(content: string, tagSet: Set<string>): void {
-  // Match YAML frontmatter: --- followed by YAML content followed by ---
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-
-  if (!frontmatterMatch) return;
-
-  const frontmatter = frontmatterMatch[1];
-  if (!frontmatter) return;
-
-  // Match tags as YAML array:
-  // tags:
-  //   - experience
-  //   - life
-  //   - tech
-  const arrayMatch = frontmatter.match(/^tags:\s*\n((?: {2}- .+\n?)+)/m);
-  if (arrayMatch?.[1]) {
-    const tagLines = arrayMatch[1];
-    const tagMatches = tagLines.matchAll(/^ {2}- (.+)$/gm);
-    for (const match of tagMatches) {
-      const tag = match[1]?.trim().toLowerCase();
-      if (tag) tagSet.add(tag);
-    }
-  }
-
-  // Match single tag: tag: value
-  const singleTagMatch = frontmatter.match(/^tag:\s*(.+)$/m);
-  if (singleTagMatch?.[1]) {
-    const tag = singleTagMatch[1].trim().toLowerCase();
-    if (tag) tagSet.add(tag);
-  }
-
-  // Match tags as inline array: tags: [tag1, tag2]
-  const inlineArrayMatch = frontmatter.match(/^tags:\s*\[([^\]]+)\]$/m);
-  if (inlineArrayMatch?.[1]) {
-    const tags = inlineArrayMatch[1].split(',');
-    for (const tag of tags) {
-      const t = tag.trim().toLowerCase();
-      if (t) tagSet.add(t);
-    }
-  }
 }
 
 export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialogProps) {
@@ -132,22 +82,10 @@ export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialo
           scannedFiles.push({ path: relativePath, content });
           noteCount++;
 
-          extractFrontmatterTags(content, tags);
-
-          const HEX_ONLY = /^[0-9a-fA-F]+$/;
-          const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-/]+)/g);
-          for (const match of inlineTags) {
-            const rawTag = match[1];
-            if (!rawTag) continue;
-            if (
-              HEX_ONLY.test(rawTag) &&
-              (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
-            ) {
-              continue;
-            }
-            const tag = rawTag.toLowerCase();
-            if (tag) tags.add(tag);
+          for (const tag of parseMarkdownFrontmatter(content).tags) {
+            tags.add(tag.toLowerCase());
           }
+          for (const tag of extractInlineTags(content)) tags.add(tag);
         } else if (
           file.type.startsWith('image/') ||
           /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name)

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -18,7 +18,7 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByText('Delete?')).not.toBeInTheDocument();
   });
 
-  it('renders dialog when isOpen is true', () => {
+  it('renders dialog when isOpen is true', async () => {
     render(
       <ConfirmDialog
         isOpen={true}
@@ -29,8 +29,9 @@ describe('ConfirmDialog', () => {
       />,
     );
 
-    expect(screen.getByText('Delete?')).toBeInTheDocument();
+    expect(screen.getByRole('alertdialog', { name: 'Delete?' })).toBeInTheDocument();
     expect(screen.getByText('Are you sure you want to delete this?')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
   });
 
   it('calls onConfirm when confirm button is clicked', async () => {
@@ -67,6 +68,24 @@ describe('ConfirmDialog', () => {
 
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels with Escape and keeps keyboard focus inside the modal', async () => {
+    const onCancel = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        title="Delete?"
+        message="Sure?"
+        onConfirm={vi.fn()}
+        onCancel={onCancel}
+      />,
+    );
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+    await user.keyboard('{Escape}');
+    expect(onCancel).toHaveBeenCalledOnce();
   });
 
   it('does not bubble confirm or cancel clicks to the clickable item beneath it', async () => {

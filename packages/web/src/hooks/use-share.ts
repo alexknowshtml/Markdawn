@@ -5,22 +5,23 @@ import type {
   ShareSummary,
 } from '@markdawn/shared';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { apiFetch } from '../utils/api';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showSuccessToast } from '../utils/toast';
 
-const API_BASE = '/api';
-
 type PublicPermission = Exclude<SharePermission, 'admin'> | 'private';
+
+export const shareQueryKeys = {
+  all: ['shares'] as const,
+  summary: (entityType: ShareEntityType, entityId: string | undefined) =>
+    ['shares', entityType, entityId] as const,
+};
 
 async function fetchShareSummary(
   entityType: ShareEntityType,
   entityId: string,
 ): Promise<ShareSummary> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}`);
-  if (!res.ok) {
-    throw new Error('Failed to fetch sharing settings');
-  }
-  return res.json();
+  return apiFetch(`/shares/entity/${entityType}/${entityId}`);
 }
 
 async function updatePublicPermission({
@@ -32,16 +33,11 @@ async function updatePublicPermission({
   entityId: string;
   permission: PublicPermission;
 }): Promise<ShareSummary['publicAccess'] & { message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/public-access`, {
+  return apiFetch(`/shares/entity/${entityType}/${entityId}/public-access`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ permission }),
   });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to update public access' }));
-    throw new Error(error.message);
-  }
-  return res.json();
 }
 
 async function updateInheritancePolicy({
@@ -53,16 +49,11 @@ async function updateInheritancePolicy({
   entityId: string;
   policy: InheritancePolicy;
 }): Promise<{ policy: InheritancePolicy; message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/inheritance`, {
+  return apiFetch(`/shares/entity/${entityType}/${entityId}/inheritance`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ policy }),
   });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to update inheritance' }));
-    throw new Error(error.message);
-  }
-  return res.json();
 }
 
 async function grantEntityAccess({
@@ -76,31 +67,22 @@ async function grantEntityAccess({
   email: string;
   permission: SharePermission;
 }): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/entity/${entityType}/${entityId}/grants`, {
+  return apiFetch(`/shares/entity/${entityType}/${entityId}/grants`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, permission }),
   });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to grant access' }));
-    throw new Error(error.message);
-  }
-  return res.json();
 }
 
 async function removeGrant(grantId: string): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/grants/${grantId}`, {
+  return apiFetch(`/shares/grants/${grantId}`, {
     method: 'DELETE',
   });
-  if (!res.ok) {
-    throw new Error('Failed to remove access');
-  }
-  return res.json();
 }
 
 export function useShareSummary(entityType: ShareEntityType, entityId?: string) {
   return useQuery({
-    queryKey: ['shares', entityType, entityId],
+    queryKey: shareQueryKeys.summary(entityType, entityId),
     queryFn: () => {
       if (!entityId) throw new Error('entityId is required');
       return fetchShareSummary(entityType, entityId);
@@ -119,7 +101,7 @@ export function useUpdatePublicPermission() {
   return useMutation({
     mutationFn: updatePublicPermission,
     onSuccess: (data, { entityType, entityId }) => {
-      queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
+      queryClient.invalidateQueries({ queryKey: shareQueryKeys.summary(entityType, entityId) });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
@@ -136,7 +118,7 @@ export function useUpdateInheritancePolicy() {
   return useMutation({
     mutationFn: updateInheritancePolicy,
     onSuccess: (data, { entityType, entityId }) => {
-      queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
+      queryClient.invalidateQueries({ queryKey: shareQueryKeys.summary(entityType, entityId) });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
       queryClient.invalidateQueries({ queryKey: ['pages', 'detail'] });
@@ -153,7 +135,7 @@ export function useGrantEntityAccess() {
   return useMutation({
     mutationFn: grantEntityAccess,
     onSuccess: (data, { entityType, entityId }) => {
-      queryClient.invalidateQueries({ queryKey: ['shares', entityType, entityId] });
+      queryClient.invalidateQueries({ queryKey: shareQueryKeys.summary(entityType, entityId) });
       queryClient.invalidateQueries({ queryKey: ['shared-with-me'] });
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       queryClient.invalidateQueries({ queryKey: ['folderTree'] });
@@ -172,16 +154,11 @@ async function updateGrantPermission({
   grantId: string;
   permission: SharePermission;
 }): Promise<{ message?: string }> {
-  const res = await fetch(`${API_BASE}/shares/grants/${grantId}`, {
+  return apiFetch(`/shares/grants/${grantId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ permission }),
   });
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ message: 'Failed to update permission' }));
-    throw new Error(error.message);
-  }
-  return res.json();
 }
 
 export function useUpdateGrantPermission() {

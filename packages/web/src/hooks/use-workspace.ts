@@ -1,26 +1,11 @@
+import type { WorkspaceMember, WorkspaceMembership } from '@markdawn/shared';
 import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isBulkRemovalInProgress } from '../utils/bulkRemovalState';
 import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
-export type WorkspaceMembership = {
-  ownerId: string;
-  ownerName: string | null;
-  role: 'viewer' | 'editor' | 'admin';
-  joinedAt: string;
-};
-
-export type WorkspaceMember = {
-  id: string;
-  workspace_owner_id: string;
-  member_id: string;
-  member_name: string | null;
-  member_email: string;
-  member_avatar_url: string | null;
-  role: 'viewer' | 'editor' | 'admin';
-  created_at: string;
-};
+export type { WorkspaceMember, WorkspaceMembership } from '@markdawn/shared';
 
 async function fetchWorkspaceMembers(): Promise<WorkspaceMember[]> {
   const res = await fetch(`${API_BASE}/workspace/members`);

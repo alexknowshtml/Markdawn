@@ -5,8 +5,8 @@ import { Link } from 'react-router-dom';
 import { buildFolderPath, buildPagePath } from '../../utils/url';
 
 interface BreadcrumbsProps {
-  pages: Page[];
-  folders: Folder[];
+  pages: Pick<Page, 'id' | 'parentId' | 'title'>[];
+  folders: Pick<Folder, 'id' | 'name' | 'parentId'>[];
   currentPageId: string;
 }
 

@@ -1,4 +1,4 @@
-import type { CollaboratorDisplay, EntityAccessor } from '@markdawn/shared';
+import type { CollaboratorDisplay } from '@markdawn/shared';
 import { useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { getInitial } from '../../utils/avatar';
@@ -10,13 +10,8 @@ const ROLE_LABELS: Record<string, string> = {
   view: 'Viewer',
 };
 
-function isDetailedAccessor(collab: CollaboratorDisplay): collab is EntityAccessor {
-  return 'userId' in collab;
-}
-
 function formatCollabLabel(collab: CollaboratorDisplay): string {
-  if (!isDetailedAccessor(collab)) return collab.name ?? 'Collaborator';
-  const name = collab.name ?? collab.email ?? 'User';
+  const name = collab.name ?? 'User';
   const role = collab.isOwner ? 'Owner' : (ROLE_LABELS[collab.permission] ?? collab.permission);
   return `${name} (${role})`;
 }
@@ -73,9 +68,7 @@ function Avatar({ collab, label }: { collab: CollaboratorDisplay; label: string 
             referrerPolicy="no-referrer"
           />
         ) : (
-          <span className="text-[9px] font-bold text-white">
-            {getInitial(collab.name ?? (isDetailedAccessor(collab) ? collab.email : null) ?? 'U')}
-          </span>
+          <span className="text-[9px] font-bold text-white">{getInitial(collab.name ?? 'U')}</span>
         )}
       </div>
       {showTooltip &&
@@ -145,11 +138,7 @@ export function CollaboratorAvatars({ collaborators, max = 3 }: CollaboratorAvat
   return (
     <div className="flex items-center -space-x-1.5">
       {visible.map((collab) => (
-        <Avatar
-          key={isDetailedAccessor(collab) ? collab.userId : collab.presenceId}
-          collab={collab}
-          label={formatCollabLabel(collab)}
-        />
+        <Avatar key={collab.userId} collab={collab} label={formatCollabLabel(collab)} />
       ))}
       {overflow > 0 && <OverflowBadge count={overflow} />}
     </div>

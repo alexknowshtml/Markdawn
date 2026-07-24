@@ -3,32 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { describe, expect, it } from 'vitest';
 import { render } from '../../test-utils/render';
-import { ChoiceGroup, calculateDropdownMenuPosition, Dropdown, TextBox } from './FormControls';
-
-describe('calculateDropdownMenuPosition', () => {
-  it('opens above a trigger when the menu would fall below the viewport', () => {
-    const position = calculateDropdownMenuPosition(
-      { bottom: 504, left: 760, top: 480, width: 72 },
-      { height: 122, width: 96 },
-      { height: 577, width: 1280 },
-    );
-
-    expect(position.top).toBe(354);
-    expect(position.top + 122).toBeLessThanOrEqual(480);
-    expect(position.maxHeight).toBe(468);
-  });
-
-  it('keeps a menu below the trigger when there is enough room', () => {
-    const position = calculateDropdownMenuPosition(
-      { bottom: 104, left: 20, top: 80, width: 72 },
-      { height: 122, width: 96 },
-      { height: 577, width: 1280 },
-    );
-
-    expect(position.top).toBe(108);
-    expect(position.left).toBe(20);
-  });
-});
+import { ChoiceGroup, Dropdown, TextBox } from './FormControls';
 
 describe('Dropdown keyboard controls', () => {
   it('opens, moves, and selects without a pointer', async () => {
@@ -43,20 +18,48 @@ describe('Dropdown keyboard controls', () => {
             { value: 'view', label: 'View' },
             { value: 'edit', label: 'Edit' },
           ]}
+          ariaLabel="Permission"
         />
       );
     }
 
     render(<Harness />);
-    const trigger = screen.getByRole('button', { name: 'View' });
+    const trigger = screen.getByRole('combobox', { name: 'Permission' });
     trigger.focus();
 
     await user.keyboard('{Enter}');
     expect(screen.getByRole('listbox')).toBeInTheDocument();
 
     await user.keyboard('{ArrowDown}{Enter}');
-    expect(screen.getByRole('button', { name: 'Edit' })).toHaveFocus();
-    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(trigger).toHaveTextContent('Edit');
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('keeps the selected option highlighted when opened with a pointer', async () => {
+    const user = userEvent.setup();
+    function Harness() {
+      const [value, setValue] = useState<'view' | 'edit'>('edit');
+      return (
+        <Dropdown
+          value={value}
+          onChange={setValue}
+          options={[
+            { value: 'view', label: 'View' },
+            { value: 'edit', label: 'Edit' },
+          ]}
+          ariaLabel="Permission"
+        />
+      );
+    }
+
+    render(<Harness />);
+    const trigger = screen.getByRole('combobox', { name: 'Permission' });
+    await user.click(trigger);
+    expect(screen.getByRole('option', { name: 'Edit' })).toHaveFocus();
+
+    await user.keyboard('{Enter}');
+    expect(trigger).toHaveTextContent('Edit');
   });
 });
 

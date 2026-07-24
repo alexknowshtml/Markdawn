@@ -17,7 +17,11 @@ interface SelectionToolbarProps {
   clipboardCount: number;
   trashCount: number;
   removeFromViewCount: number;
+  unremovableCount?: number;
+  removalFailureMessage?: string | null;
+  canRetryRemoval?: boolean;
   onDelete: () => void;
+  onDismissRemovalFailure?: () => void;
   onCopy: () => void;
   onCut: () => void;
   onMove: () => void;
@@ -36,7 +40,11 @@ export function SelectionToolbar({
   clipboardCount,
   trashCount,
   removeFromViewCount,
+  unremovableCount = 0,
+  removalFailureMessage = null,
+  canRetryRemoval = false,
   onDelete,
+  onDismissRemovalFailure,
   onCopy,
   onCut,
   onMove,
@@ -59,6 +67,9 @@ export function SelectionToolbar({
       : '',
     removeFromViewCount > 0
       ? `${removeFromViewCount} item${removeFromViewCount === 1 ? '' : 's'} will be removed from your view.`
+      : '',
+    unremovableCount > 0
+      ? `${unremovableCount} inherited item${unremovableCount === 1 ? '' : 's'} cannot be removed here and will remain selected.`
       : '',
   ]
     .filter(Boolean)
@@ -167,6 +178,18 @@ export function SelectionToolbar({
           onDelete();
         }}
         onCancel={() => setShowDeleteConfirm(false)}
+      />
+      <ConfirmDialog
+        isOpen={removalFailureMessage !== null}
+        title="Some items could not be removed"
+        message={removalFailureMessage ?? ''}
+        confirmText={canRetryRemoval ? 'Retry failed items' : 'Close'}
+        cancelText="Close"
+        showCancel={canRetryRemoval}
+        loading={isRemoving}
+        loadingText="Retrying..."
+        onConfirm={canRetryRemoval ? onDelete : () => onDismissRemovalFailure?.()}
+        onCancel={() => onDismissRemovalFailure?.()}
       />
     </>
   );

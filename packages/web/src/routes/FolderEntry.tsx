@@ -1,4 +1,4 @@
-import type { CollaboratorDisplay, FolderTreeNode, PageTreeNode } from '@markdawn/shared';
+import type { CollaboratorDisplay, FolderTreeNode } from '@markdawn/shared';
 import {
   ChevronRight,
   FilePlus2,
@@ -16,14 +16,11 @@ import { SelectionToolbar } from '../components/workspace/SelectionToolbar';
 import { useClipboard } from '../contexts/ClipboardContext';
 import { useIdentityLifecycle, useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useSelection } from '../contexts/SelectionContext';
+import { useShareContext } from '../contexts/ShareContext';
 import {
-  type PublicFolderPage,
-  type PublicFolderPayload,
-  useShareContext,
-} from '../contexts/ShareContext';
-import {
-  BulkRemovalError,
   buildBulkRemovalInput,
+  canRetryBulkRemoval,
+  formatBulkRemovalFailure,
   getBulkRemovalCounts,
   useBulkMoveFolders,
   useBulkMovePages,
@@ -39,65 +36,9 @@ import { useAuth } from '../hooks/useAuth';
 import { useEntityCreationActions } from '../hooks/useEntityCreationActions';
 import { useStableValueWhile } from '../hooks/useStableValue';
 import { canRenameEntity, preservesEffectiveOwnerAtRoot } from '../utils/entity-actions';
-import { getPagesInFolder } from '../utils/page-tree';
 import { showSuccessToast } from '../utils/toast';
 import { buildFolderPath, buildPagePath, extractUuidFromSlug } from '../utils/url';
-
-const toDate = (value: string | Date | null | undefined): Date => {
-  if (value instanceof Date) return value;
-  if (typeof value === 'string') {
-    const parsed = new Date(value);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
-  }
-  return new Date();
-};
-
-const normalizePublicPage = (page: PublicFolderPage, folderId: string): PageTreeNode => ({
-  id: page.id,
-  parentId: page.parentId ?? page.parent_id ?? folderId,
-  title: page.title,
-  icon: page.icon ?? null,
-  coverType: null,
-  coverValue: null,
-  position: '0',
-  ydoc: null,
-  properties: null,
-  createdBy: page.createdBy ?? page.created_by ?? null,
-  ownerId: page.ownerId ?? page.owner_id ?? null,
-  createdAt: toDate(page.createdAt ?? page.created_at),
-  updatedAt: toDate(page.updatedAt ?? page.updated_at),
-  children: [],
-});
-
-const normalizePublicFolder = (
-  folder: PublicFolderPayload,
-  fallbackParentId: string | null,
-): FolderTreeNode => ({
-  id: folder.id,
-  parentId: folder.parentId ?? fallbackParentId,
-  name: folder.name,
-  icon: folder.icon ?? null,
-  position: folder.position ?? '0',
-  createdBy: folder.createdBy ?? null,
-  createdAt: toDate(folder.createdAt),
-  updatedAt: toDate(folder.updatedAt),
-  ownerId: folder.ownerId ?? folder.owner_id ?? null,
-  publicPermission: folder.publicPermission ?? null,
-  children: (folder.folders ?? []).map((child) => normalizePublicFolder(child, folder.id)),
-});
-
-const findFolderById = (
-  nodes: FolderTreeNode[] | undefined,
-  folderId: string | undefined,
-): FolderTreeNode | null => {
-  if (!nodes || !folderId) return null;
-  for (const node of nodes) {
-    if (node.id === folderId) return node;
-    const found = findFolderById(node.children, folderId);
-    if (found) return found;
-  }
-  return null;
-};
+import { getFolderContentsModel } from './folderContentsModel';
 
 export default function FolderEntry() {
   const navigate = useIdentityNavigate();
@@ -126,8 +67,7 @@ export default function FolderEntry() {
   const { data: session } = useAuth();
   const currentUserId = session?.user?.id;
   const canManageFolder = !!currentUserId && capabilities.canDelete;
-  const canCreateChildren = capabilities.canEdit;
-  const canGuestDuplicateItems = isAnonymous && publicEntity?.publicPermission === 'edit';
+  const canCreateChildren = !isAnonymous && capabilities.canEdit;
 
   const bulkRemoveMutation = useBulkRemoveEntities();
   const refreshedFavoriteKeys = useMemo(
@@ -152,10 +92,7 @@ export default function FolderEntry() {
     () =>
       (collaborators: CollaboratorDisplay[]): CollaboratorDisplay[] =>
         currentUserId
-          ? collaborators.filter(
-              (collaborator) =>
-                !('userId' in collaborator) || collaborator.userId !== currentUserId,
-            )
+          ? collaborators.filter((collaborator) => collaborator.userId !== currentUserId)
           : collaborators,
     [currentUserId],
   );
@@ -171,6 +108,10 @@ export default function FolderEntry() {
     value: string;
   } | null>(null);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [removalFailure, setRemovalFailure] = useState<{
+    message: string;
+    canRetry: boolean;
+  } | null>(null);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const newMenuRef = useRef<HTMLDivElement>(null);
 
@@ -189,19 +130,10 @@ export default function FolderEntry() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const treeFolder = useMemo(() => findFolderById(folders, folderId), [folders, folderId]);
-  const shouldUsePublicPayload =
-    !!folderId && publicEntity?.id === folderId && (isAnonymous || !treeFolder);
-
-  const polledFolder = useMemo(
-    () =>
-      publicEntity && publicEntity.id === folderId
-        ? normalizePublicFolder(publicEntity, publicEntity.parentId ?? null)
-        : null,
-    [folderId, publicEntity],
+  const { currentFolder, currentFolders, currentPages, publicFolder, usesPublicPayload } = useMemo(
+    () => getFolderContentsModel({ folderId, folders, pages, publicEntity, isAnonymous }),
+    [folderId, folders, isAnonymous, pages, publicEntity],
   );
-  const publicFolder = shouldUsePublicPayload ? polledFolder : null;
-  const currentFolder = polledFolder ?? treeFolder;
 
   useEffect(() => {
     if (!currentFolder || !slugAndId) return;
@@ -242,37 +174,10 @@ export default function FolderEntry() {
     return path;
   }, [folders, folderId, publicFolder, currentFolder]);
 
-  const currentFolders = useMemo(() => {
-    if (publicFolder) return publicFolder.children;
-    if (!folderId) return folders ?? [];
-    const find = (nodes: FolderTreeNode[]): FolderTreeNode[] => {
-      for (const node of nodes) {
-        if (node.id === folderId) return node.children;
-        const found = find(node.children);
-        if (found.length > 0) return found;
-      }
-      return [];
-    };
-    return find(folders ?? []);
-  }, [folders, folderId, publicFolder]);
-
-  const currentPages = useMemo(() => {
-    if (shouldUsePublicPayload && publicEntity?.pages && folderId) {
-      return publicEntity.pages.map((page) => normalizePublicPage(page, folderId));
-    }
-    return getPagesInFolder(pages ?? [], folderId ?? null);
-  }, [pages, folderId, publicEntity, shouldUsePublicPayload]);
-
-  const pageIds = useMemo(
-    () => (isAnonymous ? [] : currentPages.map((p) => p.id)),
-    [currentPages, isAnonymous],
-  );
+  const pageIds = useMemo(() => currentPages.map((page) => page.id), [currentPages]);
   const { data: collaboratorsMap } = usePageCollaborators(pageIds);
 
-  const childFolderIds = useMemo(
-    () => (isAnonymous ? [] : currentFolders.map((f) => f.id)),
-    [currentFolders, isAnonymous],
-  );
+  const childFolderIds = useMemo(() => currentFolders.map((folder) => folder.id), [currentFolders]);
   const { data: folderCollaboratorsMap } = useFolderCollaborators(childFolderIds);
 
   const refreshedItems: ExplorerItemData[] = useMemo(() => {
@@ -359,19 +264,6 @@ export default function FolderEntry() {
         navigate(buildFolderPath(folder.name, folder.id));
       } else {
         setEditingTarget({ kind: 'folder', id: folder.id, value: folder.name });
-      }
-    } catch {
-      // Error toast handled globally by MutationCache.onError
-    }
-  };
-
-  const handleDuplicateItem = async (item: ExplorerItemData) => {
-    if (!canGuestDuplicateItems || !folderId) return;
-    try {
-      if (item.type === 'page') {
-        await copyPageMutation.mutateAsync({ pageId: item.id, parentId: folderId });
-      } else {
-        await copyFolderMutation.mutateAsync({ folderId: item.id, parentId: folderId });
       }
     } catch {
       // Error toast handled globally by MutationCache.onError
@@ -470,8 +362,11 @@ export default function FolderEntry() {
   const selectedRemovalCounts = getBulkRemovalCounts(selectedRemovalInput);
   const canRemoveSelection =
     selectedItems.length > 0 &&
-    selectedRemovalCounts.trashCount + selectedRemovalCounts.removeFromViewCount ===
-      selectedItems.length;
+    selectedRemovalCounts.trashCount + selectedRemovalCounts.removeFromViewCount > 0;
+  const unremovableSelectionCount =
+    selectedItems.length -
+    selectedRemovalCounts.trashCount -
+    selectedRemovalCounts.removeFromViewCount;
   const selectedOwnerIds = new Set(selectedItems.map((item) => item.ownerId));
   const selectedOwnerId = selectedOwnerIds.size === 1 ? selectedItems[0]?.ownerId : undefined;
   const canMoveSelection =
@@ -490,13 +385,14 @@ export default function FolderEntry() {
     try {
       const result = await bulkRemoveMutation.mutateAsync(selectedRemovalInput);
       if (!identityLifecycle.isActive()) return;
-      for (const item of result.removedItems) selection.deselect(item.id);
-    } catch (error) {
-      if (!identityLifecycle.isActive()) return;
-      if (!(error instanceof BulkRemovalError)) throw error;
-      // The mutation cache reports the aggregate failure. At this UI boundary,
-      // only successful removals are deselected so failed items remain retryable.
-      for (const item of error.result.removedItems) selection.deselect(item.id);
+      for (const item of result.removedItems) selection.deselect(item.entityId);
+      setRemovalFailure(
+        result.failedItems.length > 0
+          ? { message: formatBulkRemovalFailure(result), canRetry: canRetryBulkRemoval(result) }
+          : null,
+      );
+    } catch {
+      // Network-level failures are reported by the global mutation cache.
     }
   };
 
@@ -585,8 +481,8 @@ export default function FolderEntry() {
     }
   };
 
-  const isLoading = !shouldUsePublicPayload && (isPagesLoading || isFoldersLoading);
-  const hasError = !shouldUsePublicPayload && (pagesError || foldersError);
+  const isLoading = !usesPublicPayload && (isPagesLoading || isFoldersLoading);
+  const hasError = !usesPublicPayload && (pagesError || foldersError);
 
   if (!folderId) {
     return (
@@ -756,10 +652,7 @@ export default function FolderEntry() {
                       : {})}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
                     canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                    showContextMenu={!isAnonymous || canGuestDuplicateItems}
-                    {...(canGuestDuplicateItems
-                      ? { onCopy: () => void handleDuplicateItem(item) }
-                      : {})}
+                    showContextMenu={!isAnonymous}
                   />
                 ))}
               </div>
@@ -798,10 +691,7 @@ export default function FolderEntry() {
                   onEditKeyDown={handleEditKeyDown}
                   collaborators={filterOutSelf(item.collaborators ?? [])}
                   canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                  showContextMenu={!isAnonymous || canGuestDuplicateItems}
-                  {...(canGuestDuplicateItems
-                    ? { onCopy: () => void handleDuplicateItem(item) }
-                    : {})}
+                  showContextMenu={!isAnonymous}
                 />
               ))}
             </div>
@@ -842,10 +732,7 @@ export default function FolderEntry() {
                         : {})}
                       collaborators={filterOutSelf(item.collaborators ?? [])}
                       canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                      showContextMenu={!isAnonymous || canGuestDuplicateItems}
-                      {...(canGuestDuplicateItems
-                        ? { onCopy: () => void handleDuplicateItem(item) }
-                        : {})}
+                      showContextMenu={!isAnonymous}
                       showCheckboxes={hasSelection}
                     />
                   ))}
@@ -894,10 +781,7 @@ export default function FolderEntry() {
                     onEditKeyDown={handleEditKeyDown}
                     collaborators={filterOutSelf(item.collaborators ?? [])}
                     canSelect={!isAnonymous && !bulkRemoveMutation.isPending}
-                    showContextMenu={!isAnonymous || canGuestDuplicateItems}
-                    {...(canGuestDuplicateItems
-                      ? { onCopy: () => void handleDuplicateItem(item) }
-                      : {})}
+                    showContextMenu={!isAnonymous}
                     showCheckboxes={hasSelection}
                   />
                 ))}
@@ -919,6 +803,10 @@ export default function FolderEntry() {
           canDelete={canRemoveSelection}
           trashCount={selectedRemovalCounts.trashCount}
           removeFromViewCount={selectedRemovalCounts.removeFromViewCount}
+          unremovableCount={unremovableSelectionCount}
+          removalFailureMessage={removalFailure?.message ?? null}
+          canRetryRemoval={removalFailure?.canRetry ?? false}
+          onDismissRemovalFailure={() => setRemovalFailure(null)}
           canMove={canMoveSelection}
           canPaste={
             clipboard.state.action === 'copy'

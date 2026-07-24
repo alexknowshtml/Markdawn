@@ -549,7 +549,11 @@ function SortablePropertyRow({
         {isTagsProperty ? (
           <TagValueEditor
             ref={tagEditorRef}
-            tags={Array.isArray(item.value) ? (item.value as string[]) : []}
+            tags={
+              Array.isArray(item.value)
+                ? item.value.filter((tag): tag is string => typeof tag === 'string')
+                : []
+            }
             suggestions={tagSuggestions}
             onChange={(newTags) => {
               if (!readOnlyRef.current) onUpdate(item.id, newTags);

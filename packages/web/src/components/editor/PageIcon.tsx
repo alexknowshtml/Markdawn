@@ -1,6 +1,7 @@
 import { FileText } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useUpdatePage } from '../../hooks/use-pages';
 import { EmojiPicker } from '../EmojiPicker';
 
@@ -11,6 +12,7 @@ interface PageIconProps {
 
 export function PageIcon({ pageId, initialIcon }: PageIconProps) {
   const readOnly = useIsReadOnly();
+  const { isAnonymous } = useShareContext();
   const [icon, setIcon] = useState<string | null>(initialIcon);
   const updatePageMutation = useUpdatePage();
 
@@ -38,7 +40,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
     </div>
   );
 
-  if (readOnly) {
+  if (readOnly || isAnonymous) {
     return content;
   }
 

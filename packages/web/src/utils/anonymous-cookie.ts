@@ -18,19 +18,16 @@ function setCookie(name: string, value: string, maxAge: number): void {
   document.cookie = `${name}=${encodeURIComponent(value)}; max-age=${maxAge}; path=/; SameSite=Lax${secure}`;
 }
 
-let cachedId: string | null = null;
-
 export function getAnonymousId(): string {
-  if (cachedId) return cachedId;
-
   const existing = getCookie(COOKIE_NAME);
   if (existing && UUID_PATTERN.test(existing)) {
-    cachedId = existing;
-    return cachedId;
+    return existing;
   }
+  return rotateAnonymousId();
+}
 
+export function rotateAnonymousId(): string {
   const id = crypto.randomUUID();
   setCookie(COOKIE_NAME, id, ONE_YEAR_SECONDS);
-  cachedId = id;
-  return cachedId;
+  return id;
 }

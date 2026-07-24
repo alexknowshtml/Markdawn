@@ -1,5 +1,5 @@
 import type { ShareSummary } from '@markdawn/shared';
-import { screen } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from '../../test-utils/render';
@@ -35,6 +35,29 @@ function adminSummary(): ShareSummary {
     publicAccess: { permission: 'private', url: '/app/shared-page-page-1' },
     inheritance: { policy: 'inherit' },
     grants: [],
+    collaborators: [
+      {
+        userId: 'owner-1',
+        name: 'Owner',
+        avatarUrl: null,
+        permission: 'admin',
+        isOwner: true,
+      },
+      {
+        userId: 'current-admin',
+        name: 'Current Admin',
+        avatarUrl: null,
+        permission: 'admin',
+        isOwner: false,
+      },
+      {
+        userId: 'other-admin',
+        name: 'Other Admin',
+        avatarUrl: null,
+        permission: 'admin',
+        isOwner: false,
+      },
+    ],
     accessors: [
       {
         grantId: null,
@@ -136,13 +159,7 @@ describe('ShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <ShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        embedded
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.queryByText(/No sign-in is required/)).not.toBeInTheDocument();
@@ -167,15 +184,8 @@ describe('ShareDialog admin self-removal', () => {
     });
     mocks.summary = summary;
     const user = userEvent.setup();
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
     render(
-      <ShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        embedded
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.getAllByText('You')).toHaveLength(2);
@@ -184,7 +194,27 @@ describe('ShareDialog admin self-removal', () => {
 
     await user.click(screen.getByRole('button', { name: 'Leave' }));
 
+    const confirmation = screen.getByText('Leave this page?').parentElement;
+    if (!confirmation) throw new Error('Expected leave confirmation dialog');
+    await user.click(within(confirmation).getByRole('button', { name: 'Leave' }));
+
     expect(mocks.removeGrant).toHaveBeenCalledWith('share-self', expect.any(Object));
+  });
+
+  it('keeps leave confirmation inside the share modal focus scope', async () => {
+    mocks.summary = adminSummary();
+    const user = userEvent.setup();
+    render(
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Leave' }));
+    expect(screen.getByRole('alertdialog', { name: 'Leave this page?' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus());
+
+    await user.keyboard('{Escape}');
+    expect(screen.queryByRole('alertdialog', { name: 'Leave this page?' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Share Shared page' })).toBeInTheDocument();
   });
 
   it('does not let a user remove an inherited folder grant from a child page', () => {
@@ -212,13 +242,7 @@ describe('ShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <ShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        embedded
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.getByText('via Parent Folder')).toBeInTheDocument();
@@ -264,13 +288,7 @@ describe('ShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <ShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        embedded
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.getAllByText('Recipient')).toHaveLength(2);
@@ -279,7 +297,7 @@ describe('ShareDialog admin self-removal', () => {
     expect(screen.queryByText(/Effective|Fallback/)).not.toBeInTheDocument();
   });
 
-  it('discloses inherited public access when direct public access is restricted', () => {
+  it('does not render inherited public access details', () => {
     const summary = adminSummary();
     summary.inheritedPublicAccess = [
       {
@@ -292,18 +310,41 @@ describe('ShareDialog admin self-removal', () => {
     mocks.summary = summary;
 
     render(
-      <ShareDialog
-        entityType="page"
-        entityId="page-1"
-        title="Shared page"
-        embedded
-        onClose={vi.fn()}
-      />,
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
     );
 
     expect(screen.getByText('Public access')).toBeInTheDocument();
-    expect(screen.getByText('Inherited public access')).toBeInTheDocument();
-    expect(screen.getByText('Anyone can edit')).toBeInTheDocument();
+    expect(screen.queryByTestId('inherited-public-access')).not.toBeInTheDocument();
+    expect(screen.queryByText('Inherited public access')).not.toBeInTheDocument();
+    expect(screen.queryByText('Anyone can edit')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Public access is also inherited from a parent folder.'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('shows display-safe collaborators to a non-admin without management details', () => {
+    const summary = adminSummary();
+    summary.visibility = 'limited';
+    summary.entity.ownerId = null;
+    summary.userPermission = 'view';
+    summary.grants = [];
+    summary.accessors = [];
+    summary.accessSources = [];
+    summary.permissionDetails = [];
+    summary.inheritedAccessors = [];
+    mocks.summary = summary;
+
+    render(
+      <ShareDialog entityType="page" entityId="page-1" title="Shared page" onClose={vi.fn()} />,
+    );
+
+    expect(screen.getByText('You')).toBeInTheDocument();
+    expect(screen.getByText('Other Admin')).toBeInTheDocument();
+    expect(screen.queryByText('Source')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Details are visible to admins only/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText('Only admins can view or change public access settings.'),
+    ).toBeInTheDocument();
   });
 
   it('names the dialog, inheritance switch, grant input, and public access choice', () => {

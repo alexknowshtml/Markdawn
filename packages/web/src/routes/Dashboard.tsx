@@ -18,8 +18,9 @@ import { useClipboard } from '../contexts/ClipboardContext';
 import { useIdentityLifecycle, useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useSelection } from '../contexts/SelectionContext';
 import {
-  BulkRemovalError,
   buildBulkRemovalInput,
+  canRetryBulkRemoval,
+  formatBulkRemovalFailure,
   getBulkRemovalCounts,
   useBulkMoveFolders,
   useBulkMovePages,
@@ -153,10 +154,7 @@ export default function HomeView() {
     () =>
       (collaborators: CollaboratorDisplay[]): CollaboratorDisplay[] =>
         currentUserId
-          ? collaborators.filter(
-              (collaborator) =>
-                !('userId' in collaborator) || collaborator.userId !== currentUserId,
-            )
+          ? collaborators.filter((collaborator) => collaborator.userId !== currentUserId)
           : collaborators,
     [currentUserId],
   );
@@ -172,6 +170,10 @@ export default function HomeView() {
     value: string;
   } | null>(null);
   const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(null);
+  const [removalFailure, setRemovalFailure] = useState<{
+    message: string;
+    canRetry: boolean;
+  } | null>(null);
   const [showFilterMenu, setShowFilterMenu] = useState(false);
   const [showNewMenu, setShowNewMenu] = useState(false);
   const filterMenuRef = useRef<HTMLDivElement>(null);
@@ -527,20 +529,24 @@ export default function HomeView() {
     hasWorkspaceRootAccess && selectedItems.every(preservesEffectiveOwnerAtRoot);
   const canRemoveSelection =
     selectedItems.length > 0 &&
-    selectedRemovalCounts.trashCount + selectedRemovalCounts.removeFromViewCount ===
-      selectedItems.length;
+    selectedRemovalCounts.trashCount + selectedRemovalCounts.removeFromViewCount > 0;
+  const unremovableSelectionCount =
+    selectedItems.length -
+    selectedRemovalCounts.trashCount -
+    selectedRemovalCounts.removeFromViewCount;
 
   const handleBulkDelete = async () => {
     try {
       const result = await bulkRemoveMutation.mutateAsync(selectedRemovalInput);
       if (!identityLifecycle.isActive()) return;
-      for (const item of result.removedItems) selection.deselect(item.id);
-    } catch (error) {
-      if (!identityLifecycle.isActive()) return;
-      if (!(error instanceof BulkRemovalError)) throw error;
-      // The mutation cache reports the aggregate failure. At this UI boundary,
-      // only successful removals are deselected so failed items remain retryable.
-      for (const item of error.result.removedItems) selection.deselect(item.id);
+      for (const item of result.removedItems) selection.deselect(item.entityId);
+      setRemovalFailure(
+        result.failedItems.length > 0
+          ? { message: formatBulkRemovalFailure(result), canRetry: canRetryBulkRemoval(result) }
+          : null,
+      );
+    } catch {
+      // Network-level failures are reported by the global mutation cache.
     }
   };
 
@@ -905,6 +911,10 @@ export default function HomeView() {
         canDelete={canRemoveSelection}
         trashCount={selectedRemovalCounts.trashCount}
         removeFromViewCount={selectedRemovalCounts.removeFromViewCount}
+        unremovableCount={unremovableSelectionCount}
+        removalFailureMessage={removalFailure?.message ?? null}
+        canRetryRemoval={removalFailure?.canRetry ?? false}
+        onDismissRemovalFailure={() => setRemovalFailure(null)}
         canMove={canMoveSelection}
         isRemoving={bulkRemoveMutation.isPending}
         onPaste={() => void handlePaste()}

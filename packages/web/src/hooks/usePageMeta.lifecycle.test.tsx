@@ -72,7 +72,7 @@ vi.mock('../logger-init', () => ({
   }),
 }));
 
-import { getPageIndexMap, usePageMeta } from './usePageMeta';
+import { usePageMeta } from './usePageMeta';
 
 function MetaHarness() {
   usePageMeta();
@@ -123,14 +123,12 @@ describe('usePageMeta authentication lifecycle', () => {
     const { getByTestId, lifecycle, queryClient } = renderMeta();
     seedPrivateMetadata(queryClient);
     const clearSpy = vi.spyOn(queryClient, 'clear');
-    expect(getPageIndexMap()).not.toBeNull();
 
     act(() => {
       mocks.providerHandlers.get('authenticationFailed')?.({ reason: 'Unauthorized' });
     });
 
     expect(getByTestId('location-path')).toHaveTextContent('/login');
-    expect(getPageIndexMap()).toBeNull();
     expect(queryClient.getQueryData(['pageTree'])).toBeUndefined();
     expect(queryClient.getQueryData(['folderTree'])).toBeUndefined();
     expect(clearSpy).toHaveBeenCalledTimes(1);
@@ -183,7 +181,6 @@ describe('usePageMeta authentication lifecycle', () => {
     const { getByTestId, lifecycle, queryClient } = renderMeta();
 
     expect(getByTestId('location-path')).toHaveTextContent('/login');
-    expect(getPageIndexMap()).toBeNull();
     expect(queryClient.getQueryCache().getAll()).toHaveLength(0);
     expect(lifecycle.isActive()).toBe(false);
     expect(mocks.refetchSession).toHaveBeenCalledTimes(1);
@@ -198,7 +195,6 @@ describe('usePageMeta authentication lifecycle', () => {
     const { getByTestId, lifecycle } = renderMeta();
 
     expect(getByTestId('location-path')).toHaveTextContent('/login');
-    expect(getPageIndexMap()).toBeNull();
     expect(lifecycle.isActive()).toBe(false);
     expect(mocks.refetchSession).toHaveBeenCalledTimes(1);
     expect(mocks.providerDestroy).toHaveBeenCalledTimes(1);

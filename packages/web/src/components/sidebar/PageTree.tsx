@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
+import { useEntityCommands } from '../../contexts/EntityCommandContext';
 import { useIdentityLifecycle, useIdentityNavigate } from '../../contexts/IdentityLifecycleContext';
 import { useShareContext } from '../../contexts/ShareContext';
 import { useIsBulkRemovalPending } from '../../hooks/use-bulk-actions';
@@ -108,6 +109,7 @@ export function PageTree() {
   );
 
   const { createPageAndNavigate, createFolder } = useEntityCreationActions();
+  const entityCommands = useEntityCommands();
   const updatePageMutation = useUpdatePage();
   const updateFolderMutation = useUpdateFolder();
   const importMarkdownMutation = useImportMarkdown();
@@ -182,15 +184,11 @@ export function PageTree() {
   }, [createFolder, setEditingTarget, sidebar.expandFolder]);
 
   useEffect(() => {
-    const onCreateNote = () => void handleCreateRootPage();
-    const onCreateFolder = () => void handleCreateRootFolder();
-    window.addEventListener('markdawn:create-note', onCreateNote);
-    window.addEventListener('markdawn:create-folder', onCreateFolder);
-    return () => {
-      window.removeEventListener('markdawn:create-note', onCreateNote);
-      window.removeEventListener('markdawn:create-folder', onCreateFolder);
-    };
-  }, [handleCreateRootPage, handleCreateRootFolder]);
+    return entityCommands.register({
+      createNote: () => void handleCreateRootPage(),
+      createFolder: () => void handleCreateRootFolder(),
+    });
+  }, [entityCommands, handleCreateRootPage, handleCreateRootFolder]);
 
   const handleCreatePageInFolder = useCallback(
     async (folderId: string) => {
@@ -217,7 +215,7 @@ export function PageTree() {
     }
 
     try {
-      const newPage = await importMarkdownMutation.mutateAsync({ file });
+      const { page: newPage } = await importMarkdownMutation.mutateAsync({ file });
       if (!identityLifecycle.isActive()) return;
       navigate(buildPagePath(newPage.title, newPage.id));
     } catch {

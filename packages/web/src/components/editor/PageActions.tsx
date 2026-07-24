@@ -8,7 +8,7 @@ import { ShareDialog } from './ShareDialog';
 
 interface PageActionsProps {
   pageId: string;
-  page?: Page | undefined;
+  page?: Pick<Page, 'icon' | 'id' | 'ownerId' | 'title'> | undefined;
 }
 
 export function PageActions({ pageId, page }: PageActionsProps) {

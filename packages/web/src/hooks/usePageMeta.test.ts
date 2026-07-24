@@ -144,7 +144,7 @@ describe('parsePageMetaStatelessMessage', () => {
     const queryClient = new QueryClient();
     const invalidateSpy = vi.spyOn(queryClient, 'invalidateQueries');
     queryClient.setQueryData(['folders', 'detail', 'folder-1'], { id: 'folder-1' });
-    queryClient.setQueryData(['shares', 'entity', 'folder', 'folder-1'], { id: 'folder-1' });
+    queryClient.setQueryData(['shares', 'folder', 'folder-1'], { id: 'folder-1' });
 
     const shouldRedirect = applyPageMetaStatelessMessage(
       { type: 'entity_deleted', entityType: 'folder', entityId: 'folder-1' },
@@ -154,7 +154,7 @@ describe('parsePageMetaStatelessMessage', () => {
 
     expect(shouldRedirect).toBe(true);
     expect(queryClient.getQueryData(['folders', 'detail', 'folder-1'])).toBeUndefined();
-    expect(queryClient.getQueryData(['shares', 'entity', 'folder', 'folder-1'])).toBeUndefined();
+    expect(queryClient.getQueryData(['shares', 'folder', 'folder-1'])).toBeUndefined();
     expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: ['pages', 'detail'] });
   });
 

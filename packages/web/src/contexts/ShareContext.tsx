@@ -1,6 +1,7 @@
 import {
   type CapabilitySet,
   deriveCapabilities,
+  type FolderDetailPayload,
   getAnonymousName,
   type PublicPermission,
 } from '@markdawn/shared';
@@ -10,45 +11,13 @@ import { getAnonymousId } from '../utils/anonymous-cookie';
 
 export type AccessPermission = PublicPermission | null;
 
-export type PublicFolderPage = {
-  id: string;
-  parent_id?: string | null;
-  parentId?: string | null;
-  title: string;
-  icon?: string | null;
-  created_by?: string | null;
-  createdBy?: string | null;
-  owner_id?: string | null;
-  ownerId?: string | null;
-  created_at?: string | Date | null;
-  createdAt?: string | Date | null;
-  updated_at?: string | Date | null;
-  updatedAt?: string | Date | null;
-};
-
-export type PublicFolderPayload = {
-  id: string;
-  parentId?: string | null;
-  name: string;
-  icon?: string | null;
-  position?: string | null;
-  createdBy?: string | null;
-  owner_id?: string | null;
-  ownerId?: string | null;
-  createdAt?: string | Date | null;
-  updatedAt?: string | Date | null;
-  publicPermission?: AccessPermission;
-  pages?: PublicFolderPage[];
-  folders?: PublicFolderPayload[];
-};
-
 interface ShareContextType {
   isAnonymous: boolean;
   anonymousId: string | null;
   anonymousName: string | null;
   accessPermission: AccessPermission;
   capabilities: CapabilitySet;
-  publicEntity: PublicFolderPayload | null;
+  publicEntity: FolderDetailPayload | null;
   /** @deprecated Use capabilities.canEdit instead */
   canEdit: boolean;
 }
@@ -71,7 +40,7 @@ interface ShareProviderProps {
   children: ReactNode;
   publicPermission?: AccessPermission;
   capabilities?: CapabilitySet;
-  publicEntity?: PublicFolderPayload | null;
+  publicEntity?: FolderDetailPayload | null;
 }
 
 export function ShareProvider({
