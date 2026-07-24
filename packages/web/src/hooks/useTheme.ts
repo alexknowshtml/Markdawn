@@ -3,6 +3,8 @@ import { useCallback, useEffect, useSyncExternalStore } from 'react';
 export type Theme = 'light' | 'dark' | 'system';
 
 const THEME_KEY = 'markdawn-theme';
+const DARK_THEME_COLOR = '#09090b';
+const LIGHT_THEME_COLOR = '#ffffff';
 
 function readTheme(): Theme {
   if (typeof window === 'undefined') return 'system';
@@ -29,6 +31,9 @@ function applyTheme(theme: Theme) {
     root.classList.remove('dark');
     root.style.colorScheme = 'light';
   }
+  document
+    .querySelector('meta[name="theme-color"]')
+    ?.setAttribute('content', dark ? DARK_THEME_COLOR : LIGHT_THEME_COLOR);
   localStorage.setItem(THEME_KEY, theme);
 }
 
