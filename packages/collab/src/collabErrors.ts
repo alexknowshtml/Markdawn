@@ -1,4 +1,4 @@
-import { COLLAB_TERMINAL_REASONS } from '@markdawn/shared';
+import { COLLAB_GUEST_IDENTITY_EXPIRED_REASON, COLLAB_TERMINAL_REASONS } from '@markdawn/shared';
 
 export class CollabAccessError extends Error {
   readonly code = 'COLLAB_ACCESS_DENIED';
@@ -22,12 +22,12 @@ export class CollabVerificationError extends Error {
   }
 }
 
-export class CollabWriteDeniedError extends Error {
-  readonly code = 4403;
+export class CollabGuestIdentityExpiredError extends Error {
+  readonly reason = COLLAB_GUEST_IDENTITY_EXPIRED_REASON;
 
   constructor() {
-    super('Write permission required');
-    this.name = 'CollabWriteDeniedError';
+    super(COLLAB_GUEST_IDENTITY_EXPIRED_REASON);
+    this.name = 'CollabGuestIdentityExpiredError';
   }
 }
 

@@ -5,7 +5,7 @@ import type {
   SharePermission,
   WorkspaceMembershipMessage,
 } from '@markdawn/shared';
-import { COLLAB_TERMINAL_REASONS } from '@markdawn/shared';
+import { COLLAB_TERMINAL_REASONS, getPageMetaRoomName, isPageMetaRoomName } from '@markdawn/shared';
 import type { Pool } from 'pg';
 import {
   type CollabSession,
@@ -102,7 +102,7 @@ async function revalidatePageCandidates(
 
 function bumpShareAccessMetaVersion(server: Server, userIds: Iterable<string>): void {
   for (const userId of new Set(userIds)) {
-    const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${userId}`) as
+    const metaDocument = server.hocuspocus?.documents?.get(getPageMetaRoomName(userId)) as
       | Document
       | undefined;
     if (!metaDocument) continue;
@@ -127,7 +127,7 @@ function sendWorkspaceMembershipCompatibilityEvent(
     refreshViaAccessVersion: true,
   } satisfies WorkspaceMembershipMessage);
   for (const userId of new Set(userIds)) {
-    const metaDocument = server.hocuspocus?.documents?.get(`page-meta:${userId}`) as
+    const metaDocument = server.hocuspocus?.documents?.get(getPageMetaRoomName(userId)) as
       | Document
       | undefined;
     for (const connection of metaDocument?.getConnections() ?? []) {
@@ -243,7 +243,7 @@ export async function revalidateActivePageConnections(
             },
           });
         }
-      } else if (documentName.startsWith('page-meta:') && !isAnonymousSession(ctx)) {
+      } else if (isPageMetaRoomName(documentName) && !isAnonymousSession(ctx)) {
         metaCandidates.push({ connection, ctx });
       }
     }
@@ -455,7 +455,7 @@ export async function handleWorkspaceEvent(
 
   try {
     const activePageIds = Array.from(server.hocuspocus?.documents?.keys() ?? []).filter(
-      (documentName) => !documentName.startsWith('page-meta:'),
+      (documentName) => !isPageMetaRoomName(documentName),
     );
     if (activePageIds.length === 0) {
       logger.debug(`[workspace] no active pages for workspace owner ${ownerId}, skipping`);

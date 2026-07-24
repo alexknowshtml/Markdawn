@@ -1,8 +1,10 @@
 import { Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
 import {
+  COLLAB_DOCUMENT_RELOAD_REASONS,
   DEFAULT_MAX_AWARENESS_PAYLOAD_BYTES,
   DEFAULT_MAX_COLLAB_PAYLOAD_BYTES,
+  isPageMetaRoomName,
   MAX_YDOC_BYTES,
 } from '@markdawn/shared';
 import type { Pool } from 'pg';
@@ -18,6 +20,7 @@ import {
   reconcileDeletionOverflow,
 } from './deletionPublications';
 import { createDocumentChangeHooks } from './documentChangeHooks';
+import { reconcileActiveDocumentContent } from './documentContentReconciliation';
 import { createDocumentFlusher } from './documentFlusher';
 import { createDocumentLoader } from './documentLoader';
 import { createDocumentWriteCoordinator } from './documentWriteCoordinator';
@@ -41,13 +44,12 @@ export { publishFolderDeletion, publishPageDeletion } from './deletionPublicatio
 export { publishPageRename } from './metadataPublications';
 export { broadcastWikiLinkPresentationInvalidation } from './wikiLinkInvalidation';
 
-const META_ROOM_PREFIX = 'page-meta:';
 const APPLICATION_FENCE_TIMEOUT_MS = 10_000;
 export type CollaborationRuntime = { titles: PageTitleRuntime };
 export type CollabServer = Server & { readonly collaboration: CollaborationRuntime };
 
 function isMetaRoom(documentName: string): boolean {
-  return documentName.startsWith(META_ROOM_PREFIX);
+  return isPageMetaRoomName(documentName);
 }
 
 /** Canonical recovery after a LISTEN subscription (initial or reconnected). */
@@ -111,10 +113,13 @@ export function createCollabServer(config: CollabServerConfig) {
     getConnectionResolutionPrincipals,
     getDocumentChangeVersion,
     getDocumentSizeEstimate,
+    getDocumentContentHash,
     isDocumentBlocked,
     resetDocumentState,
     recordDocumentChange,
     setDocumentSizeEstimate,
+    setDocumentContentHash,
+    withDocumentContentLock,
   } = createDocumentWriteCoordinator({
     pool,
     logger,
@@ -145,6 +150,10 @@ export function createCollabServer(config: CollabServerConfig) {
     canPersistPendingDocument,
     clearPersistedWriters,
     setDocumentSizeEstimate,
+    getDocumentContentHash,
+    setDocumentContentHash,
+    withDocumentContentLock,
+    blockDocumentForReload,
     blockOversizedDocument,
   });
 
@@ -166,6 +175,22 @@ export function createCollabServer(config: CollabServerConfig) {
 
   const server = new Server({
     port,
+    onRequest: async ({ request, response }) => {
+      const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+      if (pathname !== '/health') return;
+
+      try {
+        await pool.query('select 1');
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ status: 'ok' }));
+      } catch (error) {
+        logger.error(`[health] database health check failed: ${error}`);
+        response.writeHead(503, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify({ status: 'unavailable' }));
+      }
+      // Prevent Hocuspocus from writing its default response after this hook.
+      await Promise.reject();
+    },
     lifecycleHooks: createHocuspocusV3LifecycleHooks({ rememberOutboundAwarenessEntries }),
     debounce: debounceMs,
     maxDebounce: maxDebounceMs,
@@ -207,6 +232,7 @@ export function createCollabServer(config: CollabServerConfig) {
       isMetaRoom,
       resetDocumentState,
       setDocumentSizeEstimate,
+      setDocumentContentHash,
       assertMetaRoomAccess,
       getSessionState,
       lockDocumentAccessMutation,
@@ -241,6 +267,12 @@ export function createCollabServer(config: CollabServerConfig) {
     permissionRevalidationMs,
     publications: {
       grantReceived: createGrantNotifier(server, pool, logger),
+      pageContentReplaced: async (pageId) => {
+        blockDocumentForReload(pageId, 4500, COLLAB_DOCUMENT_RELOAD_REASONS.CONTENT_REPLACED);
+        await rebuildActivePageMetaDocuments(server.hocuspocus, pool, logger, {
+          reconcileTitles: false,
+        });
+      },
       pageRenamed: handlePageRenamed,
       pageDeleted: (pageId) => publishPageDeletion(server.hocuspocus, pool, pageId, logger),
       folderDeleted: (folderId) => publishFolderDeletion(server.hocuspocus, pool, folderId, logger),
@@ -250,6 +282,16 @@ export function createCollabServer(config: CollabServerConfig) {
           reconcileActiveTitles: titleRuntime.reconcileActive,
         }),
       reconcileAll: () => reconcileActiveCollaborationState(server, pool, logger),
+      reconcileContent: () =>
+        reconcileActiveDocumentContent({
+          pool,
+          hocuspocus: server.hocuspocus,
+          logger,
+          isMetaRoom,
+          getLoadedContentHash: getDocumentContentHash,
+          withDocumentContentLock,
+          blockDocumentForReload,
+        }),
       reconcileDeletions: () => reconcileDeletionOverflow(server.hocuspocus, pool, logger),
     },
   });

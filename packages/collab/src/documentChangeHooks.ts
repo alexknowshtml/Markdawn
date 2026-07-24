@@ -18,6 +18,8 @@ import {
 } from './hocuspocusV3Adapter';
 import type { PageTitleRuntime } from './pageTitleRuntime';
 
+const MAX_DISCONNECT_PERSIST_ATTEMPTS = 3;
+
 export function createDocumentChangeHooks(options: {
   logger: Logger;
   maxDocumentBytes: number;
@@ -102,10 +104,25 @@ export function createDocumentChangeHooks(options: {
       await Promise.resolve();
       const document = instance.documents.get(documentName) as Y.Doc | undefined;
       if (!document) return;
-      try {
-        await options.flushDocument(documentName, document, undefined, 'disconnect');
-      } catch (error) {
-        options.logger.error(`[disconnect] force save failed for "${documentName}": ${error}`);
+      let attempt = 0;
+      while (attempt < MAX_DISCONNECT_PERSIST_ATTEMPTS) {
+        try {
+          await options.flushDocument(documentName, document, undefined, 'disconnect');
+          return;
+        } catch (error) {
+          attempt += 1;
+          if (attempt === MAX_DISCONNECT_PERSIST_ATTEMPTS) {
+            options.logger.error(
+              `[disconnect] force save failed for "${documentName}" after ${attempt} attempts: ${error}`,
+            );
+            return;
+          }
+          const retryDelay = Math.min(100 * 2 ** (attempt - 1), 5_000);
+          options.logger.error(
+            `[disconnect] force save failed for "${documentName}"; retrying in ${retryDelay}ms: ${error}`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        }
       }
     },
   };

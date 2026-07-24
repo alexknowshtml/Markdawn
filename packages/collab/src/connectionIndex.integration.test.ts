@@ -12,7 +12,7 @@ describe('connection index repository', () => {
     await pool.end();
   });
 
-  it('replaces page connections through the batched persistence path', async () => {
+  it('replaces page connections through the canonical database function', async () => {
     const owner = await createTestUser(pool);
     const source = await createTestPage(pool, owner.id, 'Source');
     const target = await createTestPage(pool, owner.id, 'Target');
@@ -23,7 +23,13 @@ describe('connection index repository', () => {
     link.setAttribute('label', 'Target');
     link.setAttribute('targetId', target.id);
     paragraph.push([link]);
-    document.getXmlFragment('prosemirror').push([paragraph]);
+    const secondParagraph = new Y.XmlElement('paragraph');
+    const secondLink = new Y.XmlElement('wikiLink');
+    secondLink.setAttribute('path', 'Target');
+    secondLink.setAttribute('label', 'Second target reference');
+    secondLink.setAttribute('targetId', target.id);
+    secondParagraph.push([secondLink]);
+    document.getXmlFragment('prosemirror').push([paragraph, secondParagraph]);
 
     const client = await pool.connect();
     try {
@@ -49,10 +55,20 @@ describe('connection index repository', () => {
        from connections where source_type = 'page' and source_id = $1`,
       [source.id],
     );
-    expect(result.rows).toEqual([{ target_id: target.id, occurrence_count: 1 }]);
+    expect(result.rows).toEqual([{ target_id: target.id, occurrence_count: 2 }]);
+    const occurrences = await pool.query<{ context: string | null }>(
+      `select occurrence.context
+       from connection_occurrences occurrence
+       join connections connection on connection.id = occurrence.connection_id
+       where connection.source_type = 'page' and connection.source_id = $1
+       order by occurrence.created_at, occurrence.id`,
+      [source.id],
+    );
+    expect(occurrences.rows).toHaveLength(2);
+    expect(occurrences.rows.every((row) => typeof row.context === 'string')).toBe(true);
   });
 
-  it('bounds each connection insertion batch', async () => {
+  it('passes the complete index to one canonical replacement call', async () => {
     const owner = await createTestUser(pool);
     const source = await createTestPage(pool, owner.id, 'Many tags');
     const tags = Array.from({ length: 251 }, (_, index) => `tag-${index}`);
@@ -81,17 +97,14 @@ describe('connection index repository', () => {
       document.destroy();
     }
 
-    const insertionCalls = querySpy.mock.calls.filter(
-      ([statement]) => typeof statement === 'string' && statement.includes('jsonb_to_recordset'),
+    const replacementCalls = querySpy.mock.calls.filter(
+      ([statement]) =>
+        typeof statement === 'string' && statement.includes('replace_page_connection_index'),
     );
-    expect(insertionCalls).toHaveLength(2);
-    expect(
-      insertionCalls.map((call) => {
-        const parameters = call[1];
-        const payload = Array.isArray(parameters) ? parameters[1] : undefined;
-        return typeof payload === 'string' ? (JSON.parse(payload) as unknown[]).length : 0;
-      }),
-    ).toEqual([250, 1]);
+    expect(replacementCalls).toHaveLength(1);
+    const parameters = replacementCalls[0]?.[1];
+    const payload = Array.isArray(parameters) ? parameters[1] : undefined;
+    expect(typeof payload === 'string' ? (JSON.parse(payload) as unknown[]).length : 0).toBe(251);
     const count = await pool.query<{ count: string }>(
       `select count(*)::text as count
        from connections where source_type = 'page' and source_id = $1`,

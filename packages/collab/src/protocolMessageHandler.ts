@@ -3,11 +3,7 @@ import { COLLAB_TERMINAL_REASONS, type StatelessShareMessage } from '@markdawn/s
 import type { Pool, PoolClient } from 'pg';
 import { withSerializedPermissionCheck } from './accessVerifier';
 import { validateAwarenessIdentity } from './awarenessPolicy';
-import {
-  CollabAccessError,
-  CollabProtocolDeniedError,
-  CollabWriteDeniedError,
-} from './collabErrors';
+import { CollabAccessError, CollabProtocolDeniedError } from './collabErrors';
 import {
   getProtocolMessageType,
   getYjsWriteUpdate,
@@ -187,6 +183,12 @@ async function verifyPageMessage(
       const effectivePermission = getCurrentPermission(session);
       if (writeUpdate && effectivePermission !== 'edit' && effectivePermission !== 'admin') {
         await transaction.rollback();
+        // Keep the verified read-only subscription alive. Milkdown and other
+        // Yjs bindings may emit normalization updates while mounting even
+        // when their UI is non-editable. Hocuspocus's read-only message path
+        // rejects the update and sends a failed sync acknowledgement without
+        // applying it to the canonical document.
+        connection.readOnly = true;
         sendPermissionSnapshot(connection, effectivePermission, session.accessRevision);
         if (stateApplied && previousPermission !== effectivePermission && effectivePermission) {
           connection.sendStateless(
@@ -197,8 +199,7 @@ async function verifyPageMessage(
             } satisfies StatelessShareMessage),
           );
         }
-        connection.close({ code: 4403, reason: 'Write permission required' });
-        throw new CollabWriteDeniedError();
+        return;
       }
       const admission = options.writeAdmissions.record(
         session,
@@ -220,10 +221,6 @@ async function verifyPageMessage(
         publishPermissionChange(connection, session, effectivePermission);
       }
     } catch (error) {
-      if (error instanceof CollabWriteDeniedError) {
-        await transaction.rollback();
-        throw error;
-      }
       if (error instanceof CollabAccessError) {
         if (error.accessRevision) {
           const applied = applyPermissionState(connection, session, {
@@ -274,7 +271,7 @@ async function verifyPageMessage(
 }
 
 export function createProtocolMessageHandler(options: MessageHandlerOptions) {
-  return async (payload: beforeHandleMessagePayload): Promise<void> => {
+  const handleMessage = async (payload: beforeHandleMessagePayload): Promise<void> => {
     const { documentName, document, update, connection, context } = payload;
     const session = isCollabSession(context) ? context : undefined;
     const protocolMessageType = getProtocolMessageType(update);
@@ -315,5 +312,17 @@ export function createProtocolMessageHandler(options: MessageHandlerOptions) {
     }
     if (!isSyncMessage && !isAwarenessMessage && !writeUpdate) return;
     await verifyPageMessage(payload, session, writeUpdate ?? undefined, options);
+  };
+
+  return async (payload: beforeHandleMessagePayload): Promise<void> => {
+    try {
+      await handleMessage(payload);
+    } catch (error) {
+      // Hocuspocus inspects rejected values with the `in` operator. Normalize
+      // extension/dependency rejections so a primitive rejection cannot cause
+      // a second exception in the connection-close path.
+      if (error instanceof Error) throw error;
+      throw new Error('Collaboration message rejected', { cause: error });
+    }
   };
 }

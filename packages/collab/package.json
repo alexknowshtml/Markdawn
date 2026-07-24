@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
+    "dev": "tsx watch --include 'src/**/*.ts' --conditions=development src/index.ts",
     "build": "tsup src/index.ts --format esm --dts --tsconfig tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "lint": "biome check src",

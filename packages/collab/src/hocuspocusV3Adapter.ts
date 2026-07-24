@@ -213,7 +213,9 @@ export function createHocuspocusV3LifecycleHooks(options: {
       } catch (error) {
         if (capturedUpdate) writeAdmissionsByUpdate.delete(capturedUpdate);
         removePendingWriteAdmission(fence.context, fence.admission);
-        void fence.complete(false);
+        void fence.complete(false).catch(() => {
+          connection?.close({ code: 4500, reason: 'Write application rollback failed' });
+        });
         throw error;
       } finally {
         if (connection && currentReadOnly !== undefined) connection.readOnly = currentReadOnly;

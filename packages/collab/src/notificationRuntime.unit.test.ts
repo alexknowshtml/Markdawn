@@ -24,11 +24,13 @@ function createRuntimeOptions(createListenClient: (databaseUrl: string) => Clien
     permissionRevalidationMs: 0,
     publications: {
       grantReceived: vi.fn(async () => undefined),
+      pageContentReplaced: vi.fn(async () => undefined),
       pageRenamed: vi.fn(async () => undefined),
       pageDeleted: vi.fn(async () => undefined),
       folderDeleted: vi.fn(async () => undefined),
       rebuildMetadata: vi.fn(async () => undefined),
       reconcileAll: vi.fn(async () => undefined),
+      reconcileContent: vi.fn(async () => undefined),
       reconcileDeletions: vi.fn(async () => undefined),
     },
     createListenClient,
@@ -52,7 +54,8 @@ describe('notification runtime connection lifecycle', () => {
       clients.push(client);
       return client as unknown as Client;
     });
-    const dispose = installNotificationRuntime(createRuntimeOptions(createListenClient));
+    const options = createRuntimeOptions(createListenClient);
+    const dispose = installNotificationRuntime(options);
     await flushConnectionSetup();
 
     expect(createListenClient).toHaveBeenCalledTimes(1);
@@ -64,6 +67,19 @@ describe('notification runtime connection lifecycle', () => {
     await vi.advanceTimersByTimeAsync(1);
     await flushConnectionSetup();
     expect(createListenClient).toHaveBeenCalledTimes(2);
+    expect(options.publications.reconcileContent).toHaveBeenCalledTimes(2);
+
+    await dispose();
+  });
+
+  it('does not reload pages on the initial notification subscription', async () => {
+    const client = new FakeListenClient();
+    const options = createRuntimeOptions(() => client as unknown as Client);
+    const dispose = installNotificationRuntime(options);
+    await flushConnectionSetup();
+
+    expect(options.publications.reconcileAll).toHaveBeenCalledOnce();
+    expect(options.publications.reconcileContent).toHaveBeenCalledOnce();
 
     await dispose();
   });

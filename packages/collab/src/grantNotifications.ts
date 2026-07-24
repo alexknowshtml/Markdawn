@@ -1,11 +1,13 @@
 import type { Document, Server } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import type { GrantReceivedMessage } from '@markdawn/shared';
+import {
+  type GrantReceivedMessage,
+  getPageMetaRoomName,
+  isPageMetaRoomName,
+} from '@markdawn/shared';
 import type { Pool } from 'pg';
 import { getSessionUser, isAnonymousSession, isCollabSession } from './collabSession';
 import type { GrantReceivedPayload } from './notificationPayloads';
-
-const META_ROOM_PREFIX = 'page-meta:';
 
 export function createGrantNotifier(server: Server, pool: Pool, logger: Logger) {
   return async function handleGrantReceived(payload: GrantReceivedPayload): Promise<void> {
@@ -49,7 +51,7 @@ export function createGrantNotifier(server: Server, pool: Pool, logger: Logger) 
     } satisfies GrantReceivedMessage);
     let affectedCount = 0;
     const metaDocument = server.hocuspocus.documents.get(
-      `${META_ROOM_PREFIX}${payload.targetUserId}`,
+      getPageMetaRoomName(payload.targetUserId),
     ) as Document | undefined;
     for (const connection of metaDocument?.getConnections() ?? []) {
       connection.sendStateless(message);
@@ -58,7 +60,7 @@ export function createGrantNotifier(server: Server, pool: Pool, logger: Logger) 
 
     if (affectedCount === 0) {
       for (const [documentName, document] of server.hocuspocus.documents) {
-        if (documentName.startsWith(META_ROOM_PREFIX)) continue;
+        if (isPageMetaRoomName(documentName)) continue;
         for (const connection of (document as Document).getConnections()) {
           const context = isCollabSession(connection.context) ? connection.context : undefined;
           if (

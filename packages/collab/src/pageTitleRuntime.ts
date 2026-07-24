@@ -1,6 +1,10 @@
 import type { Document, Hocuspocus } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import { getUnicodeCodePointLength, MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
+import {
+  COLLAB_DOCUMENT_RELOAD_REASONS,
+  getUnicodeCodePointLength,
+  MAX_PAGE_TITLE_LENGTH,
+} from '@markdawn/shared';
 import type { Pool } from 'pg';
 import type * as Y from 'yjs';
 
@@ -61,7 +65,7 @@ export function createPageTitleRuntime({
     if (acceptedTitle === title) return true;
     if (acceptedTitle === undefined) {
       logger.error(`[title] cannot recover page=${documentName}: no canonical title is available`);
-      blockDocument(documentName, 4500, 'Document reload required');
+      blockDocument(documentName, 4500, COLLAB_DOCUMENT_RELOAD_REASONS.RELOAD_REQUIRED);
       return false;
     }
     document.transact(() => {
@@ -92,7 +96,7 @@ export function createPageTitleRuntime({
           await client.query('rollback');
           continue;
         }
-        await client.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+        await client.query('select pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [
           `workspace-access:${ownerId}`,
         ]);
         const result = await client.query<{ title: string; title_revision: string }>(

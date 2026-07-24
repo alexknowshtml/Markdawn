@@ -1,10 +1,12 @@
 import type { onLoadDocumentPayload } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
+import { parsePageMetaRoomName } from '@markdawn/shared';
 import type { Pool, PoolClient, QueryResult } from 'pg';
 import * as Y from 'yjs';
 import { CollabAccessError } from './collabErrors';
 import { sanitizeCanonicalYjsUpdate } from './collaborationProtocol';
 import { getSessionToken, getSessionUser, isCollabSession } from './collabSession';
+import { getDocumentContentHash } from './documentContentHash';
 import { DocumentSizeLimitError } from './documentSizeError';
 import { rebuildPageMetaDocument } from './pageMetadata';
 import type { PageTitleRuntime } from './pageTitleRuntime';
@@ -20,6 +22,7 @@ export function createDocumentLoader(options: {
   isMetaRoom(documentName: string): boolean;
   resetDocumentState(documentName: string): void;
   setDocumentSizeEstimate(documentName: string, size: number): void;
+  setDocumentContentHash(documentName: string, hash: string): void;
   assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void>;
   getSessionState(userId: string, sessionToken: string): Promise<SessionState>;
   lockDocumentAccessMutation(documentName: string, client: PoolClient): Promise<void>;
@@ -47,7 +50,8 @@ export function createDocumentLoader(options: {
     if (!session) throw new Error('Unauthorized');
 
     if (options.isMetaRoom(documentName)) {
-      const userId = documentName.slice('page-meta:'.length);
+      const userId = parsePageMetaRoomName(documentName);
+      if (!userId) throw new CollabAccessError(session.accessRevision);
       const sessionUser = getSessionUser(session);
       await options.assertMetaRoomAccess(sessionUser.id, userId);
       const state = await options.getSessionState(sessionUser.id, getSessionToken(session));
@@ -109,6 +113,10 @@ export function createDocumentLoader(options: {
     const row = result.rows[0];
     if (!row) throw new CollabAccessError(session.accessRevision);
     const canonicalTitle = row.title || 'Untitled';
+    options.setDocumentContentHash(
+      documentName,
+      getDocumentContentHash(row.ydoc ? new Uint8Array(row.ydoc) : null),
+    );
     options.titles.rememberLoaded(documentName, canonicalTitle);
     if (!row.ydoc || row.ydoc.length === 0) {
       options.setDocumentSizeEstimate(documentName, 0);

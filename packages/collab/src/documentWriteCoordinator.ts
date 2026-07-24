@@ -1,6 +1,10 @@
 import type { Document, Hocuspocus } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import { COLLAB_TERMINAL_REASONS, type SharePermission } from '@markdawn/shared';
+import {
+  COLLAB_DOCUMENT_RELOAD_REASONS,
+  COLLAB_TERMINAL_REASONS,
+  type SharePermission,
+} from '@markdawn/shared';
 import type { Pool } from 'pg';
 import type { PermissionQueryExecutor } from './accessVerifier';
 import { CollabAccessError, CollabVerificationError } from './collabErrors';
@@ -12,6 +16,7 @@ import {
   isCollabSession,
 } from './collabSession';
 import type { ConnectionResolutionPrincipal } from './connectionIndex';
+import { createDocumentContentLock } from './documentContentLock';
 import type { WriteAdmission } from './hocuspocusV3Adapter';
 import {
   applyPagePermissionTransition,
@@ -59,12 +64,15 @@ export function createDocumentWriteCoordinator({
   const documentChangeVersions = new Map<string, number>();
   const blockedDocuments = new Set<string>();
   const documentSizeEstimates = new Map<string, number>();
+  const documentContentHashes = new Map<string, string>();
+  const contentLock = createDocumentContentLock();
 
   function resetDocumentState(documentName: string): void {
     blockedDocuments.delete(documentName);
     pendingWriters.delete(documentName);
     documentChangeVersions.delete(documentName);
     documentSizeEstimates.delete(documentName);
+    documentContentHashes.delete(documentName);
   }
 
   function updateRevalidatedConnections(
@@ -88,14 +96,21 @@ export function createDocumentWriteCoordinator({
   }
 
   function blockDocumentForReload(documentName: string, code: number, reason: string): void {
+    const activeDocument = getHocuspocus().documents.get(documentName) as Document | undefined;
+    // A reload only has meaning for a document that is currently serving
+    // clients. Retaining a block for an inactive document would reject a
+    // future, unrelated connection until this process restarts.
+    if (!activeDocument) {
+      resetDocumentState(documentName);
+      return;
+    }
     if (blockedDocuments.has(documentName)) return;
     blockedDocuments.add(documentName);
     pendingWriters.delete(documentName);
     documentChangeVersions.delete(documentName);
     documentSizeEstimates.delete(documentName);
-    const activeDocument = getHocuspocus().documents.get(documentName) as Document | undefined;
-    for (const connection of activeDocument?.getConnections() ?? [])
-      connection.close({ code, reason });
+    documentContentHashes.delete(documentName);
+    for (const connection of activeDocument.getConnections()) connection.close({ code, reason });
   }
 
   function blockOversizedDocument(documentName: string, size: number): void {
@@ -175,7 +190,7 @@ export function createDocumentWriteCoordinator({
       for (const writer of writers) {
         if (writer.admittedAccessRevision) continue;
         if (await canPersistDocument(documentName, writer.context, executor ?? pool)) continue;
-        blockDocumentForReload(documentName, 4500, 'Document reload required');
+        blockDocumentForReload(documentName, 4500, COLLAB_DOCUMENT_RELOAD_REASONS.RELOAD_REQUIRED);
         return false;
       }
       return true;
@@ -266,11 +281,15 @@ export function createDocumentWriteCoordinator({
     getConnectionResolutionPrincipals,
     getDocumentChangeVersion: (documentName: string) =>
       documentChangeVersions.get(documentName) ?? 0,
+    getDocumentContentHash: (documentName: string) => documentContentHashes.get(documentName),
     getDocumentSizeEstimate: (documentName: string) => documentSizeEstimates.get(documentName) ?? 0,
     isDocumentBlocked: (documentName: string) => blockedDocuments.has(documentName),
     resetDocumentState,
     recordDocumentChange,
+    setDocumentContentHash: (documentName: string, hash: string) =>
+      documentContentHashes.set(documentName, hash),
     setDocumentSizeEstimate: (documentName: string, size: number) =>
       documentSizeEstimates.set(documentName, size),
+    withDocumentContentLock: contentLock.run,
   };
 }

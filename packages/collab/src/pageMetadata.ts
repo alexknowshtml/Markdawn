@@ -1,10 +1,7 @@
 import type { Document, Hocuspocus } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import type { SharePermission } from '@markdawn/shared';
+import { parsePageMetaRoomName, type SharePermission } from '@markdawn/shared';
 import type { Pool, PoolClient } from 'pg';
-import { isUuid } from './utils';
-
-const META_ROOM_PREFIX = 'page-meta:';
 
 export type ActiveMetaDocuments = Map<string, Document>;
 export type PageMeta = {
@@ -19,9 +16,8 @@ export type MetadataQueryExecutor = Pick<PoolClient, 'query'>;
 export function getActiveMetaDocuments(hocuspocus: Hocuspocus): ActiveMetaDocuments {
   const documents = new Map<string, Document>();
   for (const [documentName, document] of hocuspocus.documents) {
-    if (!documentName.startsWith(META_ROOM_PREFIX)) continue;
-    const userId = documentName.slice(META_ROOM_PREFIX.length);
-    if (!isUuid(userId)) continue;
+    const userId = parsePageMetaRoomName(documentName);
+    if (!userId) continue;
     documents.set(userId, document as Document);
   }
   return documents;

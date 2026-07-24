@@ -92,7 +92,7 @@ export function createAccessVerifier(pool: Pool, logger: Logger) {
     const ownerId = ownerResult.rows[0]?.owner_id;
     if (!ownerId) return;
     await runPermissionQuery(() =>
-      executor.query('select pg_advisory_xact_lock(hashtextextended($1, 0))', [
+      executor.query('select pg_advisory_xact_lock_shared(hashtextextended($1, 0))', [
         `workspace-access:${ownerId}`,
       ]),
     );

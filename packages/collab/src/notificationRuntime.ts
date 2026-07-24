@@ -21,6 +21,7 @@ import { broadcastWikiLinkPresentationInvalidation } from './wikiLinkInvalidatio
 
 const DELETION_EVENT_QUEUE_LIMIT = 256;
 const GRANT_EVENT_QUEUE_LIMIT = 256;
+const PAGE_CONTENT_EVENT_QUEUE_LIMIT = 256;
 const PAGE_RENAME_EVENT_QUEUE_LIMIT = 256;
 const SHARE_EVENT_QUEUE_LIMIT = 256;
 const WORKSPACE_EVENT_QUEUE_LIMIT = 256;
@@ -35,11 +36,13 @@ type MetadataRebuildOptions = {
 
 type NotificationPublications = {
   grantReceived(payload: GrantReceivedPayload): Promise<void>;
+  pageContentReplaced(pageId: string): Promise<void>;
   pageRenamed(pageId: string): Promise<void>;
   pageDeleted(pageId: string): Promise<void>;
   folderDeleted(folderId: string): Promise<void>;
   rebuildMetadata(options?: MetadataRebuildOptions): Promise<void>;
   reconcileAll(): Promise<void>;
+  reconcileContent(): Promise<void>;
   reconcileDeletions(): Promise<void>;
 };
 
@@ -211,6 +214,13 @@ export function installNotificationRuntime({
     handleOverflow: () => publications.rebuildMetadata(),
     onError: (error) => logger.error(`[listen] handlePageRenamed failed: ${error}`),
   });
+  const pageContentEventQueue = createCoalescingTaskQueue<string>({
+    maxPending: PAGE_CONTENT_EVENT_QUEUE_LIMIT,
+    getKey: (pageId) => pageId,
+    handle: publications.pageContentReplaced,
+    handleOverflow: publications.reconcileContent,
+    onError: (error) => logger.error(`[listen] page content replacement failed: ${error}`),
+  });
 
   function scheduleReconnect(): void {
     if (stopped || !databaseUrl) return;
@@ -259,6 +269,8 @@ export function installNotificationRuntime({
             }
           } else if (message.channel === 'page_renamed') {
             if (typeof payload.pageId === 'string') pageRenameEventQueue.enqueue(payload.pageId);
+          } else if (message.channel === 'page_content_replaced') {
+            if (typeof payload.pageId === 'string') pageContentEventQueue.enqueue(payload.pageId);
           } else if (message.channel === 'share_event') {
             const grant = parseGrantReceivedPayload(payload);
             if (grant) grantEventQueue.enqueue(grant);
@@ -283,6 +295,7 @@ export function installNotificationRuntime({
         scheduleReconnect();
       });
       await Promise.all([
+        client.query('LISTEN page_content_replaced'),
         client.query('LISTEN page_renamed'),
         client.query('LISTEN page_deleted'),
         client.query('LISTEN folder_deleted'),
@@ -296,7 +309,11 @@ export function installNotificationRuntime({
       }
       if (connectingClient === client) connectingClient = null;
       listenClient = client;
-      await publications.reconcileAll();
+      // LISTEN starts before reconciliation, so replacements committed during
+      // this pass are either observed here or delivered as a notification.
+      // Run this on the initial subscription too: the server may already have
+      // accepted editors while the listener was connecting.
+      await Promise.all([publications.reconcileAll(), publications.reconcileContent()]);
       reconnectAttempts = 0;
       logger.info('[listen] subscribed and reconciled collaboration notification channels');
     } catch (error) {
@@ -330,6 +347,7 @@ export function installNotificationRuntime({
     grantEventQueue.drainAndStop();
     workspaceEventQueue.drainAndStop();
     deletionEventQueue.drainAndStop();
+    pageContentEventQueue.drainAndStop();
     pageRenameEventQueue.drainAndStop();
     const client = listenClient;
     listenClient = null;
@@ -343,6 +361,7 @@ export function installNotificationRuntime({
       grantEventQueue.waitForIdle(),
       workspaceEventQueue.waitForIdle(),
       deletionEventQueue.waitForIdle(),
+      pageContentEventQueue.waitForIdle(),
       pageRenameEventQueue.waitForIdle(),
       revalidationTask ?? Promise.resolve(),
       pendingListenConnection ?? Promise.resolve(),

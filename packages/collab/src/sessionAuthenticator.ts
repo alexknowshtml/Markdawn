@@ -1,8 +1,8 @@
 import type { onAuthenticatePayload } from '@hocuspocus/server';
 import type { Logger } from '@logtape/logtape';
-import { getAnonymousName } from '@markdawn/shared';
+import { getAnonymousName, parsePageMetaRoomName } from '@markdawn/shared';
 import type { Pool } from 'pg';
-import { CollabAccessError } from './collabErrors';
+import { CollabAccessError, CollabGuestIdentityExpiredError } from './collabErrors';
 import { type CollabSession, createCollabSession } from './collabSession';
 import { createConnectionLifecycle } from './hocuspocusV3Adapter';
 import type { GrantedPermissionState } from './permissionState';
@@ -22,8 +22,6 @@ type SessionAuthenticatorOptions = {
   ): Promise<GrantedPermissionState>;
   assertMetaRoomAccess(userId: string, roomUserId: string): Promise<void>;
 };
-
-const META_ROOM_PREFIX = 'page-meta:';
 
 function getSessionToken(payload: onAuthenticatePayload): string {
   const cookies = parseCookies(payload.requestHeaders.cookie);
@@ -65,12 +63,11 @@ export function createSessionAuthenticator(options: SessionAuthenticatorOptions)
       }
       const access = await assertAnonymousPageAccess(documentName);
       const anonymousName = getAnonymousName(anonymousId);
-      await pool.query(
-        `insert into guest_identities (id, name, created_at, last_seen_at)
-         values ($1, $2, now(), now())
-         on conflict (id) do update set last_seen_at = excluded.last_seen_at`,
+      const identity = await pool.query<{ established: boolean }>(
+        'select establish_guest_identity($1, $2) as established',
         [anonymousId, anonymousName],
       );
+      if (!identity.rows[0]?.established) throw new CollabGuestIdentityExpiredError();
       if (access.permission === 'view') connectionConfig.readOnly = true;
       logger.info(
         `[auth] anonymous user=${anonymousId} connected to page=${documentName} (permission=${access.permission})`,
@@ -98,8 +95,8 @@ export function createSessionAuthenticator(options: SessionAuthenticatorOptions)
     let permission: CollabSession['permission'] = null;
     let accessRevision = sessionAccessRevision;
     if (isMetaRoom(documentName)) {
-      const roomUserId = documentName.slice(META_ROOM_PREFIX.length);
-      if (!isUuid(roomUserId)) throw new CollabAccessError(accessRevision);
+      const roomUserId = parsePageMetaRoomName(documentName);
+      if (!roomUserId) throw new CollabAccessError(accessRevision);
       await assertMetaRoomAccess(user.id, roomUserId);
       connectionConfig.readOnly = true;
     } else {

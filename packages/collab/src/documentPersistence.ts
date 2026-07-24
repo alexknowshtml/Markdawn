@@ -4,6 +4,7 @@ import type { Pool, PoolClient } from 'pg';
 import * as Y from 'yjs';
 import { sanitizeCanonicalYjsUpdate } from './collaborationProtocol';
 import { type ConnectionResolutionPrincipal, updateConnections } from './connectionIndex';
+import { getDocumentContentHash } from './documentContentHash';
 import { DocumentSizeLimitError } from './documentSizeError';
 import {
   getActiveMetaDocuments,
@@ -15,8 +16,8 @@ import {
 import { broadcastWikiLinkPresentationInvalidation } from './wikiLinkInvalidation';
 
 export type PersistDocumentResult =
-  | { committed: false }
-  | { committed: true; canonicalTitle: string; stateSize: number };
+  | { committed: false; staleContent?: boolean }
+  | { committed: true; canonicalTitle: string; contentHash: string; stateSize: number };
 
 export type PersistDocumentOptions = {
   pool: Pool;
@@ -30,6 +31,7 @@ export type PersistDocumentOptions = {
   maxDocumentBytes: number;
   logger: Logger;
   authorizePersistence?: (client: PoolClient) => Promise<boolean>;
+  expectedContentHash: string | undefined;
 };
 
 function extractTitle(document: Y.Doc): string {
@@ -52,11 +54,13 @@ export async function persistDocument(
     maxDocumentBytes,
     logger,
     authorizePersistence,
+    expectedContentHash,
   } = options;
   const client = await pool.connect();
   let targetPageIds: string[] = [];
   let pageMeta: PageMeta | undefined;
   let committedStateSize = 0;
+  let committedContentHash = getDocumentContentHash(null);
   let committedTitle = lastCanonicalTitle ?? 'Untitled';
   let committedWhileDeleted = false;
   let wikiLinkPresentationsChanged = false;
@@ -82,6 +86,14 @@ export async function persistDocument(
     if (!current) {
       await client.query('ROLLBACK');
       return { committed: false };
+    }
+    if (
+      expectedContentHash !== undefined &&
+      getDocumentContentHash(current.ydoc ? new Uint8Array(current.ydoc) : null) !==
+        expectedContentHash
+    ) {
+      await client.query('ROLLBACK');
+      return { committed: false, staleContent: true };
     }
 
     const connectionSnapshot = new Y.Doc();
@@ -177,6 +189,7 @@ export async function persistDocument(
 
     await client.query('COMMIT');
     committedStateSize = state.length;
+    committedContentHash = getDocumentContentHash(state);
     committedTitle = pageMeta?.title ?? committedTitle ?? current.title;
     wikiLinkPresentationsChanged = !committedWhileDeleted && committedTitle !== current.title;
   } catch (error) {
@@ -194,7 +207,12 @@ export async function persistDocument(
   }
 
   if (committedWhileDeleted) {
-    return { committed: true, canonicalTitle: committedTitle, stateSize: committedStateSize };
+    return {
+      committed: true,
+      canonicalTitle: committedTitle,
+      contentHash: committedContentHash,
+      stateSize: committedStateSize,
+    };
   }
   if (wikiLinkPresentationsChanged) {
     try {
@@ -210,7 +228,12 @@ export async function persistDocument(
 
   const activeDocuments = getActiveMetaDocuments(hocuspocus);
   if (activeDocuments.size === 0) {
-    return { committed: true, canonicalTitle: committedTitle, stateSize: committedStateSize };
+    return {
+      committed: true,
+      canonicalTitle: committedTitle,
+      contentHash: committedContentHash,
+      stateSize: committedStateSize,
+    };
   }
   try {
     const affectedIds = [...new Set([documentName, ...targetPageIds])];
@@ -241,5 +264,10 @@ export async function persistDocument(
       `[persist] metadata publication failed after commit for page=${documentName}: ${error}`,
     );
   }
-  return { committed: true, canonicalTitle: committedTitle, stateSize: committedStateSize };
+  return {
+    committed: true,
+    canonicalTitle: committedTitle,
+    contentHash: committedContentHash,
+    stateSize: committedStateSize,
+  };
 }

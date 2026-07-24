@@ -39,8 +39,51 @@ describe('document persistence', () => {
         getPendingTitleBaseline: () => undefined,
         maxDocumentBytes: 1024,
         logger,
+        expectedContentHash: undefined,
       }),
     ).resolves.toEqual({ committed: false });
+    expect(query.mock.calls.map(([statement]) => String(statement).toLowerCase())).toEqual([
+      'begin',
+      expect.stringContaining('from pages where id = $1 for update'),
+      'rollback',
+    ]);
+    expect(client.release).toHaveBeenCalledOnce();
+    document.destroy();
+  });
+
+  it('refuses to merge a stale active document after canonical content was replaced', async () => {
+    const query = vi
+      .fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            ydoc: Buffer.from('replacement'),
+            title: 'Page',
+            is_deleted: false,
+            title_revision: '1',
+          },
+        ],
+      })
+      .mockResolvedValueOnce({ rows: [] });
+    const { pool, client } = createPool(query);
+    const document = new Y.Doc();
+
+    await expect(
+      persistDocument({
+        pool,
+        hocuspocus,
+        documentName: 'page-1',
+        document,
+        connectionSnapshotState: Y.encodeStateAsUpdate(document),
+        connectionResolutionPrincipals: [],
+        lastCanonicalTitle: 'Page',
+        getPendingTitleBaseline: () => undefined,
+        maxDocumentBytes: 1024,
+        logger,
+        expectedContentHash: 'stale-hash',
+      }),
+    ).resolves.toEqual({ committed: false, staleContent: true });
     expect(query.mock.calls.map(([statement]) => String(statement).toLowerCase())).toEqual([
       'begin',
       expect.stringContaining('from pages where id = $1 for update'),
@@ -74,6 +117,7 @@ describe('document persistence', () => {
         getPendingTitleBaseline: () => undefined,
         maxDocumentBytes: 1,
         logger,
+        expectedContentHash: undefined,
       }),
     ).rejects.toBeInstanceOf(DocumentSizeLimitError);
     expect(client.release).toHaveBeenCalledOnce();
