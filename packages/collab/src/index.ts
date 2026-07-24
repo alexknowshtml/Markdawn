@@ -1,6 +1,7 @@
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getCollabLogger, setupLogger } from '@markdawn/shared';
 import { config } from 'dotenv';
 import { createCollabServer } from './server';
 import { getDbHostname } from './utils';
@@ -22,7 +23,6 @@ if (selectedEnvPath) {
 }
 
 async function main() {
-  const { setupLogger, getCollabLogger } = await import('@markdawn/shared');
   await setupLogger();
   const logger = getCollabLogger();
 

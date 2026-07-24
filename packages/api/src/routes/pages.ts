@@ -1,32 +1,108 @@
+import {
+  type AccountPagePayload,
+  deriveCapabilities,
+  MAX_WIKI_LINK_PRESENTATION_REQUESTS,
+  normalizeWikiLinkLookupKey,
+  type PublicPagePayload,
+  type WikiLinkPresentation,
+  type WikiLinkPresentationRequest,
+  type WikiLinkPresentationResponse,
+} from '@markdawn/shared';
+import { extractWikiLinkTargetIds } from '@markdawn/shared/yjs-helpers';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import JSZip from 'jszip';
 import { marked } from 'marked';
-import * as Y from 'yjs';
-import type { pages } from '../db';
-import { pool } from '../db/connection';
+import { auth } from '../auth';
+import { db } from '../db/connection';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { uploadsDir } from '../env';
 import { requireAuth } from '../middleware/auth';
+import { getDestinationOwnerId } from '../utils/destinationOwner';
+import { ensureDocumentInputSize, ensureYdocSize } from '../utils/documentSize';
+import { purgeEntityAccessMetadata } from '../utils/entityCleanup';
+import { movePageToTrash, removePageFromView } from '../utils/entityRemoval';
 import { extractImages, pageToMarkdown } from '../utils/export-helpers';
 import { slugifyFilename } from '../utils/filename';
+import { getEnumerableFolderIds, redactParentId } from '../utils/folderEnumeration';
 import {
+  ensureActorCanCreateInFolder,
+  ensureActorPageAccess,
+  getRequestActor,
+  persistGuestIdentity,
+} from '../utils/guestAccess';
+import {
+  bindWikiLinkTargets,
   createEmptyYjsDoc,
   createYjsDocWithTitle,
-  resolveWikilinkTargets,
 } from '../utils/markdown-to-yjs';
+import {
+  replacePageConnectionIndex,
+  replacePageTagConnectionIndex,
+} from '../utils/pageConnectionIndex';
+import { copyPageContent } from '../utils/pageCopy';
+import { validatePageProperties } from '../utils/pageProperties';
+import {
+  type NormalizedPageRow,
+  normalizePageRow,
+  type PageDatabaseRow,
+  type PageDatabaseRowWithOwner,
+} from '../utils/pageRows';
+import { normalizePageTitle } from '../utils/pageTitle';
+import { getNextPosition, normalizePosition } from '../utils/position';
+import {
+  getPublicPermission,
+  type PublicPermission,
+  recordPublicVisitAndNotify,
+  resolveEntityAccess,
+} from '../utils/publicAccess';
+import {
+  ensureFolderAccess,
+  ensurePageAccess,
+  ensureWorkspaceAdmin,
+  lockEntityAccess,
+  lockEntityAccessMutation,
+  lockEntityAccessMutations,
+  lockWorkspaceAccessMutation,
+  type SharePermission,
+} from '../utils/share-access';
+import { notifyShareRecompute } from '../utils/share-notify';
+import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
+import {
+  processUploadDeletionQueue,
+  purgeUnreferencedUploadsForPages,
+} from '../utils/uploadCleanup';
+import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
-type PageRow = typeof pages.$inferSelect;
-type RawPageRow = PageRow & {
-  workspace_id?: string | null;
-  parent_id?: string | null;
-  created_by?: string | null;
-  created_at?: Date | null;
-  updated_at?: Date | null;
-  is_deleted?: boolean | null;
-  deleted_at?: Date | null;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const isLocalWikiLinkHeading = (value: string): boolean => {
+  const trimmed = value.trim();
+  return trimmed.startsWith('#') && trimmed.slice(1).trim().length > 0;
 };
 
 const pagesRoute = new Hono();
+const pagesPublicRoute = new Hono();
+
+const deletedPageOwnerSql = sql`coalesce(
+  (
+    select root.created_by
+    from folder_closure fc
+    join folders root on root.id = fc.ancestor_id
+    where fc.descendant_id = p.parent_id
+      and root.parent_id is null
+    order by fc.depth desc
+    limit 1
+  ),
+  (
+    select folder_owner.created_by
+    from folders folder_owner
+    where folder_owner.id = p.parent_id
+  ),
+  p.created_by
+)`;
 
 pagesRoute.use('*', requireAuth);
 
@@ -43,245 +119,895 @@ const isValidMarkdown = (markdown: string): boolean => {
   }
 };
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
+const getPageById = async (pageId: string, executor?: QueryExecutor) => {
+  const statement = sql`select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id from pages p where p.id = ${pageId} and p.is_deleted = false limit 1`;
+  const result = executor
+    ? await executeQuery<PageDatabaseRowWithOwner>(executor, statement)
+    : await query<PageDatabaseRowWithOwner>(statement);
+  const row = result.rows[0] ?? null;
+  return row ? normalizePageRow(row, row.owner_id) : null;
+};
 
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
+const getPageByIdForUpdate = async (
+  pageId: string,
+  executor: QueryExecutor,
+): Promise<NormalizedPageRow | null> => {
+  const result = await executeQuery<PageDatabaseRowWithOwner>(
+    executor,
+    sql`select p.*, coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id
+     from pages p
+     where p.id = ${pageId} and p.is_deleted = false
+     limit 1
+     for update of p`,
+  );
+  const row = result.rows[0] ?? null;
+  return row ? normalizePageRow(row, row.owner_id) : null;
+};
+
+const ensurePageOrganizationAccess = async (
+  page: NormalizedPageRow,
+  targetParentId: string | null,
+  userId: string,
+  executor?: QueryExecutor,
+) => {
+  if (!page.ownerId) {
+    throw new HTTPException(409, { message: 'Page owner could not be determined' });
+  }
+  if (targetParentId === page.id) {
+    throw new HTTPException(400, { message: 'Cannot set parent to self' });
+  }
+
+  await ensurePageAccess(page.id, userId, 'admin', executor);
+  if (page.parentId) {
+    await ensureFolderAccess(page.parentId, userId, 'admin', executor);
+  } else {
+    await ensureWorkspaceAdmin(page.ownerId, userId, executor);
+  }
+
+  let destinationOwnerId: string | null = page.createdBy;
+  if (targetParentId) {
+    const ownerStatement = sql`select get_root_folder_owner(id) as owner_id
+       from folders
+       where id = ${targetParentId} and is_deleted = false`;
+    const ownerResult = executor
+      ? await executeQuery<{ owner_id: string | null }>(executor, ownerStatement)
+      : await query<{ owner_id: string | null }>(ownerStatement);
+    destinationOwnerId = ownerResult.rows[0]?.owner_id ?? null;
+    if (!destinationOwnerId) {
+      throw new HTTPException(404, { message: 'Parent folder not found' });
+    }
+    await ensureFolderAccess(targetParentId, userId, 'admin', executor);
+  } else if (destinationOwnerId) {
+    await ensureWorkspaceAdmin(destinationOwnerId, userId, executor);
+  }
+
+  if (destinationOwnerId !== page.ownerId) {
+    throw new HTTPException(409, { message: 'Pages cannot be moved between different owners' });
   }
 };
 
-const getPageById = async (pageId: string) => {
-  const result = await pool.query('select * from pages where id = $1 limit 1', [pageId]);
-  const row = (result.rows[0] as RawPageRow | undefined) ?? null;
-  return row ? normalizePageRow(row) : null;
+const getDeletedPageById = async (pageId: string) => {
+  const result = await query<PageDatabaseRowWithOwner>(
+    sql`select p.*, ${deletedPageOwnerSql} as owner_id from pages p where p.id = ${pageId} and p.is_deleted = true limit 1`,
+  );
+  const row = result.rows[0] ?? null;
+  return row ? normalizePageRow(row, row.owner_id) : null;
 };
 
-const normalizePageRow = (row: RawPageRow): PageRow => ({
-  ...row,
-  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
-  parentId: row.parentId ?? row.parent_id ?? null,
-  createdBy: row.createdBy ?? row.created_by ?? null,
-  createdAt: row.createdAt ?? row.created_at ?? null,
-  updatedAt: row.updatedAt ?? row.updated_at ?? null,
-  isDeleted: row.isDeleted ?? row.is_deleted ?? false,
-  deletedAt: row.deletedAt ?? row.deleted_at ?? null,
+const toPageDto = (page: NormalizedPageRow, parentId: string | null) => ({
+  id: page.id,
+  parentId,
+  title: page.title,
+  icon: page.icon,
+  coverType: page.coverType,
+  coverValue: page.coverValue,
+  position: page.position,
+  properties: page.properties,
+  createdBy: page.createdBy,
+  ownerId: page.ownerId ?? null,
+  createdAt: page.createdAt,
+  updatedAt: page.updatedAt,
+  publicPermission: page.publicPermission,
+  inheritancePolicy: page.inheritancePolicy,
 });
 
-function ensureWorkspaceForPage(page: PageRow): asserts page is PageRow & { workspaceId: string } {
-  if (!page.workspaceId) {
-    throw new HTTPException(400, { message: 'Page has no workspace' });
-  }
-}
+const serializeTimestamp = (value: Date | string | null): string | null =>
+  value === null ? null : typeof value === 'string' ? value : value.toISOString();
+
+const toAccountPagePayload = (
+  page: NormalizedPageRow,
+  parentId: string | null,
+  publicPermission: PublicPermission | null,
+  userPermission: SharePermission,
+  fullAccess: boolean,
+): AccountPagePayload => ({
+  accessScope: 'account',
+  ...toPageDto(page, parentId),
+  createdAt: serializeTimestamp(page.createdAt),
+  updatedAt: serializeTimestamp(page.updatedAt),
+  publicPermission,
+  userPermission,
+  capabilities: deriveCapabilities(userPermission, fullAccess),
+});
+
+const toPublicPageDto = (
+  page: NormalizedPageRow,
+  publicPermission: PublicPermission,
+  userPermission: PublicPermission,
+): PublicPagePayload => ({
+  accessScope: 'public' as const,
+  id: page.id,
+  title: page.title,
+  icon: page.icon,
+  coverType: page.coverType,
+  coverValue: page.coverValue,
+  properties: page.properties,
+  updatedAt: serializeTimestamp(page.updatedAt),
+  publicPermission,
+  userPermission,
+  capabilities: deriveCapabilities(userPermission),
+});
+
+const toPublicPageMetadataDto = (page: NormalizedPageRow) => ({
+  id: page.id,
+  title: page.title,
+  icon: page.icon,
+  coverType: page.coverType,
+  coverValue: page.coverValue,
+  properties: page.properties,
+  updatedAt: page.updatedAt,
+});
 
 pagesRoute.get('/tree', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
+  // Return pages the user can access (owned or shared)
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select * from pages where workspace_id = $1 and is_deleted = false order by parent_id nulls first, case when parent_id is null then updated_at end desc nulls last, position asc',
-    [workspaceId],
+  type PageTreeDatabaseRow = PageDatabaseRowWithOwner & {
+    enumerable_parent_id: string | null;
+    user_permission: SharePermission | null;
+    workspace_access: boolean;
+  };
+  const result = await query<PageTreeDatabaseRow>(
+    sql`
+      select p.*,
+             coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+             case
+               when p.parent_id in (select folder_id from get_enumerable_folder_ids(${user.id}))
+                 then p.parent_id
+               else null
+             end as enumerable_parent_id,
+             access.permission as user_permission,
+             exists (
+               select 1 from workspace_members wm
+               where wm.workspace_owner_id = coalesce(get_root_folder_owner(p.parent_id), p.created_by)
+                 and wm.member_id = ${user.id}
+                 and not is_page_path_restricted(p.id)
+             ) as workspace_access
+      from pages p
+      join lateral get_effective_page_permission(p.id, ${user.id}) access on true
+      where p.is_deleted = false
+        and p.id in (select page_id from get_accessible_page_ids(${user.id}))
+      order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position::numeric asc
+    `,
   );
 
-  const pagesList = (result.rows as RawPageRow[]).map(normalizePageRow);
+  const pagesList = result.rows.map((row) => {
+    const page = normalizePageRow(row, row.owner_id);
+    return {
+      ...toPageDto(page, row.enumerable_parent_id ?? null),
+      userPermission: row.user_permission ?? null,
+      workspaceAccess: row.workspace_access === true,
+    };
+  });
   return c.json(
     pagesList.map((page) => ({
       ...page,
-      ydoc: page.ydoc ? Array.from(page.ydoc) : null,
       children: [],
     })),
   );
 });
 
-pagesRoute.post('/', async (c) => {
-  const body = await c.req.json().catch(() => null);
-  if (!body || typeof body !== 'object') {
-    throw new HTTPException(400, { message: 'Invalid body' });
-  }
-
-  const { workspaceId, parentId, title, icon } = body as {
-    workspaceId?: string;
-    parentId?: string | null;
-    title?: string;
-    icon?: string | null;
-  };
-
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
-
-  if (parentId) {
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, workspaceId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+pagesPublicRoute.post(
+  '/',
+  bodyLimit({
+    maxSize: 64 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new HTTPException(400, { message: 'Invalid JSON body' });
+      }
+      throw error;
     }
-  }
+    if (!body || typeof body !== 'object') {
+      throw new HTTPException(400, { message: 'Invalid body' });
+    }
 
-  const positionResult = await pool.query(
-    parentId
-      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-    parentId ? [workspaceId, parentId] : [workspaceId],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
+    const { parentId, title, icon } = body as {
+      parentId?: string | null;
+      title?: string;
+      icon?: string | null;
+    };
 
-  const pageTitle =
-    typeof title === 'string' && title.trim().length > 0 ? title.trim() : 'Untitled';
+    const actor = await getRequestActor(c);
+    if (!parentId && actor.kind === 'guest') {
+      throw new HTTPException(401, { message: 'Log in to create a root page' });
+    }
 
-  const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
+    const pageTitle = typeof title === 'string' ? normalizePageTitle(title) : 'Untitled';
+    const ydocBuffer = Buffer.from(createEmptyYjsDoc(pageTitle));
+    ensureYdocSize(ydocBuffer);
 
-  const insertResult = await pool.query(
-    "insert into pages (workspace_id, parent_id, title, title_search, icon, position, created_by, ydoc) values ($1, $2, $3, to_tsvector('english', $3), $4, $5, $6, $7) returning *",
-    [
-      workspaceId,
-      parentId ?? null,
-      pageTitle,
-      typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
-      nextPosition,
-      user.id,
-      ydocBuffer,
-    ],
-  );
+    const insertResult = await db.transaction(async (tx) => {
+      if (parentId) {
+        await lockEntityAccessMutation(tx, 'folder', parentId);
+        await ensureActorCanCreateInFolder(actor, parentId, tx);
+      } else {
+        await lockWorkspaceAccessMutation(tx, actor.id);
+      }
+      await persistGuestIdentity(actor, tx);
 
-  if (insertResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to create page' });
-  }
+      const ownerId = await getDestinationOwnerId(
+        tx,
+        parentId ?? null,
+        actor.kind === 'user' ? actor.id : null,
+      );
+      if (!ownerId) throw new HTTPException(404, { message: 'Parent folder not found' });
 
-  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
-  return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
-});
+      const nextPosition = await getNextPosition('pages', parentId ?? null, actor.id, tx);
+      const result = await executeQuery<PageDatabaseRow>(
+        tx,
+        sql`insert into pages (parent_id, title, title_search, icon, position, created_by, ydoc) values (${parentId ?? null}, ${pageTitle}, to_tsvector('english', ${pageTitle}), ${typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null}, ${nextPosition}, ${actor.kind === 'user' ? actor.id : null}, ${ydocBuffer}) returning *`,
+      );
+      const createdPageId = result.rows[0]?.id;
+      if (createdPageId) {
+        const metaUserIds = await getEntityMetaUserIds(tx, 'page', createdPageId);
+        await notifyShareRecompute(
+          {
+            entityType: 'page',
+            entityId: createdPageId,
+            metaUserIds,
+            metaOnly: true,
+          },
+          tx,
+        );
+      }
+      return { result, ownerId };
+    });
+
+    if (insertResult.result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to create page' });
+    }
+
+    const createdRow = insertResult.result.rows[0];
+    if (!createdRow) throw new HTTPException(500, { message: 'Failed to create page' });
+    const created = normalizePageRow(createdRow, insertResult.ownerId);
+    return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
+  },
+);
 
 pagesRoute.get('/trash', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select * from pages where workspace_id = $1 and is_deleted = true order by deleted_at desc nulls last, position asc',
-    [workspaceId],
+  const result = await query<PageDatabaseRowWithOwner>(
+    sql`select p.*, ${deletedPageOwnerSql} as owner_id
+     from pages p
+     left join folders parent on parent.id = p.parent_id
+     where p.is_deleted = true
+       and ${deletedPageOwnerSql} = ${user.id}
+       and coalesce(parent.is_deleted, false) = false
+     order by p.deleted_at desc nulls last, p.position::numeric asc`,
   );
 
-  return c.json((result.rows as RawPageRow[]).map(normalizePageRow));
+  return c.json(result.rows.map((row) => normalizePageRow(row, row.owner_id)));
 });
 
 pagesRoute.delete('/trash/empty-all', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
-
-  const workspacePages = await pool.query(
-    'select id, parent_id, is_deleted from pages where workspace_id = $1',
-    [workspaceId],
-  );
-
-  const childMap = new Map<string, string[]>();
-  const trashedPageIds = new Set<string>();
-
-  for (const item of workspacePages.rows as {
-    id: string;
-    parent_id: string | null;
-    is_deleted: boolean;
-  }[]) {
-    if (item.is_deleted) {
-      trashedPageIds.add(item.id);
+  const count = await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const trashedPages = await executeQuery<{ id: string }>(
+      tx,
+      sql`select p.id
+       from pages p
+       left join folders parent on parent.id = p.parent_id
+       where p.is_deleted = true
+         and ${deletedPageOwnerSql} = ${user.id}
+         and coalesce(parent.is_deleted, false) = false
+       order by p.id
+       for update of p`,
+    );
+    const pageIds = trashedPages.rows.map((row) => row.id);
+    await purgeUnreferencedUploadsForPages(tx, pageIds);
+    if (pageIds.length > 0) {
+      await purgeEntityAccessMetadata(tx, 'page', pageIds);
+      await executeQuery(
+        tx,
+        sql`delete from pages where id = any(${sql.param(pageIds)}::uuid[]) and is_deleted = true`,
+      );
     }
-    if (!item.parent_id) {
-      continue;
-    }
-    const list = childMap.get(item.parent_id) ?? [];
-    list.push(item.id);
-    childMap.set(item.parent_id, list);
-  }
+    return pageIds.length;
+  });
+  await processUploadDeletionQueue();
 
-  const toDelete = new Set<string>();
-  const stack = Array.from(trashedPageIds);
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current || toDelete.has(current)) {
-      continue;
-    }
-    toDelete.add(current);
-    const children = childMap.get(current);
-    if (children) {
-      for (const child of children) {
-        stack.push(child);
-      }
-    }
-  }
-
-  if (toDelete.size > 0) {
-    await pool.query('delete from pages where id = any($1)', [Array.from(toDelete)]);
-  }
-
-  return c.json({ deleted: true, count: toDelete.size });
+  return c.json({ deleted: true, count });
 });
 
 pagesRoute.get('/recent', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const limitParam = c.req.query('limit');
-  const parsedLimit = limitParam ? Number.parseInt(limitParam, 10) : 10;
-  if (!Number.isFinite(parsedLimit) || parsedLimit <= 0) {
+  if (limitParam && !/^\d+$/.test(limitParam)) {
+    throw new HTTPException(400, { message: 'limit must be a positive integer' });
+  }
+  const parsedLimit = limitParam ? Number(limitParam) : 10;
+  if (!Number.isSafeInteger(parsedLimit) || parsedLimit <= 0) {
     throw new HTTPException(400, { message: 'limit must be a positive integer' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select p.id, p.title, p.icon, pv.visited_at as "visitedAt" from page_visits pv join pages p on p.id = pv.page_id where pv.user_id = $1 and p.workspace_id = $2 and p.is_deleted = false order by pv.visited_at desc limit $3',
-    [user.id, workspaceId, parsedLimit],
+  const result = await query(
+    sql`select
+       p.id,
+       p.title,
+       p.icon,
+       p.created_by as "createdBy",
+       coalesce(get_root_folder_owner(p.parent_id), p.created_by) as "ownerId",
+       p.updated_at as "updatedAt",
+       pv.visited_at as "visitedAt"
+     from page_visits pv
+     join pages p on p.id = pv.page_id
+     join lateral get_effective_page_permission(p.id, ${user.id}) access on true
+     where pv.user_id = ${user.id}
+       and p.is_deleted = false
+       and access.permission is not null
+     order by pv.visited_at desc
+     limit ${parsedLimit}`,
   );
 
   return c.json(
-    result.rows as { id: string; title: string; icon: string | null; visitedAt: Date }[],
+    result.rows as {
+      id: string;
+      title: string;
+      icon: string | null;
+      createdBy: string | null;
+      ownerId: string | null;
+      updatedAt: Date;
+      visitedAt: Date;
+    }[],
   );
 });
 
-pagesRoute.get(':id', async (c) => {
+pagesPublicRoute.patch(
+  ':id/metadata',
+  bodyLimit({
+    maxSize: 64 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    const pageId = c.req.param('id');
+    const actor = await getRequestActor(c);
+    const body = await c.req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      throw new HTTPException(400, { message: 'Invalid body' });
+    }
+    if (Object.hasOwn(body, 'parentId') || Object.hasOwn(body, 'position')) {
+      throw new HTTPException(403, { message: 'Editor access cannot reorganize pages' });
+    }
+    const { title, icon, coverType, coverValue, properties } = body as {
+      title?: unknown;
+      icon?: unknown;
+      coverType?: unknown;
+      coverValue?: unknown;
+      properties?: unknown;
+    };
+    const hasTitle = Object.hasOwn(body, 'title');
+    const hasIcon = Object.hasOwn(body, 'icon');
+    const hasCoverType = Object.hasOwn(body, 'coverType');
+    const hasCoverValue = Object.hasOwn(body, 'coverValue');
+    const hasProperties = Object.hasOwn(body, 'properties');
+
+    if (actor.kind === 'guest' && (hasIcon || hasCoverType || hasCoverValue)) {
+      throw new HTTPException(403, {
+        message: 'Guest editors cannot change page icons or covers',
+      });
+    }
+
+    const result = await db.transaction(async (tx) => {
+      await lockEntityAccess(tx, 'page', pageId);
+      await ensureActorPageAccess(actor, pageId, 'edit', tx);
+      const page = await getPageById(pageId, tx);
+      if (!page) throw new HTTPException(404, { message: 'Page not found' });
+      const nextTitle = hasTitle
+        ? typeof title === 'string'
+          ? normalizePageTitle(title)
+          : (() => {
+              throw new HTTPException(400, { message: 'title must be a string' });
+            })()
+        : page.title;
+      const nextIcon = hasIcon
+        ? typeof icon === 'string' && icon.trim().length > 0
+          ? icon.trim()
+          : icon === null || icon === ''
+            ? null
+            : (() => {
+                throw new HTTPException(400, { message: 'icon must be a string or null' });
+              })()
+        : page.icon;
+      const normalizeOptionalText = (value: unknown, field: string): string | null => {
+        if (value === null || value === '') return null;
+        if (typeof value !== 'string') {
+          throw new HTTPException(400, { message: `${field} must be a string or null` });
+        }
+        return value.trim() || null;
+      };
+      const nextCoverType = hasCoverType
+        ? normalizeOptionalText(coverType, 'coverType')
+        : page.coverType;
+      const nextCoverValue = hasCoverValue
+        ? normalizeOptionalText(coverValue, 'coverValue')
+        : page.coverValue;
+      const propertiesError = hasProperties ? validatePageProperties(properties) : null;
+      if (propertiesError) {
+        throw new HTTPException(400, { message: propertiesError });
+      }
+      const nextProperties = hasProperties ? JSON.stringify(properties) : page.properties;
+      const updated = await executeQuery<PageDatabaseRow>(
+        tx,
+        sql`update pages
+         set title_revision = title_revision + case when title is distinct from ${nextTitle} then 1 else 0 end,
+             title = ${nextTitle}, title_search = to_tsvector('english', ${nextTitle}), icon = ${nextIcon},
+             cover_type = ${nextCoverType}, cover_value = ${nextCoverValue}, properties = ${nextProperties}, updated_at = now()
+         where id = ${pageId}
+         returning *`,
+      );
+      const updatedRow = updated.rows[0];
+      if (!updatedRow) throw new HTTPException(500, { message: 'Failed to update page' });
+      if (hasProperties) {
+        await replacePageTagConnectionIndex(tx, pageId, updatedRow.ydoc, properties);
+      }
+      if (page.title !== nextTitle) {
+        await executeQuery(
+          tx,
+          sql`select pg_notify(${'page_renamed'}, ${JSON.stringify({ pageId })})`,
+        );
+      }
+      return normalizePageRow(updatedRow, page.ownerId);
+    });
+    return c.json(toPublicPageMetadataDto(result));
+  },
+);
+
+pagesPublicRoute.patch(
+  ':id/title',
+  bodyLimit({
+    maxSize: 4 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    const pageId = c.req.param('id');
+    const actor = await getRequestActor(c);
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        // Malformed JSON is an expected HTTP boundary failure.
+        throw new HTTPException(400, { message: 'Invalid JSON body' });
+      }
+      throw error;
+    }
+    if (
+      !body ||
+      typeof body !== 'object' ||
+      typeof (body as { title?: unknown }).title !== 'string'
+    ) {
+      throw new HTTPException(400, { message: 'Title is required' });
+    }
+    const nextTitle = normalizePageTitle((body as { title: string }).title);
+
+    const result = await db.transaction(async (tx) => {
+      await lockEntityAccess(tx, 'page', pageId);
+      const page = await getPageById(pageId, tx);
+      if (!page) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+      await ensureActorPageAccess(actor, pageId, 'edit', tx);
+
+      if (page.title !== nextTitle) {
+        await executeQuery(
+          tx,
+          sql`update pages
+           set title_revision = title_revision + 1,
+               title = ${nextTitle},
+               title_search = to_tsvector('english', ${nextTitle}),
+               updated_at = now()
+           where id = ${pageId}`,
+        );
+        await executeQuery(
+          tx,
+          sql`select pg_notify(${'page_renamed'}, ${JSON.stringify({ pageId })})`,
+        );
+      }
+      return { title: nextTitle };
+    });
+
+    return c.json(result);
+  },
+);
+
+pagesPublicRoute.post(
+  ':id/wiki-link-presentations',
+  bodyLimit({
+    maxSize: 256 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    const sourcePageId = c.req.param('id');
+    if (!UUID_PATTERN.test(sourcePageId)) {
+      throw new HTTPException(400, { message: 'A valid source page is required' });
+    }
+
+    let body: unknown;
+    try {
+      body = await c.req.json();
+    } catch (error) {
+      if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+      throw new HTTPException(400, { message: 'Invalid JSON body' });
+    }
+    const rawLinks =
+      body && typeof body === 'object' && 'links' in body
+        ? (body as { links?: unknown }).links
+        : undefined;
+    if (
+      !Array.isArray(rawLinks) ||
+      rawLinks.length === 0 ||
+      rawLinks.length > MAX_WIKI_LINK_PRESENTATION_REQUESTS
+    ) {
+      throw new HTTPException(400, {
+        message: `links must contain between 1 and ${MAX_WIKI_LINK_PRESENTATION_REQUESTS} items`,
+      });
+    }
+
+    const links: WikiLinkPresentationRequest[] = [];
+    const keys = new Set<string>();
+    for (const rawLink of rawLinks) {
+      if (!rawLink || typeof rawLink !== 'object') {
+        throw new HTTPException(400, { message: 'Each link must be an object' });
+      }
+      const key = 'key' in rawLink ? rawLink.key : undefined;
+      const targetId = 'targetId' in rawLink ? rawLink.targetId : undefined;
+      const path = 'path' in rawLink ? rawLink.path : undefined;
+      if (
+        typeof key !== 'string' ||
+        key.length === 0 ||
+        key.length > 128 ||
+        keys.has(key) ||
+        (targetId !== undefined &&
+          (typeof targetId !== 'string' || !UUID_PATTERN.test(targetId))) ||
+        (path !== undefined && (typeof path !== 'string' || path.length > 1_000)) ||
+        (targetId === undefined &&
+          (typeof path !== 'string' ||
+            (!normalizeWikiLinkLookupKey(path) && !isLocalWikiLinkHeading(path))))
+      ) {
+        throw new HTTPException(400, { message: 'Each link needs a unique key and valid target' });
+      }
+      keys.add(key);
+      links.push({
+        key,
+        ...(typeof targetId === 'string' && { targetId: targetId.toLowerCase() }),
+        ...(typeof path === 'string' && { path }),
+      });
+    }
+
+    const actor = await getRequestActor(c);
+    const response = await db.transaction(async (tx): Promise<WikiLinkPresentationResponse> => {
+      await lockEntityAccess(tx, 'page', sourcePageId);
+      await ensureActorPageAccess(actor, sourcePageId, 'view', tx);
+      const sourceResult = await executeQuery<{ owner_id: string | null }>(
+        tx,
+        sql`select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+         from pages where id = ${sourcePageId} and is_deleted = false`,
+      );
+      const ownerId = sourceResult.rows[0]?.owner_id;
+      if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+
+      const pathKeys = [
+        ...new Set(
+          links
+            .filter((link) => !link.targetId && link.path)
+            .map((link) => normalizeWikiLinkLookupKey(link.path ?? ''))
+            .filter(Boolean),
+        ),
+      ];
+      const mappedTargets = new Map<string, string>();
+      if (pathKeys.length > 0) {
+        const mapped = await executeQuery<{ target_slug: string; target_id: string }>(
+          tx,
+          sql`select target_slug, min(target_id::text)::uuid as target_id
+           from connections
+           where source_type = 'page' and source_id = ${sourcePageId}
+             and target_type = 'page' and target_id is not null
+             and target_slug = any(${sql.param(pathKeys)}::text[])
+             and connection_type in ('wikilink', 'heading')
+           group by target_slug
+           having count(distinct target_id) = 1`,
+        );
+        for (const row of mapped.rows) mappedTargets.set(row.target_slug, row.target_id);
+      }
+
+      const autoLookup = new Map<string, string>();
+      if (pathKeys.length > 0) {
+        if (actor.kind === 'user') {
+          const requesterLookup = await getUniqueWorkspacePageLookup(ownerId, actor.id, tx);
+          for (const pathKey of pathKeys) {
+            const pageId = requesterLookup.get(pathKey);
+            if (pageId) autoLookup.set(pathKey, pageId);
+          }
+        } else {
+          const publicPages = await executeQuery<{ id: string; title: string }>(
+            tx,
+            sql`select p.id, p.title
+             from pages p
+             where p.is_deleted = false
+               and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = ${ownerId}
+               and get_public_page_permission(p.id) is not null`,
+          );
+          const publicByTitle = new Map<string, string[]>();
+          for (const page of publicPages.rows) {
+            const lookupKey = normalizeWikiLinkLookupKey(page.title);
+            const ids = publicByTitle.get(lookupKey) ?? [];
+            ids.push(page.id);
+            publicByTitle.set(lookupKey, ids);
+          }
+          for (const pathKey of pathKeys) {
+            const ids = publicByTitle.get(pathKey);
+            if (ids?.length === 1 && ids[0]) autoLookup.set(pathKey, ids[0]);
+          }
+        }
+      }
+
+      const candidateByKey = new Map<string, { id: string }>();
+      for (const link of links) {
+        if (link.targetId) {
+          candidateByKey.set(link.key, { id: link.targetId });
+          continue;
+        }
+        const pathKey = normalizeWikiLinkLookupKey(link.path ?? '');
+        if (!pathKey && isLocalWikiLinkHeading(link.path ?? '')) {
+          candidateByKey.set(link.key, { id: sourcePageId });
+          continue;
+        }
+        const mappedId = mappedTargets.get(pathKey);
+        const automaticId = autoLookup.get(pathKey);
+        const candidateId = mappedId ?? automaticId;
+        if (candidateId) {
+          candidateByKey.set(link.key, { id: candidateId });
+        }
+      }
+
+      const candidateIds = [...new Set([...candidateByKey.values()].map(({ id }) => id))];
+      const knownTargets = new Map<string, { id: string; title: string; accessible: boolean }>();
+      if (candidateIds.length > 0) {
+        const targets = await executeQuery<{ id: string; title: string; accessible: boolean }>(
+          tx,
+          sql`select target.id, target.title,
+                  case
+                    when ${actor.kind === 'user' ? actor.id : null}::uuid is not null then exists (
+                      select 1 from get_effective_page_permission(target.id, ${actor.kind === 'user' ? actor.id : null}::uuid) access
+                      where access.permission is not null
+                    )
+                    else get_public_page_permission(target.id) is not null
+                  end as accessible
+           from pages target
+           where target.id = any(${sql.param(candidateIds)}::uuid[])
+             and target.is_deleted = false
+             and coalesce(get_root_folder_owner(target.parent_id), target.created_by) = ${ownerId}`,
+        );
+        for (const target of targets.rows) knownTargets.set(target.id, target);
+      }
+
+      const presentations: WikiLinkPresentation[] = links.map((link) => {
+        const candidate = candidateByKey.get(link.key);
+        if (!candidate) return { key: link.key, state: 'unavailable' };
+        const target = knownTargets.get(candidate.id);
+        if (!target) return { key: link.key, state: 'unavailable' };
+        if (target.accessible) {
+          return {
+            key: link.key,
+            state: 'accessible',
+            target: { id: target.id, title: target.title },
+          };
+        }
+        return { key: link.key, state: 'restricted' };
+      });
+      return { links: presentations };
+    });
+
+    return c.json(response);
+  },
+);
+
+pagesPublicRoute.get(
+  ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('X-Robots-Tag', 'noindex, nofollow');
+    const pageId = c.req.param('id');
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    const sessionUserId = session?.user ? (session.user as { id: string }).id : null;
+    const result = await db.transaction(async (tx) => {
+      await lockEntityAccess(tx, 'page', pageId);
+      const page = await getPageById(pageId, tx);
+      if (!page) {
+        throw new HTTPException(404, { message: 'Page not found' });
+      }
+
+      const resolvedAccess = sessionUserId
+        ? await resolveEntityAccess('page', pageId, sessionUserId, tx)
+        : null;
+      const publicPermission = resolvedAccess
+        ? resolvedAccess.publicPermission
+        : await getPublicPermission('page', pageId, tx);
+      const hasAccountAccess = Boolean(resolvedAccess?.accountPermission);
+      let userPermission: SharePermission;
+      let fullAccess = false;
+      if (resolvedAccess) {
+        if (!resolvedAccess.permission) {
+          throw new HTTPException(403, { message: "You don't have access to this page" });
+        }
+        userPermission = resolvedAccess.permission;
+        fullAccess = resolvedAccess.fullAccess;
+      } else {
+        if (!publicPermission) {
+          throw new HTTPException(401, { message: 'Log in to access this page' });
+        }
+        userPermission = publicPermission;
+      }
+
+      if (sessionUserId) {
+        await executeQuery(
+          tx,
+          sql`insert into page_visits (user_id, page_id, visited_at) values (${sessionUserId}, ${pageId}, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at`,
+        );
+        if (publicPermission && page.ownerId !== sessionUserId) {
+          await recordPublicVisitAndNotify(tx, 'page', pageId, sessionUserId);
+        }
+      }
+
+      const enumerableFolderIds =
+        sessionUserId && hasAccountAccess
+          ? await getEnumerableFolderIds(sessionUserId, tx)
+          : new Set<string>();
+
+      if (!hasAccountAccess) {
+        if (!publicPermission) {
+          throw new HTTPException(403, { message: 'You do not have public access to this page' });
+        }
+        return toPublicPageDto(page, publicPermission, publicPermission);
+      }
+
+      return toAccountPagePayload(
+        page,
+        redactParentId(page.parentId, enumerableFolderIds),
+        publicPermission,
+        userPermission,
+        fullAccess,
+      );
+    });
+
+    return c.json(result);
+  },
+);
+
+pagesRoute.post(':id/access', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
+  const user = c.get('user') as { id: string };
+  await db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'page', pageId);
+    const page = await getPageById(pageId, tx);
+    if (!page) throw new HTTPException(404, { message: 'Page not found' });
+    await ensurePageAccess(pageId, user.id, 'view', tx);
+    if ((await getPublicPermission('page', pageId, tx)) && page.ownerId !== user.id) {
+      await recordPublicVisitAndNotify(tx, 'page', pageId, user.id);
+    }
+    await executeQuery(
+      tx,
+      sql`insert into page_visits (user_id, page_id, visited_at) values (${user.id}, ${pageId}, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at`,
+    );
+  });
+
+  return c.json({ ok: true });
+});
+
+pagesRoute.patch(':id/restore', async (c) => {
+  const pageId = c.req.param('id');
+  const page = await getDeletedPageById(pageId);
 
   if (!page) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  if (page.ownerId !== user.id) {
+    throw new HTTPException(403, { message: 'You can only restore pages that you own' });
+  }
 
-  await pool.query(
-    'insert into page_visits (user_id, page_id, visited_at) values ($1, $2, now()) on conflict (user_id, page_id) do update set visited_at = excluded.visited_at',
-    [user.id, pageId],
-  );
+  const updateResult = await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const lockedPageResult = await executeQuery<{
+      parent_id: string | null;
+      created_by: string | null;
+      owner_id: string | null;
+    }>(
+      tx,
+      sql`select p.parent_id, p.created_by, ${deletedPageOwnerSql} as owner_id
+       from pages p
+       where p.id = ${pageId} and p.is_deleted = true
+       for update`,
+    );
+    const lockedPage = lockedPageResult.rows[0];
+    if (!lockedPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+    if (lockedPage.owner_id !== user.id) {
+      throw new HTTPException(403, { message: 'You can only restore pages that you own' });
+    }
+    const affectedBefore = await getEntityMetaUserIds(tx, 'page', pageId);
 
-  return c.json({ ...page, ydoc: page.ydoc ? Array.from(page.ydoc) : null });
+    let restoreParentId: string | null = null;
+    if (lockedPage.parent_id) {
+      const parentResult = await executeQuery<{ id: string }>(
+        tx,
+        sql`select id
+         from folders
+         where id = ${lockedPage.parent_id} and is_deleted = false
+         for share`,
+      );
+      if (parentResult.rowCount && parentResult.rowCount > 0) {
+        restoreParentId = lockedPage.parent_id;
+      }
+    }
+
+    const restoreCreatorId = restoreParentId ? lockedPage.created_by : user.id;
+    const nextPosition = await getNextPosition('pages', restoreParentId, user.id, tx);
+    const result = await executeQuery<PageDatabaseRow>(
+      tx,
+      sql`update pages
+       set is_deleted = false,
+           deleted_at = null,
+           deletion_batch_id = null,
+           parent_id = ${restoreParentId},
+           created_by = ${restoreCreatorId},
+           position = ${nextPosition},
+           title_search = to_tsvector('english', title),
+           updated_at = now()
+       where id = ${pageId} and is_deleted = true
+      returning *`,
+    );
+    if ((result.rowCount ?? 0) > 0) {
+      const affectedAfter = await getEntityMetaUserIds(tx, 'page', pageId);
+      const metaUserIds = mergeMetaUserIds(affectedBefore, affectedAfter);
+      await notifyShareRecompute({ entityType: 'page', entityId: pageId, metaUserIds }, tx);
+    }
+    return {
+      result,
+      ownerId: restoreParentId ? lockedPage.owner_id : user.id,
+    };
+  });
+
+  if (updateResult.result.rowCount === 0) {
+    throw new HTTPException(500, { message: 'Failed to restore page' });
+  }
+
+  const updatedRow = updateResult.result.rows[0];
+  if (!updatedRow) throw new HTTPException(500, { message: 'Failed to restore page' });
+  const updated = normalizePageRow(updatedRow, updateResult.ownerId);
+  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
 pagesRoute.patch(':id', async (c) => {
@@ -292,11 +1018,18 @@ pagesRoute.patch(':id', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
 
-  const body = await c.req.json().catch(() => null);
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      // Malformed JSON is an expected HTTP boundary failure.
+      throw new HTTPException(400, { message: 'Invalid JSON body' });
+    }
+    throw error;
+  }
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
@@ -312,121 +1045,122 @@ pagesRoute.patch(':id', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === page.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
-    }
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
-  }
-
-  const nextTitle =
-    typeof title === 'string' ? (title.trim().length > 0 ? title.trim() : 'Untitled') : page.title;
-
-  const nextIcon =
-    typeof icon === 'string'
-      ? icon.trim().length > 0
-        ? icon.trim()
-        : null
-      : icon === null
-        ? null
-        : page.icon;
-  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : page.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : page.position;
+  const hasPosition = Object.hasOwn(body, 'position');
   const hasCoverType = Object.hasOwn(body, 'coverType');
   const hasCoverValue = Object.hasOwn(body, 'coverValue');
   const hasProperties = Object.hasOwn(body, 'properties');
-  const nextCoverType = hasCoverType
-    ? typeof coverType === 'string' && coverType.trim().length > 0
-      ? coverType.trim()
-      : null
-    : page.coverType;
-  const nextCoverValue = hasCoverValue
-    ? typeof coverValue === 'string' && coverValue.trim().length > 0
-      ? coverValue.trim()
-      : null
-    : page.coverValue;
-  const nextProperties = hasProperties
-    ? properties && typeof properties === 'object'
-      ? JSON.stringify(properties)
-      : null
-    : page.properties;
+  const propertiesError = hasProperties ? validatePageProperties(properties) : null;
+  if (propertiesError) {
+    throw new HTTPException(400, { message: propertiesError });
+  }
+  const normalizedRequestedTitle =
+    typeof title === 'string' ? normalizePageTitle(title) : undefined;
 
-  const updateResult = hasProperties
-    ? await pool.query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, properties = $7, updated_at = now() where id = $8 returning *",
-        [
-          nextTitle,
-          nextIcon,
-          nextParent,
-          nextPosition,
-          nextCoverType,
-          nextCoverValue,
-          nextProperties,
-          pageId,
-        ],
-      )
-    : await pool.query(
-        "update pages set title = $1, title_search = to_tsvector('english', $1), icon = $2, parent_id = $3, position = $4, cover_type = $5, cover_value = $6, updated_at = now() where id = $7 returning *",
-        [nextTitle, nextIcon, nextParent, nextPosition, nextCoverType, nextCoverValue, pageId],
+  const updateResult = await db.transaction(async (tx) => {
+    const workspaceOwnerId = await lockEntityAccess(tx, 'page', pageId);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+
+    const nextParent = hasParentId ? (parentId ?? null) : currentPage.parentId;
+    if (hasParentId || hasPosition) {
+      await ensurePageOrganizationAccess(currentPage, nextParent, user.id, tx);
+    } else {
+      await ensurePageAccess(currentPage.id, user.id, 'edit', tx);
+    }
+
+    const nextTitle = normalizedRequestedTitle ?? currentPage.title;
+    const nextIcon =
+      typeof icon === 'string'
+        ? icon.trim().length > 0
+          ? icon.trim()
+          : null
+        : icon === null
+          ? null
+          : currentPage.icon;
+    const nextPosition = normalizePosition(position, currentPage.position);
+    const nextCoverType = hasCoverType
+      ? typeof coverType === 'string' && coverType.trim().length > 0
+        ? coverType.trim()
+        : null
+      : currentPage.coverType;
+    const nextCoverValue = hasCoverValue
+      ? typeof coverValue === 'string' && coverValue.trim().length > 0
+        ? coverValue.trim()
+        : null
+      : currentPage.coverValue;
+    const nextProperties = hasProperties
+      ? properties && typeof properties === 'object'
+        ? JSON.stringify(properties)
+        : null
+      : currentPage.properties;
+    const accessChanged = hasParentId && nextParent !== currentPage.parentId;
+    if (accessChanged) {
+      await lockWorkspaceAccessMutation(tx, workspaceOwnerId);
+    }
+    const affectedBefore = accessChanged ? await getEntityMetaUserIds(tx, 'page', pageId) : [];
+
+    const result = hasProperties
+      ? await executeQuery<PageDatabaseRow>(
+          tx,
+          sql`update pages
+           set title_revision = title_revision + case when title is distinct from ${nextTitle} then 1 else 0 end,
+               title = ${nextTitle}, title_search = to_tsvector('english', ${nextTitle}), icon = ${nextIcon},
+               parent_id = ${nextParent}, position = ${nextPosition}, cover_type = ${nextCoverType}, cover_value = ${nextCoverValue},
+               properties = ${nextProperties}, updated_at = now()
+           where id = ${pageId} returning *`,
+        )
+      : await executeQuery<PageDatabaseRow>(
+          tx,
+          sql`update pages
+           set title_revision = title_revision + case when title is distinct from ${nextTitle} then 1 else 0 end,
+               title = ${nextTitle}, title_search = to_tsvector('english', ${nextTitle}), icon = ${nextIcon},
+               parent_id = ${nextParent}, position = ${nextPosition}, cover_type = ${nextCoverType}, cover_value = ${nextCoverValue},
+               updated_at = now()
+           where id = ${pageId} returning *`,
+        );
+
+    const updatedPage = result.rows[0];
+    if (!updatedPage) {
+      throw new HTTPException(500, { message: 'Failed to update page' });
+    }
+    if (hasProperties) {
+      await replacePageTagConnectionIndex(tx, pageId, updatedPage.ydoc, properties);
+    }
+
+    // Keep the payload bounded; the collaboration server reloads the title
+    // from PostgreSQL after this transaction commits.
+    if (currentPage.title !== nextTitle) {
+      await executeQuery(
+        tx,
+        sql`select pg_notify(${'page_renamed'}, ${JSON.stringify({ pageId })})`,
       );
+    }
+    if (accessChanged) {
+      const affectedAfter = await getEntityMetaUserIds(tx, 'page', pageId);
+      await notifyShareRecompute(
+        {
+          entityType: 'page',
+          entityId: pageId,
+          metaUserIds: mergeMetaUserIds(affectedBefore, affectedAfter),
+        },
+        tx,
+      );
+    }
+    return {
+      result,
+      ownerId: currentPage.ownerId,
+      enumerableFolderIds: await getEnumerableFolderIds(user.id, tx),
+    };
+  });
 
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to update page' });
-  }
-
-  // Notify the collab server so it can update the meta room sidebar and
-  // push the new title into any active in-memory Yjs session.
-  if (page.title !== nextTitle) {
-    await pool.query('select pg_notify($1, $2)', [
-      'page_renamed',
-      JSON.stringify({
-        workspaceId: page.workspaceId,
-        pageId,
-        newTitle: nextTitle,
-      }),
-    ]);
-  }
-
-  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
-  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
-});
-
-pagesRoute.patch(':id/restore', async (c) => {
-  const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
-  ensureWorkspaceForPage(page);
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
-
-  const updateResult = await pool.query(
-    "update pages set is_deleted = false, deleted_at = null, title_search = to_tsvector('english', title), updated_at = now() where id = $1 returning *",
-    [pageId],
+  const updatedRow = updateResult.result.rows[0];
+  if (!updatedRow) throw new HTTPException(500, { message: 'Failed to update page' });
+  const updated = normalizePageRow(updatedRow, updateResult.ownerId);
+  return c.json(
+    toPageDto(updated, redactParentId(updated.parentId, updateResult.enumerableFolderIds)),
   );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to restore page' });
-  }
-
-  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
-  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
 pagesRoute.patch(':id/move', async (c) => {
@@ -437,9 +1171,7 @@ pagesRoute.patch(':id/move', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -452,57 +1184,118 @@ pagesRoute.patch(':id/move', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === page.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
+
+  const updateResult = await db.transaction(async (tx) => {
+    const workspaceOwnerId = await lockEntityAccess(tx, 'page', pageId);
+    const currentPage = await getPageById(pageId, tx);
+    if (!currentPage) {
+      throw new HTTPException(404, { message: 'Page not found' });
     }
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
+
+    const nextParent = hasParentId ? (parentId ?? null) : currentPage.parentId;
+    await ensurePageOrganizationAccess(currentPage, nextParent, user.id, tx);
+    const nextPosition = normalizePosition(position, currentPage.position);
+    const accessChanged = hasParentId && nextParent !== currentPage.parentId;
+    if (accessChanged) {
+      await lockWorkspaceAccessMutation(tx, workspaceOwnerId);
+    }
+    const affectedBefore = accessChanged ? await getEntityMetaUserIds(tx, 'page', pageId) : [];
+    const result = await executeQuery<PageDatabaseRow>(
+      tx,
+      sql`update pages set parent_id = ${nextParent}, position = ${nextPosition}, updated_at = now() where id = ${pageId} returning *`,
     );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+
+    if (result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to move page' });
     }
-  }
 
-  const nextParent = hasParentId ? (parentId ?? null) : page.parentId;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : page.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : page.position;
+    if (accessChanged) {
+      const affectedAfter = await getEntityMetaUserIds(tx, 'page', pageId);
+      await notifyShareRecompute(
+        {
+          entityType: 'page',
+          entityId: pageId,
+          metaUserIds: mergeMetaUserIds(affectedBefore, affectedAfter),
+        },
+        tx,
+      );
+    }
+    return {
+      result,
+      ownerId: currentPage.ownerId,
+      enumerableFolderIds: await getEnumerableFolderIds(user.id, tx),
+    };
+  });
 
-  const updateResult = await pool.query(
-    'update pages set parent_id = $1, position = $2, updated_at = now() where id = $3 returning *',
-    [nextParent, nextPosition, pageId],
+  const updatedRow = updateResult.result.rows[0];
+  if (!updatedRow) throw new HTTPException(500, { message: 'Failed to move page' });
+  const updated = normalizePageRow(updatedRow, updateResult.ownerId);
+  return c.json(
+    toPageDto(updated, redactParentId(updated.parentId, updateResult.enumerableFolderIds)),
   );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to move page' });
-  }
-
-  const updated = normalizePageRow(updateResult.rows[0] as RawPageRow);
-  return c.json({ ...updated, ydoc: updated.ydoc ? Array.from(updated.ydoc) : null });
 });
 
 pagesRoute.get(':id/export/markdown', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  const snapshot = await db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'page', pageId);
+    const page = await getPageById(pageId, tx);
+    if (!page) {
+      throw new HTTPException(404, { message: 'Page not found' });
+    }
+    await ensurePageAccess(page.id, user.id, 'view', tx);
+    const uploadResult = await executeQuery<{ filename: string }>(
+      tx,
+      sql`select u.filename
+       from uploads u
+       join upload_page_refs upr on upr.upload_id = u.id
+       where upr.page_id = ${pageId}`,
+    );
+    const targetIds = page.ydoc
+      ? extractWikiLinkTargetIds(new Uint8Array(page.ydoc)).filter((targetId) =>
+          UUID_PATTERN.test(targetId),
+        )
+      : [];
+    const ownerId =
+      page.ownerId ??
+      (
+        await executeQuery<{ owner_id: string | null }>(
+          tx,
+          sql`select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+           from pages where id = ${pageId}`,
+        )
+      ).rows[0]?.owner_id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+    const targetResult =
+      targetIds.length > 0
+        ? await executeQuery<{ id: string; title: string }>(
+            tx,
+            sql`select p.id, p.title
+             from pages p
+             where p.id = any(${sql.param(targetIds)}::uuid[])
+               and p.is_deleted = false
+               and p.id in (select page_id from get_accessible_page_ids(${user.id}))
+               and coalesce(get_root_folder_owner(p.parent_id), p.created_by) = ${ownerId}`,
+          )
+        : { rows: [] };
+    return {
+      page,
+      authorizedUploadFilenames: new Set(uploadResult.rows.map((row) => row.filename)),
+      wikiLinkTargets: new Map(targetResult.rows.map((target) => [target.id, target.title])),
+    };
+  });
 
+  const { page, authorizedUploadFilenames, wikiLinkTargets } = snapshot;
   const baseFilename = slugifyFilename(page.title || 'Untitled') || 'untitled';
-  const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined);
-  const extracted = await extractImages(markdown, uploadsDir, page.workspaceId ?? undefined);
+  const markdown = pageToMarkdown(page.ydoc, page.properties, page.icon, page.title || undefined, {
+    resolveWikiLinkTarget: (targetId) => {
+      const title = wikiLinkTargets.get(targetId.toLowerCase());
+      return title ? { title } : null;
+    },
+    restrictedWikiLinkText: 'Restricted page',
+  });
+  const extracted = await extractImages(markdown, uploadsDir, authorizedUploadFilenames);
 
   if (extracted.assets.size === 0) {
     c.header('Content-Type', 'text/markdown');
@@ -534,9 +1327,8 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
+  await ensurePageAccess(page.id, user.id, 'edit');
 
   const contentType = c.req.header('content-type') ?? '';
   let markdown = '';
@@ -548,12 +1340,14 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     }
     const bodyMarkdown = (body as { markdown?: string }).markdown;
     markdown = typeof bodyMarkdown === 'string' ? bodyMarkdown : '';
+    ensureDocumentInputSize(markdown);
   } else if (contentType.includes('multipart/form-data')) {
     const formData = await c.req.formData().catch(() => null);
     const file = formData?.get('file');
     if (!(file instanceof File)) {
       throw new HTTPException(400, { message: 'File is required' });
     }
+    ensureDocumentInputSize(file);
     markdown = await file.text();
   } else {
     throw new HTTPException(415, { message: 'Unsupported content type' });
@@ -567,29 +1361,49 @@ pagesRoute.post(':id/import/markdown', async (c) => {
     throw new HTTPException(400, { message: 'Invalid markdown format' });
   }
 
-  // Build Yjs doc with both title and body content
-  // Title and H1 are independent — we don't strip the first H1 anymore
-  let ydocBuffer = Buffer.from(createYjsDocWithTitle(page.title || 'Untitled', markdown));
+  const updateResult = await db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'page', pageId);
+    const currentPage = await getPageByIdForUpdate(pageId, tx);
+    if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
+    await ensurePageAccess(pageId, user.id, 'edit', tx);
 
-  // Resolve wiki link titles to page UUIDs so backlinks survive renames.
-  if (page.workspaceId) {
-    const existingPages = await pool.query(
-      'select id, title from pages where workspace_id = $1 and is_deleted = false',
-      [page.workspaceId],
+    const ownerId =
+      currentPage.ownerId ??
+      (
+        await executeQuery<{ owner_id: string | null }>(
+          tx,
+          sql`select coalesce(get_root_folder_owner(parent_id), created_by) as owner_id
+           from pages where id = ${pageId}`,
+        )
+      ).rows[0]?.owner_id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Page not found' });
+    const pageLookup = await getUniqueWorkspacePageLookup(ownerId, user.id, tx);
+    const ydocBuffer = Buffer.from(
+      bindWikiLinkTargets(
+        createYjsDocWithTitle(currentPage.title || 'Untitled', markdown),
+        pageLookup,
+      ),
     );
-    const pageLookup = new Map<string, string>();
-    for (const row of existingPages.rows as { id: string; title: string }[]) {
-      pageLookup.set(row.title.trim().toLowerCase(), row.id);
-    }
-    if (pageLookup.size > 0) {
-      ydocBuffer = Buffer.from(resolveWikilinkTargets(ydocBuffer, pageLookup));
-    }
-  }
+    ensureYdocSize(ydocBuffer);
 
-  const updateResult = await pool.query(
-    "update pages set ydoc = $1, title = $2, title_search = to_tsvector('english', $2), updated_at = now() where id = $3",
-    [ydocBuffer, page.title || 'Untitled', pageId],
-  );
+    await replacePageConnectionIndex(tx, pageId, ydocBuffer, currentPage.properties);
+
+    const updated = await executeQuery(
+      tx,
+      sql`update pages
+       set ydoc = ${ydocBuffer},
+           title_revision = title_revision + case when title is distinct from ${currentPage.title || 'Untitled'} then 1 else 0 end,
+           title = ${currentPage.title || 'Untitled'},
+           title_search = to_tsvector('english', ${currentPage.title || 'Untitled'}),
+           updated_at = now()
+       where id = ${pageId}`,
+    );
+    await executeQuery(
+      tx,
+      sql`select pg_notify(${'page_content_replaced'}, ${JSON.stringify({ pageId })})`,
+    );
+    return updated;
+  });
 
   if (updateResult.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to import page content' });
@@ -600,204 +1414,124 @@ pagesRoute.post(':id/import/markdown', async (c) => {
 
 pagesRoute.delete(':id', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
-
-  const updateResult = await pool.query(
-    'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-    [pageId],
-  );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to delete page' });
-  }
-
-  // Notify the collab server so it removes the page from the meta room.
-  await pool.query('select pg_notify($1, $2)', [
-    'page_deleted',
-    JSON.stringify({ workspaceId: page.workspaceId, pageId }),
-  ]);
-
+  await movePageToTrash(pageId, user.id);
   return c.json({ deleted: true });
 });
 
-pagesRoute.post(':id/copy', async (c) => {
+pagesRoute.post(':id/leave', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
-    throw new HTTPException(404, { message: 'Page not found' });
-  }
-
-  ensureWorkspaceForPage(page);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
-
-  const body = await c.req.json().catch(() => null);
-  const parentId =
-    body && typeof body === 'object'
-      ? ((body as { parentId?: string | null }).parentId ?? null)
-      : null;
-
-  if (parentId) {
-    const folderResult = await pool.query(
-      'select id from folders where id = $1 and workspace_id = $2 and is_deleted = false limit 1',
-      [parentId, page.workspaceId],
-    );
-    if (folderResult.rowCount === 0) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
-  }
-
-  const positionResult = await pool.query(
-    parentId
-      ? 'select max(position) as max_position from pages where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from pages where workspace_id = $1 and parent_id is null',
-    parentId ? [page.workspaceId, parentId] : [page.workspaceId],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
-
-  const insertResult = await pool.query(
-    `insert into pages (id, workspace_id, parent_id, title, title_search, icon, cover_type, cover_value, position, ydoc, created_by)
-     select gen_random_uuid(), workspace_id, $1, $2, to_tsvector('english', $2), icon, cover_type, cover_value, $3, ydoc, $4
-     from pages where id = $5
-     returning id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by, created_at, updated_at, is_deleted`,
-    [parentId ?? null, `Copy of ${page.title}`, nextPosition, user.id, pageId],
-  );
-
-  if (insertResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to copy page' });
-  }
-
-  const copiedPage = insertResult.rows[0] as RawPageRow;
-  const newPageId = copiedPage.id;
-
-  if (page.ydoc && page.ydoc.length > 0) {
-    try {
-      const ydoc = new Y.Doc();
-      Y.applyUpdate(ydoc, new Uint8Array(page.ydoc));
-      const titleText = ydoc.getText('title');
-      if (titleText.length > 0) {
-        titleText.delete(0, titleText.length);
-      }
-      titleText.insert(0, `Copy of ${page.title}`);
-      const newBinary = Buffer.from(Y.encodeStateAsUpdate(ydoc));
-      await pool.query('update pages set ydoc = $1 where id = $2', [newBinary, newPageId]);
-    } catch {
-      // If Yjs decode fails, the title column is already set
-    }
-  }
-
-  // Copy connections from the original page so wiki links and tags
-  // appear immediately — without this, the copied page's backlinks
-  // panel and tag queries would be empty until a user opens it and
-  // triggers a collab persist.
-  if (page.workspaceId) {
-    const originalConnections = await pool.query(
-      `select id, target_type, target_id, target_slug, target_label, connection_type,
-              link_text, link_context, occurrence_count
-       from connections
-       where source_type = 'page' and source_id = $1`,
-      [pageId],
-    );
-    for (const conn of originalConnections.rows as {
-      id: string;
-      target_type: string;
-      target_id: string | null;
-      target_slug: string;
-      target_label: string;
-      connection_type: string;
-      link_text: string | null;
-      link_context: string | null;
-      occurrence_count: number;
-    }[]) {
-      const insertResult = await pool.query(
-        `insert into connections (
-           workspace_id, source_type, source_id, target_type, target_id, target_slug,
-           target_label, connection_type, link_text, link_context, occurrence_count, updated_at
-         ) values ($1, 'page', $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
-         returning id`,
-        [
-          page.workspaceId,
-          newPageId,
-          conn.target_type,
-          conn.target_id,
-          conn.target_slug,
-          conn.target_label,
-          conn.connection_type,
-          conn.link_text,
-          conn.link_context,
-          conn.occurrence_count,
-        ],
-      );
-      const newConnectionId = insertResult.rows[0]?.id;
-      if (newConnectionId && conn.link_context) {
-        await pool.query(
-          `insert into connection_occurrences (connection_id, context)
-           values ($1, $2)`,
-          [newConnectionId, conn.link_context],
-        );
-      }
-    }
-  }
-
-  const created = normalizePageRow(insertResult.rows[0] as RawPageRow);
-  return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
+  await removePageFromView(pageId, user.id);
+  return c.json({ ok: true });
 });
+
+pagesPublicRoute.post(
+  ':id/copy',
+  bodyLimit({
+    maxSize: 4 * 1024,
+    onError: (c) => c.json({ message: 'Request body is too large' }, 413),
+  }),
+  async (c) => {
+    const pageId = c.req.param('id');
+    const actor = await getRequestActor(c);
+    const body = await c.req.json().catch((error: unknown) => {
+      if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+      return null;
+    });
+    const parentId =
+      body && typeof body === 'object'
+        ? ((body as { parentId?: string | null }).parentId ?? null)
+        : null;
+    if (!parentId && actor.kind === 'guest') {
+      throw new HTTPException(401, { message: 'Log in to copy a page to the workspace root' });
+    }
+
+    const copiedPage = await db.transaction(async (tx) => {
+      await lockEntityAccessMutations(
+        tx,
+        [
+          { entityType: 'page', entityId: pageId },
+          ...(parentId ? [{ entityType: 'folder' as const, entityId: parentId }] : []),
+        ],
+        parentId ? [] : [actor.id],
+      );
+      const currentPage = await getPageById(pageId, tx);
+      if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
+      await ensureActorPageAccess(actor, pageId, 'view', tx);
+      if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
+      await persistGuestIdentity(actor, tx);
+
+      const insertedPage = await copyPageContent(tx, currentPage, parentId, actor);
+      const metaUserIds = await getEntityMetaUserIds(tx, 'page', insertedPage.id);
+      await notifyShareRecompute(
+        {
+          entityType: 'page',
+          entityId: insertedPage.id,
+          metaUserIds,
+          metaOnly: true,
+        },
+        tx,
+      );
+      return insertedPage;
+    });
+
+    const created = normalizePageRow(copiedPage, copiedPage.owner_id);
+    return c.json({ ...created, ydoc: created.ydoc ? Array.from(created.ydoc) : null }, 201);
+  },
+);
 
 pagesRoute.delete(':id/permanent', async (c) => {
   const pageId = c.req.param('id');
-  const page = await getPageById(pageId);
-
-  if (!page) {
+  const user = c.get('user') as { id: string };
+  const deletedPage = await getDeletedPageById(pageId);
+  if (!deletedPage) {
+    const activePage = await getPageById(pageId);
+    if (activePage) {
+      if (activePage.ownerId !== user.id) {
+        throw new HTTPException(403, {
+          message: 'You can only permanently delete pages that you own',
+        });
+      }
+      throw new HTTPException(409, {
+        message: 'Page must be moved to Trash before it can be permanently deleted',
+      });
+    }
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
-  ensureWorkspaceForPage(page);
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspaceId, user.id);
-
-  const workspacePages = await pool.query(
-    'select id, parent_id from pages where workspace_id = $1',
-    [page.workspaceId],
-  );
-
-  const childMap = new Map<string, string[]>();
-  for (const item of workspacePages.rows as { id: string; parent_id: string | null }[]) {
-    if (!item.parent_id) {
-      continue;
-    }
-    const list = childMap.get(item.parent_id) ?? [];
-    list.push(item.id);
-    childMap.set(item.parent_id, list);
+  if (deletedPage.ownerId !== user.id) {
+    throw new HTTPException(403, {
+      message: 'You can only permanently delete pages that you own',
+    });
   }
 
-  const toDelete = new Set<string>();
-  const stack = [pageId];
-  while (stack.length) {
-    const current = stack.pop();
-    if (!current || toDelete.has(current)) {
-      continue;
+  await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const lockedPage = await executeQuery<{ owner_id: string | null }>(
+      tx,
+      sql`select ${deletedPageOwnerSql} as owner_id
+       from pages p
+       where p.id = ${pageId} and p.is_deleted = true
+       for update`,
+    );
+    const ownerId = lockedPage.rows[0]?.owner_id;
+    if (!ownerId) {
+      throw new HTTPException(404, { message: 'Page not found' });
     }
-    toDelete.add(current);
-    const children = childMap.get(current);
-    if (children) {
-      for (const child of children) {
-        stack.push(child);
-      }
+    if (ownerId !== user.id) {
+      throw new HTTPException(403, {
+        message: 'You can only permanently delete pages that you own',
+      });
     }
-  }
-
-  await pool.query('delete from pages where id = any($1)', [Array.from(toDelete)]);
+    await purgeUnreferencedUploadsForPages(tx, [pageId]);
+    await purgeEntityAccessMetadata(tx, 'page', [pageId]);
+    await executeQuery(tx, sql`delete from pages where id = ${pageId} and is_deleted = true`);
+  });
+  await processUploadDeletionQueue();
 
   return c.json({ deleted: true });
 });
 
+export { pagesPublicRoute };
 export default pagesRoute;

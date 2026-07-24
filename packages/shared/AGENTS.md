@@ -6,7 +6,6 @@
 
 ```typescript
 export * from "./types/user.js";
-export * from "./types/workspace.js";
 export * from "./logger.js";
 ```
 

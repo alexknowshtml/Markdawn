@@ -1,3 +1,4 @@
+import { MAX_PAGE_TITLE_LENGTH } from '@markdawn/shared';
 import { describe, expect, it } from 'vitest';
 import {
   createTestApp,
@@ -5,7 +6,6 @@ import {
   createTestSession,
   createTestUser,
   createTestVersion,
-  createTestWorkspace,
 } from '../test-utils';
 
 describe('versions API', () => {
@@ -30,7 +30,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
       await createTestVersion(page.id, user.id, { title: 'v1' });
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
@@ -55,21 +55,6 @@ describe('versions API', () => {
 
       expect(res.status).toBe(404);
     });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-
-      const res = await app.request(`/api/pages/${page.id}/versions`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('POST /api/pages/:pageId/versions', () => {
@@ -77,7 +62,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
         method: 'POST',
@@ -98,7 +83,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(`/api/pages/${page.id}/versions`, {
         method: 'POST',
@@ -111,6 +96,31 @@ describe('versions API', () => {
       });
 
       expect(res.status).toBe(400);
+    });
+
+    it('normalizes blank titles and rejects titles above the page limit', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id);
+
+      const blankRes = await app.request(`/api/pages/${page.id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: '   ' }),
+      });
+      expect(blankRes.status).toBe(200);
+      expect(await blankRes.json()).toMatchObject({ title: 'Untitled' });
+
+      const oversizedRes = await app.request(`/api/pages/${page.id}/versions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Cookie: session.Cookie },
+        body: JSON.stringify({ title: 'x'.repeat(MAX_PAGE_TITLE_LENGTH + 1) }),
+      });
+      expect(oversizedRes.status).toBe(400);
+      expect(await oversizedRes.json()).toMatchObject({
+        message: `Title must be ${MAX_PAGE_TITLE_LENGTH} characters or fewer`,
+      });
     });
 
     it('returns 404 for non-existent page', async () => {
@@ -137,7 +147,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id, { title: 'Original' });
+      const page = await createTestPage(user.id, { title: 'Original' });
       const version = await createTestVersion(page.id, user.id, { title: 'Restored Title' });
 
       const res = await app.request(`/api/pages/${page.id}/versions/${version.id}/restore`, {
@@ -157,7 +167,7 @@ describe('versions API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
+      const page = await createTestPage(user.id);
 
       const res = await app.request(
         `/api/pages/${page.id}/versions/00000000-0000-0000-0000-000000000000/restore`,
@@ -168,6 +178,22 @@ describe('versions API', () => {
       );
 
       expect(res.status).toBe(404);
+    });
+
+    it('normalizes a legacy blank version title when restoring', async () => {
+      const app = await createTestApp();
+      const user = await createTestUser();
+      const session = await createTestSession(user.id);
+      const page = await createTestPage(user.id, { title: 'Original' });
+      const version = await createTestVersion(page.id, user.id, { title: '   ' });
+
+      const res = await app.request(`/api/pages/${page.id}/versions/${version.id}/restore`, {
+        method: 'POST',
+        headers: { Cookie: session.Cookie },
+      });
+
+      expect(res.status).toBe(200);
+      expect(await res.json()).toMatchObject({ title: 'Untitled' });
     });
 
     it('returns 404 for non-existent page', async () => {

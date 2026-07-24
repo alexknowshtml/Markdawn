@@ -18,6 +18,7 @@ export interface OutgoingLink {
   targetTitle: string;
   linkText: string;
   linkType: string;
+  targetState: 'accessible' | 'restricted' | 'unavailable';
   targetPageTitle: string | null;
   targetPageIcon: string | null;
 }

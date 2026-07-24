@@ -1,18 +1,4 @@
 import { $node } from '@milkdown/utils';
-import { getPageIndexMap } from '../../hooks/useWorkspaceMeta';
-
-function resolveTargetId(path: string): string {
-  const pageIndex = getPageIndexMap();
-  if (!pageIndex || !path) return '';
-  const lowerPath = path.toLowerCase();
-  for (const [id, data] of pageIndex.entries()) {
-    const entry = data as { title?: string } | undefined;
-    if (entry?.title && entry.title.toLowerCase() === lowerPath) {
-      return id;
-    }
-  }
-  return '';
-}
 
 export const wikiLink = $node('wikiLink', () => ({
   group: 'inline',
@@ -31,7 +17,7 @@ export const wikiLink = $node('wikiLink', () => ({
         targetId: (dom as HTMLElement).getAttribute('data-target-id') || '',
         path: (dom as HTMLElement).getAttribute('data-path'),
         heading: (dom as HTMLElement).getAttribute('data-heading') || '',
-        label: dom.textContent,
+        label: (dom as HTMLElement).getAttribute('data-label') || '',
       }),
     },
   ],
@@ -43,8 +29,9 @@ export const wikiLink = $node('wikiLink', () => ({
       'data-target-id': node.attrs.targetId || '',
       'data-path': node.attrs.path,
       'data-heading': node.attrs.heading || '',
+      'data-label': node.attrs.label || '',
     },
-    node.attrs.label,
+    node.attrs.label || node.attrs.path || 'Wiki link',
   ],
   parseMarkdown: {
     match: (node) =>
@@ -55,13 +42,12 @@ export const wikiLink = $node('wikiLink', () => ({
       if (match) {
         const path = match[1] || '';
         const heading = match[2] || '';
-        const label = match[3] || (path ? (heading ? `${path}#${heading}` : path) : `#${heading}`);
+        const label = match[3] || '';
 
         state.addNode(nodeType, {
           path,
           heading,
           label,
-          targetId: resolveTargetId(path),
         });
       }
     },
@@ -70,11 +56,15 @@ export const wikiLink = $node('wikiLink', () => ({
     match: (node) => node.type.name === 'wikiLink',
     runner: (state, node) => {
       const path = String(node.attrs.path || '');
+      const targetId = String(node.attrs.targetId || '');
+      if (targetId && !path) {
+        state.addNode('text', undefined, String(node.attrs.label || 'Link unavailable'));
+        return;
+      }
       const heading = String(node.attrs.heading || '');
       const target = heading ? `${path}#${heading}` : path;
-      const defaultLabel = path ? (heading ? `${path}#${heading}` : path) : `#${heading}`;
-      const text =
-        node.attrs.label !== defaultLabel ? `[[${target}|${node.attrs.label}]]` : `[[${target}]]`;
+      const label = String(node.attrs.label || '');
+      const text = label ? `[[${target}|${label}]]` : `[[${target}]]`;
       state.addNode('text', undefined, text);
     },
   },

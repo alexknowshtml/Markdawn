@@ -1,0 +1,1 @@
+CREATE INDEX "guest_identities_last_seen_idx" ON "guest_identities" ("last_seen_at");

@@ -1,12 +1,17 @@
+import type { ShareEntityType } from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
+import { ensureFolderAccess, ensurePageAccess } from '../utils/share-access';
 
 type FavoriteRow = {
-  page_id: string;
+  entity_type: ShareEntityType;
+  entity_id: string;
   title: string;
   icon: string | null;
+  owner_id: string | null;
   created_at: Date | null;
 };
 
@@ -14,48 +19,62 @@ const favoritesRoute = new Hono();
 
 favoritesRoute.use('*', requireAuth);
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
+const parseEntityType = (value: unknown): ShareEntityType => {
+  if (value === 'page' || value === 'folder') {
+    return value;
   }
+  throw new HTTPException(400, { message: 'Invalid entityType' });
 };
 
-const getPageWorkspace = async (pageId: string) => {
-  const result = await pool.query(
-    'select id, workspace_id, is_deleted from pages where id = $1 limit 1',
-    [pageId],
-  );
-
-  return (
-    (result.rows[0] as
-      | { id: string; workspace_id: string | null; is_deleted: boolean | null }
-      | undefined) ?? null
-  );
+const ensureEntityAccess = async (
+  entityType: ShareEntityType,
+  entityId: string,
+  userId: string,
+) => {
+  if (entityType === 'page') {
+    await ensurePageAccess(entityId, userId);
+    return;
+  }
+  await ensureFolderAccess(entityId, userId);
 };
 
 favoritesRoute.get('/', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select uf.page_id, p.title, p.icon, uf.created_at from user_favorites uf join pages p on p.id = uf.page_id where uf.user_id = $1 and p.workspace_id = $2 and p.is_deleted = false order by uf.created_at desc nulls last',
-    [user.id, workspaceId],
+  const result = await query(
+    sql`select
+       uf.entity_type,
+       uf.entity_id,
+       case when uf.entity_type = 'folder' then f.name else p.title end as title,
+       case when uf.entity_type = 'folder' then f.icon else p.icon end as icon,
+       case
+         when uf.entity_type = 'folder' then get_root_folder_owner(f.id)
+         else coalesce(get_root_folder_owner(p.parent_id), p.created_by)
+       end as owner_id,
+       uf.created_at
+     from user_favorites uf
+     left join pages p on p.id = uf.entity_id and uf.entity_type = 'page' and p.is_deleted = false
+     left join folders f on f.id = uf.entity_id and uf.entity_type = 'folder' and f.is_deleted = false
+     where uf.user_id = ${user.id}
+       and ((uf.entity_type = 'page' and p.id is not null) or (uf.entity_type = 'folder' and f.id is not null))
+       and case
+         when uf.entity_type = 'folder' then exists (
+           select 1 from get_effective_folder_permission(f.id, ${user.id}) access where access.permission is not null
+         )
+         else exists (
+           select 1 from get_effective_page_permission(p.id, ${user.id}) access where access.permission is not null
+         )
+       end
+     order by uf.created_at desc nulls last`,
   );
 
   const favorites = (result.rows as FavoriteRow[]).map((row) => ({
-    pageId: row.page_id,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    ...(row.entity_type === 'page' ? { pageId: row.entity_id } : {}),
     title: row.title,
     icon: row.icon,
+    ownerId: row.owner_id,
     createdAt: row.created_at,
   }));
 
@@ -68,22 +87,36 @@ favoritesRoute.post('/', async (c) => {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { pageId } = body as { pageId?: string };
-  if (!pageId) {
-    throw new HTTPException(400, { message: 'pageId is required' });
+  const raw = body as { entityType?: unknown; entityId?: unknown; pageId?: unknown };
+  const entityType = raw.entityType === undefined ? 'page' : parseEntityType(raw.entityType);
+  const entityId =
+    typeof raw.entityId === 'string'
+      ? raw.entityId
+      : entityType === 'page' && typeof raw.pageId === 'string'
+        ? raw.pageId
+        : null;
+
+  if (!entityId) {
+    throw new HTTPException(400, { message: 'entityId is required' });
   }
 
-  const page = await getPageWorkspace(pageId);
-  if (!page?.workspace_id || page.is_deleted) {
-    throw new HTTPException(404, { message: 'Page not found' });
+  const existsResult = await query(
+    entityType === 'page'
+      ? sql`select id, is_deleted from pages where id = ${entityId} limit 1`
+      : sql`select id, is_deleted from folders where id = ${entityId} limit 1`,
+  );
+  const entity = existsResult.rows[0] as { id: string; is_deleted: boolean | null } | undefined;
+  if (!entity || entity.is_deleted) {
+    throw new HTTPException(404, {
+      message: `${entityType === 'page' ? 'Page' : 'Folder'} not found`,
+    });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensureEntityAccess(entityType, entityId, user.id);
 
-  const insertResult = await pool.query(
-    'insert into user_favorites (user_id, page_id, workspace_id) values ($1, $2, $3) on conflict (user_id, page_id) do nothing returning id',
-    [user.id, pageId, page.workspace_id],
+  const insertResult = await query(
+    sql`insert into user_favorites (user_id, entity_type, entity_id) values (${user.id}, ${entityType}, ${entityId}) on conflict (user_id, entity_type, entity_id) do nothing returning id`,
   );
 
   if (insertResult.rowCount === 0) {
@@ -93,20 +126,32 @@ favoritesRoute.post('/', async (c) => {
   return c.json({ ok: true }, 201);
 });
 
-favoritesRoute.delete(':pageId', async (c) => {
+favoritesRoute.delete('/:entityType/:entityId', async (c) => {
+  const entityType = parseEntityType(c.req.param('entityType'));
+  const entityId = c.req.param('entityId');
+  const user = c.get('user') as { id: string };
+
+  await ensureEntityAccess(entityType, entityId, user.id);
+  await query(
+    sql`delete from user_favorites where user_id = ${user.id} and entity_type = ${entityType} and entity_id = ${entityId}`,
+  );
+
+  return c.json({ deleted: true });
+});
+
+favoritesRoute.delete('/:pageId', async (c) => {
   const pageId = c.req.param('pageId');
-  const page = await getPageWorkspace(pageId);
-  if (!page?.workspace_id) {
+  const pageResult = await query(sql`select id from pages where id = ${pageId} limit 1`);
+  if (!pageResult.rows[0]) {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(page.workspace_id, user.id);
+  await ensurePageAccess(pageId, user.id);
 
-  await pool.query('delete from user_favorites where user_id = $1 and page_id = $2', [
-    user.id,
-    pageId,
-  ]);
+  await query(
+    sql`delete from user_favorites where user_id = ${user.id} and entity_type = 'page' and entity_id = ${pageId}`,
+  );
 
   return c.json({ deleted: true });
 });

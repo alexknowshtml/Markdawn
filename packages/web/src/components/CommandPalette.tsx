@@ -1,8 +1,9 @@
 import { FileText, Plus, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useIdentityNavigate } from '../contexts/IdentityLifecycleContext';
 import { useShortcut, useShortcutScope } from '../contexts/KeyboardShortcutContext';
-import { useCreatePage } from '../hooks/use-pages';
+import { useEntityCreationActions } from '../hooks/useEntityCreationActions';
+import { buildPagePath } from '../utils/url';
 
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:3001';
 
@@ -12,20 +13,15 @@ type SearchResult = {
   icon: string | null;
 };
 
-interface CommandPaletteProps {
-  workspaceId: string;
-  workspaceSlug: string;
-}
-
-export function CommandPalette({ workspaceId, workspaceSlug }: CommandPaletteProps) {
-  const navigate = useNavigate();
+export function CommandPalette() {
+  const navigate = useIdentityNavigate();
   const inputRef = useRef<HTMLInputElement>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
   const [isLoading, setIsLoading] = useState(false);
 
-  const createPageMutation = useCreatePage();
+  const entityCreation = useEntityCreationActions();
 
   const hasResults = results.length > 0;
   const trimmedQuery = useMemo(() => query.trim(), [query]);
@@ -85,10 +81,10 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
 
     const timeout = window.setTimeout(async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/api/search?q=${encodeURIComponent(trimmedQuery)}&workspaceId=${workspaceId}`,
-          { credentials: 'include', signal: controller.signal },
-        );
+        const res = await fetch(`${API_BASE}/api/search?q=${encodeURIComponent(trimmedQuery)}`, {
+          credentials: 'include',
+          signal: controller.signal,
+        });
         if (!res.ok) {
           throw new Error('Failed to search');
         }
@@ -109,7 +105,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
       window.clearTimeout(timeout);
       controller.abort();
     };
-  }, [isOpen, trimmedQuery, workspaceId]);
+  }, [isOpen, trimmedQuery]);
 
   if (!isOpen) {
     return null;
@@ -164,7 +160,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                 No results found
               </p>
               <p className="text-sm text-zinc-500 dark:text-zinc-400 mt-1">
-                We couldn't find anything matching "{trimmedQuery}"
+                We couldn't find anything matching &quot;{trimmedQuery}&quot;
               </p>
             </div>
           )}
@@ -176,7 +172,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                   <button
                     type="button"
                     onClick={() => {
-                      navigate(`/app/${workspaceSlug}/${result.id}`);
+                      navigate(buildPagePath(result.title, result.id));
                       closeDialog();
                     }}
                     className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
@@ -206,15 +202,14 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                 <button
                   type="button"
                   onClick={() => {
-                    createPageMutation.mutate(
-                      { workspaceId },
-                      {
-                        onSuccess: (page) => {
-                          navigate(`/app/${workspaceSlug}/${page.id}`);
-                          closeDialog();
-                        },
-                      },
-                    );
+                    void entityCreation
+                      .createPageAndNavigate()
+                      .then((page) => {
+                        if (page) closeDialog();
+                      })
+                      .catch(() => {
+                        // Error toast handled globally by MutationCache.onError
+                      });
                   }}
                   className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"
                 >
@@ -230,7 +225,7 @@ export function CommandPalette({ workspaceId, workspaceSlug }: CommandPalettePro
                 <button
                   type="button"
                   onClick={() => {
-                    navigate(`/app/${workspaceSlug}?tab=trash`);
+                    navigate('/app/trash');
                     closeDialog();
                   }}
                   className="w-full rounded-xl px-4 py-3 text-left transition-all duration-200 flex items-center gap-3 text-zinc-600 dark:text-zinc-400 hover:bg-zinc-50 dark:hover:bg-zinc-800/30 hover:text-zinc-900 dark:hover:text-zinc-200"

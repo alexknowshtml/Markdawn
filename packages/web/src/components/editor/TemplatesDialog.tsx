@@ -9,17 +9,16 @@ import {
 } from '../../hooks/use-templates';
 
 interface TemplatesDialogProps {
-  workspaceId: string;
   onUseTemplate: (template: Template) => void;
 }
 
-export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogProps) {
+export function TemplatesDialog({ onUseTemplate }: TemplatesDialogProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [newTemplateTitle, setNewTemplateTitle] = useState('');
   const [newTemplateIcon, setNewTemplateIcon] = useState('');
   const [newTemplateDescription, setNewTemplateDescription] = useState('');
-  const { data: templates, isLoading } = useTemplates(isOpen ? workspaceId : '');
+  const { data: templates, isLoading } = useTemplates();
   const createTemplateMutation = useCreateTemplate();
   const deleteTemplateMutation = useDeleteTemplate();
   const canCreate = useMemo(() => newTemplateTitle.trim().length > 0, [newTemplateTitle]);
@@ -33,7 +32,6 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
 
     createTemplateMutation.mutate(
       {
-        workspaceId,
         title,
         icon: newTemplateIcon.trim() ? newTemplateIcon.trim() : null,
         description: newTemplateDescription.trim() ? newTemplateDescription.trim() : null,
@@ -178,7 +176,7 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                   ) : templates?.length === 0 ? (
                     <div className="text-center py-12 text-zinc-500 flex flex-col items-center">
                       <LayoutTemplate size={48} className="mb-4 text-zinc-300 dark:text-zinc-700" />
-                      <p>No templates found in this workspace.</p>
+                      <p>No templates found.</p>
                       <p className="text-sm mt-1">
                         Create one from the current page to get started.
                       </p>
@@ -206,7 +204,6 @@ export function TemplatesDialog({ workspaceId, onUseTemplate }: TemplatesDialogP
                                 if (confirm('Are you sure you want to delete this template?')) {
                                   deleteTemplateMutation.mutate({
                                     templateId: template.id,
-                                    workspaceId,
                                   });
                                 }
                               }}

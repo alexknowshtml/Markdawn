@@ -1,17 +1,19 @@
-export interface Workspace {
-  id: string;
-  name: string;
-  slug: string;
-  ownerId: string | null;
-  isPersonal: boolean | null;
-  createdAt: Date;
-  updatedAt: Date;
+export type WorkspaceRole = 'viewer' | 'editor' | 'admin';
+
+export interface WorkspaceMembership {
+  ownerId: string;
+  ownerName: string | null;
+  role: WorkspaceRole;
+  joinedAt: string;
 }
 
 export interface WorkspaceMember {
   id: string;
-  workspaceId: string | null;
-  userId: string | null;
-  role: 'owner' | 'admin' | 'member';
-  joinedAt: Date;
+  workspaceOwnerId: string;
+  memberId: string;
+  memberName: string | null;
+  memberEmail: string;
+  memberAvatarUrl: string | null;
+  role: WorkspaceRole;
+  createdAt: string;
 }

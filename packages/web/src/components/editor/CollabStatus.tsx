@@ -13,6 +13,7 @@ type AwarenessUser = {
   name: string;
   color: string;
   avatar?: string;
+  emoji?: string;
 };
 
 const STATUS_LABELS: Record<WebSocketStatus, string> = {
@@ -35,22 +36,32 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
 
       const states = awareness.getStates();
       const localClientId = awareness.clientID;
-      const activeUsers: AwarenessUser[] = [];
+      const seen = new Map<string, AwarenessUser>();
 
       for (const [clientId, state] of states.entries()) {
         if (clientId === localClientId) continue;
         if (state.user && typeof state.user === 'object') {
-          const user = state.user as { name?: string; color?: string; avatar?: string };
-          activeUsers.push({
-            id: clientId,
-            name: user.name ?? 'Anonymous',
-            color: user.color ?? '#000000',
-            ...(user.avatar ? { avatar: user.avatar } : {}),
-          });
+          const user = state.user as {
+            name?: string;
+            color?: string;
+            avatar?: string;
+            emoji?: string;
+          };
+
+          const key = user.avatar ?? user.name ?? 'Anonymous';
+          if (!seen.has(key)) {
+            seen.set(key, {
+              id: clientId,
+              name: user.name ?? 'Anonymous',
+              color: user.color ?? '#000000',
+              ...(user.avatar ? { avatar: user.avatar } : {}),
+              ...(user.emoji ? { emoji: user.emoji } : {}),
+            });
+          }
         }
       }
 
-      setUsers(activeUsers);
+      setUsers(Array.from(seen.values()));
     };
 
     provider.awareness?.on('change', updateUsers);
@@ -69,10 +80,6 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
         ? 'bg-amber-500'
         : 'bg-rose-500';
 
-  if (!provider) {
-    return null;
-  }
-
   return (
     <div className="flex items-center gap-3">
       {/* Status Indicator */}
@@ -84,8 +91,8 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
         </span>
       </Tooltip>
 
-      {/* User Avatars */}
-      {users.length > 0 && (
+      {/* User Avatars — only when provider is available */}
+      {provider && users.length > 0 && (
         <div className="flex items-center -space-x-2">
           {users.slice(0, 5).map((user) => (
             <Tooltip key={user.id} label={user.name} position="bottom">
@@ -103,6 +110,8 @@ export function CollabStatus({ provider, status }: CollabStatusProps) {
                     className="w-full h-full object-cover"
                     referrerPolicy="no-referrer"
                   />
+                ) : user.emoji ? (
+                  <span className="text-base">{user.emoji}</span>
                 ) : (
                   <span className="text-white text-xs font-bold">{getInitial(user.name)}</span>
                 )}

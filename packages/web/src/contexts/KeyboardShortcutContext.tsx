@@ -16,7 +16,7 @@ import {
 
 type Scope = string;
 
-interface ShortcutDefinition {
+export interface ShortcutDefinition {
   key: string;
   // biome-ignore lint/suspicious/noConfusingVoidType: void allows simple arrow functions like () => fn()
   handler: (event: KeyboardEvent) => boolean | void;
@@ -166,6 +166,51 @@ export function useShortcut(def: ShortcutDefinition): void {
 
     return unregister;
   }, [def.key, def.scope, def.priority, def.preventDefault, def.description, def.whenInputFocused]);
+}
+
+/** Register a stable group of related shortcuts through one hook boundary. */
+export function useShortcuts(definitions: readonly ShortcutDefinition[]): void {
+  const ctx = useContext(ShortcutContext);
+  if (!ctx) {
+    throw new Error('useShortcuts must be used within a KeyboardShortcutProvider');
+  }
+  const definitionsRef = useRef(definitions);
+  definitionsRef.current = definitions;
+  const idsRef = useRef<string[]>([]);
+  while (idsRef.current.length < definitions.length) {
+    idsRef.current.push(`hook-${++hookIdCounter}`);
+  }
+  const signature = definitions
+    .map((definition) =>
+      [
+        definition.key,
+        definition.scope,
+        definition.priority,
+        definition.preventDefault,
+        definition.description,
+        definition.whenInputFocused,
+      ].join('\u001f'),
+    )
+    .join('\u001e');
+
+  useEffect(() => {
+    if (signature.length === 0 && definitionsRef.current.length === 0) return;
+    const unregister = definitionsRef.current.map((definition, index) =>
+      keyboardRegistry.register({
+        id: idsRef.current[index] ?? `hook-${++hookIdCounter}`,
+        key: keyboardRegistry.patternToKey(definition.key),
+        handler: (event) => definitionsRef.current[index]?.handler(event),
+        scope: definition.scope ?? '*',
+        priority: definition.priority ?? 'normal',
+        preventDefault: definition.preventDefault ?? true,
+        description: definition.description ?? '',
+        whenInputFocused: definition.whenInputFocused ?? 'allow',
+      }),
+    );
+    return () => {
+      for (const remove of unregister) remove();
+    };
+  }, [signature]);
 }
 
 /**

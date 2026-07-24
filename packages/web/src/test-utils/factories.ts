@@ -1,4 +1,4 @@
-import type { Folder, FolderTreeNode, Page, PageTreeNode, User, Workspace } from '@markdawn/shared';
+import type { Folder, FolderTreeNode, Page, PageTreeNode, User } from '@markdawn/shared';
 
 let idCounter = 0;
 
@@ -59,23 +59,9 @@ export function createMockSessionUnauthenticated() {
   };
 }
 
-export function createMockWorkspace(overrides: Partial<Workspace> = {}): Workspace {
-  return {
-    id: nextId('ws'),
-    name: 'Test Workspace',
-    slug: 'test-workspace',
-    ownerId: null,
-    isPersonal: false,
-    createdAt: new Date('2024-01-01'),
-    updatedAt: new Date('2024-01-01'),
-    ...overrides,
-  };
-}
-
 export function createMockPage(overrides: Partial<Page> = {}): Page {
   return {
     id: nextId('page'),
-    workspaceId: null,
     parentId: null,
     title: 'Untitled',
     icon: null,
@@ -89,8 +75,7 @@ export function createMockPage(overrides: Partial<Page> = {}): Page {
     updatedAt: new Date('2024-01-01'),
     isDeleted: false,
     deletedAt: null,
-    isPublic: false,
-    publicToken: null,
+    publicPermission: null,
     ...overrides,
   };
 }
@@ -106,7 +91,6 @@ export function createMockPageTreeNode(overrides: Partial<PageTreeNode> = {}): P
 export function createMockFolder(overrides: Partial<Folder> = {}): Folder {
   return {
     id: nextId('folder'),
-    workspaceId: null,
     parentId: null,
     name: 'New Folder',
     icon: null,
@@ -128,12 +112,9 @@ export function createMockFolderTreeNode(overrides: Partial<FolderTreeNode> = {}
   };
 }
 
-export function createMockTag(
-  overrides: { id?: string; name?: string; workspaceId?: string } = {},
-) {
+export function createMockTag(overrides: { id?: string; name?: string } = {}) {
   return {
     id: overrides.id ?? nextId('tag'),
     name: overrides.name ?? 'test-tag',
-    workspaceId: overrides.workspaceId ?? nextId('ws'),
   };
 }

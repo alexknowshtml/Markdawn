@@ -1,4 +1,5 @@
 import * as Y from 'yjs';
+import { normalizeWikiLinkLookupKey } from './wikiLink.js';
 
 export type ConnectionTargetType = 'page' | 'tag' | 'user' | 'external';
 export type ConnectionType = 'wikilink' | 'tag' | 'mention' | 'embed' | 'heading' | 'url';
@@ -31,17 +32,26 @@ const MARK_DELIMITERS: Record<string, [string, string]> = {
   strike_through: ['~~', '~~'],
 };
 
+export interface MarkdownRenderOptions {
+  resolveWikiLinkTarget?: (targetId: string) => { title: string } | null;
+  restrictedWikiLinkText?: string;
+}
+
 /** Exported for testing. */
-export function yDocToMarkdown(update: Uint8Array): string {
+export function yDocToMarkdown(update: Uint8Array, options: MarkdownRenderOptions = {}): string {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, update);
   const fragment = doc.getXmlFragment('prosemirror');
-  return renderBlockChildren(fragment, 0);
+  return renderBlockChildren(fragment, 0, options);
 }
 
 // ---- Block rendering ----
 
-function renderBlockChildren(element: Y.XmlFragment | Y.XmlElement, depth: number): string {
+function renderBlockChildren(
+  element: Y.XmlFragment | Y.XmlElement,
+  depth: number,
+  options: MarkdownRenderOptions,
+): string {
   let result = '';
 
   for (let i = 0; i < element.length; i++) {
@@ -52,21 +62,25 @@ function renderBlockChildren(element: Y.XmlFragment | Y.XmlElement, depth: numbe
       // but handle it gracefully as inline content.
       result += renderDelta(child.toDelta() as DeltaSegment[]);
     } else if (child instanceof Y.XmlElement) {
-      result += renderBlockElement(child, depth);
+      result += renderBlockElement(child, depth, options);
     }
   }
 
   return result;
 }
 
-function renderBlockElement(element: Y.XmlElement, depth: number): string {
+function renderBlockElement(
+  element: Y.XmlElement,
+  depth: number,
+  options: MarkdownRenderOptions,
+): string {
   switch (element.nodeName) {
     case 'paragraph':
-      return `${renderInlineContent(element)}\n\n`;
+      return `${renderInlineContent(element, options)}\n\n`;
 
     case 'heading': {
       const level = Number.parseInt(element.getAttribute('level') || '1', 10);
-      return `${'#'.repeat(Math.min(Math.max(level, 1), 6))} ${renderInlineContent(element)}\n\n`;
+      return `${'#'.repeat(Math.min(Math.max(level, 1), 6))} ${renderInlineContent(element, options)}\n\n`;
     }
 
     case 'code_block': {
@@ -77,36 +91,41 @@ function renderBlockElement(element: Y.XmlElement, depth: number): string {
     }
 
     case 'blockquote': {
-      const inner = renderBlockChildren(element, depth + 1).replace(/\n\n$/, '');
+      const inner = renderBlockChildren(element, depth + 1, options).replace(/\n\n$/, '');
       if (!inner.trim()) return '\n';
       const lines = inner.split('\n');
       return `${lines.map((l) => (l ? `> ${l}` : '>')).join('\n')}\n\n`;
     }
 
     case 'bullet_list':
-      return renderList(element, depth, false);
+      return renderList(element, depth, false, options);
 
     case 'ordered_list':
-      return renderList(element, depth, true);
+      return renderList(element, depth, true, options);
 
     case 'hr':
       return '---\n\n';
 
     case 'table':
-      return renderTable(element);
+      return renderTable(element, options);
 
     case 'callout':
-      return renderCallout(element, depth);
+      return renderCallout(element, depth, options);
 
     default:
       // Treat unknown block nodes as inline content
-      return `${renderInlineContent(element)}\n\n`;
+      return `${renderInlineContent(element, options)}\n\n`;
   }
 }
 
 // ---- List rendering ----
 
-function renderList(element: Y.XmlElement, depth: number, ordered: boolean): string {
+function renderList(
+  element: Y.XmlElement,
+  depth: number,
+  ordered: boolean,
+  options: MarkdownRenderOptions,
+): string {
   const items: string[] = [];
   let counter = Number(element.getAttribute('order') || '1');
   const indent = '  '.repeat(depth);
@@ -118,7 +137,7 @@ function renderList(element: Y.XmlElement, depth: number, ordered: boolean): str
     const prefix = ordered ? `${counter}. ` : '- ';
     const checked = child.getAttribute('checked');
     const taskPrefix = checked != null ? (checked === 'true' ? '[x] ' : '[ ] ') : '';
-    const itemContent = renderListItemContent(child, depth + 1);
+    const itemContent = renderListItemContent(child, depth + 1, options);
 
     items.push(`${indent}${prefix}${taskPrefix}${itemContent.trimStart().trimEnd()}`);
     counter++;
@@ -127,7 +146,11 @@ function renderList(element: Y.XmlElement, depth: number, ordered: boolean): str
   return `${items.join('\n')}\n`;
 }
 
-function renderListItemContent(element: Y.XmlElement, depth: number): string {
+function renderListItemContent(
+  element: Y.XmlElement,
+  depth: number,
+  options: MarkdownRenderOptions,
+): string {
   let result = '';
 
   for (let i = 0; i < element.length; i++) {
@@ -138,14 +161,14 @@ function renderListItemContent(element: Y.XmlElement, depth: number): string {
     } else if (child instanceof Y.XmlElement) {
       switch (child.nodeName) {
         case 'paragraph':
-          result += renderInlineContent(child);
+          result += renderInlineContent(child, options);
           break;
         case 'bullet_list':
         case 'ordered_list':
-          result += `\n${renderList(child, depth, child.nodeName === 'ordered_list')}`;
+          result += `\n${renderList(child, depth, child.nodeName === 'ordered_list', options)}`;
           break;
         default:
-          result += renderBlockElement(child, depth);
+          result += renderBlockElement(child, depth, options);
       }
     }
   }
@@ -155,7 +178,7 @@ function renderListItemContent(element: Y.XmlElement, depth: number): string {
 
 // ---- Table rendering ----
 
-function renderTable(element: Y.XmlElement): string {
+function renderTable(element: Y.XmlElement, options: MarkdownRenderOptions): string {
   const rows: string[][] = [];
   const alignments: (string | null)[] = [];
 
@@ -168,7 +191,7 @@ function renderTable(element: Y.XmlElement): string {
       const cell = row.get(j);
       if (!(cell instanceof Y.XmlElement)) continue;
 
-      cells.push(renderInlineContent(cell));
+      cells.push(renderInlineContent(cell, options));
 
       if (row.nodeName === 'table_header_row' && j >= alignments.length) {
         alignments.push(cell.getAttribute('alignment') || null);
@@ -202,11 +225,15 @@ function renderTable(element: Y.XmlElement): string {
 
 // ---- Callout rendering ----
 
-function renderCallout(element: Y.XmlElement, depth: number): string {
+function renderCallout(
+  element: Y.XmlElement,
+  depth: number,
+  options: MarkdownRenderOptions,
+): string {
   const calloutType = (element.getAttribute('type') || 'note').toUpperCase();
   const title = element.getAttribute('title') || '';
   const titleSuffix = title ? ` ${title}` : '';
-  const inner = renderBlockChildren(element, depth + 1).replace(/\n\n$/, '');
+  const inner = renderBlockChildren(element, depth + 1, options).replace(/\n\n$/, '');
 
   if (!inner.trim()) return `> [!${calloutType}${titleSuffix}]\n\n`;
 
@@ -220,7 +247,10 @@ function renderCallout(element: Y.XmlElement, depth: number): string {
 
 // ---- Inline content rendering ----
 
-function renderInlineContent(element: Y.XmlFragment | Y.XmlElement): string {
+function renderInlineContent(
+  element: Y.XmlFragment | Y.XmlElement,
+  options: MarkdownRenderOptions,
+): string {
   let result = '';
 
   for (let i = 0; i < element.length; i++) {
@@ -229,14 +259,14 @@ function renderInlineContent(element: Y.XmlFragment | Y.XmlElement): string {
     if (child instanceof Y.XmlText) {
       result += renderDelta(child.toDelta() as DeltaSegment[]);
     } else if (child instanceof Y.XmlElement) {
-      result += renderInlineElement(child);
+      result += renderInlineElement(child, options);
     }
   }
 
   return result;
 }
 
-function renderInlineElement(element: Y.XmlElement): string {
+function renderInlineElement(element: Y.XmlElement, options: MarkdownRenderOptions): string {
   switch (element.nodeName) {
     case 'image': {
       const src = element.getAttribute('src') || '';
@@ -250,7 +280,12 @@ function renderInlineElement(element: Y.XmlElement): string {
       return '\n';
 
     case 'wikiLink': {
-      const path = element.getAttribute('path') || '';
+      const targetId = element.getAttribute('targetId') || '';
+      const resolvedTarget = targetId ? options.resolveWikiLinkTarget?.(targetId) : undefined;
+      if (targetId && !resolvedTarget) {
+        return options.restrictedWikiLinkText ?? 'Restricted page';
+      }
+      const path = resolvedTarget?.title ?? element.getAttribute('path') ?? '';
       const label = element.getAttribute('label') || '';
       const heading = element.getAttribute('heading') || '';
       // When imported via API, heading may be embedded in path (# suffix)
@@ -261,7 +296,7 @@ function renderInlineElement(element: Y.XmlElement): string {
           : path;
       const target = resolvedHeading ? `${resolvedPath}#${resolvedHeading}` : resolvedPath;
 
-      if (label && label !== target) {
+      if (label) {
         return `[[${target}|${label}]]`;
       }
       return `[[${target}]]`;
@@ -288,7 +323,7 @@ function renderInlineElement(element: Y.XmlElement): string {
     }
 
     default:
-      return renderInlineContent(element);
+      return renderInlineContent(element, options);
   }
 }
 
@@ -400,6 +435,26 @@ export function extractConnectionsFromYDoc(update: Uint8Array): ConnectionDraft[
   return extractConnectionsFromXml(fragment);
 }
 
+export function extractWikiLinkTargetIds(update: Uint8Array): string[] {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, update);
+  const targetIds = new Set<string>();
+
+  const visit = (element: Y.XmlFragment | Y.XmlElement): void => {
+    for (let index = 0; index < element.length; index++) {
+      const item = element.get(index);
+      if (!(item instanceof Y.XmlElement)) continue;
+      if (item.nodeName === 'wikiLink') {
+        const targetId = item.getAttribute('targetId');
+        if (targetId) targetIds.add(targetId);
+      }
+      visit(item);
+    }
+  };
+  visit(doc.getXmlFragment('prosemirror'));
+  return [...targetIds];
+}
+
 function extractConnectionsFromXml(element: Y.XmlFragment | Y.XmlElement): ConnectionDraft[] {
   const connections: ConnectionDraft[] = [];
 
@@ -425,22 +480,26 @@ function collectConnections(
 
     if (item.nodeName === 'wikiLink') {
       const path = item.getAttribute('path') || '';
-      const label = item.getAttribute('label') || path;
+      const label = item.getAttribute('label') || '';
       const targetId = item.getAttribute('targetId') || '';
       const heading = item.getAttribute('heading') || '';
       const target = heading ? `${path}#${heading}` : path;
-      const targetSlug = normalizePageSlug(path);
+      const targetSlug = path
+        ? normalizeWikiLinkLookupKey(path)
+        : targetId
+          ? `id:${targetId.toLowerCase()}`
+          : '';
 
       if (targetSlug) {
         const draft: ConnectionDraft = {
           targetType: 'page',
           targetSlug,
-          targetLabel: target || label,
+          targetLabel: target || label || 'Wiki link',
           connectionType: heading ? 'heading' : 'wikilink',
-          linkText: label || target || path,
+          linkText: label || target || 'Wiki link',
         };
-        if (context) draft.linkContext = context;
         if (targetId) draft.targetId = targetId;
+        if (context) draft.linkContext = context;
         connections.push(draft);
       }
       continue;
@@ -479,7 +538,7 @@ function xmlElementPlainText(element: Y.XmlFragment | Y.XmlElement): string {
     if (!(item instanceof Y.XmlElement)) continue;
 
     if (item.nodeName === 'wikiLink') {
-      const label = item.getAttribute('label') || item.getAttribute('path') || '';
+      const label = item.getAttribute('label') || item.getAttribute('path') || 'Wiki link';
       text += label;
       continue;
     }
@@ -501,7 +560,7 @@ function xmlElementPlainText(element: Y.XmlFragment | Y.XmlElement): string {
 // ---------------------------------------------------------------------------
 
 export function normalizePageSlug(value: string): string {
-  return value.trim().toLowerCase();
+  return normalizeWikiLinkLookupKey(value);
 }
 
 export function normalizeTagSlug(value: string): string {

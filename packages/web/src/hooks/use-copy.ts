@@ -1,6 +1,6 @@
 import type { Folder, Page } from '@markdawn/shared';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -17,7 +17,9 @@ async function copyPage(pageId: string, parentId?: string | null): Promise<Page>
   return res.json();
 }
 
-async function copyFolder(folderId: string, parentId?: string | null): Promise<Folder> {
+type FolderCopyResult = Folder & { skippedRestrictedItems?: boolean };
+
+async function copyFolder(folderId: string, parentId?: string | null): Promise<FolderCopyResult> {
   const res = await fetch(`${API_BASE}/folders/${folderId}/copy`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -33,21 +35,12 @@ async function copyFolder(folderId: string, parentId?: string | null): Promise<F
 export function useCopyPage() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      pageId,
-      parentId,
-      workspaceId: _workspaceId,
-    }: {
-      pageId: string;
-      parentId?: string | null;
-      workspaceId: string;
-    }) => copyPage(pageId, parentId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
+    mutationFn: ({ pageId, parentId }: { pageId: string; parentId?: string | null }) =>
+      copyPage(pageId, parentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
       showSuccessToast('Page copied');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
     },
   });
 }
@@ -55,22 +48,17 @@ export function useCopyPage() {
 export function useCopyFolder() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      folderId,
-      parentId,
-      workspaceId: _workspaceId,
-    }: {
-      folderId: string;
-      parentId?: string | null;
-      workspaceId: string;
-    }) => copyFolder(folderId, parentId),
-    onSuccess: (_, { workspaceId }) => {
-      queryClient.invalidateQueries({ queryKey: ['folderTree', workspaceId] });
-      queryClient.invalidateQueries({ queryKey: ['pageTree', workspaceId] });
-      showSuccessToast('Folder copied');
-    },
-    onError: (error: Error) => {
-      showErrorToast(error.message);
+    mutationFn: ({ folderId, parentId }: { folderId: string; parentId?: string | null }) =>
+      copyFolder(folderId, parentId),
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['folderTree'] });
+      queryClient.invalidateQueries({ queryKey: ['pageTree'] });
+      queryClient.invalidateQueries({ queryKey: ['folders', 'detail'] });
+      showSuccessToast(
+        data.skippedRestrictedItems
+          ? 'Folder copied. Some restricted items were skipped.'
+          : 'Folder copied',
+      );
     },
   });
 }

@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { pool } from '../db/connection';
+import { testQuery as query } from '../db/testQuery';
 import {
   createTestApp,
+  createTestFolder,
   createTestPage,
   createTestSession,
   createTestUser,
-  createTestWorkspace,
 } from '../test-utils';
 
-async function createTagConnection(workspaceId: string, pageId: string, tag: string) {
-  await pool.query(
+async function createTagConnection(pageId: string, tag: string) {
+  await query(
     `insert into connections (
-       workspace_id, source_type, source_id, target_type, target_slug,
+       source_type, source_id, target_type, target_slug,
        target_label, connection_type, link_text, occurrence_count, updated_at
      )
-     values ($1, 'page', $2, 'tag', $3, $3, 'tag', $3, 1, now())`,
-    [workspaceId, pageId, `#${tag}`],
+     values ('page', $1, 'tag', $2, $2, 'tag', $2, 1, now())`,
+    [pageId, `#${tag}`],
   );
 }
 
@@ -37,14 +37,14 @@ describe('tags API', () => {
   });
 
   describe('GET /api/tags', () => {
-    it('lists tags for a workspace with page counts', async () => {
+    it('lists tags with page counts', async () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
-      await createTagConnection(user.workspaceId, page.id, 'todo');
+      const page = await createTestPage(user.id);
+      await createTagConnection(page.id, 'todo');
 
-      const res = await app.request(`/api/tags?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/tags', {
         headers: { Cookie: session.Cookie },
       });
 
@@ -54,34 +54,6 @@ describe('tags API', () => {
       expect(body.length).toBeGreaterThanOrEqual(1);
       expect(body[0].name).toBe('todo');
     });
-
-    it('returns 400 when workspaceId is missing', async () => {
-      const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-
-      const res = await app.request('/api/tags', {
-        headers: { Cookie: session.Cookie },
-      });
-
-      expect(res.status).toBe(400);
-    });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const page = await createTestPage(ws.id, user1.id);
-      await createTagConnection(ws.id, page.id, 'secret');
-
-      const res = await app.request(`/api/tags?workspaceId=${ws.id}`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
-    });
   });
 
   describe('GET /api/tags/pages', () => {
@@ -89,13 +61,12 @@ describe('tags API', () => {
       const app = await createTestApp();
       const user = await createTestUser();
       const session = await createTestSession(user.id);
-      const page = await createTestPage(user.workspaceId, user.id);
-      await createTagConnection(user.workspaceId, page.id, 'review');
+      const page = await createTestPage(user.id);
+      await createTagConnection(page.id, 'review');
 
-      const res = await app.request(
-        `/api/tags/pages?workspaceId=${user.workspaceId}&tagId=%23review`,
-        { headers: { Cookie: session.Cookie } },
-      );
+      const res = await app.request('/api/tags/pages?tagId=%23review', {
+        headers: { Cookie: session.Cookie },
+      });
 
       expect(res.status).toBe(200);
       const body = await res.json();
@@ -103,15 +74,77 @@ describe('tags API', () => {
       expect(body.length).toBeGreaterThanOrEqual(1);
     });
 
-    it('returns 400 when workspaceId is missing', async () => {
+    it('uses current access instead of the page creator', async () => {
       const app = await createTestApp();
-      const user = await createTestUser();
-      const session = await createTestSession(user.id);
-      const res = await app.request('/api/tags/pages?tagId=anything', {
-        headers: { Cookie: session.Cookie },
-      });
+      const owner = await createTestUser();
+      const formerEditor = await createTestUser();
+      const ownerSession = await createTestSession(owner.id);
+      const editorSession = await createTestSession(formerEditor.id);
+      const folder = await createTestFolder(owner.id);
+      const page = await createTestPage(formerEditor.id, { parentId: folder.id, title: 'Revoked' });
+      await createTagConnection(page.id, 'private');
 
-      expect(res.status).toBe(400);
+      const ownerRes = await app.request('/api/tags/pages?tagId=%23private', {
+        headers: { Cookie: ownerSession.Cookie },
+      });
+      expect(await ownerRes.json()).toContainEqual(expect.objectContaining({ id: page.id }));
+
+      const editorRes = await app.request('/api/tags/pages?tagId=%23private', {
+        headers: { Cookie: editorSession.Cookie },
+      });
+      expect(await editorRes.json()).not.toContainEqual(expect.objectContaining({ id: page.id }));
+    });
+
+    it('redacts a hidden parent until the folder becomes enumerable', async () => {
+      const app = await createTestApp();
+      const owner = await createTestUser();
+      const recipient = await createTestUser();
+      const recipientSession = await createTestSession(recipient.id);
+      const hiddenParent = await createTestFolder(owner.id, { name: 'Hidden Tag Parent' });
+      await query("update folders set public_permission = 'view' where id = $1", [hiddenParent.id]);
+      const page = await createTestPage(owner.id, {
+        title: 'Tagged Direct Share',
+        parentId: hiddenParent.id,
+      });
+      await createTagConnection(page.id, 'hidden-parent');
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('page', $1, $2, $3, 'view')`,
+        [page.id, owner.id, recipient.id],
+      );
+
+      let res = await app.request('/api/tags/pages?tagId=%23hidden-parent', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      let body = (await res.json()) as Array<{ id: string; parentId: string | null }>;
+      expect(body).toContainEqual(expect.objectContaining({ id: page.id, parentId: null }));
+      expect(JSON.stringify(body)).not.toContain(hiddenParent.id);
+
+      const recordedFolderAccess = await query<{ count: string }>(
+        `select count(*)::text as count
+         from folder_public_access_visits
+         where folder_id = $1 and user_id = $2`,
+        [hiddenParent.id, recipient.id],
+      );
+      expect(recordedFolderAccess.rows[0]?.count).toBe('0');
+
+      await query(
+        `insert into shares (
+           entity_type, entity_id, shared_by, recipient_user_id, permission
+         ) values ('folder', $1, $2, $3, 'view')`,
+        [hiddenParent.id, owner.id, recipient.id],
+      );
+
+      res = await app.request('/api/tags/pages?tagId=%23hidden-parent', {
+        headers: { Cookie: recipientSession.Cookie },
+      });
+      expect(res.status).toBe(200);
+      body = (await res.json()) as Array<{ id: string; parentId: string | null }>;
+      expect(body).toContainEqual(
+        expect.objectContaining({ id: page.id, parentId: hiddenParent.id }),
+      );
     });
 
     it('returns 400 when tagId is missing', async () => {
@@ -119,24 +152,11 @@ describe('tags API', () => {
       const user = await createTestUser();
       const session = await createTestSession(user.id);
 
-      const res = await app.request(`/api/tags/pages?workspaceId=${user.workspaceId}`, {
+      const res = await app.request('/api/tags/pages', {
         headers: { Cookie: session.Cookie },
       });
 
       expect(res.status).toBe(400);
-    });
-
-    it('returns 403 when user is not a workspace member', async () => {
-      const app = await createTestApp();
-      const user1 = await createTestUser();
-      const user2 = await createTestUser();
-      const session2 = await createTestSession(user2.id);
-      const ws = await createTestWorkspace(user1.id);
-      const res = await app.request(`/api/tags/pages?workspaceId=${ws.id}&tagId=anything`, {
-        headers: { Cookie: session2.Cookie },
-      });
-
-      expect(res.status).toBe(403);
     });
   });
 });

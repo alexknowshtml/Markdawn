@@ -1,0 +1,1 @@
+ALTER TABLE "folders" ADD CONSTRAINT "folders_name_length_check" CHECK (char_length("name") <= 250);

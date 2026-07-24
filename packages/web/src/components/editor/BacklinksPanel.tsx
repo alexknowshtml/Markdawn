@@ -1,13 +1,13 @@
-import { ArrowLeft, ArrowRight, Link2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Link2, LockKeyhole } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useBacklinks, useOutgoingLinks } from '../../hooks/use-backlinks';
+import { buildPagePath } from '../../utils/url';
 
 interface BacklinksPanelProps {
   pageId: string;
-  workspaceSlug: string;
 }
 
-export function BacklinksPanel({ pageId, workspaceSlug }: BacklinksPanelProps) {
+export function BacklinksPanel({ pageId }: BacklinksPanelProps) {
   const { data: backlinks } = useBacklinks(pageId);
   const { data: outgoing } = useOutgoingLinks(pageId);
 
@@ -39,7 +39,7 @@ export function BacklinksPanel({ pageId, workspaceSlug }: BacklinksPanelProps) {
             {backlinks.slice(0, 5).map((link) => (
               <Link
                 key={link.id}
-                to={`/app/${workspaceSlug}/${link.sourcePageId}`}
+                to={buildPagePath(link.sourceTitle, link.sourcePageId)}
                 className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors"
               >
                 <span className="text-base">{link.sourceIcon || '📄'}</span>
@@ -68,7 +68,7 @@ export function BacklinksPanel({ pageId, workspaceSlug }: BacklinksPanelProps) {
               link.targetPageId ? (
                 <Link
                   key={link.id}
-                  to={`/app/${workspaceSlug}/${link.targetPageId}`}
+                  to={buildPagePath(link.targetPageTitle || link.targetTitle, link.targetPageId)}
                   className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/50 transition-colors"
                 >
                   <span className="text-base">{link.targetPageIcon || '📄'}</span>
@@ -77,11 +77,19 @@ export function BacklinksPanel({ pageId, workspaceSlug }: BacklinksPanelProps) {
               ) : (
                 <div
                   key={link.id}
+                  title={
+                    link.targetState === 'restricted'
+                      ? "You don't have access to this page."
+                      : 'This link is unavailable.'
+                  }
                   className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm text-zinc-400 dark:text-zinc-500"
                 >
-                  <span className="text-base">{link.targetPageIcon || '📄'}</span>
+                  {link.targetState === 'restricted' ? (
+                    <LockKeyhole size={14} aria-hidden="true" />
+                  ) : (
+                    <span className="text-base">{link.targetPageIcon || '📄'}</span>
+                  )}
                   <span className="truncate">{link.targetPageTitle || link.targetTitle}</span>
-                  <span className="text-xs text-zinc-400 dark:text-zinc-500">(not found)</span>
                 </div>
               ),
             )}

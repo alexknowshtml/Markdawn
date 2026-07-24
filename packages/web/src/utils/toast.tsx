@@ -14,6 +14,7 @@ interface Toast {
 type AddToastFn = (toast: Omit<Toast, 'id'>) => void;
 
 let addToast: AddToastFn | null = null;
+let clearToastQueue: (() => void) | null = null;
 
 export function showSuccessToast(message: string) {
   addToast?.({ message, icon: <IconCheck size={16} />, autoClose: 4000 });
@@ -27,6 +28,10 @@ export function showInfoToast(message: string) {
   addToast?.({ message, icon: <IconInfoCircle size={16} />, autoClose: 4000 });
 }
 
+export function clearToasts() {
+  clearToastQueue?.();
+}
+
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const nextId = useRef(0);
@@ -38,13 +43,16 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, toast.autoClose);
   }, []);
+  const clear = useCallback(() => setToasts([]), []);
 
   useEffect(() => {
     addToast = add;
+    clearToastQueue = clear;
     return () => {
-      addToast = null;
+      if (addToast === add) addToast = null;
+      if (clearToastQueue === clear) clearToastQueue = null;
     };
-  }, [add]);
+  }, [add, clear]);
 
   return (
     <>

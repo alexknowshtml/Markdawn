@@ -1,6 +1,8 @@
+import { extractInlineTags, parseMarkdownFrontmatter } from '@markdawn/shared';
 import { directoryOpen } from 'browser-fs-access';
 import { AlertCircle, CheckCircle, FileText, FolderOpen, Image, Loader2, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
+import { useIdentityLifecycle } from '../../contexts/IdentityLifecycleContext';
 
 interface VaultFile {
   path: string;
@@ -17,67 +19,12 @@ interface ImportPreview {
 }
 
 interface ObsidianImportDialogProps {
-  workspaceId: string;
   onClose: () => void;
   onSuccess: () => void;
 }
 
-/**
- * Extracts tags from YAML frontmatter in Obsidian markdown files.
- * Works reliably in browser environment without gray-matter.
- *
- * Supports:
- * - tags:\n  - experience\n  - life\n  - tech\n
- * - tag: single-tag
- * - tags: [tag1, tag2]
- */
-function extractFrontmatterTags(content: string, tagSet: Set<string>): void {
-  // Match YAML frontmatter: --- followed by YAML content followed by ---
-  const frontmatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-
-  if (!frontmatterMatch) return;
-
-  const frontmatter = frontmatterMatch[1];
-  if (!frontmatter) return;
-
-  // Match tags as YAML array:
-  // tags:
-  //   - experience
-  //   - life
-  //   - tech
-  const arrayMatch = frontmatter.match(/^tags:\s*\n((?: {2}- .+\n?)+)/m);
-  if (arrayMatch?.[1]) {
-    const tagLines = arrayMatch[1];
-    const tagMatches = tagLines.matchAll(/^ {2}- (.+)$/gm);
-    for (const match of tagMatches) {
-      const tag = match[1]?.trim().toLowerCase();
-      if (tag) tagSet.add(tag);
-    }
-  }
-
-  // Match single tag: tag: value
-  const singleTagMatch = frontmatter.match(/^tag:\s*(.+)$/m);
-  if (singleTagMatch?.[1]) {
-    const tag = singleTagMatch[1].trim().toLowerCase();
-    if (tag) tagSet.add(tag);
-  }
-
-  // Match tags as inline array: tags: [tag1, tag2]
-  const inlineArrayMatch = frontmatter.match(/^tags:\s*\[([^\]]+)\]$/m);
-  if (inlineArrayMatch?.[1]) {
-    const tags = inlineArrayMatch[1].split(',');
-    for (const tag of tags) {
-      const t = tag.trim().toLowerCase();
-      if (t) tagSet.add(t);
-    }
-  }
-}
-
-export function ObsidianImportDialog({
-  workspaceId,
-  onClose,
-  onSuccess,
-}: ObsidianImportDialogProps) {
+export function ObsidianImportDialog({ onClose, onSuccess }: ObsidianImportDialogProps) {
+  const identityLifecycle = useIdentityLifecycle();
   const [step, setStep] = useState<'select' | 'preview' | 'uploading' | 'done' | 'error'>('select');
   const [files, setFiles] = useState<VaultFile[]>([]);
   const [preview, setPreview] = useState<ImportPreview | null>(null);
@@ -95,6 +42,7 @@ export function ObsidianImportDialog({
   const scanVault = useCallback(async () => {
     try {
       const dirHandle = await directoryOpen({ recursive: true });
+      if (!identityLifecycle.isActive()) return;
       const scannedFiles: VaultFile[] = [];
       const tags = new Set<string>();
       let noteCount = 0;
@@ -114,6 +62,7 @@ export function ObsidianImportDialog({
           : null;
 
       for (let i = 0; i < (dirHandle as unknown as File[]).length; i++) {
+        if (!identityLifecycle.isActive()) return;
         const file = (dirHandle as unknown as File[])[i];
         if (!file) continue;
         let relativePath = allPaths[i] ?? '';
@@ -129,25 +78,14 @@ export function ObsidianImportDialog({
         if (file.name.endsWith('.md')) {
           if (dir) folderPaths.add(dir);
           const content = await file.text();
+          if (!identityLifecycle.isActive()) return;
           scannedFiles.push({ path: relativePath, content });
           noteCount++;
 
-          extractFrontmatterTags(content, tags);
-
-          const HEX_ONLY = /^[0-9a-fA-F]+$/;
-          const inlineTags = content.matchAll(/(?:^|\s)#([a-zA-Z0-9_\-/]+)/g);
-          for (const match of inlineTags) {
-            const rawTag = match[1];
-            if (!rawTag) continue;
-            if (
-              HEX_ONLY.test(rawTag) &&
-              (rawTag.length === 3 || rawTag.length === 6 || rawTag.length === 8)
-            ) {
-              continue;
-            }
-            const tag = rawTag.toLowerCase();
-            if (tag) tags.add(tag);
+          for (const tag of parseMarkdownFrontmatter(content).tags) {
+            tags.add(tag.toLowerCase());
           }
+          for (const tag of extractInlineTags(content)) tags.add(tag);
         } else if (
           file.type.startsWith('image/') ||
           /\.(jpe?g|png|gif|webp|svg)$/i.test(file.name)
@@ -163,6 +101,7 @@ export function ObsidianImportDialog({
             reader.onerror = reject;
             reader.readAsDataURL(file);
           });
+          if (!identityLifecycle.isActive()) return;
           scannedFiles.push({
             path: relativePath,
             data: base64,
@@ -181,46 +120,49 @@ export function ObsidianImportDialog({
       });
       setStep('preview');
     } catch (err) {
+      if (!identityLifecycle.isActive()) return;
       if ((err as Error).name !== 'AbortError') {
         setError((err as Error).message || 'Failed to read vault');
         setStep('error');
       }
     }
-  }, []);
+  }, [identityLifecycle]);
 
   const startImport = useCallback(async () => {
+    if (!identityLifecycle.isActive()) return;
     setStep('uploading');
     setProgress(0);
 
     const _totalFiles = files.length;
 
     try {
-      const res = await fetch(
-        `/api/import/obsidian?workspaceId=${encodeURIComponent(workspaceId)}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'include',
-          body: JSON.stringify({ files }),
-        },
-      );
+      const res = await fetch('/api/import/obsidian', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ files }),
+      });
+      if (!identityLifecycle.isActive()) return;
 
       setProgress(100);
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ message: 'Import failed' }));
+        if (!identityLifecycle.isActive()) return;
         throw new Error(errData.message || 'Import failed');
       }
 
       const data = await res.json();
+      if (!identityLifecycle.isActive()) return;
       setResult(data);
       setStep('done');
       onSuccess();
     } catch (err) {
+      if (!identityLifecycle.isActive()) return;
       setError((err as Error).message);
       setStep('error');
     }
-  }, [files, workspaceId, onSuccess]);
+  }, [files, identityLifecycle, onSuccess]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-zinc-900/50 backdrop-blur-sm px-4">

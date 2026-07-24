@@ -6,17 +6,16 @@ import {
   useRestorePage,
   useTrashPages,
 } from '../../hooks/use-pages';
-import { showErrorToast, showSuccessToast } from '../../utils/toast';
+import { showSuccessToast } from '../../utils/toast';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { EmptyState } from '../EmptyState';
 
 interface TrashViewProps {
-  workspaceId: string;
   onClose: () => void;
 }
 
-export function TrashView({ workspaceId, onClose }: TrashViewProps) {
-  const { data: trashPages, isLoading } = useTrashPages(workspaceId);
+export function TrashView({ onClose }: TrashViewProps) {
+  const { data: trashPages, isLoading } = useTrashPages();
   const restoreMutation = useRestorePage();
   const permanentDeleteMutation = usePermanentDeletePage();
   const emptyTrashMutation = useEmptyTrash();
@@ -24,33 +23,26 @@ export function TrashView({ workspaceId, onClose }: TrashViewProps) {
   const [pageToDelete, setPageToDelete] = useState<{ id: string; title: string } | null>(null);
   const [showEmptyAllConfirm, setShowEmptyAllConfirm] = useState(false);
 
-  const handleRestore = async (pageId: string) => {
-    try {
-      await restoreMutation.mutateAsync(pageId);
-      showSuccessToast('Page restored');
-    } catch (_error) {
-      showErrorToast('Failed to restore page');
-    }
+  const handleRestore = (pageId: string) => {
+    restoreMutation.mutate(pageId, {
+      onSuccess: () => showSuccessToast('Page restored'),
+    });
   };
 
-  const handlePermanentDelete = async () => {
+  const handlePermanentDelete = () => {
     if (!pageToDelete) return;
-    try {
-      await permanentDeleteMutation.mutateAsync(pageToDelete.id);
-      showSuccessToast('Page permanently deleted');
-      setPageToDelete(null);
-    } catch (_error) {
-      showErrorToast('Failed to permanently delete page');
-    }
+    permanentDeleteMutation.mutate(pageToDelete.id, {
+      onSuccess: () => {
+        showSuccessToast('Page permanently deleted');
+        setPageToDelete(null);
+      },
+    });
   };
 
-  const handleEmptyAll = async () => {
-    try {
-      await emptyTrashMutation.mutateAsync(workspaceId);
-      setShowEmptyAllConfirm(false);
-    } catch (_error) {
-      showErrorToast('Failed to empty trash');
-    }
+  const handleEmptyAll = () => {
+    emptyTrashMutation.mutate(undefined, {
+      onSuccess: () => setShowEmptyAllConfirm(false),
+    });
   };
 
   return (

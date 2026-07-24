@@ -26,14 +26,14 @@ describe('useCopyPage', () => {
   });
 
   it('copies a page successfully', async () => {
-    const copied = { id: 'p-copy', title: 'Copy of Original', workspaceId: 'ws-1' };
+    const copied = { id: 'p-copy', title: 'Copy of Original' };
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(copied) });
 
     const { result } = renderHook(() => useCopyPage(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageId: 'p1', workspaceId: 'ws-1' });
+    result.current.mutate({ pageId: 'p1' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -55,7 +55,7 @@ describe('useCopyPage', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageId: 'p1', parentId: 'p-parent', workspaceId: 'ws-1' });
+    result.current.mutate({ pageId: 'p1', parentId: 'p-parent' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -75,7 +75,7 @@ describe('useCopyPage', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ pageId: 'p-missing', workspaceId: 'ws-1' });
+    result.current.mutate({ pageId: 'p-missing' });
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);
@@ -101,14 +101,14 @@ describe('useCopyFolder', () => {
   });
 
   it('copies a folder successfully', async () => {
-    const copied = { id: 'f-copy', name: 'Copy of Folder', workspaceId: 'ws-1' };
+    const copied = { id: 'f-copy', name: 'Copy of Folder' };
     fetchMock.mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(copied) });
 
     const { result } = renderHook(() => useCopyFolder(), {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ folderId: 'f1', workspaceId: 'ws-1' });
+    result.current.mutate({ folderId: 'f1' });
 
     await waitFor(() => {
       expect(result.current.isSuccess).toBe(true);
@@ -133,7 +133,7 @@ describe('useCopyFolder', () => {
       wrapper: createWrapper(queryClient),
     });
 
-    result.current.mutate({ folderId: 'f-missing', workspaceId: 'ws-1' });
+    result.current.mutate({ folderId: 'f-missing' });
 
     await waitFor(() => {
       expect(result.current.isError).toBe(true);

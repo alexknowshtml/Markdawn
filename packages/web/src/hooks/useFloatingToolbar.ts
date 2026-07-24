@@ -19,10 +19,26 @@ function computePosition(): { top: number; left: number } {
   }
   const range = selection.getRangeAt(0);
   const rect = range.getBoundingClientRect();
-  return {
-    top: rect.top - 50,
-    left: rect.left + rect.width / 2 + 20,
-  };
+
+  // Position above the selection, clamped to stay within viewport
+  const toolbarHeight = 44;
+  const toolbarWidth = 400;
+  const margin = 8;
+
+  let top = rect.top - toolbarHeight;
+  if (top < margin) {
+    // Flip below the selection if there isn't room above
+    top = rect.bottom + margin;
+  }
+
+  // Center horizontally on the selection, clamped to viewport edges
+  const centerX = rect.left + rect.width / 2;
+  const left = Math.max(
+    toolbarWidth / 2 + margin,
+    Math.min(centerX, window.innerWidth - toolbarWidth / 2 - margin),
+  );
+
+  return { top, left };
 }
 
 export function useFloatingToolbar(): FloatingToolbarApi {

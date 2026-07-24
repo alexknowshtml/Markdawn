@@ -8,8 +8,8 @@ export interface Tag {
   page_count: number;
 }
 
-async function fetchTags(workspaceId: string): Promise<Tag[]> {
-  const res = await fetch(`${API_BASE}/tags?workspaceId=${encodeURIComponent(workspaceId)}`);
+async function fetchTags(): Promise<Tag[]> {
+  const res = await fetch(`${API_BASE}/tags`);
   if (!res.ok) {
     throw new Error('Failed to fetch tags');
   }
@@ -17,39 +17,32 @@ async function fetchTags(workspaceId: string): Promise<Tag[]> {
 }
 
 async function fetchPagesByTag(
-  workspaceId: string,
   tagId: string,
 ): Promise<{ id: string; title: string; icon: string | null; parentId: string | null }[]> {
-  const res = await fetch(
-    `${API_BASE}/tags/pages?workspaceId=${encodeURIComponent(workspaceId)}&tagId=${encodeURIComponent(tagId)}`,
-  );
+  const res = await fetch(`${API_BASE}/tags/pages?tagId=${encodeURIComponent(tagId)}`);
   if (!res.ok) {
     throw new Error('Failed to fetch pages by tag');
   }
   return res.json();
 }
 
-export function useTags(workspaceId?: string) {
+export function useTags() {
   return useQuery({
-    queryKey: ['tags', workspaceId],
-    queryFn: () => {
-      if (!workspaceId) throw new Error('workspaceId is required');
-      return fetchTags(workspaceId);
-    },
-    enabled: !!workspaceId,
+    queryKey: ['tags'],
+    queryFn: () => fetchTags(),
     staleTime: 1000 * 60 * 2,
     refetchOnWindowFocus: false,
   });
 }
 
-export function usePagesByTag(workspaceId?: string, tagId?: string) {
+export function usePagesByTag(tagId?: string) {
   return useQuery({
-    queryKey: ['tags', 'pages', workspaceId, tagId],
+    queryKey: ['tags', 'pages', tagId],
     queryFn: () => {
-      if (!workspaceId || !tagId) throw new Error('workspaceId and tagId are required');
-      return fetchPagesByTag(workspaceId, tagId);
+      if (!tagId) throw new Error('tagId is required');
+      return fetchPagesByTag(tagId);
     },
-    enabled: !!workspaceId && !!tagId,
+    enabled: !!tagId,
     staleTime: 1000 * 60 * 2,
     refetchOnWindowFocus: false,
   });

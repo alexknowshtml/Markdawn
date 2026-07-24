@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
-import { extractConnectionsFromYDoc, yDocToMarkdown } from './yjs-helpers';
+import {
+  extractConnectionsFromYDoc,
+  extractWikiLinkTargetIds,
+  yDocToMarkdown,
+} from './yjs-helpers';
 
 // --------------------------------------------------------------------------
 // Helpers for building Yjs test documents
@@ -249,7 +253,7 @@ describe('yDocToMarkdown', () => {
 
   it('converts a wiki link without label', () => {
     const update = encodeFragment([
-      block('paragraph', [inlineEl('wikiLink', { path: 'Page Name', label: 'Page Name' })]),
+      block('paragraph', [inlineEl('wikiLink', { path: 'Page Name', label: '' })]),
     ]);
     expect(yDocToMarkdown(update)).toBe('[[Page Name]]\n\n');
   });
@@ -263,18 +267,70 @@ describe('yDocToMarkdown', () => {
 
   it('converts a wiki link with heading', () => {
     const update = encodeFragment([
-      block('paragraph', [
-        inlineEl('wikiLink', { path: 'Page', heading: 'Section', label: 'Page#Section' }),
-      ]),
+      block('paragraph', [inlineEl('wikiLink', { path: 'Page', heading: 'Section', label: '' })]),
     ]);
     expect(yDocToMarkdown(update)).toBe('[[Page#Section]]\n\n');
   });
 
   it('converts a wiki link with embedded heading in path (API import format)', () => {
     const update = encodeFragment([
-      block('paragraph', [inlineEl('wikiLink', { path: 'Page#Section', label: 'Page#Section' })]),
+      block('paragraph', [inlineEl('wikiLink', { path: 'Page#Section', label: '' })]),
     ]);
     expect(yDocToMarkdown(update)).toBe('[[Page#Section]]\n\n');
+  });
+
+  it('renders a bound wiki link with the requester-visible current title', () => {
+    const targetId = '11111111-1111-1111-1111-111111111111';
+    const update = encodeFragment([
+      block('paragraph', [inlineEl('wikiLink', { targetId, path: '', label: '' })]),
+    ]);
+
+    expect(
+      yDocToMarkdown(update, {
+        resolveWikiLinkTarget: (id) => (id === targetId ? { title: '2026 Roadmap' } : null),
+      }),
+    ).toBe('[[2026 Roadmap]]\n\n');
+  });
+
+  it('renders a bound heading link with the requester-visible current title', () => {
+    const targetId = '11111111-1111-1111-1111-111111111111';
+    const update = encodeFragment([
+      block('paragraph', [
+        inlineEl('wikiLink', { targetId, path: '', heading: 'Milestones', label: '' }),
+      ]),
+    ]);
+
+    expect(
+      yDocToMarkdown(update, {
+        resolveWikiLinkTarget: () => ({ title: '2026 Roadmap' }),
+      }),
+    ).toBe('[[2026 Roadmap#Milestones]]\n\n');
+  });
+
+  it('preserves a custom alias and redacts a restricted bound link', () => {
+    const targetId = '11111111-1111-1111-1111-111111111111';
+    const aliased = encodeFragment([
+      block('paragraph', [inlineEl('wikiLink', { targetId, path: '', label: 'Plan' })]),
+    ]);
+    expect(
+      yDocToMarkdown(aliased, {
+        resolveWikiLinkTarget: () => ({ title: '2026 Roadmap' }),
+      }),
+    ).toBe('[[2026 Roadmap|Plan]]\n\n');
+    expect(yDocToMarkdown(aliased)).toBe('Restricted page\n\n');
+  });
+
+  it('preserves an explicit alias that equals the current target title', () => {
+    const targetId = '11111111-1111-1111-1111-111111111111';
+    const aliased = encodeFragment([
+      block('paragraph', [inlineEl('wikiLink', { targetId, path: '', label: 'Roadmap' })]),
+    ]);
+
+    expect(
+      yDocToMarkdown(aliased, {
+        resolveWikiLinkTarget: () => ({ title: 'Roadmap' }),
+      }),
+    ).toBe('[[Roadmap|Roadmap]]\n\n');
   });
 
   it('converts a tag (name attribute)', () => {
@@ -420,5 +476,19 @@ describe('extractConnectionsFromYDoc', () => {
         linkContext: 'See Roadmap for #Project',
       },
     ]);
+  });
+});
+
+describe('wiki-link target IDs', () => {
+  it('extracts stable target IDs from canonical content', () => {
+    const source = new Y.Doc();
+    const targetId = '11111111-1111-1111-1111-111111111111';
+    const link = new Y.XmlElement('wikiLink');
+    link.setAttribute('targetId', targetId);
+    link.setAttribute('path', '');
+    link.setAttribute('label', 'Authored alias');
+    source.getXmlFragment('prosemirror').push([block('paragraph', [link])]);
+
+    expect(extractWikiLinkTargetIds(Y.encodeStateAsUpdate(source))).toEqual([targetId]);
   });
 });

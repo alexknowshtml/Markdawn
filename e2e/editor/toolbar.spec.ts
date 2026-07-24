@@ -118,6 +118,9 @@ test.describe('Floating toolbar buttons', () => {
     await page.keyboard.press('Control+a');
     await page.locator('.floating-toolbar button[title="Ordered List"]').click({ timeout: 5000 });
     await expect(page.locator('.ProseMirror ol')).toBeVisible({ timeout: 5000 });
+    // Re-select before toggling off to ensure the toolbar reappears
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(200);
     await page.locator('.floating-toolbar button[title="Ordered List"]').click({ timeout: 5000 });
     await expect(page.locator('.ProseMirror ol')).toHaveCount(0);
     await page.keyboard.press('ArrowRight');

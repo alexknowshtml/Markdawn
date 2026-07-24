@@ -2,14 +2,7 @@ import { HocuspocusProvider } from '@hocuspocus/provider';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
 import { createCollabServer } from '../src/server';
-import {
-  createTestPage,
-  createTestSession,
-  createTestUser,
-  createTestWorkspace,
-  getTestPool,
-  insertTestWorkspace,
-} from '../src/test-utils';
+import { createTestPage, createTestSession, createTestUser, getTestPool } from '../src/test-utils';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -42,24 +35,27 @@ describe('collab server stress', () => {
   let port: number;
 
   beforeAll(async () => {
-    server = createCollabServer({ port: 0, pool, logger, debounceMs: 50, maxDebounceMs: 100 });
+    server = createCollabServer({
+      port: 0,
+      pool,
+      logger,
+      debounceMs: 50,
+      maxDebounceMs: 100,
+      permissionRevalidationMs: 0,
+    });
     await server.listen();
     port = (server as unknown as { address: { port: number } }).address.port;
   });
 
   afterAll(async () => {
-    server.hocuspocus.closeConnections();
-    server.httpServer.closeAllConnections();
-    await new Promise<void>((resolve) => server.httpServer.close(() => resolve()));
+    await server.destroy();
     await pool.end();
   });
 
   it('handles 20 concurrent providers on same document', async () => {
     const user = await createTestUser(pool);
-    const workspace = createTestWorkspace();
-    await insertTestWorkspace(pool, workspace, user.id);
-    const page = await createTestPage(pool, workspace.id, user.id);
     const session = await createTestSession(pool, user.id);
+    const page = await createTestPage(pool, user.id);
 
     const providers: HocuspocusProvider[] = [];
     for (let i = 0; i < 20; i++) {
@@ -95,10 +91,8 @@ describe('collab server stress', () => {
 
   it('handles rapid connect/disconnect cycles', async () => {
     const user = await createTestUser(pool);
-    const workspace = createTestWorkspace();
-    await insertTestWorkspace(pool, workspace, user.id);
-    const page = await createTestPage(pool, workspace.id, user.id);
     const session = await createTestSession(pool, user.id);
+    const page = await createTestPage(pool, user.id);
 
     for (let i = 0; i < 10; i++) {
       const provider = new HocuspocusProvider({

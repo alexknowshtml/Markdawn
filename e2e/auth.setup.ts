@@ -5,13 +5,15 @@ import { API_URL } from './fixtures';
 const authFile = path.join(__dirname, 'playwright/.auth/user.json');
 
 setup('authenticate', async ({ page, request }) => {
-  // Create a test user and session via the API's dev-only test setup endpoint.
-  // Disabled in production (NODE_ENV === 'production').
-  const headers: Record<string, string> = {};
+  // Create a test user and session via the API's protected test setup endpoint.
+  // The API and Playwright process must use the same explicit token.
   const testToken = process.env.TEST_SETUP_TOKEN;
-  if (testToken) {
-    headers['x-test-setup-token'] = testToken;
+  if (!testToken) {
+    throw new Error('TEST_SETUP_TOKEN is required for end-to-end tests');
   }
+  const headers: Record<string, string> = {
+    'x-test-setup-token': testToken,
+  };
 
   const res = await request.post(`${API_URL}/api/test/setup`, {
     data: { name: 'Playwright Test User' },
@@ -35,10 +37,7 @@ setup('authenticate', async ({ page, request }) => {
     },
   ]);
 
-  await page.goto('/');
-  if (!page.url().includes('/app/')) {
-    await page.goto('/app/e2e-test-workspace/', { waitUntil: 'networkidle' });
-  }
+  await page.goto('/app/', { waitUntil: 'networkidle' });
   expect(page.url()).toMatch(/\/app\//);
   await page.context().storageState({ path: authFile });
 });

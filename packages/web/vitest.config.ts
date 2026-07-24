@@ -31,7 +31,6 @@ export default defineConfig({
         'src/main.tsx',
         'src/logger-init.ts',
         'src/index.ts',
-        'src/test-harness.ts',
       ],
       thresholds: {},
     },

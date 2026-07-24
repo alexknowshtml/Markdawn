@@ -1,40 +1,35 @@
 import type { Page } from '@markdawn/shared';
 import { Share, Star } from 'lucide-react';
 import { useState } from 'react';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useFavorites, useToggleFavorite } from '../../hooks/use-favorites';
-import { useWorkspaces } from '../../hooks/use-workspaces';
-import { showErrorToast } from '../../utils/toast';
 import { Tooltip } from '../Tooltip';
-import { PublicShareDialog } from './PublicShareDialog';
+import { ShareDialog } from './ShareDialog';
 
 interface PageActionsProps {
-  workspaceSlug: string;
   pageId: string;
-  page?: Page | undefined;
+  page?: Pick<Page, 'icon' | 'id' | 'ownerId' | 'title'> | undefined;
 }
 
-export function PageActions({ workspaceSlug, pageId, page }: PageActionsProps) {
+export function PageActions({ pageId, page }: PageActionsProps) {
+  const { isAnonymous } = useShareContext();
   const [isShareDialogOpen, setIsShareDialogOpen] = useState(false);
-  const { data: workspaces } = useWorkspaces();
-  const workspace = workspaces?.find((item) => item.slug === workspaceSlug);
-  const workspaceId = workspace?.id;
-  const { data: favorites } = useFavorites(workspaceId);
+  const { data: favorites } = useFavorites();
   const toggleFavoriteMutation = useToggleFavorite();
 
   const isFavorite = favorites?.some((f) => f.pageId === pageId) ?? false;
 
-  const handleToggleFavorite = async () => {
-    if (!workspaceId) return;
-    try {
-      await toggleFavoriteMutation.mutateAsync({
-        pageId,
-        isFavorite,
-        workspaceId,
-      });
-    } catch {
-      showErrorToast('Failed to toggle favorite');
-    }
+  const handleToggleFavorite = () => {
+    toggleFavoriteMutation.mutate({
+      pageId,
+      ...(page?.title !== undefined ? { title: page.title } : {}),
+      icon: page?.icon ?? null,
+      ownerId: page?.ownerId ?? null,
+      isFavorite,
+    });
   };
+
+  if (isAnonymous) return null;
 
   return (
     <div className="flex items-center gap-2 shrink-0">
@@ -42,6 +37,7 @@ export function PageActions({ workspaceSlug, pageId, page }: PageActionsProps) {
         <button
           type="button"
           onClick={handleToggleFavorite}
+          aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
           className={`p-2 rounded-md transition-colors cursor-pointer ${
             isFavorite
               ? 'text-yellow-500 hover:bg-yellow-50 dark:hover:bg-yellow-900/20'
@@ -53,21 +49,24 @@ export function PageActions({ workspaceSlug, pageId, page }: PageActionsProps) {
       </Tooltip>
       {page && (
         <>
-          <Tooltip label="Share to web" position="bottom">
+          <Tooltip label="Share" position="bottom">
             <button
               type="button"
               onClick={() => setIsShareDialogOpen(true)}
-              className={`p-2 rounded-md transition-colors cursor-pointer ${
-                page.isPublic
-                  ? 'text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/20'
-                  : 'text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800'
-              }`}
+              aria-label="Share page"
+              data-testid="page-share-btn"
+              className="p-2 rounded-md transition-colors cursor-pointer text-zinc-400 hover:text-zinc-600 hover:bg-zinc-100 dark:hover:bg-zinc-800"
             >
               <Share size={20} />
             </button>
           </Tooltip>
           {isShareDialogOpen && (
-            <PublicShareDialog page={page} onClose={() => setIsShareDialogOpen(false)} />
+            <ShareDialog
+              entityType="page"
+              entityId={page.id}
+              title={page.title}
+              onClose={() => setIsShareDialogOpen(false)}
+            />
           )}
         </>
       )}

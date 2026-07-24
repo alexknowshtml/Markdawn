@@ -1,0 +1,1 @@
+ALTER TABLE "pages" ADD COLUMN "title_revision" bigint DEFAULT 0 NOT NULL;

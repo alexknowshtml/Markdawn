@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { showErrorToast, showSuccessToast } from '../utils/toast';
+import { showSuccessToast } from '../utils/toast';
 
 const API_BASE = '/api';
 
@@ -66,9 +66,7 @@ export function useCreateVersion(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['versions', pageId] });
       showSuccessToast('Snapshot saved');
     },
-    onError: () => {
-      showErrorToast('Failed to save snapshot');
-    },
+    meta: { errorMessage: 'Failed to save snapshot' },
   });
 }
 
@@ -84,8 +82,6 @@ export function useRestoreVersion(pageId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['pageTree'] });
       showSuccessToast('Version restored');
     },
-    onError: () => {
-      showErrorToast('Failed to restore version');
-    },
+    meta: { errorMessage: 'Failed to restore version' },
   });
 }

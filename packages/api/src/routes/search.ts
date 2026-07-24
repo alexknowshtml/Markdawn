@@ -1,16 +1,18 @@
+import { type SQL, sql } from 'drizzle-orm';
 import { Hono } from 'hono';
-import { pool } from '../db/connection';
+import { HTTPException } from 'hono/http-exception';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 
 type SearchRow = {
   id: string;
   title: string;
   icon: string | null;
-  workspace_slug: string;
   breadcrumb: string[] | null;
 };
 
 const searchRoute = new Hono();
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 searchRoute.use('*', requireAuth);
 
@@ -39,94 +41,108 @@ searchRoute.get('/', async (c) => {
 
   const user = c.get('user') as { id: string };
   const { textQuery, tagSlugs } = parseTagSearch(rawQuery);
-  const workspaceId = c.req.query('workspaceId');
   const createdAfter = c.req.query('createdAfter');
   const createdBefore = c.req.query('createdBefore');
   const parentId = c.req.query('parentId');
+  if (parentId && parentId !== 'root' && !UUID_PATTERN.test(parentId)) {
+    throw new HTTPException(400, { message: 'parentId must be a valid UUID or root' });
+  }
   const searchPattern = `%${textQuery}%`;
 
-  const filters: string[] = [];
-  const params: unknown[] = [user.id, textQuery, searchPattern];
-  let paramIndex = 4;
-
-  if (workspaceId) {
-    filters.push(`p.workspace_id = $${paramIndex}`);
-    params.push(workspaceId);
-    paramIndex += 1;
+  const parseDateFilter = (value: string | undefined, field: string): string | undefined => {
+    if (!value) return undefined;
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      throw new HTTPException(400, { message: `${field} must be a valid date` });
+    }
+    return parsed.toISOString();
+  };
+  const normalizedCreatedAfter = parseDateFilter(createdAfter, 'createdAfter');
+  const normalizedCreatedBefore = parseDateFilter(createdBefore, 'createdBefore');
+  if (
+    normalizedCreatedAfter &&
+    normalizedCreatedBefore &&
+    normalizedCreatedAfter > normalizedCreatedBefore
+  ) {
+    throw new HTTPException(400, { message: 'createdAfter must not be after createdBefore' });
   }
 
-  if (createdAfter) {
-    filters.push(`p.created_at >= $${paramIndex}`);
-    params.push(createdAfter);
-    paramIndex += 1;
+  const filters: SQL[] = [];
+
+  if (normalizedCreatedAfter) {
+    filters.push(sql`p.created_at >= ${normalizedCreatedAfter}`);
   }
 
-  if (createdBefore) {
-    filters.push(`p.created_at <= $${paramIndex}`);
-    params.push(createdBefore);
-    paramIndex += 1;
+  if (normalizedCreatedBefore) {
+    filters.push(sql`p.created_at <= ${normalizedCreatedBefore}`);
   }
 
   if (parentId === 'root') {
-    filters.push('p.parent_id is null');
+    filters.push(sql`(
+      p.parent_id is null
+      or p.parent_id not in (select folder_id from get_enumerable_folder_ids(${user.id}))
+    )`);
   } else if (parentId) {
-    filters.push(`p.parent_id = $${paramIndex}`);
-    params.push(parentId);
-    paramIndex += 1;
+    filters.push(sql`(
+      p.parent_id = ${parentId}
+      and ${parentId}::uuid in (select folder_id from get_enumerable_folder_ids(${user.id}))
+    )`);
   }
 
   if (tagSlugs.length > 0) {
-    filters.push(`p.id in (
+    filters.push(sql`p.id in (
       select c.source_id
       from connections c
-      where c.workspace_id = p.workspace_id
-        and c.connection_type = 'tag'
-        and c.target_slug = any($${paramIndex}::text[])
+      where c.connection_type = 'tag'
+        and c.target_slug = any(${sql.param(tagSlugs)}::text[])
       group by c.source_id
-      having count(distinct c.target_slug) = $${paramIndex + 1}
+      having count(distinct c.target_slug) = ${tagSlugs.length}
     )`);
-    params.push(tagSlugs, tagSlugs.length);
-    paramIndex += 2;
   }
 
-  const whereClause = filters.length > 0 ? ` and ${filters.join(' and ')}` : '';
+  const whereClause = filters.length > 0 ? sql`and ${sql.join(filters, sql` and `)}` : sql.empty();
   const textSearchClause = textQuery
-    ? `and (p.title_search @@ plainto_tsquery('english', $2) or p.title ilike $3)`
-    : '';
+    ? sql`and (p.title_search @@ plainto_tsquery('english', ${textQuery}) or p.title ilike ${searchPattern})`
+    : sql.empty();
 
-  const result = await pool.query(
-    `select p.id,
+  const result = await query(
+    sql`select p.id,
       p.title,
       p.icon,
-      w.slug as workspace_slug,
       coalesce(breadcrumbs.breadcrumb, '{}'::text[]) as breadcrumb,
-      ts_rank(p.title_search, plainto_tsquery('english', $2)) as rank
+      ts_rank(p.title_search, plainto_tsquery('english', ${textQuery})) as rank
     from pages p
-    join workspaces w on w.id = p.workspace_id
-    join workspace_members wm on wm.workspace_id = p.workspace_id
     left join lateral (
-      with recursive ancestors as (
-        select id, title, parent_id, 1 as depth from pages where id = p.parent_id
+      with recursive visible_path as (
+        select f.id, f.parent_id, f.name, 0 as depth
+        from folders f
+        where f.id = p.parent_id
+          and f.is_deleted = false
+          and f.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
+
         union all
-        select p2.id, p2.title, p2.parent_id, a.depth + 1 from pages p2
-        join ancestors a on p2.id = a.parent_id where a.depth < 3
+
+        select parent.id, parent.parent_id, parent.name, child.depth + 1
+        from visible_path child
+        join folders parent on parent.id = child.parent_id
+        where parent.is_deleted = false
+          and parent.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
       )
-      select array_agg(title order by depth desc) as breadcrumb from ancestors
+      select array_agg(name order by depth desc) as breadcrumb
+      from visible_path
     ) breadcrumbs on true
-    where wm.user_id = $1
-      and p.is_deleted = false
+    where p.is_deleted = false
+      and p.id in (select page_id from get_accessible_page_ids(${user.id}))
       ${textSearchClause}
       ${whereClause}
     order by rank desc nulls last
     limit 20`,
-    params,
   );
 
   const results = (result.rows as SearchRow[]).map((row) => ({
     id: row.id,
     title: row.title,
     icon: row.icon,
-    workspaceSlug: row.workspace_slug,
     breadcrumb: row.breadcrumb ?? [],
     path: [row.title],
   }));

@@ -2,10 +2,13 @@ import { mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { extractImages, serializeFrontmatter } from './export-helpers';
+import { extractImages as extractAuthorizedImages, serializeFrontmatter } from './export-helpers';
 
 describe('export-helpers / extractImages', () => {
   let tmpDir: string;
+  const authorizedUploadFilenames = new Set(['test-image.png', 'photo.jpg']);
+  const extractImages = (markdown: string, uploadsDir: string) =>
+    extractAuthorizedImages(markdown, uploadsDir, authorizedUploadFilenames);
 
   beforeAll(async () => {
     const dirPath = path.join(os.tmpdir(), 'extract-images-test');
@@ -33,6 +36,14 @@ describe('export-helpers / extractImages', () => {
     expect(result.markdown).toBe('![test](./assets/test-image.png)');
     expect(result.assets.size).toBe(1);
     expect(result.assets.has('test-image.png')).toBe(true);
+  });
+
+  it('leaves server images unchanged when the page does not reference the upload', async () => {
+    const md = '![test](/api/uploads/test-image.png)';
+    const result = await extractAuthorizedImages(md, tmpDir, new Set());
+
+    expect(result.markdown).toBe(md);
+    expect(result.assets.size).toBe(0);
   });
 
   it('extracts base64 images to assets with hash filename', async () => {

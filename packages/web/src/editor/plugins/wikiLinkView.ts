@@ -1,122 +1,160 @@
+import type { Node as ProseNode } from '@milkdown/kit/prose/model';
 import type { NodeViewConstructor } from '@milkdown/kit/prose/view';
 import { $view } from '@milkdown/utils';
-import { getPageIndexMap } from '../../hooks/useWorkspaceMeta';
+import {
+  type ResolvedWikiLinkPresentation,
+  subscribeToWikiLinkPresentation,
+} from '../wikiLinkPresentations';
 import { wikiLink } from './wikilink';
 
-const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos) => {
+function getWikiLinkHeading(node: ProseNode): string {
+  const explicitHeading = String(node.attrs.heading || '');
+  if (explicitHeading) return explicitHeading;
+  const path = String(node.attrs.path || '');
+  const hashIndex = path.indexOf('#');
+  return hashIndex >= 0 ? path.slice(hashIndex + 1) : '';
+}
+
+/**
+ * The server decides whether the current viewer may see and open a target.
+ * The node view only renders that presentation; it never guesses by title.
+ */
+export const wikiLinkNodeView: NodeViewConstructor = (initialNode, view, getPos) => {
   const dom = document.createElement('a');
   dom.className = 'wiki-link';
   dom.href = '#';
 
   let node = initialNode;
-  let unsub: (() => void) | null = null;
-  let retryTimeout: ReturnType<typeof setTimeout> | null = null;
-  let renameTimeout: ReturnType<typeof setTimeout> | null = null;
+  let unsubscribe: (() => void) | null = null;
+  let presentation: ResolvedWikiLinkPresentation = { state: 'loading' };
 
-  function setupObserver() {
-    if (unsub) return;
-    const map = getPageIndexMap();
-    if (!map) {
-      retryTimeout = setTimeout(setupObserver, 100);
+  const bindResolvedPath = (target: { id: string }): void => {
+    const targetId = String(node.attrs.targetId || '');
+    const path = String(node.attrs.path || '');
+    const nodeHeading = getWikiLinkHeading(node);
+    if (targetId || (!path && !nodeHeading) || !view.editable || typeof getPos !== 'function') {
       return;
     }
-    const handler = () => updateDisplay();
-    map.observe(handler);
-    unsub = () => {
-      try {
-        map.unobserve(handler);
-      } catch {
-        /* already detached */
-      }
-    };
+
+    const position = getPos();
+    if (typeof position !== 'number') return;
+    const currentNode = view.state.doc.nodeAt(position);
+    if (!currentNode || currentNode.type.name !== 'wikiLink') return;
+    if (
+      String(currentNode.attrs.targetId || '') ||
+      String(currentNode.attrs.path || '') !== path ||
+      getWikiLinkHeading(currentNode) !== nodeHeading
+    ) {
+      return;
+    }
+
+    const heading = getWikiLinkHeading(currentNode);
+    const label = String(currentNode.attrs.label || '');
+    view.dispatch(
+      view.state.tr.setNodeMarkup(position, undefined, {
+        ...currentNode.attrs,
+        targetId: target.id,
+        path: '',
+        heading,
+        label,
+      }),
+    );
+  };
+
+  const updateDisplay = () => {
+    const heading = getWikiLinkHeading(node);
+    const label = String(node.attrs.label || '');
+
+    dom.className = 'wiki-link';
+    dom.removeAttribute('data-target-id');
+    dom.removeAttribute('data-target-title');
+    dom.removeAttribute('data-path');
+    dom.dataset.heading = heading;
+    dom.removeAttribute('href');
+
+    if (presentation.state === 'accessible') {
+      const displayText = label || presentation.target.title;
+      dom.textContent = !label && heading ? `${displayText}#${heading}` : displayText;
+      dom.dataset.state = 'accessible';
+      dom.dataset.targetId = presentation.target.id;
+      dom.dataset.targetTitle = presentation.target.title;
+      dom.href = '#';
+      dom.removeAttribute('aria-disabled');
+      dom.removeAttribute('tabindex');
+      dom.removeAttribute('title');
+      return;
+    }
+
+    dom.setAttribute('aria-disabled', 'true');
+    dom.tabIndex = -1;
+    if (presentation.state === 'restricted') {
+      dom.textContent = 'Restricted page';
+      dom.dataset.state = 'restricted';
+      dom.title = "You don't have access to this page.";
+      dom.classList.add('wiki-link-restricted');
+      return;
+    }
+
+    dom.textContent =
+      presentation.state === 'loading'
+        ? 'Loading link…'
+        : presentation.state === 'error'
+          ? 'Couldn’t check link'
+          : 'Link unavailable';
+    dom.dataset.state = presentation.state;
+    dom.title =
+      presentation.state === 'loading'
+        ? 'Resolving link'
+        : presentation.state === 'error'
+          ? 'Could not verify this link. It will retry.'
+          : 'This link is unavailable.';
+    dom.classList.add('wiki-link-unavailable');
+  };
+
+  const subscribe = () => {
+    unsubscribe?.();
+    const targetId = String(node.attrs.targetId || '');
+    const path = String(node.attrs.path || '');
+    const heading = getWikiLinkHeading(node);
+    const resolutionPath = path || (!targetId && heading ? `#${heading}` : '');
+    presentation = { state: 'loading' };
     updateDisplay();
-  }
-
-  function updateDisplay() {
-    setupObserver();
-    const currentTargetId = node.attrs.targetId as string;
-    const currentHeading = node.attrs.heading as string;
-    const storedLabel = node.attrs.label as string;
-
-    const pageIndex = getPageIndexMap();
-    let resolvedTitle = '';
-    let resolvedTargetId = currentTargetId;
-
-    if (pageIndex) {
-      if (currentTargetId) {
-        const pageData = pageIndex.get(currentTargetId) as { title?: string } | undefined;
-        resolvedTitle = pageData?.title ?? '';
-      }
-
-      // Fallback: resolve by path/slug for manual wiki links without targetId.
-      if (!resolvedTitle && node.attrs.path) {
-        const path = String(node.attrs.path).toLowerCase();
-        for (const [id, data] of pageIndex.entries()) {
-          const pageData = data as { title?: string } | undefined;
-          if (pageData?.title && pageData.title.toLowerCase() === path) {
-            resolvedTitle = pageData.title;
-            resolvedTargetId = String(id);
-            break;
-          }
-        }
-      }
+    if (!targetId && !resolutionPath) {
+      presentation = { state: 'unavailable' };
+      updateDisplay();
+      return;
     }
-
-    const displayText = resolvedTitle || storedLabel || currentTargetId || 'wiki link';
-    const pathDisplay = currentHeading ? `${displayText}#${currentHeading}` : displayText;
-
-    dom.textContent = pathDisplay;
-    dom.dataset.targetId = currentTargetId || resolvedTargetId;
-    dom.dataset.path = pathDisplay;
-    dom.dataset.heading = currentHeading;
-
-    // When the target page is renamed, update the node attributes so the
-    // Yjs document contains the new path. This ensures the collab server
-    // extracts the correct slug on next persist, avoiding a stale-target
-    // fallback lookup.
-    const currentPath = node.attrs.path as string;
-    if (resolvedTitle && currentPath !== resolvedTitle) {
-      // Only auto-update label when it was a default label (matched the old path),
-      // not when the user intentionally set a custom alias.
-      const newLabel = storedLabel === currentPath ? resolvedTitle : storedLabel;
-      const pos = getPos();
-      if (typeof pos === 'number' && pos >= 0) {
-        const attrs: Record<string, unknown> = {
-          ...node.attrs,
-          path: resolvedTitle,
-          label: newLabel,
-        };
-        if (resolvedTargetId && !currentTargetId) {
-          attrs.targetId = resolvedTargetId;
+    unsubscribe = subscribeToWikiLinkPresentation(
+      view,
+      {
+        ...(targetId && { targetId }),
+        ...(resolutionPath && { path: resolutionPath }),
+      },
+      (nextPresentation) => {
+        if (nextPresentation.state === 'accessible') {
+          bindResolvedPath(nextPresentation.target);
         }
-        if (renameTimeout) clearTimeout(renameTimeout);
-        // Delay to ensure the Milkdown collab plugin has finished binding
-        // the Yjs document before we mutate ProseMirror state.
-        renameTimeout = setTimeout(() => {
-          const tr = view.state.tr.setNodeMarkup(pos, undefined, attrs);
-          view.dispatch(tr);
-        }, 500);
-      }
-    }
-  }
-
-  requestAnimationFrame(() => {
-    setupObserver();
-  });
+        presentation = nextPresentation;
+        updateDisplay();
+      },
+    );
+  };
+  subscribe();
 
   return {
     dom,
     update: (newNode) => {
       if (newNode.type.name !== 'wikiLink') return false;
+      const targetChanged =
+        newNode.attrs.targetId !== node.attrs.targetId ||
+        newNode.attrs.path !== node.attrs.path ||
+        newNode.attrs.heading !== node.attrs.heading;
       node = newNode;
-      updateDisplay();
+      if (targetChanged) subscribe();
+      else updateDisplay();
       return true;
     },
-    destroy: () => {
-      if (retryTimeout) clearTimeout(retryTimeout);
-      if (renameTimeout) clearTimeout(renameTimeout);
-      unsub?.();
-    },
+    destroy: () => unsubscribe?.(),
     ignoreMutation: () => true,
   };
 };

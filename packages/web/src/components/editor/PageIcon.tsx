@@ -1,7 +1,8 @@
 import { FileText } from 'lucide-react';
 import { useEffect, useState } from 'react';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
+import { useShareContext } from '../../contexts/ShareContext';
 import { useUpdatePage } from '../../hooks/use-pages';
-import { showErrorToast } from '../../utils/toast';
 import { EmojiPicker } from '../EmojiPicker';
 
 interface PageIconProps {
@@ -10,6 +11,8 @@ interface PageIconProps {
 }
 
 export function PageIcon({ pageId, initialIcon }: PageIconProps) {
+  const readOnly = useIsReadOnly();
+  const { isAnonymous } = useShareContext();
   const [icon, setIcon] = useState<string | null>(initialIcon);
   const updatePageMutation = useUpdatePage();
 
@@ -18,6 +21,7 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
   }, [initialIcon]);
 
   const handleIconChange = async (newIcon: string | null) => {
+    if (readOnly) return;
     setIcon(newIcon);
     try {
       await updatePageMutation.mutateAsync({
@@ -25,16 +29,24 @@ export function PageIcon({ pageId, initialIcon }: PageIconProps) {
         updates: { icon: newIcon },
       });
     } catch {
-      showErrorToast('Failed to update icon');
+      // Error toast handled globally by MutationCache.onError
       setIcon(initialIcon);
     }
   };
 
+  const content = (
+    <div className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-4xl">
+      {icon ? icon : <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />}
+    </div>
+  );
+
+  if (readOnly || isAnonymous) {
+    return content;
+  }
+
   return (
     <EmojiPicker icon={icon} onChange={handleIconChange}>
-      <div className="flex items-center justify-center w-10 h-10 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 transition-colors text-4xl">
-        {icon ? icon : <FileText className="w-8 h-8 text-zinc-400 dark:text-zinc-500" />}
-      </div>
+      {content}
     </EmojiPicker>
   );
 }

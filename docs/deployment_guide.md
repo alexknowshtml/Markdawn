@@ -33,7 +33,7 @@ The `setup.sh` script installs everything automatically, but if doing it manuall
 sudo dnf install -y git nano curl podman
 curl -fsSL https://fnm.vercel.app/install | bash
 export PATH="$HOME/.local/share/fnm:$PATH"
-eval "$(fnm env)"
+eval "$(fnm env --shell bash)"
 fnm install 24
 fnm use 24
 corepack enable pnpm
@@ -75,7 +75,6 @@ NODE_ENV=production
 PORT=3001
 COLLAB_PORT=1234
 VITE_API_URL=https://markdawn.space
-VITE_COLLAB_URL=wss://markdawn.space/collab
 ```
 
 ### 4. Configure OAuth Providers
@@ -117,7 +116,7 @@ This script will:
 4. Copy Quadlet files to `~/.config/containers/systemd/`
 5. Build container images
 6. Start PostgreSQL and wait for it to be healthy
-7. Run `db:migrate` to initialize the database schema (followed by `podman exec` to add any columns not covered by existing migrations)
+7. Run `db:migrate` to initialize the database schema
 8. Start API and Collab systemd user services
 
 ### 8. Verify Deployment
@@ -130,20 +129,42 @@ Expected response: `{"status":"ok","timestamp":...}`
 
 ## Future Deployments
 
-After initial setup, deploy updates with:
+After initial setup, fetch and execute the deployment script from the target revision before updating the working tree:
 
 ```bash
 cd /var/www/markdawn
-./deploy/deploy.sh
+git fetch origin master
+git show origin/master:deploy/deploy.sh > /tmp/markdawn-deploy.sh
+bash /tmp/markdawn-deploy.sh
+rm /tmp/markdawn-deploy.sh
 ```
 
+Fetching only updates Git metadata. Executing the fetched script separately ensures that new pre-deployment compatibility checks run during the first rollout that introduces them; invoking an older checked-out `deploy.sh` cannot run checks added by the release it later pulls.
+
 The script will:
-1. Pull latest code
-2. Install dependencies
-3. Build all packages
-4. Rebuild container images
-5. Restart Podman services
-6. Push any database schema updates
+1. Verify that the existing database uses the current migration baseline
+2. Pull the latest code and install dependencies
+3. Build the shared and web packages
+4. Update Podman Quadlet units
+5. Rebuild the API and collaboration container images
+6. Stop the application services
+7. Apply pending database migrations
+8. Restart the application services and verify API health
+
+The current Drizzle v1 baseline is not compatible with databases created from the removed legacy migration history. `deploy.sh` detects those databases before pulling code or replacing deployment artifacts and exits without resetting them.
+
+### Resetting a Legacy Database
+
+This procedure permanently deletes the existing PostgreSQL data. Run it only when a clean reset is intended:
+
+```bash
+cd /var/www/markdawn
+systemctl --user stop markdawn-api.service markdawn-collab.service markdawn-postgres.service markdawn-pod.service
+podman volume rm postgres-data
+./deploy/setup.sh
+```
+
+`setup.sh` creates a fresh `postgres-data` volume and applies the current migrations. Running `setup.sh` without removing the incompatible volume does not reset the database.
 
 ## Managing Services
 
@@ -218,4 +239,5 @@ Confirm redirect URLs exactly match what's registered in the provider dashboard 
 
 ### Frontend shows blank page
 
-Ensure `VITE_API_URL` and `VITE_COLLAB_URL` are set before building the web package.
+Ensure `VITE_API_URL` is set before building the web package. Collaboration uses the browser's
+same-origin `/collab` WebSocket route, which Caddy proxies to the collaboration service.

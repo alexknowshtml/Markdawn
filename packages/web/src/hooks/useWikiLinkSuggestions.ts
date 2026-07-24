@@ -1,14 +1,23 @@
 import type { Editor } from '@milkdown/core';
 import { editorViewCtx } from '@milkdown/core';
 import { Selection } from 'prosemirror-state';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useCreatePage, usePages } from './use-pages';
+import { useAuth } from './useAuth';
 
 type WikiLinkPage = {
   id: string;
   title: string;
   icon: string | null;
 };
+
+export function createBoundWikiLinkAttributes(targetId: string): {
+  targetId: string;
+  path: string;
+  label: string;
+} {
+  return { targetId, path: '', label: '' };
+}
 
 interface SuggestionsState {
   isOpen: boolean;
@@ -18,11 +27,18 @@ interface SuggestionsState {
 }
 
 export function useWikiLinkSuggestions(
-  workspaceId: string,
   editorRef: React.RefObject<Editor | null>,
+  sourcePageId: string,
 ) {
   const createPageMutation = useCreatePage();
-  const { data: allPages = [] } = usePages(workspaceId);
+  const { data: session } = useAuth();
+  const { data: accessiblePages = [] } = usePages({ enabled: !!session?.user });
+  const sourceOwnerId = accessiblePages.find((page) => page.id === sourcePageId)?.ownerId;
+  const allPages = useMemo(() => {
+    if (!sourceOwnerId) return [];
+    return accessiblePages.filter((page) => page.ownerId === sourceOwnerId);
+  }, [accessiblePages, sourceOwnerId]);
+  const canAddPage = sourceOwnerId !== undefined && sourceOwnerId === session?.user?.id;
 
   const [suggestions, setSuggestions] = useState<SuggestionsState>({
     isOpen: false,
@@ -61,7 +77,6 @@ export function useWikiLinkSuggestions(
     (page: WikiLinkPage) => {
       const editor = editorRef.current;
       if (!editor) return;
-
       try {
         editor.action((ctx) => {
           const view = ctx.get(editorViewCtx);
@@ -82,11 +97,7 @@ export function useWikiLinkSuggestions(
               const tr = state.tr.replaceWith(
                 start,
                 end,
-                wikiLinkNode.create({
-                  targetId: page.id,
-                  path: page.title,
-                  label: page.title,
-                }),
+                wikiLinkNode.create(createBoundWikiLinkAttributes(page.id)),
               );
 
               const nextPos = start + 1;
@@ -110,7 +121,7 @@ export function useWikiLinkSuggestions(
   const handleAddPage = useCallback(
     async (title: string) => {
       createPageMutation.mutate(
-        { workspaceId, title: title || 'Untitled' },
+        { title: title || 'Untitled' },
         {
           onSuccess: (newPage) => {
             handleWikiLinkSelect({
@@ -122,7 +133,7 @@ export function useWikiLinkSuggestions(
         },
       );
     },
-    [workspaceId, createPageMutation, handleWikiLinkSelect],
+    [createPageMutation, handleWikiLinkSelect],
   );
 
   return {
@@ -131,6 +142,7 @@ export function useWikiLinkSuggestions(
     handleWikiLinkSuggest,
     handleWikiLinkSelect,
     handleAddPage,
+    canAddPage,
     closeSuggestions: () => setSuggestions((prev) => ({ ...prev, isOpen: false })),
   };
 }

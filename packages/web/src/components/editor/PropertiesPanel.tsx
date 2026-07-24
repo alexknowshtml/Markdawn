@@ -34,12 +34,13 @@ import {
 } from 'lucide-react';
 import type React from 'react';
 import { forwardRef, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useIsReadOnly } from '../../contexts/EditorReadOnlyContext';
 import { useUpdatePage } from '../../hooks/use-pages';
-import { useWorkspaceMetadata } from '../../hooks/useWorkspaceMetadata';
+import { usePropertyMetadata } from '../../hooks/usePropertyMetadata';
+import { cleanTagName, tagIdentity } from '../../utils/tags';
 
 interface PropertiesPanelProps {
   pageId: string;
-  workspaceId: string;
   properties: Record<string, unknown> | null;
 }
 
@@ -80,36 +81,41 @@ interface TagValueEditorProps {
   onChange: (newTags: string[]) => void;
   suggestions: string[];
   onBlur?: () => void;
+  onSuggestionsOpen?: () => void;
 }
 
 const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
-  ({ tags, onChange, suggestions, onBlur }, ref) => {
+  ({ tags, onChange, suggestions, onBlur, onSuggestionsOpen }, ref) => {
+    const readOnly = useIsReadOnly();
     const [inputValue, setInputValue] = useState('');
     const [isFocused, setIsFocused] = useState(false);
     const [selectedIndex, setSelectedIndex] = useState(0);
 
     const filteredSuggestions = useMemo(() => {
-      if (!inputValue) {
-        return suggestions.filter((s) => !tags.includes(s));
-      }
-      return suggestions.filter(
-        (s) => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s),
-      );
+      const existingTags = new Set(tags.map(tagIdentity));
+      return suggestions.filter((suggestion) => {
+        if (existingTags.has(tagIdentity(suggestion))) return false;
+        return !inputValue || suggestion.toLowerCase().includes(inputValue.toLowerCase());
+      });
     }, [inputValue, suggestions, tags]);
 
     const addTag = (tag: string) => {
-      const trimmed = tag.trim();
-      if (trimmed && !tags.includes(trimmed)) {
-        onChange([...tags, trimmed]);
+      if (readOnly) return;
+      const name = cleanTagName(tag);
+      const identity = tagIdentity(name);
+      if (identity && !tags.some((existing) => tagIdentity(existing) === identity)) {
+        onChange([...tags, name]);
       }
       setInputValue('');
     };
 
     const removeTag = (tagToRemove: string) => {
+      if (readOnly) return;
       onChange(tags.filter((t) => t !== tagToRemove));
     };
 
     const handleKeyDown = (e: React.KeyboardEvent) => {
+      if (readOnly) return;
       if (e.key === 'ArrowDown') {
         if (filteredSuggestions.length > 0) {
           e.preventDefault();
@@ -151,66 +157,73 @@ const TagValueEditor = forwardRef<HTMLInputElement, TagValueEditorProps>(
             className="flex items-center gap-1 px-2 py-0.5 bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 text-[12px] rounded-full font-medium leading-none group/tag transition-colors"
           >
             {tag}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                removeTag(tag);
-              }}
-              className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
-            >
-              <X size={11} />
-            </button>
+            {!readOnly && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  removeTag(tag);
+                }}
+                className="p-0.5 rounded-full hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-200 transition-colors"
+              >
+                <X size={11} />
+              </button>
+            )}
           </span>
         ))}
-        <div className="relative flex-1 min-w-[80px]">
-          <input
-            ref={ref}
-            type="text"
-            data-testid="tag-input"
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value);
-              setSelectedIndex(0);
-            }}
-            onKeyDown={handleKeyDown}
-            onFocus={() => setIsFocused(true)}
-            onBlur={() => {
-              setIsFocused(false);
-              if (onBlur) onBlur();
-            }}
-            placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
-            className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
-            style={{
-              border: 'none',
-              outline: 'none',
-              boxShadow: 'none',
-              background: 'transparent',
-            }}
-          />
-          {isFocused && filteredSuggestions.length > 0 && (
-            <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
-              {filteredSuggestions.map((s, i) => (
-                <button
-                  key={s}
-                  type="button"
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    addTag(s);
-                  }}
-                  className={clsx(
-                    'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
-                    i === selectedIndex
-                      ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
-                      : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
-                  )}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
+        {!readOnly && (
+          <div className="relative flex-1 min-w-[80px]">
+            <input
+              ref={ref}
+              type="text"
+              data-testid="tag-input"
+              value={inputValue}
+              onChange={(e) => {
+                setInputValue(e.target.value);
+                setSelectedIndex(0);
+              }}
+              onKeyDown={handleKeyDown}
+              onFocus={() => {
+                setIsFocused(true);
+                onSuggestionsOpen?.();
+              }}
+              onBlur={() => {
+                setIsFocused(false);
+                if (onBlur) onBlur();
+              }}
+              placeholder={tags.length === 0 ? 'Empty' : 'Add tag...'}
+              className="w-full !bg-transparent !border-0 !border-none !shadow-none !outline-none text-[15px] py-0 px-1 placeholder:text-zinc-400 text-zinc-800 dark:text-zinc-200 caret-zinc-800 dark:caret-zinc-200 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !ring-0 !ring-offset-0 appearance-none"
+              style={{
+                border: 'none',
+                outline: 'none',
+                boxShadow: 'none',
+                background: 'transparent',
+              }}
+            />
+            {isFocused && filteredSuggestions.length > 0 && (
+              <div className="absolute top-full left-0 mt-1 w-48 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg shadow-xl z-50 overflow-hidden py-1">
+                {filteredSuggestions.map((s, i) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      addTag(s);
+                    }}
+                    className={clsx(
+                      'w-full text-left px-3 py-1.5 text-[13px] transition-colors !outline-none !ring-0 !ring-offset-0 !focus:ring-0',
+                      i === selectedIndex
+                        ? 'bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100'
+                        : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-50 dark:hover:bg-zinc-800/50',
+                    )}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     );
   },
@@ -232,11 +245,21 @@ function PropertyKeySelector({
   isEditing,
   setIsEditing,
 }: PropertyKeySelectorProps) {
+  const readOnly = useIsReadOnly();
   const [inputValue, setInputValue] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const hasInteracted = useRef(false);
   const blurTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (readOnly && isEditing) {
+      if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+      blurTimeoutRef.current = null;
+      hasInteracted.current = false;
+      setIsEditing(false);
+    }
+  }, [isEditing, readOnly, setIsEditing]);
 
   useEffect(() => {
     return () => {
@@ -272,11 +295,13 @@ function PropertyKeySelector({
   }, [isEditing, currentKey, suggestions]);
 
   const handleSelect = (key: string) => {
+    if (readOnly) return;
     onSelect(key);
     setIsEditing(false);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (readOnly) return;
     if (e.key === 'ArrowDown') {
       if (totalItems > 0) {
         e.preventDefault();
@@ -303,13 +328,16 @@ function PropertyKeySelector({
     }
   };
 
-  if (!isEditing) {
+  if (readOnly || !isEditing) {
     const IconComponent = getIconForKey(currentKey);
     return (
       <button
         type="button"
-        onClick={() => setIsEditing(true)}
-        className="flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate cursor-text px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
+        onClick={() => !readOnly && setIsEditing(true)}
+        className={clsx(
+          'flex items-center gap-2 text-[13px] font-medium text-zinc-500 dark:text-zinc-400 truncate px-1.5 py-0.5 rounded transition-colors text-left w-36 shrink-0 group/key !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200',
+          readOnly ? 'cursor-default' : 'cursor-text',
+        )}
         style={{ border: 'none', outline: 'none', boxShadow: 'none', background: 'transparent' }}
       >
         {IconComponent && <IconComponent size={15} className="text-zinc-400 shrink-0" />}
@@ -332,8 +360,9 @@ function PropertyKeySelector({
         }}
         onKeyDown={handleKeyDown}
         onBlur={() => {
+          if (readOnly) return;
           blurTimeoutRef.current = setTimeout(() => {
-            if (inputRef.current) {
+            if (inputRef.current && !readOnly) {
               handleSelect(inputValue.trim() || currentKey);
             }
           }, 150);
@@ -396,7 +425,6 @@ interface SortablePropertyRowProps {
   onUpdate: (id: string, value: unknown) => void;
   onDelete: (id: string) => void;
   onRename: (id: string, newKey: string) => void;
-  workspaceMetadata: { allKeys: string[]; allTags: string[] };
   isNew?: boolean;
 }
 
@@ -405,11 +433,19 @@ function SortablePropertyRow({
   onUpdate,
   onDelete,
   onRename,
-  workspaceMetadata,
   isNew,
-}: SortablePropertyRowProps) {
+  propertyKeySuggestions,
+  tagSuggestions,
+  refreshTags,
+}: SortablePropertyRowProps & {
+  propertyKeySuggestions: string[];
+  tagSuggestions: string[];
+  refreshTags: () => void;
+}) {
+  const readOnly = useIsReadOnly();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: item.id,
+    disabled: readOnly,
   });
 
   const [isEditingValue, setIsEditingValue] = useState(false);
@@ -422,6 +458,8 @@ function SortablePropertyRow({
   const tagEditorRef = useRef<HTMLInputElement>(null);
   const [isEditingKey, setIsEditingKey] = useState(isNew ?? false);
   const valueSavePending = useRef(false);
+  const readOnlyRef = useRef(readOnly);
+  readOnlyRef.current = readOnly;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -430,6 +468,11 @@ function SortablePropertyRow({
   };
 
   const handleValueSave = (nextValue?: unknown) => {
+    if (readOnlyRef.current) {
+      setIsEditingValue(false);
+      setTempValue(Array.isArray(item.value) ? item.value.join(', ') : String(item.value ?? ''));
+      return;
+    }
     if (valueSavePending.current) return;
     setIsEditingValue(false);
     const finalValue = nextValue !== undefined ? nextValue : tempValue.trim();
@@ -438,6 +481,15 @@ function SortablePropertyRow({
       onUpdate(item.id, finalValue);
     }
   };
+
+  useEffect(() => {
+    if (readOnly) {
+      valueSavePending.current = false;
+      setIsEditingValue(false);
+      setIsEditingKey(false);
+      setTempValue(Array.isArray(item.value) ? item.value.join(', ') : String(item.value ?? ''));
+    }
+  }, [item.value, readOnly]);
 
   useEffect(() => {
     if (isEditingValue) {
@@ -450,6 +502,7 @@ function SortablePropertyRow({
 
   const handleKeySelect = useCallback(
     (newKey: string) => {
+      if (readOnlyRef.current) return;
       onRename(item.id, newKey);
       // Auto-focus the value area after selecting a property key
       const isTag = newKey.toLowerCase() === 'tags' || newKey.toLowerCase() === 'tag';
@@ -474,18 +527,20 @@ function SortablePropertyRow({
           : 'hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40',
       )}
     >
-      <div
-        {...attributes}
-        {...listeners}
-        className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing p-1 -ml-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-opacity"
-      >
-        <GripVertical size={15} />
-      </div>
+      {!readOnly && (
+        <div
+          {...attributes}
+          {...listeners}
+          className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing p-1 -ml-2 text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 transition-opacity"
+        >
+          <GripVertical size={15} />
+        </div>
+      )}
 
       <PropertyKeySelector
         currentKey={item.key}
         onSelect={handleKeySelect}
-        suggestions={workspaceMetadata.allKeys}
+        suggestions={propertyKeySuggestions}
         isEditing={isEditingKey}
         setIsEditing={setIsEditingKey}
       />
@@ -494,9 +549,16 @@ function SortablePropertyRow({
         {isTagsProperty ? (
           <TagValueEditor
             ref={tagEditorRef}
-            tags={Array.isArray(item.value) ? (item.value as string[]) : []}
-            suggestions={workspaceMetadata.allTags}
-            onChange={(newTags) => onUpdate(item.id, newTags)}
+            tags={
+              Array.isArray(item.value)
+                ? item.value.filter((tag): tag is string => typeof tag === 'string')
+                : []
+            }
+            suggestions={tagSuggestions}
+            onChange={(newTags) => {
+              if (!readOnlyRef.current) onUpdate(item.id, newTags);
+            }}
+            onSuggestionsOpen={refreshTags}
           />
         ) : isEditingValue ? (
           <input
@@ -526,8 +588,11 @@ function SortablePropertyRow({
         ) : (
           <button
             type="button"
-            onClick={() => setIsEditingValue(true)}
-            className="flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate cursor-text px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200"
+            onClick={() => !readOnly && setIsEditingValue(true)}
+            className={clsx(
+              'flex-1 text-[15px] text-zinc-800 dark:text-zinc-200 truncate px-2 py-0.5 rounded min-h-[1.75rem] flex items-center transition-colors text-left !outline-none !ring-0 !ring-offset-0 !focus:ring-0 !focus-visible:ring-0 !focus:outline-none !border-0 selection:bg-zinc-200 selection:text-zinc-800 dark:selection:bg-zinc-700 dark:selection:text-zinc-200',
+              readOnly ? 'cursor-default' : 'cursor-text',
+            )}
             style={{
               border: 'none',
               outline: 'none',
@@ -555,27 +620,31 @@ function SortablePropertyRow({
         )}
       </div>
 
-      <button
-        type="button"
-        data-testid="delete-property"
-        onClick={() => onDelete(item.id)}
-        className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-400 hover:text-red-500 transition-all cursor-pointer rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 !outline-none !ring-0 !ring-offset-0 !focus:ring-0"
-        title="Delete property"
-      >
-        <Trash2 size={15} />
-      </button>
+      {!readOnly && (
+        <button
+          type="button"
+          data-testid="delete-property"
+          onClick={() => onDelete(item.id)}
+          className="opacity-0 group-hover:opacity-100 p-1.5 text-zinc-400 hover:text-red-500 transition-all cursor-pointer rounded-md hover:bg-red-50 dark:hover:bg-red-500/10 shrink-0 !outline-none !ring-0 !ring-offset-0 !focus:ring-0"
+          title="Delete property"
+        >
+          <Trash2 size={15} />
+        </button>
+      )}
     </div>
   );
 }
 
 // --- Main Component ---
 
-export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesPanelProps) {
+export function PropertiesPanel({ pageId, properties }: PropertiesPanelProps) {
+  const readOnly = useIsReadOnly();
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [items, setItems] = useState<PropertyItem[]>([]);
   const [newPropertyId, setNewPropertyId] = useState<string | null>(null);
   const updatePage = useUpdatePage();
-  const workspaceMetadata = useWorkspaceMetadata(workspaceId);
+  const panelReadOnlyRef = useRef(readOnly);
+  panelReadOnlyRef.current = readOnly;
 
   // Sync internal items with props while preserving order
   useEffect(() => {
@@ -622,6 +691,18 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
     });
   }, [properties]);
 
+  useEffect(() => {
+    if (!readOnly) return;
+    setNewPropertyId(null);
+    setItems(Object.entries(properties ?? {}).map(([key, value]) => ({ id: key, key, value })));
+  }, [properties, readOnly]);
+
+  const {
+    allKeys: propertyKeySuggestions,
+    allTags: tagSuggestions,
+    refreshTags,
+  } = usePropertyMetadata();
+
   const sensors = useSensors(
     useSensor(PointerSensor),
     useSensor(KeyboardSensor, {
@@ -631,6 +712,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
 
   const persistChanges = useCallback(
     (newItems: PropertyItem[]) => {
+      if (panelReadOnlyRef.current) return;
       const nextProperties: Record<string, unknown> = {};
       for (const item of newItems) {
         const key = item.key.trim();
@@ -653,6 +735,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   );
 
   const handleDragEnd = (event: DragEndEvent) => {
+    if (panelReadOnlyRef.current) return;
     const { active, over } = event;
 
     if (over && active.id !== over.id) {
@@ -667,6 +750,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   const updateProperty = (id: string, value: unknown) => {
+    if (panelReadOnlyRef.current) return;
     setItems((prev) => {
       const next = prev.map((it) => (it.id === id ? { ...it, value } : it));
       persistChanges(next);
@@ -675,6 +759,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   const deleteProperty = (id: string) => {
+    if (panelReadOnlyRef.current) return;
     setItems((prev) => {
       const next = prev.filter((it) => it.id !== id);
       persistChanges(next);
@@ -683,6 +768,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   const renameProperty = (id: string, newKey: string) => {
+    if (panelReadOnlyRef.current) return;
     setItems((currentItems) => {
       if (!newKey || currentItems.some((it) => it.id !== id && it.key === newKey)) {
         return [...currentItems]; // Trigger re-render to revert invalid input
@@ -695,6 +781,7 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   const addProperty = () => {
+    if (panelReadOnlyRef.current) return;
     const newId = `new-${Math.random().toString(36).slice(2, 11)}`;
     setItems((prev) => [...prev, { id: newId, key: '', value: '' }]);
     setNewPropertyId(newId);
@@ -702,6 +789,15 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
   };
 
   if (items.length === 0 && !isCollapsed) {
+    if (readOnly) {
+      return (
+        <div className="mb-6 animate-fade-in px-2">
+          <span className="flex items-center gap-2 px-3 py-1.5 text-[13px] font-medium text-zinc-400 dark:text-zinc-500">
+            No properties
+          </span>
+        </div>
+      );
+    }
     return (
       <div className="mb-6 animate-fade-in px-2">
         <button
@@ -742,7 +838,8 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
       {!isCollapsed && (
         <div className="space-y-1">
           <DndContext
-            sensors={sensors}
+            key={readOnly ? 'read-only' : 'editable'}
+            sensors={readOnly ? [] : sensors}
             collisionDetection={closestCenter}
             onDragEnd={handleDragEnd}
           >
@@ -755,21 +852,25 @@ export function PropertiesPanel({ pageId, workspaceId, properties }: PropertiesP
                   onUpdate={updateProperty}
                   onDelete={deleteProperty}
                   onRename={renameProperty}
-                  workspaceMetadata={workspaceMetadata}
+                  propertyKeySuggestions={propertyKeySuggestions}
+                  tagSuggestions={tagSuggestions}
+                  refreshTags={refreshTags}
                 />
               ))}
             </SortableContext>
           </DndContext>
 
-          <button
-            type="button"
-            data-testid="add-property"
-            onClick={addProperty}
-            className="w-full flex items-center gap-2 px-2 py-2 mt-2 text-[13px] font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 rounded-lg transition-all cursor-pointer group border border-dashed border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
-          >
-            <Plus size={15} className="group-hover:scale-110 transition-transform" />
-            <span>Add a property</span>
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              data-testid="add-property"
+              onClick={addProperty}
+              className="w-full flex items-center gap-2 px-2 py-2 mt-2 text-[13px] font-medium text-zinc-400 hover:text-zinc-600 dark:hover:text-zinc-300 hover:bg-zinc-100/50 dark:hover:bg-zinc-800/40 rounded-lg transition-all cursor-pointer group border border-dashed border-transparent hover:border-zinc-200 dark:hover:border-zinc-700 !outline-none !focus:outline-none !focus:ring-0 !focus-visible:ring-0 !ring-0 !ring-offset-0"
+            >
+              <Plus size={15} className="group-hover:scale-110 transition-transform" />
+              <span>Add a property</span>
+            </button>
+          )}
         </div>
       )}
     </div>

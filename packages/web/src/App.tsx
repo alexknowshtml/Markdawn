@@ -1,51 +1,67 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppShell } from './components/AppShell';
+import { AuthIdentityBoundary } from './components/auth/AuthIdentityBoundary';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
+import { ShareablePageRoute } from './components/auth/ShareablePageRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
-import { WorkspaceSettings } from './components/workspace/WorkspaceSettings';
-import { ClipboardProvider } from './contexts/ClipboardContext';
-import { KeyboardShortcutProvider } from './contexts/KeyboardShortcutContext';
-import { SelectionProvider } from './contexts/SelectionContext';
 import Dashboard from './routes/Dashboard';
+import FolderEntry from './routes/FolderEntry';
 import Home from './routes/Home';
 import Login from './routes/Login';
-import Page from './routes/Page';
-import PublicPage from './routes/PublicPage';
-import Workspace from './routes/Workspace';
+import PageEntry from './routes/PageEntry';
+import Settings from './routes/Settings';
+import SharedWithMe from './routes/SharedWithMe';
+import Trash from './routes/Trash';
 
 function App() {
   return (
     <ErrorBoundary>
       <div className="bg-white dark:bg-zinc-950 min-h-screen text-zinc-900 dark:text-zinc-50">
         <BrowserRouter>
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/login" element={<Login />} />
+          <AuthIdentityBoundary>
+            <Routes>
+              <Route path="/" element={<Home />} />
+              <Route path="/login" element={<Login />} />
 
-            <Route
-              path="/app"
-              element={
-                <ProtectedRoute>
-                  <ClipboardProvider>
-                    <SelectionProvider>
-                      <KeyboardShortcutProvider>
-                        <AppShell />
-                      </KeyboardShortcutProvider>
-                    </SelectionProvider>
-                  </ClipboardProvider>
-                </ProtectedRoute>
-              }
-            >
-              <Route index element={<Dashboard />} />
-              <Route path=":workspaceSlug" element={<Workspace />} />
-              <Route path=":workspaceSlug/folder/:folderId" element={<Workspace />} />
-              <Route path=":workspaceSlug/settings" element={<WorkspaceSettings />} />
-              <Route path=":workspaceSlug/:slugAndId" element={<Page />} />
-            </Route>
-            <Route path="/public/:token" element={<PublicPage />} />
+              <Route
+                path="/app"
+                element={
+                  <ProtectedRoute>
+                    <AppShell />
+                  </ProtectedRoute>
+                }
+              >
+                <Route index element={<Dashboard />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="trash" element={<Trash />} />
+                <Route path="shared-with-me" element={<SharedWithMe />} />
+              </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+              <Route
+                path="/app/:slugAndId"
+                element={
+                  <ShareablePageRoute entityType="page">
+                    <AppShell />
+                  </ShareablePageRoute>
+                }
+              >
+                <Route index element={<PageEntry />} />
+              </Route>
+
+              <Route
+                path="/app/folder/:slugAndId"
+                element={
+                  <ShareablePageRoute entityType="folder">
+                    <AppShell />
+                  </ShareablePageRoute>
+                }
+              >
+                <Route index element={<FolderEntry />} />
+              </Route>
+
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </AuthIdentityBoundary>
         </BrowserRouter>
       </div>
     </ErrorBoundary>

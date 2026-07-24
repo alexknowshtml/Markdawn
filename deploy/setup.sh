@@ -114,10 +114,6 @@ done
 echo -e "${YELLOW}[SCHEMA] Running db:migrate to initialize database...${NC}"
 pnpm --filter @markdawn/api db:migrate
 
-echo -e "${YELLOW}[SCHEMA] Applying schema fixes not covered by migrations...${NC}"
-# TODO(#102): Remove these workarounds after feat/share-ui merges and proper migrations are created
-podman exec markdawn-postgres psql -U markdawn -d markdawn -c "ALTER TABLE pages ADD COLUMN IF NOT EXISTS properties jsonb;"
-
 systemctl --user start markdawn-api.service markdawn-collab.service
 
 echo -e "${GREEN}[DONE] Setup complete!${NC}"

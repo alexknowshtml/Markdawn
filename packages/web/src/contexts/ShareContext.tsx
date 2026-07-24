@@ -1,0 +1,128 @@
+import {
+  type CapabilitySet,
+  deriveCapabilities,
+  type FolderDetailPayload,
+  getAnonymousName,
+  type PublicPermission,
+} from '@markdawn/shared';
+import { createContext, type ReactNode, useContext, useEffect, useMemo, useState } from 'react';
+import { useAuth } from '../hooks/useAuth';
+import { getAnonymousId } from '../utils/anonymous-cookie';
+
+export type AccessPermission = PublicPermission | null;
+
+interface ShareContextType {
+  isAnonymous: boolean;
+  anonymousId: string | null;
+  anonymousName: string | null;
+  accessPermission: AccessPermission;
+  capabilities: CapabilitySet;
+  publicEntity: FolderDetailPayload | null;
+  /** @deprecated Use capabilities.canEdit instead */
+  canEdit: boolean;
+}
+
+const ShareContext = createContext<ShareContextType | undefined>(undefined);
+const SetAccessPermissionContext = createContext<
+  React.Dispatch<React.SetStateAction<AccessPermission>>
+>(() => {});
+const SetCapabilitiesContext = createContext<React.Dispatch<React.SetStateAction<CapabilitySet>>>(
+  () => {},
+);
+
+const DEFAULT_CAPABILITIES: CapabilitySet = {
+  canEdit: false,
+  canDelete: false,
+  canCopy: false,
+};
+
+interface ShareProviderProps {
+  children: ReactNode;
+  publicPermission?: AccessPermission;
+  capabilities?: CapabilitySet;
+  publicEntity?: FolderDetailPayload | null;
+}
+
+export function ShareProvider({
+  children,
+  publicPermission: initial = null,
+  capabilities: initialCapabilities,
+  publicEntity = null,
+}: ShareProviderProps) {
+  const { data: session } = useAuth();
+  const isAnonymous = !session?.user;
+  const [accessPermission, setAccessPermission] = useState(initial);
+  // Default to no capabilities while loading to prevent flash of editable content
+  const [capabilities, setCapabilities] = useState<CapabilitySet>(
+    initialCapabilities ?? DEFAULT_CAPABILITIES,
+  );
+
+  useEffect(() => {
+    setAccessPermission(initial);
+  }, [initial]);
+
+  useEffect(() => {
+    if (initialCapabilities) {
+      setCapabilities(initialCapabilities);
+    }
+  }, [initialCapabilities]);
+
+  const value = useMemo(() => {
+    if (!isAnonymous) {
+      return {
+        isAnonymous: false,
+        anonymousId: null,
+        anonymousName: null,
+        accessPermission,
+        capabilities,
+        publicEntity,
+        canEdit: capabilities.canEdit,
+      };
+    }
+
+    const anonymousId = getAnonymousId();
+    const anonymousName = getAnonymousName(anonymousId);
+    const anonymousCapabilities = deriveCapabilities(accessPermission);
+
+    return {
+      isAnonymous: true,
+      anonymousId,
+      anonymousName,
+      accessPermission,
+      capabilities: anonymousCapabilities,
+      publicEntity,
+      canEdit: anonymousCapabilities.canEdit,
+    };
+  }, [isAnonymous, accessPermission, capabilities, publicEntity]);
+
+  return (
+    <SetCapabilitiesContext.Provider value={setCapabilities}>
+      <SetAccessPermissionContext.Provider value={setAccessPermission}>
+        <ShareContext.Provider value={value}>{children}</ShareContext.Provider>
+      </SetAccessPermissionContext.Provider>
+    </SetCapabilitiesContext.Provider>
+  );
+}
+
+const DEFAULT_SHARE_CONTEXT: ShareContextType = {
+  isAnonymous: false,
+  anonymousId: null,
+  anonymousName: null,
+  accessPermission: null,
+  capabilities: DEFAULT_CAPABILITIES,
+  publicEntity: null,
+  canEdit: false,
+};
+
+export function useShareContext(): ShareContextType {
+  const context = useContext(ShareContext);
+  return context ?? DEFAULT_SHARE_CONTEXT;
+}
+
+export function useSetAccessPermission(): React.Dispatch<React.SetStateAction<AccessPermission>> {
+  return useContext(SetAccessPermissionContext);
+}
+
+export function useSetCapabilities(): React.Dispatch<React.SetStateAction<CapabilitySet>> {
+  return useContext(SetCapabilitiesContext);
+}

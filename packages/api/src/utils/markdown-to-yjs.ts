@@ -1,3 +1,4 @@
+import { normalizeWikiLinkLookupKey } from '@markdawn/shared';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import remarkParse from 'remark-parse';
@@ -104,58 +105,43 @@ export function createEmptyYjsDoc(title: string): Uint8Array {
   return createYjsDocWithTitle(title, '');
 }
 
+/** Bind uniquely resolved links without retaining the target title in shared content. */
+export function bindWikiLinkTargets(
+  ydocBinary: Uint8Array,
+  pageLookup: ReadonlyMap<string, string>,
+): Uint8Array {
+  const doc = new Y.Doc();
+  Y.applyUpdate(doc, ydocBinary);
+
+  const visit = (element: Y.XmlFragment | Y.XmlElement): void => {
+    for (let index = 0; index < element.length; index++) {
+      const item = element.get(index);
+      if (!(item instanceof Y.XmlElement)) continue;
+      if (item.nodeName === 'wikiLink') {
+        const authoredPath = item.getAttribute('path') || '';
+        const targetId = pageLookup.get(normalizeWikiLinkLookupKey(authoredPath));
+        if (targetId) {
+          const hashIndex = authoredPath.indexOf('#');
+          const heading = hashIndex >= 0 ? authoredPath.slice(hashIndex + 1) : '';
+          const label = item.getAttribute('label') || '';
+          item.setAttribute('targetId', targetId);
+          item.setAttribute('path', '');
+          item.setAttribute('label', label);
+          if (heading) item.setAttribute('heading', heading);
+        }
+      }
+      visit(item);
+    }
+  };
+
+  doc.transact(() => visit(doc.getXmlFragment('prosemirror')));
+  return Y.encodeStateAsUpdate(doc);
+}
+
 /**
  * Loads a Yjs document from binary and extracts the title text.
  * Returns 'Untitled' if no title field exists.
  */
-function visitWikiLinks(
-  element: Y.XmlFragment | Y.XmlElement,
-  fn: (link: Y.XmlElement) => void,
-): void {
-  for (let i = 0; i < element.length; i++) {
-    const item = element.get(i);
-    if (!(item instanceof Y.XmlElement)) continue;
-    if (item.nodeName === 'wikiLink') {
-      fn(item);
-    }
-    visitWikiLinks(item, fn);
-  }
-}
-
-/**
- * Post-processes a Yjs binary to backfill the `targetId` attribute on every
- * wikiLink element whose `path` matches a page title in the lookup map.
- *
- * This is used by import routes where the conversion from markdown to Yjs
- * cannot resolve UUIDs (no access to the pageIndex map available in the
- * browser). After creating the binary with `markdownToYjsState` or
- * `createYjsDocWithTitle`, call this to populate `targetId` from the
- * workspace's existing pages.
- */
-export function resolveWikilinkTargets(
-  ydocBinary: Uint8Array,
-  pageLookup: Map<string, string>,
-): Uint8Array {
-  const doc = new Y.Doc();
-  Y.applyUpdate(doc, ydocBinary);
-  const fragment = doc.getXmlFragment('prosemirror');
-
-  visitWikiLinks(fragment, (link) => {
-    const path = link.getAttribute('path') || '';
-    // Strip heading suffix if present ([[Title#Heading]])
-    const slug = path.split('#')[0]?.trim().toLowerCase();
-    if (!slug) return;
-    const existingTargetId = link.getAttribute('targetId') || '';
-    if (existingTargetId) return; // already resolved
-    const resolvedId = pageLookup.get(slug);
-    if (resolvedId) {
-      link.setAttribute('targetId', resolvedId);
-    }
-  });
-
-  return Y.encodeStateAsUpdate(doc);
-}
-
 export function extractTitleFromYjs(ydocBinary: Uint8Array): string {
   const doc = new Y.Doc();
   Y.applyUpdate(doc, ydocBinary);
@@ -575,10 +561,9 @@ function createInlineContentFromText(
 
     if (match[1]) {
       const path = match[1].trim();
-      const label = (match[2] ?? path).trim();
+      const label = (match[2] ?? '').trim();
       if (path.length > 0) {
         const wikiLink = new Y.XmlElement('wikiLink');
-        wikiLink.setAttribute('targetId', '');
         wikiLink.setAttribute('path', path);
         wikiLink.setAttribute('label', label);
         result.push(wikiLink);

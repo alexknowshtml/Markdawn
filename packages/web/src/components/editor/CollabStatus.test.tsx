@@ -22,11 +22,13 @@ function createMockProvider(status: WebSocketStatus) {
 }
 
 describe('CollabStatus', () => {
-  it('renders nothing when provider is null', () => {
-    const { container } = render(
-      <CollabStatus provider={null} status={WebSocketStatus.Connecting} />,
-    );
-    expect(container.firstChild).toBeNull();
+  it('shows status indicator but no avatars when provider is null', () => {
+    render(<CollabStatus provider={null} status={WebSocketStatus.Connecting} />);
+
+    // Status indicator should still render (it's independent of provider)
+    expect(screen.getByText('Connecting')).toBeInTheDocument();
+    // User avatars should NOT render (they depend on provider.awareness)
+    expect(screen.queryByText('User 1')).not.toBeInTheDocument();
   });
 
   it('shows connecting status label and amber dot', () => {

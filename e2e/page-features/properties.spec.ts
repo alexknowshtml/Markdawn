@@ -1,5 +1,35 @@
-import { expect, test } from '@playwright/test';
-import { createNewPage } from '../fixtures';
+import { expect, type Page, type Response, test } from '@playwright/test';
+import { createNewPage, focusEditor } from '../fixtures';
+
+async function createAnotherPage(page: Page): Promise<void> {
+  const currentUrl = page.url();
+  const previousEditor = await page.locator('.ProseMirror').first().elementHandle();
+
+  await page.getByRole('button', { name: /create note/i }).click();
+  await page.waitForURL((url) => url.toString() !== currentUrl);
+  if (previousEditor) {
+    await page.waitForFunction((editor) => !editor.isConnected, previousEditor);
+  }
+  await page.locator('.ProseMirror').first().waitFor({ state: 'visible', timeout: 15000 });
+}
+
+async function responseIncludesTag(response: Response, tagName: string): Promise<boolean> {
+  if (
+    response.request().method() !== 'GET' ||
+    new URL(response.url()).pathname !== '/api/tags' ||
+    !response.ok()
+  ) {
+    return false;
+  }
+
+  const body: unknown = await response.json();
+  return (
+    Array.isArray(body) &&
+    body.some(
+      (tag) => typeof tag === 'object' && tag !== null && 'name' in tag && tag.name === tagName,
+    )
+  );
+}
 
 test.describe('Properties panel', () => {
   test('1: shows empty state on a fresh page', async ({ page }) => {
@@ -259,7 +289,12 @@ test.describe('Properties panel', () => {
     await expect(page.getByText('tagone')).toBeVisible();
     await expect(page.getByText('tagtwo')).toBeVisible();
 
+    await tagInput.fill('#TAGONE');
+    await tagInput.press('Enter');
     const row = page.locator('[data-property-key="tags"]');
+    await expect(row.getByText('tagone', { exact: true })).toHaveCount(1);
+    await expect(row.getByText('#TAGONE', { exact: true })).toHaveCount(0);
+
     const chip = row.locator('span').filter({ hasText: 'tagone' });
     await chip.locator('button').click();
 
@@ -291,14 +326,22 @@ test.describe('Properties panel', () => {
 
     const tagInput = page.getByTestId('tag-input');
     await tagInput.fill('crossdoctag');
+    const propertyUpdate = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PATCH' &&
+        /\/api\/pages\/[^/]+$/.test(new URL(response.url()).pathname) &&
+        response.request().postData()?.includes('crossdoctag') === true &&
+        response.ok(),
+    );
     await tagInput.press('Enter');
-    await page.waitForTimeout(1500);
+    await propertyUpdate;
 
-    // Reload to ensure fresh tag data from the server (staleTime is 30s)
+    await createAnotherPage(page);
+    // A new page can mount while the page-tree invalidation from the previous
+    // property update is still settling. Reload so this document starts from a
+    // canonical tree containing the other page's properties.
     await page.reload({ waitUntil: 'networkidle' });
-    await page.waitForSelector('.ProseMirror', { timeout: 15000 });
-
-    await createNewPage(page);
+    await page.locator('.ProseMirror').first().waitFor({ state: 'visible', timeout: 15_000 });
     await page.getByTestId('add-property').click();
     await page.getByTestId('key-input').fill('tags');
     await page.getByTestId('key-input').press('Enter');
@@ -306,5 +349,48 @@ test.describe('Properties panel', () => {
     const tagInputY = page.getByTestId('tag-input');
     await tagInputY.focus();
     await expect(page.getByText('crossdoctag')).toBeVisible();
+  });
+
+  test('17: shows saved content tags in the property suggestion dropdown', async ({ page }) => {
+    test.setTimeout(60_000);
+    await createNewPage(page);
+    await page.locator('main .bg-emerald-500').waitFor({ state: 'visible', timeout: 15_000 });
+    await focusEditor(page);
+
+    const contentTag = 'contenttag';
+    await page.keyboard.type(`#${contentTag} `);
+
+    // Content tags become available after collaboration persistence completes.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async (tagName) => {
+            const response = await fetch('/api/tags');
+            if (!response.ok) throw new Error(`Failed to fetch tags: ${response.status}`);
+            const body: unknown = await response.json();
+            return (
+              Array.isArray(body) &&
+              body.some(
+                (tag) =>
+                  typeof tag === 'object' && tag !== null && 'name' in tag && tag.name === tagName,
+              )
+            );
+          }, contentTag),
+        { timeout: 30_000 },
+      )
+      .toBe(true);
+
+    await createAnotherPage(page);
+    await page.getByTestId('add-property').click();
+    await page.getByTestId('key-input').fill('tags');
+    const tagRefresh = page.waitForResponse((response) =>
+      responseIncludesTag(response, contentTag),
+    );
+    await page.getByTestId('key-input').press('Enter');
+    await tagRefresh;
+
+    const tagInput = page.getByTestId('tag-input');
+    await tagInput.focus();
+    await expect(page.getByRole('button', { name: contentTag, exact: true })).toBeVisible();
   });
 });

@@ -1,35 +1,18 @@
+import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
-import { pool } from '../db/connection';
+import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 
 const templatesRoute = new Hono();
 
 templatesRoute.use('*', requireAuth);
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
 templatesRoute.get('/', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select id, workspace_id as "workspaceId", title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where workspace_id = $1 order by created_at desc',
-    [workspaceId],
+  const result = await query(
+    sql`select id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt" from templates where created_by = ${user.id} order by created_at desc`,
   );
 
   return c.json(result.rows);
@@ -37,11 +20,7 @@ templatesRoute.get('/', async (c) => {
 
 templatesRoute.post('/', async (c) => {
   const body = await c.req.json();
-  const { workspaceId, title, icon, description, contentBlocks } = body;
-
-  if (!workspaceId || typeof workspaceId !== 'string') {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
+  const { title, icon, description, contentBlocks } = body;
 
   if (!title || typeof title !== 'string') {
     throw new HTTPException(400, { message: 'title is required' });
@@ -52,20 +31,11 @@ templatesRoute.post('/', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    `insert into templates (workspace_id, title, icon, description, content_blocks, created_by)
-     values ($1, $2, $3, $4, $5, $6)
-     returning id, workspace_id as "workspaceId", title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt"`,
-    [
-      workspaceId,
-      title.trim(),
-      icon ?? null,
-      description ?? null,
-      JSON.stringify(contentBlocks),
-      user.id,
-    ],
+  const result = await query(
+    sql`insert into templates (title, icon, description, content_blocks, created_by)
+     values (${title.trim()}, ${icon ?? null}, ${description ?? null}, ${JSON.stringify(contentBlocks)}, ${user.id})
+     returning id, title, icon, description, content_blocks as "contentBlocks", created_by as "createdBy", created_at as "createdAt", updated_at as "updatedAt"`,
   );
 
   return c.json(result.rows[0], 201);
@@ -75,20 +45,25 @@ templatesRoute.delete('/:id', async (c) => {
   const id = c.req.param('id');
   const user = c.get('user') as { id: string };
 
-  // First get the template to check workspace
-  const templateResult = await pool.query(
-    'select workspace_id from templates where id = $1 limit 1',
-    [id],
+  const templateResult = await query(
+    sql`select created_by from templates where id = ${id} limit 1`,
   );
 
   if (templateResult.rowCount === 0) {
     throw new HTTPException(404, { message: 'Template not found' });
   }
 
-  const workspaceId = templateResult.rows[0].workspace_id;
-  await ensureWorkspaceMember(workspaceId, user.id);
+  const templateRow = templateResult.rows[0];
+  if (!templateRow) {
+    throw new HTTPException(404, { message: 'Template not found' });
+  }
 
-  await pool.query('delete from templates where id = $1', [id]);
+  const ownerId = templateRow.created_by;
+  if (ownerId !== user.id) {
+    throw new HTTPException(403, { message: 'You can only delete your own templates' });
+  }
+
+  await query(sql`delete from templates where id = ${id}`);
 
   return c.json({ success: true });
 });

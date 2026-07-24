@@ -1,34 +1,28 @@
 import { execSync } from 'node:child_process';
-import { createServer } from 'node:net';
+import { randomUUID } from 'node:crypto';
+import { Client } from 'pg';
 
-const CONTAINER_NAME = 'markdawn-postgres-test';
-const BASE_PORT = 5433;
+const CONTAINER_NAME_PREFIX = 'markdawn-postgres-test';
 
-async function findFreePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object') {
-        const port = addr.port;
-        server.close(() => resolve(port));
-      } else {
-        server.close(() => resolve(BASE_PORT));
-      }
-    });
-    server.on('error', reject);
-  });
+function getMappedPort(name: string): number {
+  const mapping = execSync(`podman port ${name} 5432/tcp`, { encoding: 'utf8' }).trim();
+  const port = Number.parseInt(mapping.slice(mapping.lastIndexOf(':') + 1), 10);
+  if (!Number.isInteger(port) || port <= 0) {
+    throw new Error(`Unable to determine PostgreSQL port from mapping: ${mapping}`);
+  }
+  return port;
 }
 
-async function waitForContainer(name: string): Promise<void> {
+async function waitForDatabase(name: string, databaseUrl: string): Promise<void> {
   for (let i = 0; i < 60; i++) {
+    const client = new Client({ connectionString: databaseUrl, connectionTimeoutMillis: 1_000 });
     try {
-      execSync(`podman exec ${name} pg_isready -U markdawn`, {
-        stdio: 'pipe',
-        timeout: 5_000,
-      });
+      await client.connect();
+      await client.query('select 1');
+      await client.end();
       return;
     } catch {
+      await client.end().catch(() => undefined);
       if (i >= 5 && i % 10 === 0) {
         try {
           execSync(`podman logs --tail=5 ${name}`, { stdio: 'inherit' });
@@ -47,47 +41,50 @@ async function waitForContainer(name: string): Promise<void> {
   throw new Error('PostgreSQL test container failed to become ready');
 }
 
-export default async function setup(): Promise<() => Promise<void>> {
-  // Find a free port to avoid collisions with other test runs or local services
-  const port = await findFreePort();
-  const testDbUrl = `postgresql://markdawn:password@localhost:${port}/markdawn_test`;
-
-  // Defensive cleanup: remove any leftover container from a previous interrupted run
+function removeContainer(name: string): void {
   try {
-    execSync(`podman rm -f ${CONTAINER_NAME} 2>/dev/null`, { stdio: 'pipe' });
+    execSync(`podman rm -f ${name}`, { stdio: 'pipe', timeout: 15_000 });
   } catch {
     void 0;
   }
+}
 
-  // Start the container with --replace for idempotent startup
-  execSync(
-    `podman run -d --name ${CONTAINER_NAME} -e POSTGRES_USER=markdawn -e POSTGRES_PASSWORD=password -e POSTGRES_DB=markdawn_test -p ${port}:5432 postgres:17-alpine -c fsync=off -c full_page_writes=off -c synchronous_commit=off`,
-    { stdio: 'inherit' },
-  );
+export default async function setup(): Promise<() => Promise<void>> {
+  const containerName = `${CONTAINER_NAME_PREFIX}-${process.pid}-${randomUUID().slice(0, 8)}`;
 
-  await waitForContainer(CONTAINER_NAME);
+  // Let Podman reserve the host port atomically so concurrent test processes
+  // cannot both discover and then race to bind the same "free" port.
+  try {
+    execSync(
+      `podman run -d --name ${containerName} -e POSTGRES_USER=markdawn -e POSTGRES_PASSWORD=password -e POSTGRES_DB=markdawn_test -p 127.0.0.1::5432 postgres:17-alpine -c fsync=off -c full_page_writes=off -c synchronous_commit=off`,
+      { stdio: 'inherit' },
+    );
+    const port = getMappedPort(containerName);
+    const testDbUrl = `postgresql://markdawn:password@127.0.0.1:${port}/markdawn_test`;
 
-  // Seed env vars for test worker processes
-  process.env.BETTER_AUTH_SECRET ??= 'test-secret-that-is-at-least-32-characters-long';
-  process.env.BETTER_AUTH_URL ??= 'http://localhost:3001';
-  process.env.FRONTEND_URL ??= 'http://localhost:3001';
-  process.env.GITHUB_CLIENT_ID ??= 'test';
-  process.env.GITHUB_CLIENT_SECRET ??= 'test';
-  process.env.GOOGLE_CLIENT_ID ??= 'test';
-  process.env.GOOGLE_CLIENT_SECRET ??= 'test';
-  process.env.DATABASE_URL = testDbUrl;
+    await waitForDatabase(containerName, testDbUrl);
 
-  execSync('pnpm exec drizzle-kit push --force', {
-    cwd: process.cwd(),
-    env: { ...process.env, DATABASE_URL: testDbUrl },
-    stdio: 'inherit',
-  });
+    // Seed env vars for test worker processes
+    process.env.BETTER_AUTH_SECRET ??= 'test-secret-that-is-at-least-32-characters-long';
+    process.env.BETTER_AUTH_URL ??= 'http://localhost:3001';
+    process.env.FRONTEND_URL ??= 'http://localhost:3001';
+    process.env.GITHUB_CLIENT_ID ??= 'test';
+    process.env.GITHUB_CLIENT_SECRET ??= 'test';
+    process.env.GOOGLE_CLIENT_ID ??= 'test';
+    process.env.GOOGLE_CLIENT_SECRET ??= 'test';
+    process.env.DATABASE_URL = testDbUrl;
+
+    // Apply the full migration chain through drizzle-kit.
+    execSync('pnpm --filter @markdawn/api exec drizzle-kit migrate', {
+      env: { ...process.env, DATABASE_URL: testDbUrl },
+      stdio: 'inherit',
+    });
+  } catch (error) {
+    removeContainer(containerName);
+    throw error;
+  }
 
   return async () => {
-    try {
-      execSync(`podman rm -f ${CONTAINER_NAME}`, { stdio: 'pipe', timeout: 15_000 });
-    } catch {
-      void 0;
-    }
+    removeContainer(containerName);
   };
 }

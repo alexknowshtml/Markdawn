@@ -9,7 +9,7 @@ import { collab, collabServiceCtx } from '@milkdown/plugin-collab';
 import { listener, listenerCtx } from '@milkdown/plugin-listener';
 import { commonmark, syncHeadingIdPlugin } from '@milkdown/preset-commonmark';
 import { gfm } from '@milkdown/preset-gfm';
-import { getMarkdown, insert, replaceAll } from '@milkdown/utils';
+import { insert } from '@milkdown/utils';
 import Papa from 'papaparse';
 import { goToNextCell, isInTable } from 'prosemirror-tables';
 import { useEffect, useRef, useState } from 'react';
@@ -27,10 +27,12 @@ import {
   remarkMathPlugin,
   toggleLatexCommand,
 } from '../editor/plugins/math';
+import { createSafeLinkView } from '../editor/plugins/safeLinkView';
 import { tag } from '../editor/plugins/tag';
 import { wikiLinkView } from '../editor/plugins/wikiLinkView';
 import { wikiLink } from '../editor/plugins/wikilink';
 import { repairDocument } from '../editor/utils/documentRepair';
+import type { WikiLinkNavigationTarget } from '../editor/wikiLinkPresentations';
 import { ensureAbsoluteUrl } from '../utils/url';
 import 'katex/dist/katex.min.css';
 import type { HocuspocusProvider } from '@hocuspocus/provider';
@@ -39,7 +41,7 @@ import type * as Y from 'yjs';
 import { getLogger } from '../logger-init';
 import { getInitial } from '../utils/avatar';
 
-const cursorBuilder = (user: { name: string; color: string; avatar?: string }) => {
+const cursorBuilder = (user: { name: string; color: string; avatar?: string; emoji?: string }) => {
   const cursor = document.createElement('span');
   cursor.classList.add('ProseMirror-yjs-cursor');
   cursor.style.borderColor = user.color;
@@ -60,6 +62,18 @@ const cursorBuilder = (user: { name: string; color: string; avatar?: string }) =
     img.alt = user.name;
     img.referrerPolicy = 'no-referrer';
     pill.appendChild(img);
+  } else if (user.emoji) {
+    const wrapper = document.createElement('span');
+    wrapper.style.width = '20px';
+    wrapper.style.height = '20px';
+    wrapper.style.borderRadius = '50%';
+    wrapper.style.backgroundColor = 'rgba(0, 0, 0, 0.2)';
+    wrapper.style.display = 'inline-flex';
+    wrapper.style.alignItems = 'center';
+    wrapper.style.justifyContent = 'center';
+    wrapper.style.fontSize = '14px';
+    wrapper.innerText = user.emoji;
+    pill.appendChild(wrapper);
   } else {
     const initials = document.createElement('div');
     initials.classList.add('ProseMirror-yjs-cursor-initials');
@@ -156,7 +170,7 @@ interface UseMilkdownProps {
   onChange?: (markdown: string) => void;
   doc?: Y.Doc;
   provider?: HocuspocusProvider;
-  onWikiLinkClick?: ((path: string) => void) | undefined;
+  onWikiLinkClick?: ((target: WikiLinkNavigationTarget) => void) | undefined;
   onWikiLinkSuggest?: (
     isOpen: boolean,
     query: string,
@@ -168,6 +182,7 @@ interface UseMilkdownProps {
     position: { x: number; y: number; top?: number; bottom?: number } | null,
     range: { from: number; to: number } | null,
   ) => void;
+  readOnly?: boolean;
 }
 
 function isTaskChecked(checked: unknown): boolean {
@@ -192,27 +207,6 @@ function findListItemAncestor(
   return null;
 }
 
-function scrollToHeading(headingText: string): void {
-  const normalized = headingText.toLowerCase().trim();
-  const headingId = normalized.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-  let element = document.getElementById(headingId);
-  if (!element) {
-    const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6');
-    for (const h of headings) {
-      if (!(h instanceof HTMLElement)) continue;
-      const text = h.textContent?.trim().toLowerCase() ?? '';
-      if (text === normalized || text.includes(normalized)) {
-        if (!h.id) h.id = headingId;
-        element = h;
-        break;
-      }
-    }
-  }
-  if (element) {
-    element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-}
-
 export function useMilkdown({
   initialValue,
   onChange,
@@ -221,6 +215,7 @@ export function useMilkdown({
   onWikiLinkClick,
   onWikiLinkSuggest,
   onSlashMenuSuggest,
+  readOnly = false,
 }: UseMilkdownProps) {
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const editorRef = useRef<Editor | null>(null);
@@ -411,11 +406,17 @@ export function useMilkdown({
 
           ctx.update(editorViewOptionsCtx, (prev) => ({
             ...prev,
+            editable: () => !readOnly,
             attributes: {
               class: 'milkdown-editor-view',
               spellcheck: 'false',
             },
+            markViews: {
+              ...prev.markViews,
+              link: createSafeLinkView,
+            },
             handlePaste: (_view, event) => {
+              if (readOnly) return false;
               const text = event.clipboardData?.getData('text/plain') ?? '';
               if (!text) return false;
 
@@ -434,6 +435,7 @@ export function useMilkdown({
             },
             handleDOMEvents: {
               keydown: (view, event) => {
+                if (readOnly) return false;
                 const { state, dispatch } = view;
                 if (!isInTable(state)) return false;
 
@@ -451,6 +453,7 @@ export function useMilkdown({
 
                 const taskItem = target.closest('li[data-item-type="task"]');
                 if (taskItem instanceof HTMLElement) {
+                  if (readOnly) return false;
                   const rect = taskItem.getBoundingClientRect();
                   const clickX = event.clientX - rect.left;
                   const clickY = event.clientY - rect.top;
@@ -481,28 +484,16 @@ export function useMilkdown({
 
                   linkEditor.close();
 
-                  // Resolve by UUID first (stable across renames), fall back to
-                  // title-based path matching for legacy links without targetId.
-                  const targetId = anchor.getAttribute('data-target-id') || '';
-                  if (targetId && onWikiLinkClickRef.current) {
-                    // handleWikiLinkClick checks p.id === targetId, which is a
-                    // UUID match — resilient to title changes.
-                    onWikiLinkClickRef.current(targetId);
-                  } else {
-                    const path = anchor.getAttribute('data-path') || '';
-                    const heading = anchor.getAttribute('data-heading') || '';
-                    // Strip #heading suffix from path if present, since
-                    // handleWikiLinkClick resolves by title match and a
-                    // "#Heading" suffix would never match a page title.
-                    const pagePath =
-                      heading && path.endsWith(`#${heading}`)
-                        ? path.slice(0, -(heading.length + 1))
-                        : path;
-                    if (pagePath && onWikiLinkClickRef.current) {
-                      onWikiLinkClickRef.current(pagePath);
-                    } else if (heading) {
-                      scrollToHeading(heading);
-                    }
+                  if (anchor.dataset.state !== 'accessible') return true;
+                  const targetId = anchor.dataset.targetId;
+                  const targetTitle = anchor.dataset.targetTitle;
+                  if (targetId && targetTitle && onWikiLinkClickRef.current) {
+                    const heading = anchor.dataset.heading;
+                    onWikiLinkClickRef.current({
+                      id: targetId,
+                      title: targetTitle,
+                      ...(heading && { heading }),
+                    });
                   }
                   return true;
                 }
@@ -517,6 +508,22 @@ export function useMilkdown({
                 if (!(anchor instanceof HTMLAnchorElement)) return false;
 
                 if (anchor.classList.contains('wiki-link')) {
+                  event.preventDefault();
+                  // Mouse activation is handled on mousedown so the editor
+                  // selection cannot swallow it. Keyboard activation emits a
+                  // click with detail=0 and must follow the same safe target.
+                  if (event.detail === 0 && anchor.dataset.state === 'accessible') {
+                    const targetId = anchor.dataset.targetId;
+                    const targetTitle = anchor.dataset.targetTitle;
+                    if (targetId && targetTitle && onWikiLinkClickRef.current) {
+                      const heading = anchor.dataset.heading;
+                      onWikiLinkClickRef.current({
+                        id: targetId,
+                        title: targetTitle,
+                        ...(heading && { heading }),
+                      });
+                    }
+                  }
                   return true;
                 }
 
@@ -535,7 +542,12 @@ export function useMilkdown({
 
                 event.preventDefault();
                 linkEditor.close();
-                window.open(ensureAbsoluteUrl(href), '_blank', 'noopener,noreferrer');
+                const safeUrl = ensureAbsoluteUrl(href);
+                if (!safeUrl) {
+                  getLogger().warn('Blocked unsafe editor link', { href });
+                  return true;
+                }
+                window.open(safeUrl, '_blank', 'noopener,noreferrer');
                 return true;
               },
               mouseover: (view, event) => {
@@ -572,18 +584,23 @@ export function useMilkdown({
                 const hasLink = view.state.doc.rangeHasMark(markFrom, markTo, linkMarkType);
                 if (!hasLink) return false;
 
+                if (!view.editable) return true;
+
                 linkEditor.open(view, anchor, {
                   initialUrl: href,
                   initialText: anchor.textContent || href,
                   onConfirm: ({ url, text }) => {
+                    const safeUrl = ensureAbsoluteUrl(url);
+                    if (!safeUrl) {
+                      getLogger().warn('Refused to persist unsafe editor link', { url });
+                      return;
+                    }
                     const tr = view.state.tr;
                     tr.removeMark(markFrom, markTo, linkMarkType);
                     tr.replaceWith(
                       markFrom,
                       markTo,
-                      view.state.schema.text(text, [
-                        linkMarkType.create({ href: ensureAbsoluteUrl(url) }),
-                      ]),
+                      view.state.schema.text(text, [linkMarkType.create({ href: safeUrl })]),
                     );
                     view.dispatch(tr);
                   },
@@ -630,23 +647,6 @@ export function useMilkdown({
       return next;
     };
 
-    const bindWindowApi = () => {
-      window.getEditorMarkdown = () => {
-        if (!editorRef.current) return '';
-        return editorRef.current.action(getMarkdown());
-      };
-
-      window.insertMarkdown = (content: string) => {
-        if (!editorRef.current) return;
-        editorRef.current.action(insert(content));
-      };
-
-      window.replaceAllMarkdown = (content: string) => {
-        if (!editorRef.current) return;
-        editorRef.current.action(replaceAll(content));
-      };
-    };
-
     const init = async () => {
       const shouldUseCollab = hasCollab;
       getLogger()
@@ -689,13 +689,12 @@ export function useMilkdown({
 
       editorRef.current = runtimeEditor;
       setEditorInstance(runtimeEditor);
-      bindWindowApi();
 
       runtimeEditor.action((ctx) => {
         const view = ctx.get(editorViewCtx) as
           | import('@milkdown/kit/prose/view').EditorView
           | undefined;
-        if (view) {
+        if (view && !readOnly) {
           setTimeout(() => {
             if (disposed) return;
             repairDocument(view);
@@ -727,7 +726,7 @@ export function useMilkdown({
         floatingCopyBtn = null;
       }
     };
-  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider]);
+  }, [container, fallbackInitialValue, hasCollab, onChange, doc, provider, readOnly]);
 
   return { setContainer, editor: editorInstance };
 }

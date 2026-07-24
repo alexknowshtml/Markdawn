@@ -1,96 +1,194 @@
-import { Hono } from 'hono';
+import {
+  type AccountFolderPayload,
+  deriveCapabilities,
+  type PublicFolderPayload,
+} from '@markdawn/shared';
+import { sql } from 'drizzle-orm';
+import { type Context, Hono } from 'hono';
+import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
-import type { folders } from '../db';
-import { pool } from '../db/connection';
+import { auth } from '../auth';
+import { db } from '../db/connection';
+import { executeQuery, type QueryExecutor, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
-
-type FolderRow = typeof folders.$inferSelect;
-type RawFolderRow = FolderRow & {
-  workspace_id?: string | null;
-  parent_id?: string | null;
-  created_by?: string | null;
-  created_at?: Date | null;
-  updated_at?: Date | null;
-  is_deleted?: boolean | null;
-  deleted_at?: Date | null;
-};
+import { getDestinationOwnerId } from '../utils/destinationOwner';
+import { moveFolderToTrash, removeFolderFromView } from '../utils/entityRemoval';
+import { copyFolderRecursive } from '../utils/folderCopy';
+import { getEnumerableFolderIds, redactParentId } from '../utils/folderEnumeration';
+import { normalizeFolderName } from '../utils/folderName';
+import {
+  type FolderDatabaseRow,
+  type FolderDatabaseRowWithOwner,
+  type NormalizedFolderRow,
+  normalizeFolderRow,
+} from '../utils/folderRows';
+import {
+  ensureActorCanCreateInFolder,
+  ensureActorFolderAccess,
+  getRequestActor,
+  persistGuestIdentity,
+} from '../utils/guestAccess';
+import { getNextPosition, normalizePosition } from '../utils/position';
+import {
+  getPublicPermission,
+  type PublicPermission,
+  recordPublicVisitAndNotify,
+  resolveEntityAccess,
+} from '../utils/publicAccess';
+import {
+  ensureFolderAccess,
+  ensureWorkspaceAdmin,
+  lockEntityAccess,
+  lockEntityAccessMutation,
+  lockEntityAccessMutations,
+  lockWorkspaceAccessMutation,
+  type SharePermission,
+} from '../utils/share-access';
+import { notifyShareRecompute } from '../utils/share-notify';
+import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
+import { purgeFolderSubtrees } from '../utils/trashLifecycle';
+import { processUploadDeletionQueue } from '../utils/uploadCleanup';
 
 const foldersRoute = new Hono();
+const foldersPublicRoute = new Hono();
+const bodyLimitError = (c: Context) => c.json({ message: 'Request body is too large' }, 413);
+
+const deletedFolderOwnerSql = sql`coalesce(
+  (
+    select root.created_by
+    from folder_closure fc
+    join folders root on root.id = fc.ancestor_id
+    where fc.descendant_id = f.id
+      and root.parent_id is null
+    order by fc.depth desc
+    limit 1
+  ),
+  f.created_by
+)`;
 
 foldersRoute.use('*', requireAuth);
+foldersRoute.use('*', bodyLimit({ maxSize: 16 * 1024, onError: bodyLimitError }));
+const publicFolderBodyLimit = bodyLimit({ maxSize: 4 * 1024, onError: bodyLimitError });
 
-const normalizeFolderRow = (row: RawFolderRow): FolderRow => ({
-  ...row,
-  workspaceId: row.workspaceId ?? row.workspace_id ?? null,
-  parentId: row.parentId ?? row.parent_id ?? null,
-  createdBy: row.createdBy ?? row.created_by ?? null,
-  createdAt: row.createdAt ?? row.created_at ?? null,
-  updatedAt: row.updatedAt ?? row.updated_at ?? null,
-  isDeleted: row.isDeleted ?? row.is_deleted ?? false,
-  deletedAt: row.deletedAt ?? row.deleted_at ?? null,
+const toFolderDto = (folder: NormalizedFolderRow, parentId: string | null) => ({
+  id: folder.id,
+  parentId,
+  name: folder.name,
+  icon: folder.icon,
+  position: folder.position,
+  createdBy: folder.createdBy,
+  ownerId: folder.ownerId ?? null,
+  createdAt: folder.createdAt,
+  updatedAt: folder.updatedAt,
+  publicPermission: folder.publicPermission,
+  inheritancePolicy: folder.inheritancePolicy,
 });
 
-const ensureWorkspaceMember = async (workspaceId: string, userId: string) => {
-  const result = await pool.query(
-    'select id from workspace_members where workspace_id = $1 and user_id = $2 limit 1',
-    [workspaceId, userId],
-  );
-
-  if (result.rowCount === 0) {
-    throw new HTTPException(403, { message: 'Forbidden' });
-  }
-};
-
-function ensureFolderWorkspace(
-  folder: FolderRow,
-): asserts folder is FolderRow & { workspaceId: string } {
-  if (!folder.workspaceId) {
-    throw new HTTPException(400, { message: 'Folder has no workspace' });
-  }
+/** Raw SQL result timestamps may be strings while Drizzle rows are Dates. */
+export function serializeTimestamp(value: Date | string): string;
+export function serializeTimestamp(value: null | undefined): null;
+export function serializeTimestamp(value: Date | string | null | undefined): string | null;
+export function serializeTimestamp(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  return typeof value === 'string' ? value : value.toISOString();
 }
 
-const getFolderById = async (folderId: string) => {
-  const result = await pool.query('select * from folders where id = $1 limit 1', [folderId]);
-  const row = (result.rows[0] as RawFolderRow | undefined) ?? null;
-  return row ? normalizeFolderRow(row) : null;
+const toPublicFolderDto = (
+  folder: NormalizedFolderRow,
+  publicPermission: PublicPermission,
+  userPermission: PublicPermission,
+  pages: PublicFolderPayload['pages'],
+  childFolders: PublicFolderPayload['folders'],
+): PublicFolderPayload => ({
+  accessScope: 'public',
+  id: folder.id,
+  name: folder.name,
+  icon: folder.icon,
+  updatedAt: serializeTimestamp(folder.updatedAt),
+  publicPermission,
+  userPermission,
+  capabilities: deriveCapabilities(userPermission),
+  pages,
+  folders: childFolders,
+});
+
+const getFolderById = async (folderId: string, executor?: QueryExecutor) => {
+  const statement = sql`select f.*, get_root_folder_owner(f.id) as owner_id from folders f where f.id = ${folderId} and f.is_deleted = false limit 1`;
+  const result = executor
+    ? await executeQuery<FolderDatabaseRowWithOwner>(executor, statement)
+    : await query<FolderDatabaseRowWithOwner>(statement);
+  const row = result.rows[0] ?? null;
+  return row ? normalizeFolderRow(row, row.owner_id) : null;
+};
+
+const getDeletedFolderById = async (folderId: string, executor?: QueryExecutor) => {
+  const statement = sql`select f.*, ${deletedFolderOwnerSql} as owner_id
+    from folders f where f.id = ${folderId} and f.is_deleted = true limit 1`;
+  const result = executor
+    ? await executeQuery<FolderDatabaseRowWithOwner>(executor, statement)
+    : await query<FolderDatabaseRowWithOwner>(statement);
+  const row = result.rows[0] ?? null;
+  return row ? normalizeFolderRow(row, row.owner_id) : null;
+};
+
+const ensureFolderOrganizationAccess = async (
+  folder: NormalizedFolderRow,
+  targetParentId: string | null,
+  userId: string,
+  executor?: QueryExecutor,
+) => {
+  if (!folder.ownerId) {
+    throw new HTTPException(409, { message: 'Folder owner could not be determined' });
+  }
+  if (targetParentId === folder.id) {
+    throw new HTTPException(400, { message: 'Cannot set parent to self' });
+  }
+
+  await ensureFolderAccess(folder.id, userId, 'admin', executor);
+  if (folder.parentId) {
+    await ensureFolderAccess(folder.parentId, userId, 'admin', executor);
+  } else {
+    await ensureWorkspaceAdmin(folder.ownerId, userId, executor);
+  }
+
+  let destinationOwnerId: string | null = folder.createdBy;
+  if (targetParentId) {
+    const destination = await getFolderById(targetParentId, executor);
+    if (!destination?.ownerId) {
+      throw new HTTPException(404, { message: 'Parent folder not found' });
+    }
+    destinationOwnerId = destination.ownerId;
+    await ensureFolderAccess(destination.id, userId, 'admin', executor);
+  } else if (destinationOwnerId) {
+    await ensureWorkspaceAdmin(destinationOwnerId, userId, executor);
+  }
+
+  if (destinationOwnerId !== folder.ownerId) {
+    throw new HTTPException(409, { message: 'Folders cannot be moved between different owners' });
+  }
 };
 
 const ensureNoFolderCycle = async (
-  workspaceId: string,
   folderId: string,
   targetParentId: string | null,
+  _userId: string,
+  executor?: QueryExecutor,
 ) => {
   if (!targetParentId) {
     return;
   }
 
-  const result = await pool.query(
-    'select id, parent_id from folders where workspace_id = $1 and is_deleted = false',
-    [workspaceId],
-  );
-
-  const parentById = new Map<string, string | null>();
-  for (const row of result.rows as { id: string; parent_id: string | null }[]) {
-    parentById.set(row.id, row.parent_id ?? null);
-  }
-
-  let current: string | null = targetParentId;
-  const visited = new Set<string>();
-
-  while (current) {
-    if (current === folderId) {
-      throw new HTTPException(400, { message: 'Cannot move folder into its own subtree' });
-    }
-    if (visited.has(current)) {
-      throw new HTTPException(400, { message: 'Invalid folder hierarchy detected' });
-    }
-    visited.add(current);
-    current = parentById.get(current) ?? null;
+  // Check if targetParentId is already a descendant of folderId (would create a cycle)
+  const statement = sql`SELECT 1 FROM folder_closure
+     WHERE ancestor_id = ${folderId} AND descendant_id = ${targetParentId} AND depth > 0`;
+  const result = executor ? await executeQuery(executor, statement) : await query(statement);
+  if (result.rowCount && result.rowCount > 0) {
+    throw new HTTPException(400, { message: 'Cannot move folder into its own subtree' });
   }
 };
 
-const buildFolderTree = (rows: FolderRow[]) => {
-  type FolderNode = FolderRow & { children: FolderNode[] };
+const buildFolderTree = <T extends { id: string; parentId: string | null }>(rows: T[]) => {
+  type FolderNode = T & { children: FolderNode[] };
   const nodes: FolderNode[] = rows.map((folder) => ({
     ...folder,
     children: [],
@@ -113,90 +211,350 @@ const buildFolderTree = (rows: FolderRow[]) => {
 };
 
 foldersRoute.get('/tree', async (c) => {
-  const workspaceId = c.req.query('workspaceId');
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
-  }
-
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
 
-  const result = await pool.query(
-    'select * from folders where workspace_id = $1 and is_deleted = false order by parent_id nulls first, case when parent_id is null then updated_at end desc nulls last, position asc',
-    [workspaceId],
+  type FolderTreeDatabaseRow = FolderDatabaseRowWithOwner & {
+    enumerable_parent_id: string | null;
+    user_permission: string | null;
+    workspace_access: boolean;
+  };
+  const result = await query<FolderTreeDatabaseRow>(
+    sql`
+      select f.*, get_root_folder_owner(f.id) as owner_id,
+             case
+               when f.parent_id in (select folder_id from get_enumerable_folder_ids(${user.id}))
+                 then f.parent_id
+               else null
+             end as enumerable_parent_id,
+             access.permission as user_permission,
+             exists (
+               select 1 from workspace_members wm
+               where wm.workspace_owner_id = get_root_folder_owner(f.id)
+                 and wm.member_id = ${user.id}
+                 and not is_folder_path_restricted(f.id)
+             ) as workspace_access
+      from folders f
+      join lateral get_effective_folder_permission(f.id, ${user.id}) access on true
+      where f.is_deleted = false
+        and f.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
+        and access.permission is not null
+      order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position::numeric asc
+    `,
   );
 
-  return c.json(buildFolderTree((result.rows as RawFolderRow[]).map(normalizeFolderRow)));
+  return c.json(
+    buildFolderTree(
+      result.rows.map((row) => {
+        const folder = normalizeFolderRow(row, row.owner_id);
+        return {
+          ...toFolderDto(folder, row.enumerable_parent_id ?? null),
+          userPermission: row.user_permission ?? null,
+          workspaceAccess: row.workspace_access === true,
+        };
+      }),
+    ),
+  );
 });
 
-foldersRoute.post('/', async (c) => {
-  const body = await c.req.json().catch(() => null);
+foldersPublicRoute.post('/', publicFolderBodyLimit, async (c) => {
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
 
-  const { workspaceId, parentId, name, icon } = body as {
-    workspaceId?: string;
+  const { parentId, name, icon } = body as {
     parentId?: string | null;
     name?: string;
     icon?: string | null;
   };
 
-  if (!workspaceId) {
-    throw new HTTPException(400, { message: 'workspaceId is required' });
+  const actor = await getRequestActor(c);
+  if (!parentId && actor.kind === 'guest') {
+    throw new HTTPException(401, { message: 'Log in to create a root folder' });
   }
 
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(workspaceId, user.id);
-
-  if (parentId) {
-    const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== workspaceId) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+  const insertResult = await db.transaction(async (tx) => {
+    if (parentId) {
+      await lockEntityAccessMutation(tx, 'folder', parentId);
+      await ensureActorCanCreateInFolder(actor, parentId, tx);
+    } else {
+      await lockWorkspaceAccessMutation(tx, actor.id);
     }
-    if (parent.isDeleted) {
-      throw new HTTPException(400, { message: 'Cannot create inside a deleted folder' });
-    }
-  }
+    await persistGuestIdentity(actor, tx);
 
-  const positionResult = await pool.query(
-    parentId
-      ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
-    parentId ? [workspaceId, parentId] : [workspaceId],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
-
-  const insertResult = await pool.query(
-    'insert into folders (workspace_id, parent_id, name, icon, position, created_by) values ($1, $2, $3, $4, $5, $6) returning *',
-    [
-      workspaceId,
+    const ownerId = await getDestinationOwnerId(
+      tx,
       parentId ?? null,
-      typeof name === 'string' && name.trim().length > 0 ? name.trim() : 'New Folder',
-      typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null,
-      nextPosition,
-      user.id,
-    ],
-  );
+      actor.kind === 'user' ? actor.id : null,
+    );
+    if (!ownerId) throw new HTTPException(404, { message: 'Parent folder not found' });
 
-  if (insertResult.rowCount === 0) {
+    const nextPosition = await getNextPosition('folders', parentId ?? null, actor.id, tx);
+    const result = await executeQuery<FolderDatabaseRow>(
+      tx,
+      sql`insert into folders (parent_id, name, icon, position, created_by) values (${parentId ?? null}, ${normalizeFolderName(typeof name === 'string' ? name : undefined)}, ${typeof icon === 'string' && icon.trim().length > 0 ? icon.trim() : null}, ${nextPosition}, ${actor.kind === 'user' ? actor.id : null}) returning *`,
+    );
+    const createdFolderId = result.rows[0]?.id;
+    if (createdFolderId) {
+      const metaUserIds = await getEntityMetaUserIds(tx, 'folder', createdFolderId);
+      await notifyShareRecompute(
+        {
+          entityType: 'folder',
+          entityId: createdFolderId,
+          metaUserIds,
+          metaOnly: true,
+        },
+        tx,
+      );
+    }
+    return { result, ownerId };
+  });
+
+  if (insertResult.result.rowCount === 0) {
     throw new HTTPException(500, { message: 'Failed to create folder' });
   }
 
-  const created = normalizeFolderRow(insertResult.rows[0] as RawFolderRow);
+  const createdRow = insertResult.result.rows[0];
+  if (!createdRow) throw new HTTPException(500, { message: 'Failed to create folder' });
+  const created = normalizeFolderRow(createdRow, insertResult.ownerId);
   return c.json(created, 201);
+});
+
+foldersRoute.get('/trash', async (c) => {
+  const user = c.get('user') as { id: string };
+  const result = await query<FolderDatabaseRowWithOwner>(
+    sql`select f.*, ${deletedFolderOwnerSql} as owner_id
+     from folders f
+     left join folders parent on parent.id = f.parent_id
+     where f.is_deleted = true
+       and ${deletedFolderOwnerSql} = ${user.id}
+       and coalesce(parent.is_deleted, false) = false
+     order by f.deleted_at desc nulls last, f.position::numeric asc`,
+  );
+
+  return c.json(result.rows.map((row) => normalizeFolderRow(row, row.owner_id)));
+});
+
+foldersRoute.delete('/trash/empty-all', async (c) => {
+  const user = c.get('user') as { id: string };
+  const purged = await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const roots = await executeQuery<{ id: string }>(
+      tx,
+      sql`select f.id
+       from folders f
+       left join folders parent on parent.id = f.parent_id
+       where f.is_deleted = true
+         and ${deletedFolderOwnerSql} = ${user.id}
+         and coalesce(parent.is_deleted, false) = false
+       order by f.id
+       for update of f`,
+    );
+    return purgeFolderSubtrees(
+      tx,
+      roots.rows.map((row) => row.id),
+    );
+  });
+  await processUploadDeletionQueue();
+
+  return c.json({ deleted: true, folders: purged.folders, pages: purged.pages });
+});
+
+foldersRoute.patch(':id/restore', async (c) => {
+  const folderId = c.req.param('id');
+  const folder = await getDeletedFolderById(folderId);
+  if (!folder) {
+    throw new HTTPException(404, { message: 'Folder not found' });
+  }
+
+  const user = c.get('user') as { id: string };
+  if (folder.ownerId !== user.id) {
+    throw new HTTPException(403, { message: 'You can only restore folders that you own' });
+  }
+
+  const restored = await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const rootResult = await executeQuery<{
+      parent_id: string | null;
+      created_by: string | null;
+      deleted_at: Date | null;
+      deletion_batch_id: string | null;
+      owner_id: string | null;
+    }>(
+      tx,
+      sql`select f.parent_id, f.created_by, f.deleted_at, f.deletion_batch_id,
+              ${deletedFolderOwnerSql} as owner_id
+       from folders f
+       where f.id = ${folderId} and f.is_deleted = true
+       for update`,
+    );
+    const root = rootResult.rows[0];
+    if (!root) throw new HTTPException(404, { message: 'Folder not found' });
+    if (root.owner_id !== user.id) {
+      throw new HTTPException(403, { message: 'You can only restore folders that you own' });
+    }
+    if (!root.deleted_at) {
+      throw new HTTPException(409, { message: 'Folder deletion state is invalid' });
+    }
+    const affectedBefore = await getEntityMetaUserIds(tx, 'folder', folderId);
+
+    const foldersResult = await executeQuery<{ id: string; depth: number }>(
+      tx,
+      sql`select f.id, fc.depth
+       from folder_closure fc
+       join folders f on f.id = fc.descendant_id
+       where fc.ancestor_id = ${folderId}
+         and f.is_deleted = true
+         and (
+           (${root.deletion_batch_id}::uuid is not null and f.deletion_batch_id = ${root.deletion_batch_id})
+           or (${root.deletion_batch_id}::uuid is null and f.deletion_batch_id is null and f.deleted_at = ${root.deleted_at})
+         )
+       order by fc.depth, f.id
+       for update of f`,
+    );
+    const batchFolders = foldersResult.rows;
+    const folderIds = batchFolders.map((row) => row.id);
+    if (!folderIds.includes(folderId)) {
+      throw new HTTPException(409, { message: 'Folder deletion state is invalid' });
+    }
+
+    const pagesResult = await executeQuery<{ id: string }>(
+      tx,
+      sql`select p.id
+       from pages p
+       where p.parent_id = any(${sql.param(folderIds)}::uuid[])
+         and p.is_deleted = true
+         and (
+           (${root.deletion_batch_id}::uuid is not null and p.deletion_batch_id = ${root.deletion_batch_id})
+           or (${root.deletion_batch_id}::uuid is null and p.deletion_batch_id is null and p.deleted_at = ${root.deleted_at})
+         )
+       order by p.id
+       for update of p`,
+    );
+    const pageIds = pagesResult.rows.map((row) => row.id);
+
+    let restoreParentId: string | null = null;
+    if (root.parent_id) {
+      const parentResult = await executeQuery<{ id: string }>(
+        tx,
+        sql`select id from folders where id = ${root.parent_id} and is_deleted = false for share`,
+      );
+      if ((parentResult.rowCount ?? 0) > 0) restoreParentId = root.parent_id;
+    }
+    const nextPosition = await getNextPosition('folders', restoreParentId, user.id, tx);
+    await executeQuery(
+      tx,
+      sql`update folders
+       set is_deleted = false, deleted_at = null, deletion_batch_id = null, parent_id = ${restoreParentId},
+           created_by = ${restoreParentId ? root.created_by : user.id}, position = ${nextPosition}, updated_at = now()
+       where id = ${folderId} and is_deleted = true`,
+    );
+
+    for (const descendant of batchFolders) {
+      if (descendant.id === folderId) continue;
+      await executeQuery(
+        tx,
+        sql`update folders
+         set is_deleted = false, deleted_at = null, deletion_batch_id = null, updated_at = now()
+         where id = ${descendant.id} and is_deleted = true`,
+      );
+    }
+    if (pageIds.length > 0) {
+      await executeQuery(
+        tx,
+        sql`update pages
+         set is_deleted = false, deleted_at = null, deletion_batch_id = null, updated_at = now()
+         where id = any(${sql.param(pageIds)}::uuid[]) and is_deleted = true`,
+      );
+    }
+
+    const affectedAfter = await getEntityMetaUserIds(tx, 'folder', folderId);
+    const metaUserIds = mergeMetaUserIds(affectedBefore, affectedAfter);
+    await notifyShareRecompute({ entityType: 'folder', entityId: folderId, metaUserIds }, tx);
+    const updated = await executeQuery<FolderDatabaseRowWithOwner>(
+      tx,
+      sql`select f.*, get_root_folder_owner(f.id) as owner_id from folders f where f.id = ${folderId}`,
+    );
+    const updatedRow = updated.rows[0];
+    if (!updatedRow) throw new HTTPException(500, { message: 'Failed to restore folder' });
+    return {
+      folder: normalizeFolderRow(updatedRow, updatedRow.owner_id),
+      restoredFolders: folderIds.length,
+      restoredPages: pageIds.length,
+    };
+  });
+
+  return c.json({
+    ...restored.folder,
+    restoredFolders: restored.restoredFolders,
+    restoredPages: restored.restoredPages,
+  });
+});
+
+foldersRoute.delete(':id/permanent', async (c) => {
+  const folderId = c.req.param('id');
+  const user = c.get('user') as { id: string };
+  const folder = await getDeletedFolderById(folderId);
+  if (!folder) {
+    const activeFolder = await getFolderById(folderId);
+    if (activeFolder) {
+      if (activeFolder.ownerId !== user.id) {
+        throw new HTTPException(403, {
+          message: 'You can only permanently delete folders that you own',
+        });
+      }
+      throw new HTTPException(409, {
+        message: 'Folder must be moved to Trash before it can be permanently deleted',
+      });
+    }
+    throw new HTTPException(404, { message: 'Folder not found' });
+  }
+
+  if (folder.ownerId !== user.id) {
+    throw new HTTPException(403, {
+      message: 'You can only permanently delete folders that you own',
+    });
+  }
+
+  const purged = await db.transaction(async (tx) => {
+    await lockWorkspaceAccessMutation(tx, user.id);
+    const lockedFolder = await executeQuery<{ owner_id: string | null }>(
+      tx,
+      sql`select ${deletedFolderOwnerSql} as owner_id
+       from folders f
+       where f.id = ${folderId} and f.is_deleted = true
+       for update`,
+    );
+    const ownerId = lockedFolder.rows[0]?.owner_id;
+    if (!ownerId) throw new HTTPException(404, { message: 'Folder not found' });
+    if (ownerId !== user.id) {
+      throw new HTTPException(403, {
+        message: 'You can only permanently delete folders that you own',
+      });
+    }
+    return purgeFolderSubtrees(tx, [folderId]);
+  });
+  await processUploadDeletionQueue();
+
+  return c.json({ deleted: true, folders: purged.folders, pages: purged.pages });
 });
 
 foldersRoute.get(':id', async (c) => {
   const folderId = c.req.param('id');
-  const folder = await getFolderById(folderId);
-
-  if (!folder) {
-    throw new HTTPException(404, { message: 'Folder not found' });
-  }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  const folder = await db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'folder', folderId);
+    const currentFolder = await getFolderById(folderId, tx);
+    if (!currentFolder) {
+      throw new HTTPException(404, { message: 'Folder not found' });
+    }
+    await ensureFolderAccess(currentFolder.id, user.id, 'view', tx);
+    const enumerableFolderIds = await getEnumerableFolderIds(user.id, tx);
+    return toFolderDto(currentFolder, redactParentId(currentFolder.parentId, enumerableFolderIds));
+  });
 
   return c.json(folder);
 });
@@ -208,11 +566,12 @@ foldersRoute.patch(':id', async (c) => {
   if (!folder) {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
 
-  const body = await c.req.json().catch(() => null);
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   if (!body || typeof body !== 'object') {
     throw new HTTPException(400, { message: 'Invalid body' });
   }
@@ -225,234 +584,381 @@ foldersRoute.patch(':id', async (c) => {
   };
 
   const hasParentId = Object.hasOwn(body, 'parentId');
-  if (hasParentId && parentId) {
-    if (parentId === folder.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
+  const hasPosition = Object.hasOwn(body, 'position');
+
+  const updateResult = await db.transaction(async (tx) => {
+    const workspaceOwnerId = await lockEntityAccess(tx, 'folder', folderId);
+    const currentFolder = await getFolderById(folderId, tx);
+    if (!currentFolder) {
+      throw new HTTPException(404, { message: 'Folder not found' });
     }
-    const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== folder.workspaceId) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
+
+    const nextParent = hasParentId ? (parentId ?? null) : currentFolder.parentId;
+    if (hasParentId || hasPosition) {
+      await ensureFolderOrganizationAccess(currentFolder, nextParent, user.id, tx);
+    } else {
+      await ensureFolderAccess(currentFolder.id, user.id, 'admin', tx);
+    }
+    await ensureNoFolderCycle(currentFolder.id, nextParent, user.id, tx);
+
+    const nextName = typeof name === 'string' ? normalizeFolderName(name) : currentFolder.name;
+    const nextIcon =
+      typeof icon === 'string'
+        ? icon.trim().length > 0
+          ? icon.trim()
+          : null
+        : icon === null
+          ? null
+          : currentFolder.icon;
+    const nextPosition = normalizePosition(position, currentFolder.position);
+    const accessChanged = hasParentId && nextParent !== currentFolder.parentId;
+    if (accessChanged) {
+      await lockWorkspaceAccessMutation(tx, workspaceOwnerId);
+    }
+    const affectedBefore = accessChanged ? await getEntityMetaUserIds(tx, 'folder', folderId) : [];
+    const result = await executeQuery<FolderDatabaseRow>(
+      tx,
+      sql`update folders set name = ${nextName}, icon = ${nextIcon}, parent_id = ${nextParent}, position = ${nextPosition}, updated_at = now() where id = ${folderId} returning *`,
+    );
+
+    if (result.rowCount === 0) {
+      throw new HTTPException(500, { message: 'Failed to update folder' });
     }
 
-    if (parent.isDeleted) {
-      throw new HTTPException(400, { message: 'Cannot move into a deleted folder' });
+    if (accessChanged) {
+      const affectedAfter = await getEntityMetaUserIds(tx, 'folder', folderId);
+      await notifyShareRecompute(
+        {
+          entityType: 'folder',
+          entityId: folderId,
+          metaUserIds: mergeMetaUserIds(affectedBefore, affectedAfter),
+        },
+        tx,
+      );
     }
-  }
+    return {
+      result,
+      ownerId: currentFolder.ownerId,
+      enumerableFolderIds: await getEnumerableFolderIds(user.id, tx),
+    };
+  });
 
-  const nextParent = hasParentId ? (parentId ?? null) : folder.parentId;
-  await ensureNoFolderCycle(folder.workspaceId, folder.id, nextParent);
-
-  const nextName =
-    typeof name === 'string' ? (name.trim().length > 0 ? name.trim() : 'New Folder') : folder.name;
-  const nextIcon =
-    typeof icon === 'string'
-      ? icon.trim().length > 0
-        ? icon.trim()
-        : null
-      : icon === null
-        ? null
-        : folder.icon;
-  const nextPosition =
-    typeof position === 'string'
-      ? position.trim().length > 0
-        ? position.trim()
-        : folder.position
-      : typeof position === 'number' && Number.isFinite(position)
-        ? String(position)
-        : folder.position;
-
-  const updateResult = await pool.query(
-    'update folders set name = $1, icon = $2, parent_id = $3, position = $4, updated_at = now() where id = $5 returning *',
-    [nextName, nextIcon, nextParent, nextPosition, folderId],
+  const updatedRow = updateResult.result.rows[0];
+  if (!updatedRow) throw new HTTPException(500, { message: 'Failed to update folder' });
+  const updated = normalizeFolderRow(updatedRow, updateResult.ownerId);
+  return c.json(
+    toFolderDto(updated, redactParentId(updated.parentId, updateResult.enumerableFolderIds)),
   );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to update folder' });
-  }
-
-  const updated = normalizeFolderRow(updateResult.rows[0] as RawFolderRow);
-  return c.json(updated);
 });
 
-foldersRoute.post(':id/copy', async (c) => {
+foldersPublicRoute.post(':id/copy', publicFolderBodyLimit, async (c) => {
   const folderId = c.req.param('id');
-  const folder = await getFolderById(folderId);
-
-  if (!folder) {
-    throw new HTTPException(404, { message: 'Folder not found' });
-  }
-  ensureFolderWorkspace(folder);
-  const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
-
-  const body = await c.req.json().catch(() => null);
+  const actor = await getRequestActor(c);
+  const body = await c.req.json().catch((error: unknown) => {
+    if (error instanceof Error && error.name === 'BodyLimitError') throw error;
+    return null;
+  });
   const parentId =
     body && typeof body === 'object'
       ? ((body as { parentId?: string | null }).parentId ?? null)
       : null;
-
-  if (parentId) {
-    if (parentId === folder.id) {
-      throw new HTTPException(400, { message: 'Cannot set parent to self' });
-    }
-    const parent = await getFolderById(parentId);
-    if (!parent || parent.workspaceId !== folder.workspaceId) {
-      throw new HTTPException(404, { message: 'Parent folder not found' });
-    }
-    if (parent.isDeleted) {
-      throw new HTTPException(400, { message: 'Cannot move into a deleted folder' });
-    }
+  if (!parentId && actor.kind === 'guest') {
+    throw new HTTPException(401, { message: 'Log in to copy a folder to the workspace root' });
+  }
+  if (parentId === folderId) {
+    throw new HTTPException(400, { message: 'Cannot set parent to self' });
   }
 
-  await ensureNoFolderCycle(folder.workspaceId, folder.id, parentId);
-
-  await pool.query('BEGIN');
-
-  try {
-    const newFolder = await copyFolderRecursive(folderId, parentId, folder.workspaceId, user.id);
-    await pool.query('COMMIT');
-    return c.json(newFolder, 201);
-  } catch (err) {
-    await pool.query('ROLLBACK');
-    throw new HTTPException(500, {
-      message: err instanceof Error ? err.message : 'Failed to copy folder',
+  const copyResult = await db.transaction(async (tx) => {
+    await lockEntityAccessMutations(
+      tx,
+      [
+        { entityType: 'folder', entityId: folderId },
+        ...(parentId ? [{ entityType: 'folder' as const, entityId: parentId }] : []),
+      ],
+      parentId ? [] : [actor.id],
+    );
+    const currentFolder = await getFolderById(folderId, tx);
+    if (!currentFolder) throw new HTTPException(404, { message: 'Folder not found' });
+    await ensureActorFolderAccess(actor, folderId, 'view', tx);
+    if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
+    await ensureNoFolderCycle(folderId, parentId, actor.id, tx);
+    await persistGuestIdentity(actor, tx);
+    const destinationOwnerId = await getDestinationOwnerId(
+      tx,
+      parentId,
+      actor.kind === 'user' ? actor.id : null,
+    );
+    if (!destinationOwnerId) {
+      throw new HTTPException(404, { message: 'Destination workspace not found' });
+    }
+    const result = await copyFolderRecursive(
+      tx,
+      folderId,
+      parentId,
+      destinationOwnerId,
+      actor,
+      currentFolder.ownerId === destinationOwnerId ? 'all' : 'non-page',
+    );
+    const copiedRoot = result.folder;
+    if (copiedRoot) {
+      const metaUserIds = await getEntityMetaUserIds(tx, 'folder', copiedRoot.id);
+      await notifyShareRecompute(
+        {
+          entityType: 'folder',
+          entityId: copiedRoot.id,
+          metaUserIds,
+          metaOnly: true,
+        },
+        tx,
+      );
+    }
+    return result;
+  });
+  const newFolder = copyResult.folder;
+  if (!newFolder) {
+    throw new HTTPException(409, {
+      message: 'Source folder is no longer accessible',
+      cause: { code: 'SOURCE_FOLDER_UNAVAILABLE' },
     });
   }
+  return c.json({ ...newFolder, skippedRestrictedItems: copyResult.skippedRestrictedItems }, 201);
 });
-
-async function copyFolderRecursive(
-  sourceFolderId: string,
-  newParentId: string | null,
-  workspaceId: string,
-  userId: string,
-): Promise<FolderRow> {
-  const sourceResult = await pool.query('select * from folders where id = $1', [sourceFolderId]);
-  const source = normalizeFolderRow(sourceResult.rows[0] as RawFolderRow);
-
-  const positionResult = await pool.query(
-    newParentId
-      ? 'select max(position) as max_position from folders where workspace_id = $1 and parent_id = $2'
-      : 'select max(position) as max_position from folders where workspace_id = $1 and parent_id is null',
-    newParentId ? [workspaceId, newParentId] : [workspaceId],
-  );
-  const nextPosition = (Number(positionResult.rows[0]?.max_position ?? -1) || -1) + 1;
-
-  const insertResult = await pool.query(
-    `insert into folders (id, workspace_id, parent_id, name, icon, position, created_by)
-     values (gen_random_uuid(), $1, $2, $3, $4, $5, $6)
-     returning *`,
-    [workspaceId, newParentId ?? null, `Copy of ${source.name}`, source.icon, nextPosition, userId],
-  );
-  const newFolder = normalizeFolderRow(insertResult.rows[0] as RawFolderRow);
-
-  const pagesResult = await pool.query(
-    'select * from pages where parent_id = $1 and is_deleted = false',
-    [sourceFolderId],
-  );
-  for (const pageRow of pagesResult.rows) {
-    const pr = pageRow as {
-      title: string;
-      icon: string | null;
-      cover_type: string | null;
-      cover_value: string | null;
-      position: string;
-      ydoc: Buffer | null;
-    };
-    await pool.query(
-      `insert into pages (id, workspace_id, parent_id, title, icon, cover_type, cover_value, position, ydoc, created_by)
-       values (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [
-        workspaceId,
-        newFolder.id,
-        `Copy of ${pr.title}`,
-        pr.icon,
-        pr.cover_type,
-        pr.cover_value,
-        pr.position,
-        pr.ydoc,
-        userId,
-      ],
-    );
-  }
-
-  const subfoldersResult = await pool.query(
-    'select id from folders where parent_id = $1 and is_deleted = false',
-    [sourceFolderId],
-  );
-  for (const subfolderRow of subfoldersResult.rows) {
-    await copyFolderRecursive(
-      (subfolderRow as { id: string }).id,
-      newFolder.id,
-      workspaceId,
-      userId,
-    );
-  }
-
-  return newFolder;
-}
 
 foldersRoute.delete(':id', async (c) => {
   const folderId = c.req.param('id');
-  const folder = await getFolderById(folderId);
-
-  if (!folder) {
-    throw new HTTPException(404, { message: 'Folder not found' });
-  }
-  ensureFolderWorkspace(folder);
   const user = c.get('user') as { id: string };
-  await ensureWorkspaceMember(folder.workspaceId, user.id);
+  const force = c.req.query('force') === 'true';
+  const deletionResult = await moveFolderToTrash(folderId, user.id, force);
 
-  const directChildFolders = await pool.query(
-    'select id from folders where parent_id = $1 and is_deleted = false',
-    [folderId],
-  );
-  const directChildPages = await pool.query(
-    'select id from pages where parent_id = $1 and is_deleted = false',
-    [folderId],
-  );
-
-  const hasChildren =
-    (directChildFolders.rowCount ?? 0) > 0 || (directChildPages.rowCount ?? 0) > 0;
-
-  if (hasChildren) {
-    const force = c.req.query('force') === 'true';
-
-    if (!force) {
-      return c.json({
-        requiresForce: true,
-        childFolders: directChildFolders.rowCount ?? 0,
-        childPages: directChildPages.rowCount ?? 0,
-        message: 'Folder is not empty. Add ?force=true to delete contents as well.',
-      });
-    }
-
-    const childFolderIds = (directChildFolders.rows as { id: string }[]).map((r) => r.id);
-    for (const childFolderId of childFolderIds) {
-      await pool.query(
-        'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-        [childFolderId],
-      );
-    }
-
-    const childPageIds = (directChildPages.rows as { id: string }[]).map((r) => r.id);
-    for (const childPageId of childPageIds) {
-      await pool.query(
-        'update pages set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-        [childPageId],
-      );
-    }
+  if ('requiresForce' in deletionResult) {
+    return c.json(
+      {
+        code: 'FOLDER_NOT_EMPTY',
+        ...deletionResult,
+        message: 'Folder is not empty. Confirm recursive deletion to continue.',
+      },
+      409,
+    );
   }
 
-  const updateResult = await pool.query(
-    'update folders set is_deleted = true, deleted_at = now(), updated_at = now() where id = $1',
-    [folderId],
-  );
-
-  if (updateResult.rowCount === 0) {
-    throw new HTTPException(500, { message: 'Failed to delete folder' });
-  }
-
-  return c.json({ deleted: true });
+  return c.json(deletionResult);
 });
 
+foldersRoute.post(':id/leave', async (c) => {
+  const folderId = c.req.param('id');
+  const user = c.get('user') as { id: string };
+  await removeFolderFromView(folderId, user.id);
+  return c.json({ ok: true });
+});
+
+foldersPublicRoute.get(
+  ':id{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}}',
+  async (c) => {
+    c.header('Cache-Control', 'no-store');
+    c.header('X-Robots-Tag', 'noindex, nofollow');
+    const folderId = c.req.param('id');
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    const sessionUserId = session?.user ? (session.user as { id: string }).id : null;
+    const result = await db.transaction(async (tx) => {
+      await lockEntityAccess(tx, 'folder', folderId);
+      const lockedFolder = await getFolderById(folderId, tx);
+      if (!lockedFolder) {
+        throw new HTTPException(404, { message: 'Folder not found' });
+      }
+
+      const resolvedAccess = sessionUserId
+        ? await resolveEntityAccess('folder', folderId, sessionUserId, tx)
+        : null;
+      const publicPermission = resolvedAccess
+        ? resolvedAccess.publicPermission
+        : await getPublicPermission('folder', folderId, tx);
+      const hasAccountAccess = Boolean(resolvedAccess?.accountPermission);
+      let userPermission: SharePermission;
+      let fullAccess = false;
+      if (resolvedAccess) {
+        if (!resolvedAccess.permission) {
+          throw new HTTPException(403, { message: "You don't have access to this folder" });
+        }
+        userPermission = resolvedAccess.permission;
+        fullAccess = resolvedAccess.fullAccess;
+      } else {
+        if (!publicPermission) {
+          throw new HTTPException(401, { message: 'Log in to access this folder' });
+        }
+        userPermission = publicPermission;
+      }
+
+      if (sessionUserId && publicPermission && lockedFolder.ownerId !== sessionUserId) {
+        await recordPublicVisitAndNotify(tx, 'folder', folderId, sessionUserId);
+      }
+
+      type PublicFolderPageRow = {
+        id: string;
+        parent_id: string | null;
+        title: string;
+        icon: string | null;
+        created_by: string | null;
+        owner_id: string | null;
+        created_at: Date | string;
+        updated_at: Date | string;
+        public_permission: PublicPermission | null;
+        user_permission: SharePermission;
+      };
+      type PublicFolderChildRow = {
+        id: string;
+        parent_id: string | null;
+        name: string;
+        icon: string | null;
+        created_by: string | null;
+        owner_id: string | null;
+        created_at: Date | string;
+        updated_at: Date | string;
+        public_permission: PublicPermission | null;
+        user_permission: SharePermission;
+      };
+      const pagesResult = await executeQuery<PublicFolderPageRow>(
+        tx,
+        sql`SELECT id, title, icon, created_by, created_at, updated_at, parent_id,
+                get_public_page_permission(p.id) as public_permission,
+                coalesce(get_root_folder_owner(p.parent_id), p.created_by) as owner_id,
+                access.permission as user_permission
+         FROM pages p
+         JOIN LATERAL get_effective_page_permission(p.id, ${sessionUserId}::uuid) access ON true
+         WHERE parent_id = ${folderId} AND is_deleted = false
+           AND access.permission IS NOT NULL
+         ORDER BY position::numeric ASC`,
+      );
+      const foldersResult = await executeQuery<PublicFolderChildRow>(
+        tx,
+        sql`SELECT id, parent_id, name, icon, created_by, created_at, updated_at,
+                get_public_folder_permission(f.id) as public_permission,
+                get_root_folder_owner(f.id) as owner_id,
+                access.permission as user_permission
+         FROM folders f
+         JOIN LATERAL get_effective_folder_permission(f.id, ${sessionUserId}::uuid) access ON true
+         WHERE parent_id = ${folderId} AND is_deleted = false
+           AND access.permission IS NOT NULL
+         ORDER BY position::numeric ASC`,
+      );
+
+      const enumerableFolderIds =
+        sessionUserId && hasAccountAccess
+          ? await getEnumerableFolderIds(sessionUserId, tx)
+          : new Set<string>();
+
+      const pages = pagesResult.rows.map((page) => {
+        return {
+          accessScope: 'account' as const,
+          id: page.id,
+          parentId: page.parent_id,
+          title: page.title,
+          icon: page.icon,
+          createdBy: page.created_by,
+          ownerId: page.owner_id,
+          createdAt: serializeTimestamp(page.created_at),
+          updatedAt: serializeTimestamp(page.updated_at),
+          publicPermission: page.public_permission,
+          userPermission: page.user_permission,
+        } satisfies AccountFolderPayload['pages'][number];
+      });
+      const childFolders = foldersResult.rows.map((folder) => {
+        return {
+          accessScope: 'account' as const,
+          id: folder.id,
+          parentId: folder.parent_id,
+          name: folder.name,
+          icon: folder.icon,
+          createdBy: folder.created_by,
+          ownerId: folder.owner_id,
+          createdAt: serializeTimestamp(folder.created_at),
+          updatedAt: serializeTimestamp(folder.updated_at),
+          publicPermission: folder.public_permission,
+          userPermission: folder.user_permission,
+        } satisfies AccountFolderPayload['folders'][number];
+      });
+
+      if (!hasAccountAccess) {
+        if (!publicPermission) {
+          throw new HTTPException(403, { message: 'You do not have public access to this folder' });
+        }
+        const publicPages = pages.flatMap((page) =>
+          page.publicPermission
+            ? [
+                {
+                  accessScope: 'public',
+                  id: page.id,
+                  title: page.title,
+                  icon: page.icon,
+                  updatedAt: serializeTimestamp(page.updatedAt),
+                  publicPermission: page.publicPermission,
+                  userPermission: page.publicPermission,
+                } satisfies PublicFolderPayload['pages'][number],
+              ]
+            : [],
+        );
+        const publicChildFolders = childFolders.flatMap((folder) =>
+          folder.publicPermission
+            ? [
+                {
+                  accessScope: 'public',
+                  id: folder.id,
+                  name: folder.name,
+                  icon: folder.icon,
+                  updatedAt: serializeTimestamp(folder.updatedAt),
+                  publicPermission: folder.publicPermission,
+                  userPermission: folder.publicPermission,
+                } satisfies PublicFolderPayload['folders'][number],
+              ]
+            : [],
+        );
+        return toPublicFolderDto(
+          lockedFolder,
+          publicPermission,
+          publicPermission,
+          publicPages,
+          publicChildFolders,
+        );
+      }
+
+      return {
+        accessScope: 'account' as const,
+        ...toFolderDto(lockedFolder, redactParentId(lockedFolder.parentId, enumerableFolderIds)),
+        createdAt: serializeTimestamp(lockedFolder.createdAt),
+        updatedAt: serializeTimestamp(lockedFolder.updatedAt),
+        publicPermission,
+        userPermission,
+        capabilities: deriveCapabilities(userPermission, fullAccess),
+        pages,
+        folders: childFolders,
+      } satisfies AccountFolderPayload;
+    });
+
+    return c.json(result);
+  },
+);
+
+foldersPublicRoute.post(':id/access', publicFolderBodyLimit, async (c) => {
+  const folderId = c.req.param('id');
+  const session = await auth.api.getSession({ headers: c.req.raw.headers });
+  const sessionUserId = session?.user ? (session.user as { id: string }).id : null;
+  await db.transaction(async (tx) => {
+    await lockEntityAccess(tx, 'folder', folderId);
+    const folder = await getFolderById(folderId, tx);
+    if (!folder) throw new HTTPException(404, { message: 'Folder not found' });
+    const publicPermission = await getPublicPermission('folder', folderId, tx);
+    if (sessionUserId) {
+      await ensureFolderAccess(folderId, sessionUserId, 'view', tx);
+      if (publicPermission && folder.ownerId !== sessionUserId) {
+        await recordPublicVisitAndNotify(tx, 'folder', folderId, sessionUserId);
+      }
+    } else if (!publicPermission) {
+      throw new HTTPException(401, { message: 'Log in to access this folder' });
+    }
+  });
+
+  return c.json({ ok: true });
+});
+
+export { foldersPublicRoute };
 export default foldersRoute;

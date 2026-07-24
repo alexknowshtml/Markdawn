@@ -168,6 +168,8 @@ const mathInlineView: NodeViewConstructor = (node, view, getPos) => {
     e.preventDefault();
     e.stopPropagation();
 
+    if (!view.editable) return;
+
     const pos = getPos();
     if (typeof pos !== 'number') return;
 
@@ -238,6 +240,8 @@ const latexCodeBlockView: NodeViewConstructor = (node, view, getPos) => {
   dom.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
+
+    if (!view.editable) return;
 
     const pos = getPos();
     if (typeof pos !== 'number') return;

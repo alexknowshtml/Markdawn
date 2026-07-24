@@ -84,6 +84,13 @@ jobs:
         if: steps.cache-podman.outputs.cache-hit != 'true'
         run: podman pull postgres:17-alpine
 
+      - name: Check database migration history
+        run: pnpm --filter @markdawn/api db:check
+        env:
+          # drizzle-kit check is snapshot-only, but the shared config requires
+          # a syntactically valid URL before it can load.
+          DATABASE_URL: postgresql://markdawn:password@localhost:5432/markdawn
+
       - name: Run all tests
         run: pnpm test
 
@@ -162,9 +169,8 @@ jobs:
           echo "PostgreSQL failed to become ready"
           exit 1
 
-      - name: Push database schema
-        run: pnpm exec drizzle-kit push --force
-        working-directory: packages/api
+      - name: Apply database migrations
+        run: pnpm --filter @markdawn/api db:migrate
         env:
           DATABASE_URL: postgresql://markdawn:password@localhost:5432/markdawn
 
@@ -175,18 +181,22 @@ jobs:
         run: |
           pnpm dev > /tmp/dev-servers.log 2>&1 &
           echo "Dev servers starting..."
-          # Wait for API (port 3001) and web (port 5173)
+          # Wait for API (3001), collaboration (1234), and web (5173).
           for i in $(seq 1 60); do
             api_ready=0
+            collab_ready=0
             web_ready=0
             if curl -sf -o /dev/null http://localhost:3001/api/health 2>/dev/null; then
               api_ready=1
             fi
+            if curl -sf -o /dev/null http://localhost:1234/health 2>/dev/null; then
+              collab_ready=1
+            fi
             if curl -sf -o /dev/null http://localhost:5173 2>/dev/null; then
               web_ready=1
             fi
-            if [ $api_ready -eq 1 ] && [ $web_ready -eq 1 ]; then
-              echo "Both API and web servers are ready"
+            if [ $api_ready -eq 1 ] && [ $collab_ready -eq 1 ] && [ $web_ready -eq 1 ]; then
+              echo "API, collaboration, and web servers are ready"
               exit 0
             fi
             sleep 2

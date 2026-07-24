@@ -20,9 +20,9 @@ function buildWikiNode(wikiLinkType: NodeType, source: string): ProseNode {
   const match = source.match(/^\[\[([^\]|#]*)(?:#([^\]|]+))?(?:\|(.+?))?\]\]$/);
   const path = match?.[1] ?? '';
   const heading = match?.[2] ?? '';
-  const label = match?.[3] ?? (path ? (heading ? `${path}#${heading}` : path) : `#${heading}`);
+  const label = match?.[3] ?? '';
 
-  return wikiLinkType.create({ targetId: '', path, heading, label });
+  return wikiLinkType.create({ path, heading, label });
 }
 
 function splitInlineText(
