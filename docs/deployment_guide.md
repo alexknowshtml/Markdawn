@@ -75,7 +75,6 @@ NODE_ENV=production
 PORT=3001
 COLLAB_PORT=1234
 VITE_API_URL=https://markdawn.space
-VITE_COLLAB_URL=wss://markdawn.space/collab
 ```
 
 ### 4. Configure OAuth Providers
@@ -240,4 +239,5 @@ Confirm redirect URLs exactly match what's registered in the provider dashboard 
 
 ### Frontend shows blank page
 
-Ensure `VITE_API_URL` and `VITE_COLLAB_URL` are set before building the web package.
+Ensure `VITE_API_URL` is set before building the web package. Collaboration uses the browser's
+same-origin `/collab` WebSocket route, which Caddy proxies to the collaboration service.

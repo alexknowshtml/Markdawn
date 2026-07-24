@@ -112,6 +112,19 @@ for i in {1..15}; do
     sleep 2
 done
 
+echo -e "${YELLOW}[CHECK] Verifying collaboration service is healthy...${NC}"
+for i in {1..15}; do
+    if curl -sf --max-time 5 "http://127.0.0.1:1234/health" >/dev/null 2>&1; then
+        echo -e "${GREEN}[OK] Collaboration service is healthy.${NC}"
+        break
+    fi
+    if [ "$i" -eq 15 ]; then
+        echo -e "${RED}[ERROR] Collaboration service health check failed after restart.${NC}"
+        exit 1
+    fi
+    sleep 2
+done
+
 DEPLOYED_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 echo "$(date -u '+%Y-%m-%dT%H:%M:%SZ') deploy: $DEPLOYED_COMMIT" >> "$REPO_DIR/.deploy-log"
 
