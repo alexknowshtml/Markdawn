@@ -1,3 +1,4 @@
+import { autoUpdate, flip, inline, offset, shift, useFloating } from '@floating-ui/react';
 import {
   IconBlockquote,
   IconBold,
@@ -23,6 +24,7 @@ import {
   IconTable,
   IconTrash,
 } from '@tabler/icons-react';
+import { useEffect, useMemo } from 'react';
 
 export interface FloatingToolbarProps {
   onBold: () => void;
@@ -49,7 +51,7 @@ export interface FloatingToolbarProps {
   onOrderedList: () => void;
   onTaskList: () => void;
   visible: boolean;
-  position: { top: number; left: number };
+  position: Range | null;
   isBoldActive?: boolean;
   isItalicActive?: boolean;
   isStrikeActive?: boolean;
@@ -111,16 +113,37 @@ export function FloatingToolbar({
   isTaskListActive,
   isInTableActive,
 }: FloatingToolbarProps) {
+  const virtualReference = useMemo(() => {
+    if (!position) return null;
+
+    const contextElement =
+      position.commonAncestorContainer instanceof Element
+        ? position.commonAncestorContainer
+        : position.commonAncestorContainer.parentElement;
+
+    return {
+      getBoundingClientRect: () => position.getBoundingClientRect(),
+      getClientRects: () => position.getClientRects(),
+      ...(contextElement ? { contextElement } : {}),
+    };
+  }, [position]);
+  const { refs, floatingStyles, isPositioned } = useFloating({
+    open: visible,
+    placement: 'top',
+    strategy: 'fixed',
+    middleware: [inline(), offset(8), flip({ padding: 8 }), shift({ padding: 8 })],
+    whileElementsMounted: autoUpdate,
+  });
+
+  useEffect(() => {
+    refs.setPositionReference(virtualReference);
+  }, [refs, virtualReference]);
+
   return (
     <div
-      className={`floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl ${visible ? '' : 'invisible'}`}
-      style={{
-        position: 'fixed',
-        top: position.top,
-        left: position.left,
-        transform: 'translateX(-50%)',
-        zIndex: 1000,
-      }}
+      ref={refs.setFloating}
+      className={`floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl ${visible && isPositioned ? '' : 'invisible'}`}
+      style={{ ...floatingStyles, zIndex: 1000 }}
     >
       <button
         type="button"
