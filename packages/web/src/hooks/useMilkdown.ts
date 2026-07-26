@@ -16,6 +16,7 @@ import { useEffect, useRef, useState } from 'react';
 import { linkEditor } from '../editor/components/LinkEditor';
 import { autolink } from '../editor/plugins/autolink';
 import { callout } from '../editor/plugins/callout';
+import { codeBlockExitShortcut } from '../editor/plugins/codeBlockExit';
 import {
   latexCodeBlockViewPlugin,
   mathBlockInputRule,
@@ -624,6 +625,7 @@ export function useMilkdown({
         })
         .use(commonmark)
         .use(gfm)
+        .use(codeBlockExitShortcut)
         .use(wikiLink)
         .use(wikiLinkView)
         .use(callout)
