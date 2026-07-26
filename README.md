@@ -62,6 +62,16 @@ Open source under GNU AGPL v3. Run it on your own infrastructure.
 
 ---
 
+## CI
+
+Maintainers can request E2E tests from a pull request comment:
+
+- `/e2e chromium`
+- `/e2e firefox`
+- `/e2e all`
+
+---
+
 ## Author
 
 Atharva Verma  
