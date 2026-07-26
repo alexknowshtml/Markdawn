@@ -50,6 +50,7 @@ export interface FloatingToolbarProps {
   onBulletList: () => void;
   onOrderedList: () => void;
   onTaskList: () => void;
+  onInteractionStart: () => void;
   visible: boolean;
   position: Range | null;
   isBoldActive?: boolean;
@@ -94,6 +95,7 @@ export function FloatingToolbar({
   onBulletList,
   onOrderedList,
   onTaskList,
+  onInteractionStart,
   visible,
   position,
   isBoldActive,
@@ -142,6 +144,7 @@ export function FloatingToolbar({
   return (
     <div
       ref={refs.setFloating}
+      onPointerDown={onInteractionStart}
       className={`floating-toolbar flex items-center gap-1 px-2 py-1.5 bg-white dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-lg shadow-xl ${visible && isPositioned ? '' : 'invisible'}`}
       style={{ ...floatingStyles, zIndex: 1000 }}
     >

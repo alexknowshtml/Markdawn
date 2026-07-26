@@ -59,6 +59,7 @@ function createProps(overrides: Partial<FloatingToolbarProps> = {}): FloatingToo
     onInsertTable: vi.fn(),
     onItalic: vi.fn(),
     onLink: vi.fn(),
+    onInteractionStart: vi.fn(),
     onOrderedList: vi.fn(),
     onStrike: vi.fn(),
     onTaskList: vi.fn(),
@@ -102,6 +103,7 @@ function FloatingToolbarHarness({ onBold }: { onBold: () => void }) {
           keepVisible();
           onBold();
         },
+        onInteractionStart: keepVisible,
         position,
         visible,
       })}
@@ -164,14 +166,22 @@ describe('FloatingToolbar', () => {
 
     const boldButton = screen.getByTitle('Bold (Ctrl+B)');
 
-    fireEvent.mouseDown(boldButton);
+    floatingMocks.setPositionReference.mockClear();
+    fireEvent.pointerDown(boldButton);
     act(() => {
       getSelection().removeAllRanges();
       document.dispatchEvent(new Event('selectionchange'));
-      vi.advanceTimersByTime(101);
+      vi.advanceTimersByTime(301);
     });
+
+    expect(boldButton.parentElement).not.toHaveClass('invisible');
+    expect(floatingMocks.setPositionReference).toHaveBeenLastCalledWith(
+      expect.objectContaining({ getBoundingClientRect: expect.any(Function) }),
+    );
+
     fireEvent.click(boldButton);
 
     expect(onBold).toHaveBeenCalledOnce();
+    expect(boldButton.parentElement).not.toHaveClass('invisible');
   });
 });
