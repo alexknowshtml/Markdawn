@@ -20,17 +20,20 @@ export function isEligibleAutolinkRange(
   linkMarkType: MarkType,
 ): boolean {
   let eligible = from < to;
+  let hasText = false;
   doc.nodesBetween(from, to, (node) => {
-    if (
-      !node.isText ||
-      node.marks.some((mark) => mark.type === linkMarkType || mark.type.spec.code)
-    ) {
+    if (!node.isText) {
+      if (node.isInline) eligible = false;
+      return !node.isInline;
+    }
+    hasText = true;
+    if (node.marks.some((mark) => mark.type === linkMarkType || mark.type.spec.code)) {
       eligible = false;
       return false;
     }
     return true;
   });
-  return eligible;
+  return eligible && hasText;
 }
 
 export function findHttpUrlsInTextRun(nodes: readonly ProseMirrorNode[], context = '') {

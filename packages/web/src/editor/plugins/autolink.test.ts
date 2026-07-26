@@ -10,7 +10,12 @@ import {
   handleUrlPasteIntent,
   linkifyPastedSlice,
 } from './autolinkPaste';
-import { handleAutolinkEnter } from './autolinkTyping';
+import {
+  createAutolinkTypingPlugin,
+  handleAutolinkCompletedInput,
+  handleAutolinkEnter,
+  handleAutolinkTextInput,
+} from './autolinkTyping';
 
 const schema = new Schema({
   nodes: {
@@ -19,6 +24,8 @@ const schema = new Schema({
     code_block: { content: 'text*', group: 'block', code: true },
     text: { group: 'inline' },
     hard_break: { inline: true, group: 'inline' },
+    math_inline: { inline: true, group: 'inline', atom: true },
+    tag: { inline: true, group: 'inline', atom: true },
   },
   marks: {
     link: { attrs: { href: {} }, inclusive: false },
@@ -31,6 +38,8 @@ const schema = new Schema({
 const paragraphType = schema.nodes.paragraph;
 const codeBlockType = schema.nodes.code_block;
 const hardBreakType = schema.nodes.hard_break;
+const mathInlineType = schema.nodes.math_inline;
+const tagType = schema.nodes.tag;
 const linkMarkType = schema.marks.link;
 const strongMarkType = schema.marks.strong;
 const emphasisMarkType = schema.marks.emphasis;
@@ -39,6 +48,8 @@ if (
   !paragraphType ||
   !codeBlockType ||
   !hardBreakType ||
+  !mathInlineType ||
+  !tagType ||
   !linkMarkType ||
   !strongMarkType ||
   !emphasisMarkType ||
@@ -346,6 +357,275 @@ describe('handleUrlPasteIntent', () => {
 });
 
 describe('autolink typing and repair', () => {
+  it('cancels deferred completion when its plugin view is destroyed', () => {
+    vi.useFakeTimers();
+    const plugin = createAutolinkTypingPlugin();
+    const view = {
+      isDestroyed: false,
+      state: { selection: { empty: true, from: 1, to: 1 } },
+    } as unknown as EditorView;
+    const pluginView = plugin.spec.view?.call(plugin, view);
+    const compositionend = plugin.props.handleDOMEvents?.compositionend;
+    if (!pluginView?.destroy || !compositionend) {
+      throw new Error('Expected autolink typing lifecycle handlers');
+    }
+
+    compositionend.call(plugin, view, new CompositionEvent('compositionend'));
+    pluginView.destroy();
+    vi.runAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('does not complete deferred input for a destroyed editor view', () => {
+    vi.useFakeTimers();
+    const plugin = createAutolinkTypingPlugin();
+    const view = {
+      isDestroyed: true,
+      state: { selection: { empty: true, from: 1, to: 1 } },
+    } as unknown as EditorView;
+    const compositionend = plugin.props.handleDOMEvents?.compositionend;
+    if (!compositionend) throw new Error('Expected autolink composition handler');
+
+    compositionend.call(plugin, view, new CompositionEvent('compositionend'));
+    vi.runAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('does not complete deferred input after the cursor moves', () => {
+    vi.useFakeTimers();
+    const plugin = createAutolinkTypingPlugin();
+    const state = { selection: { empty: true, from: 1, to: 1 } };
+    const view = { isDestroyed: false, state } as unknown as EditorView;
+    const beforeinput = plugin.props.handleDOMEvents?.beforeinput;
+    if (!beforeinput) throw new Error('Expected autolink input handler');
+
+    beforeinput.call(plugin, view, {
+      inputType: 'insertText',
+      data: 'https://example.com ',
+    } as InputEvent);
+    state.selection = { empty: true, from: 2, to: 2 };
+    vi.runAllTimers();
+    vi.useRealTimers();
+  });
+
+  it('does not complete composition input after the settled cursor moves', () => {
+    vi.useFakeTimers();
+    const plugin = createAutolinkTypingPlugin();
+    const state = { selection: { empty: true, from: 1, to: 1 } };
+    const view = { isDestroyed: false, state } as unknown as EditorView;
+    const compositionend = plugin.props.handleDOMEvents?.compositionend;
+    if (!compositionend) throw new Error('Expected autolink composition handler');
+
+    compositionend.call(plugin, view, new CompositionEvent('compositionend'));
+    vi.advanceTimersByTime(0);
+    state.selection = { empty: true, from: 2, to: 2 };
+    vi.advanceTimersByTime(1);
+    vi.useRealTimers();
+  });
+
+  it('does not claim non-autolink text input', () => {
+    const doc = schema.node('doc', null, paragraphType.create());
+    const state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, 1),
+    });
+    const view = { state } as unknown as EditorView;
+    const plugin = createAutolinkTypingPlugin();
+    const beforeinput = plugin.props.handleDOMEvents?.beforeinput;
+    if (!beforeinput) throw new Error('Expected autolink input handler');
+
+    expect(
+      beforeinput.call(plugin, view, {
+        inputType: 'insertText',
+        data: 'x',
+      } as InputEvent),
+    ).toBe(false);
+  });
+
+  it('marks a typed URL through the text-input fallback', () => {
+    const url = 'https://example.com/text-input-fallback';
+    const doc = schema.node('doc', null, paragraphType.create(null, schema.text(url)));
+    let state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, url.length + 1),
+    });
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+    const plugin = createAutolinkTypingPlugin();
+    const handleTextInput = plugin.props.handleTextInput;
+    if (!handleTextInput) throw new Error('Expected autolink text-input handler');
+
+    expect(
+      handleTextInput.call(plugin, view, url.length + 1, url.length + 1, ' ', () =>
+        state.tr.insertText(' ', url.length + 1),
+      ),
+    ).toBe(false);
+    expect(linkMarkType.isInSet(state.doc.firstChild?.firstChild?.marks ?? [])?.attrs.href).toBe(
+      url,
+    );
+  });
+
+  it('autolinks multi-character input replacing a selection', () => {
+    vi.useFakeTimers();
+    const url = 'https://example.com/replaced-selection';
+    const insertedText = `${url} `;
+    const initialDoc = schema.node(
+      'doc',
+      null,
+      paragraphType.create(null, schema.text('selected text')),
+    );
+    let state = EditorState.create({
+      schema,
+      doc: initialDoc,
+      selection: TextSelection.create(initialDoc, 1, 'selected text'.length + 1),
+    });
+    const view = {
+      isDestroyed: false,
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+    const plugin = createAutolinkTypingPlugin();
+    const handler = plugin.props.handleDOMEvents?.beforeinput;
+    if (!handler) throw new Error('Expected deferred autolink handler');
+
+    handler.call(plugin, view, {
+      inputType: 'insertText',
+      data: insertedText,
+    } as InputEvent);
+    const completedDoc = schema.node(
+      'doc',
+      null,
+      paragraphType.create(null, schema.text(insertedText)),
+    );
+    state = EditorState.create({
+      schema,
+      doc: completedDoc,
+      selection: TextSelection.create(completedDoc, 1 + insertedText.length),
+    });
+
+    vi.runAllTimers();
+    vi.useRealTimers();
+    expect(linkMarkType.isInSet(state.doc.firstChild?.firstChild?.marks ?? [])?.attrs.href).toBe(
+      url,
+    );
+  });
+
+  it('autolinks composition input after ProseMirror settles the cursor', () => {
+    vi.useFakeTimers();
+    const url = 'https://example.com/composition';
+    const completedDoc = schema.node(
+      'doc',
+      null,
+      paragraphType.create(null, schema.text(`${url} `)),
+    );
+    let state = EditorState.create({
+      schema,
+      doc: completedDoc,
+      selection: TextSelection.create(completedDoc, url.length + 2),
+    });
+    const view = {
+      isDestroyed: false,
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+    const plugin = createAutolinkTypingPlugin();
+    const compositionend = plugin.props.handleDOMEvents?.compositionend;
+    if (!compositionend) throw new Error('Expected autolink composition handler');
+
+    compositionend.call(plugin, view, new CompositionEvent('compositionend', { data: `${url} ` }));
+    vi.runAllTimers();
+    vi.useRealTimers();
+    expect(linkMarkType.isInSet(state.doc.firstChild?.firstChild?.marks ?? [])?.attrs.href).toBe(
+      url,
+    );
+  });
+
+  it('marks a typed URL before native delimiter insertion', () => {
+    const url = 'https://example.com/typed';
+    const doc = schema.node('doc', null, paragraphType.create(null, schema.text(url)));
+    let state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, url.length + 1),
+    });
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+
+    expect(handleAutolinkTextInput(view, url.length + 1, url.length + 1, ' ')).toBe(true);
+    expect(linkMarkType.isInSet(state.doc.firstChild?.firstChild?.marks ?? [])?.attrs.href).toBe(
+      url,
+    );
+  });
+
+  it('marks a typed URL longer than 500 characters', () => {
+    const prefix = 'word '.repeat(200);
+    const url = `https://example.com/${'path/'.repeat(125)}`;
+    const text = `${prefix}${url}`;
+    const doc = schema.node('doc', null, paragraphType.create(null, schema.text(text)));
+    let state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, text.length + 1),
+    });
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+
+    expect(handleAutolinkTextInput(view, text.length + 1, text.length + 1, ' ')).toBe(true);
+    const link = state.doc.firstChild?.lastChild;
+    expect(linkMarkType.isInSet(link?.marks ?? [])?.attrs.href).toBe(url);
+  });
+
+  it('marks a URL after multi-character or composition input commits its delimiter', () => {
+    const url = 'https://example.com/completed-input';
+    const doc = schema.node('doc', null, paragraphType.create(null, schema.text(`${url} `)));
+    let state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, url.length + 2),
+    });
+    const view = {
+      get state() {
+        return state;
+      },
+      dispatch(transaction: Transaction) {
+        state = state.apply(transaction);
+      },
+    } as unknown as EditorView;
+
+    expect(handleAutolinkCompletedInput(view)).toBe(true);
+    expect(linkMarkType.isInSet(state.doc.firstChild?.firstChild?.marks ?? [])?.attrs.href).toBe(
+      url,
+    );
+  });
+
   it('does not finalize an earlier URL when text follows it before Enter', () => {
     const text = 'Visit https://example.com later';
     const doc = schema.node('doc', null, paragraphType.create(null, schema.text(text)));
@@ -428,6 +708,42 @@ describe('autolink typing and repair', () => {
 
     expect(isEligibleAutolinkRange(linkedDoc, 1, url.length + 1, linkMarkType)).toBe(false);
     expect(isEligibleAutolinkRange(codeDoc, 1, url.length + 1, linkMarkType)).toBe(false);
+  });
+
+  it('accepts an unmarked text range for delimiter-triggered autolinking', () => {
+    const url = 'https://example.com/unmarked';
+    const doc = schema.node('doc', null, paragraphType.create(null, schema.text(url)));
+
+    expect(isEligibleAutolinkRange(doc, 1, url.length + 1, linkMarkType)).toBe(true);
+  });
+
+  it.each([
+    mathInlineType,
+    tagType,
+  ])('does not link a URL interrupted by an inline %s atom', (atomType) => {
+    const doc = schema.node(
+      'doc',
+      null,
+      paragraphType.create(null, [
+        schema.text('https://exa'),
+        atomType.create(),
+        schema.text('mple.com'),
+      ]),
+    );
+    const state = EditorState.create({
+      schema,
+      doc,
+      selection: TextSelection.create(doc, doc.content.size - 1),
+    });
+    const dispatch = vi.fn();
+
+    expect(
+      handleAutolinkEnter(
+        { state, dispatch } as unknown as EditorView,
+        { key: 'Enter', shiftKey: false } as KeyboardEvent,
+      ),
+    ).toBe(false);
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it('repairs only canonical URLs outside inline and fenced code', () => {

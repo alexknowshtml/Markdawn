@@ -221,34 +221,35 @@ test.describe('Autolink', () => {
     await expect(page.locator('.ProseMirror a')).toHaveCount(0);
   });
 
-  test('does not link a URL pasted with inline code toggled at the cursor', async ({ page }) => {
-    await createNewPage(page);
-    await focusEditor(page);
-    const url = 'https://example.com/stored-code';
-    await page.keyboard.type('seed');
-    await page.keyboard.press('Control+a');
-    await page.locator('.floating-toolbar button[title="Code"]').click({ timeout: 5_000 });
-    await page.keyboard.press('ArrowRight');
-
-    await pasteClipboardText(page, 'text/plain', url);
-
-    await expect(page.locator('.ProseMirror code')).toContainText(url);
-    await expect(page.locator('.ProseMirror code a')).toHaveCount(0);
-  });
-
-  test('rejects invalid direct URLs and leaves code contexts plain text', async ({ page }) => {
+  test('rejects invalid direct URLs', async ({ page }) => {
     await createNewPage(page);
     await focusEditor(page);
     await page.keyboard.type('192.168.1.1 foo.invalidtld ');
     await pasteClipboardText(page, 'text/plain', '192.168.1.1');
     await page.keyboard.type(' ');
     await expect(page.locator('.ProseMirror a')).toHaveCount(0);
+  });
 
-    await page.keyboard.press('Enter');
+  test('pastes a direct URL as plain text at an inline-code cursor', async ({ page }) => {
+    await createNewPage(page);
+    await focusEditor(page);
     await page.keyboard.type('`seed`');
     await page.keyboard.press('ArrowLeft');
     await pasteClipboardText(page, 'text/plain', 'https://example.com/code');
     await expect(page.locator('.ProseMirror code')).toContainText('https://example.com/code');
+    await expect(page.locator('.ProseMirror code a')).toHaveCount(0);
+  });
+
+  test('pastes a direct URL as plain text with an inline-code stored mark', async ({ page }) => {
+    await createNewPage(page);
+    await focusEditor(page);
+    await page.keyboard.press('Control+e');
+
+    await pasteClipboardText(page, 'text/plain', 'https://example.com/stored-code');
+
+    await expect(page.locator('.ProseMirror code')).toContainText(
+      'https://example.com/stored-code',
+    );
     await expect(page.locator('.ProseMirror code a')).toHaveCount(0);
   });
 });
