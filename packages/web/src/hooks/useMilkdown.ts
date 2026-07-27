@@ -16,7 +16,6 @@ import { useEffect, useRef, useState } from 'react';
 import { linkEditor } from '../editor/components/LinkEditor';
 import { autolink } from '../editor/plugins/autolink';
 import { handleUrlPasteIntent } from '../editor/plugins/autolinkPaste';
-import { handleAutolinkEnter } from '../editor/plugins/autolinkTyping';
 import { callout } from '../editor/plugins/callout';
 import {
   latexCodeBlockViewPlugin,
@@ -435,7 +434,6 @@ export function useMilkdown({
             handleDOMEvents: {
               keydown: (view, event) => {
                 if (readOnly) return false;
-                if (handleAutolinkEnter(view, event)) return true;
                 const { state, dispatch } = view;
 
                 if (!isInTable(state)) return false;

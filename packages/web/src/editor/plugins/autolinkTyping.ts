@@ -177,6 +177,7 @@ export function createAutolinkTypingPlugin(): Plugin {
         handleAutolinkTextInput(view, from, to, text);
         return false;
       },
+      handleKeyDown: (view, event) => handleAutolinkEnter(view, event),
       handleDOMEvents: {
         beforeinput: (view, event) => {
           const inputEvent = event as InputEvent;
