@@ -6,9 +6,11 @@ import { ShareablePageRoute } from './components/auth/ShareablePageRoute';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import Dashboard from './routes/Dashboard';
 import FolderEntry from './routes/FolderEntry';
+import ForgotPassword from './routes/ForgotPassword';
 import Home from './routes/Home';
 import Login from './routes/Login';
 import PageEntry from './routes/PageEntry';
+import ResetPassword from './routes/ResetPassword';
 import Settings from './routes/Settings';
 import SharedWithMe from './routes/SharedWithMe';
 import Trash from './routes/Trash';
@@ -22,6 +24,8 @@ function App() {
             <Routes>
               <Route path="/" element={<Home />} />
               <Route path="/login" element={<Login />} />
+              <Route path="/forgot-password" element={<ForgotPassword />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
 
               <Route
                 path="/app"
