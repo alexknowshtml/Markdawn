@@ -23,7 +23,10 @@ import testSetupRoute from './routes/test-setup';
 import trashRoute from './routes/trash';
 import uploadsRoute from './routes/uploads';
 import versionsRoute from './routes/versions';
+import invitesRoute from './routes/invites';
+import orgsRoute from './routes/orgs';
 import workspaceRoute from './routes/workspace';
+import workspacesRoute from './routes/workspaces';
 
 export async function createApp() {
   await setupLogger();
@@ -96,6 +99,10 @@ export async function createApp() {
   app.route('/api/bulk-removal', bulkRemovalRoute);
 
   app.route('/api/workspace', workspaceRoute);
+
+  app.route('/api/orgs', orgsRoute);
+  app.route('/api/orgs', workspacesRoute);
+  app.route('/api/invites', invitesRoute);
 
   app.route('/api', testSetupRoute);
 
