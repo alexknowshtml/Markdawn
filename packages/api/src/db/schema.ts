@@ -11,6 +11,7 @@ import {
   text,
   timestamp,
   unique,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -81,16 +82,26 @@ export const verifications = pgTable('verifications', {
 // App Tables
 // ======================
 
-export const users = pgTable('users', {
-  id: uuid('id').defaultRandom().primaryKey(),
-  email: text('email').notNull().unique(),
-  name: text('name').notNull(),
-  emailVerified: boolean('email_verified').default(false),
-  image: text('image'),
-  avatarUrl: text('avatar_url'),
-  createdAt: timestamp('created_at').defaultNow(),
-  updatedAt: timestamp('updated_at').defaultNow(),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    email: text('email').notNull().unique(),
+    name: text('name').notNull(),
+    emailVerified: boolean('email_verified').default(false),
+    image: text('image'),
+    avatarUrl: text('avatar_url'),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+    systemRole: text('system_role').$type<'super_admin'>(),
+  },
+  (table) => ({
+    systemRoleCheck: check(
+      'users_system_role_check',
+      sql`${table.systemRole} is null or ${table.systemRole} = 'super_admin'`,
+    ),
+  }),
+);
 
 export const workspaceAccessVersions = pgTable('workspace_access_versions', {
   workspaceOwnerId: uuid('workspace_owner_id')
@@ -175,6 +186,7 @@ export const folders = pgTable(
       .notNull()
       .default('inherit')
       .$type<'inherit' | 'restricted'>(),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'restrict' }),
   },
   (table) => ({
     nameLength: check('folders_name_length_check', sql`char_length(${table.name}) <= 250`),
@@ -256,6 +268,7 @@ export const pages = pgTable(
       .notNull()
       .default('inherit')
       .$type<'inherit' | 'restricted'>(),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'restrict' }),
 
     createdAt: timestamp('created_at').defaultNow(),
 
@@ -409,6 +422,7 @@ export const templates = pgTable('templates', {
     },
   })('content_blocks').notNull(),
   createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+  orgId: uuid('org_id').references(() => orgs.id, { onDelete: 'cascade' }),
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),
 });
@@ -549,5 +563,149 @@ export const uploadPageRefs = pgTable(
     ),
     uploadIdx: index('upload_page_refs_upload_idx').on(table.uploadId),
     pageIdx: index('upload_page_refs_page_idx').on(table.pageId),
+  }),
+);
+
+// ======================
+// Org / Workspace Tables (Phase 1)
+// ======================
+
+export const orgs = pgTable(
+  'orgs',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    name: text('name').notNull(),
+    slug: text('slug').notNull().unique(),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+    archivedAt: timestamp('archived_at'),
+  },
+  (table) => ({
+    slugFormat: check(
+      'orgs_slug_format_check',
+      sql`char_length(${table.slug}) between 1 and 50 and ${table.slug} ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'`,
+    ),
+    slugReserved: check(
+      'orgs_slug_reserved_check',
+      sql`${table.slug} not in ('admin', 'api', 'app', 'auth', 'login', 'logout', 'register', 'signup', 'static', 'www')`,
+    ),
+  }),
+);
+
+export const orgMembers = pgTable(
+  'org_members',
+  {
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().$type<'owner' | 'admin' | 'member'>(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    pk: unique('org_members_pk').on(table.orgId, table.userId),
+    userIdx: index('org_members_user_idx').on(table.userId),
+    roleCheck: check(
+      'org_members_role_check',
+      sql`${table.role} in ('owner', 'admin', 'member')`,
+    ),
+  }),
+);
+
+export const workspaces = pgTable(
+  'workspaces',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    slug: text('slug').notNull(),
+    visibility: text('visibility').notNull().default('open').$type<'open' | 'private'>(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at').defaultNow(),
+    updatedAt: timestamp('updated_at').defaultNow(),
+    archivedAt: timestamp('archived_at'),
+  },
+  (table) => ({
+    orgSlugUnique: unique('workspaces_org_slug_unique').on(table.orgId, table.slug),
+    slugFormat: check(
+      'workspaces_slug_format_check',
+      sql`char_length(${table.slug}) between 1 and 50 and ${table.slug} ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$'`,
+    ),
+    visibilityCheck: check(
+      'workspaces_visibility_check',
+      sql`${table.visibility} in ('open', 'private')`,
+    ),
+  }),
+);
+
+export const workspaceMemberships = pgTable(
+  'workspace_memberships',
+  {
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'restrict' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    role: text('role').notNull().$type<'admin' | 'editor' | 'viewer'>(),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    pk: unique('workspace_memberships_pk').on(table.workspaceId, table.userId),
+    roleCheck: check(
+      'workspace_memberships_role_check',
+      sql`${table.role} in ('admin', 'editor', 'viewer')`,
+    ),
+  }),
+);
+
+export const inviteTokens = pgTable(
+  'invite_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tokenHash: text('token_hash').notNull().unique(),
+    orgId: uuid('org_id')
+      .notNull()
+      .references(() => orgs.id, { onDelete: 'cascade' }),
+    workspaceId: uuid('workspace_id').references(() => workspaces.id, { onDelete: 'cascade' }),
+    email: text('email').notNull(),
+    role: text('role').notNull(),
+    invitedBy: uuid('invited_by').references(() => users.id, { onDelete: 'set null' }),
+    expiresAt: timestamp('expires_at').notNull(),
+    usedAt: timestamp('used_at'),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    emailIdx: index('invite_tokens_email_idx').on(table.email),
+    expiresAtIdx: index('invite_tokens_expires_at_idx').on(table.expiresAt),
+    orgEmailPendingUnique: uniqueIndex('invite_tokens_org_email_pending_unique')
+      .on(table.orgId, table.email)
+      .where(sql`${table.usedAt} is null`),
+    roleCheck: check(
+      'invite_tokens_role_check',
+      sql`${table.role} in ('owner', 'admin', 'member', 'editor', 'viewer')`,
+    ),
+  }),
+);
+
+export const auditLog = pgTable(
+  'audit_log',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    actorId: uuid('actor_id').references(() => users.id, { onDelete: 'set null' }),
+    action: text('action').notNull(),
+    resourceType: text('resource_type').notNull(),
+    resourceId: uuid('resource_id'),
+    orgId: uuid('org_id').references(() => orgs.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at').defaultNow(),
+  },
+  (table) => ({
+    orgIdx: index('audit_log_org_idx').on(table.orgId),
+    actorIdx: index('audit_log_actor_idx').on(table.actorId),
+    createdAtIdx: index('audit_log_created_at_idx').on(table.createdAt),
   }),
 );
