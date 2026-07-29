@@ -3,8 +3,9 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { workspaceMemberships, workspaces } from '../db/schema';
-import { query } from '../db/query';
+import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
+import { lockWorkspaceEntityMutation } from '../utils/share-access';
 import {
   type WsRole,
   assertOrgAdmin,
@@ -203,10 +204,11 @@ workspacesRoute.post('/:orgSlug/workspaces/:workspaceSlug/members', async (c) =>
   }
 
   try {
-    await db.insert(workspaceMemberships).values({
-      workspaceId: wsCtx.workspaceId,
-      userId: targetId,
-      role: role as WsRole,
+    await db.transaction(async (tx) => {
+      await lockWorkspaceEntityMutation(tx, wsCtx.workspaceId);
+      await tx
+        .insert(workspaceMemberships)
+        .values({ workspaceId: wsCtx.workspaceId, userId: targetId, role: role as WsRole });
     });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : '';
@@ -234,12 +236,18 @@ workspacesRoute.patch('/:orgSlug/workspaces/:workspaceSlug/members/:userId/role'
     throw new HTTPException(400, { message: 'role must be admin, editor, or viewer' });
   }
 
-  const result = await query(
-    sql`UPDATE workspace_memberships SET role = ${role}
-        WHERE workspace_id = ${wsCtx.workspaceId} AND user_id = ${targetId}
-        RETURNING user_id`,
-  );
-  if (!result.rowCount || result.rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
+  let rowCount = 0;
+  await db.transaction(async (tx) => {
+    await lockWorkspaceEntityMutation(tx, wsCtx.workspaceId);
+    const result = await executeQuery(
+      tx,
+      sql`UPDATE workspace_memberships SET role = ${role}
+          WHERE workspace_id = ${wsCtx.workspaceId} AND user_id = ${targetId}
+          RETURNING user_id`,
+    );
+    rowCount = result.rowCount ?? 0;
+  });
+  if (rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
   return c.json({ ok: true, role });
 });
 
@@ -254,12 +262,18 @@ workspacesRoute.delete('/:orgSlug/workspaces/:workspaceSlug/members/:userId', as
   const targetId = c.req.param('userId');
   if (targetId !== user.id) assertWsAdmin(wsCtx, ctx);
 
-  const result = await query(
-    sql`DELETE FROM workspace_memberships
-        WHERE workspace_id = ${wsCtx.workspaceId} AND user_id = ${targetId}
-        RETURNING user_id`,
-  );
-  if (!result.rowCount || result.rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
+  let rowCount = 0;
+  await db.transaction(async (tx) => {
+    await lockWorkspaceEntityMutation(tx, wsCtx.workspaceId);
+    const result = await executeQuery(
+      tx,
+      sql`DELETE FROM workspace_memberships
+          WHERE workspace_id = ${wsCtx.workspaceId} AND user_id = ${targetId}
+          RETURNING user_id`,
+    );
+    rowCount = result.rowCount ?? 0;
+  });
+  if (rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
   return c.json({ ok: true });
 });
 

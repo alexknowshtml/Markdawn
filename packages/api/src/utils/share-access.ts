@@ -123,6 +123,23 @@ export const lockWorkspaceAccessMutation = async (
   );
 };
 
+export const lockWorkspaceEntityMutation = async (
+  executor: QueryExecutor,
+  workspaceId: string,
+): Promise<void> => {
+  await executeQuery(
+    executor,
+    sql`select pg_advisory_xact_lock(hashtextextended(${`workspace-entity-access:${workspaceId}`}, 0))`,
+  );
+  await executeQuery(
+    executor,
+    sql`insert into workspace_entity_versions (workspace_id, version)
+     values (${workspaceId}, nextval('workspace_entity_revision_seq'))
+     on conflict (workspace_id) do update
+     set version = nextval('workspace_entity_revision_seq')`,
+  );
+};
+
 type EntityAccessTarget = { entityType: ShareEntityType; entityId: string };
 type ResolvedEntityAccessTarget = EntityAccessTarget & { ownerId: string };
 type MissingEntityPolicy = 'omit' | 'reject';

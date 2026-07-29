@@ -642,6 +642,13 @@ export const workspaces = pgTable(
   }),
 );
 
+export const workspaceEntityVersions = pgTable('workspace_entity_versions', {
+  workspaceId: uuid('workspace_id')
+    .primaryKey()
+    .references(() => workspaces.id, { onDelete: 'cascade' }),
+  version: bigint('version', { mode: 'bigint' }).notNull().default(0n),
+});
+
 export const workspaceMemberships = pgTable(
   'workspace_memberships',
   {
