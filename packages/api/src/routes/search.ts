@@ -3,6 +3,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
+import { assertEntityWorkspaceAccess } from '../utils/org-auth';
 
 type SearchRow = {
   id: string;
@@ -46,6 +47,27 @@ searchRoute.get('/', async (c) => {
   const parentId = c.req.query('parentId');
   if (parentId && parentId !== 'root' && !UUID_PATTERN.test(parentId)) {
     throw new HTTPException(400, { message: 'parentId must be a valid UUID or root' });
+  }
+  const workspaceId = c.req.query('workspaceId') ?? null;
+  if (workspaceId) {
+    if (!UUID_PATTERN.test(workspaceId)) {
+      throw new HTTPException(400, { message: 'Invalid workspaceId' });
+    }
+    await assertEntityWorkspaceAccess(workspaceId, user.id);
+  }
+  const orgId = c.req.query('orgId') ?? null;
+  if (orgId) {
+    if (!UUID_PATTERN.test(orgId)) {
+      throw new HTTPException(400, { message: 'Invalid orgId' });
+    }
+    const orgCheck = await query<{ ok: boolean }>(
+      sql`SELECT true AS ok FROM org_members WHERE org_id = ${orgId} AND user_id = ${user.id}
+          UNION ALL SELECT true FROM users WHERE id = ${user.id} AND system_role = 'super_admin'
+          LIMIT 1`,
+    );
+    if (!orgCheck.rows[0]) {
+      throw new HTTPException(403, { message: "You don't have access to this org" });
+    }
   }
   const searchPattern = `%${textQuery}%`;
 
@@ -97,6 +119,14 @@ searchRoute.get('/', async (c) => {
         and c.target_slug = any(${sql.param(tagSlugs)}::text[])
       group by c.source_id
       having count(distinct c.target_slug) = ${tagSlugs.length}
+    )`);
+  }
+
+  if (workspaceId) {
+    filters.push(sql`p.workspace_id = ${workspaceId}`);
+  } else if (orgId) {
+    filters.push(sql`p.workspace_id in (
+      select id from workspaces where org_id = ${orgId} and archived_at is null
     )`);
   }
 
