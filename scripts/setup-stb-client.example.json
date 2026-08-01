@@ -1,0 +1,23 @@
+{
+  "apiUrl": "http://localhost:3000",
+  "adminEmail": "admin@example.com",
+  "adminPassword": "SET_VIA_ENV_OR_FILL_IN",
+  "org": {
+    "name": "Acme Corp",
+    "slug": "acme",
+    "ownerEmail": "owner@acme.com"
+  },
+  "workspace": {
+    "name": "Acme Workspace",
+    "slug": "acme-workspace",
+    "visibility": "private"
+  },
+  "members": [
+    { "email": "alice@acme.com", "orgRole": "member", "wsRole": "editor" },
+    { "email": "bob@acme.com", "orgRole": "member", "wsRole": "viewer" }
+  ],
+  "content": {
+    "folderIds": [],
+    "pageIds": []
+  }
+}
