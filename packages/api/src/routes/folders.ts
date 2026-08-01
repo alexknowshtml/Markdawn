@@ -213,6 +213,16 @@ const buildFolderTree = <T extends { id: string; parentId: string | null }>(rows
 
 foldersRoute.get('/tree', async (c) => {
   const user = c.get('user') as { id: string };
+  const workspaceId = c.req.query('workspaceId') ?? null;
+
+  if (workspaceId) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(workspaceId)) {
+      throw new HTTPException(400, { message: 'Invalid workspaceId' });
+    }
+    await assertEntityWorkspaceAccess(workspaceId, user.id);
+  }
+
+  const workspaceFilter = workspaceId ? sql`and f.workspace_id = ${workspaceId}` : sql``;
 
   type FolderTreeDatabaseRow = FolderDatabaseRowWithOwner & {
     enumerable_parent_id: string | null;
@@ -239,6 +249,7 @@ foldersRoute.get('/tree', async (c) => {
       where f.is_deleted = false
         and f.id in (select folder_id from get_enumerable_folder_ids(${user.id}))
         and access.permission is not null
+        ${workspaceFilter}
       order by f.parent_id nulls first, case when f.parent_id is null then f.updated_at end desc nulls last, f.position::numeric asc
     `,
   );

@@ -262,6 +262,16 @@ const toPublicPageMetadataDto = (page: NormalizedPageRow) => ({
 pagesRoute.get('/tree', async (c) => {
   // Return pages the user can access (owned or shared)
   const user = c.get('user') as { id: string };
+  const workspaceId = c.req.query('workspaceId') ?? null;
+
+  if (workspaceId) {
+    if (!UUID_PATTERN.test(workspaceId)) {
+      throw new HTTPException(400, { message: 'Invalid workspaceId' });
+    }
+    await assertEntityWorkspaceAccess(workspaceId, user.id);
+  }
+
+  const workspaceFilter = workspaceId ? sql`and p.workspace_id = ${workspaceId}` : sql``;
 
   type PageTreeDatabaseRow = PageDatabaseRowWithOwner & {
     enumerable_parent_id: string | null;
@@ -288,6 +298,7 @@ pagesRoute.get('/tree', async (c) => {
       join lateral get_effective_page_permission(p.id, ${user.id}) access on true
       where p.is_deleted = false
         and p.id in (select page_id from get_accessible_page_ids(${user.id}))
+        ${workspaceFilter}
       order by p.parent_id nulls first, case when p.parent_id is null then p.updated_at end desc nulls last, p.position::numeric asc
     `,
   );
