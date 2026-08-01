@@ -19,6 +19,8 @@ import {
 const workspacesRoute = new Hono();
 workspacesRoute.use('*', requireAuth);
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // GET /:orgSlug/workspaces
 workspacesRoute.get('/:orgSlug/workspaces', async (c) => {
   const user = c.get('user') as { id: string };
@@ -275,6 +277,52 @@ workspacesRoute.delete('/:orgSlug/workspaces/:workspaceSlug/members/:userId', as
   });
   if (rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
   return c.json({ ok: true });
+});
+
+// POST /:orgSlug/workspaces/:workspaceSlug/assign — bulk-stamp workspace_id on folders and/or pages
+workspacesRoute.post('/:orgSlug/workspaces/:workspaceSlug/assign', async (c) => {
+  const user = c.get('user') as { id: string };
+  const ctx = await loadOrgCtx(user.id, c.req.param('orgSlug'));
+  if (!ctx) throw new HTTPException(404, { message: 'Org not found' });
+  assertOrgAdmin(ctx);
+  const wsCtx = await loadWorkspaceCtx(ctx.orgId, c.req.param('workspaceSlug'), user.id, ctx);
+  if (!wsCtx) throw new HTTPException(404, { message: 'Workspace not found' });
+
+  const body = await c.req.json().catch(() => null);
+  const folderIds: string[] = Array.isArray(body?.folderIds) ? body.folderIds : [];
+  const pageIds: string[] = Array.isArray(body?.pageIds) ? body.pageIds : [];
+
+  if (folderIds.length === 0 && pageIds.length === 0) {
+    throw new HTTPException(400, { message: 'At least one of folderIds or pageIds is required' });
+  }
+
+  const badFolder = folderIds.find((id) => !UUID_PATTERN.test(id));
+  const badPage = pageIds.find((id) => !UUID_PATTERN.test(id));
+  if (badFolder) throw new HTTPException(400, { message: `Invalid folder ID: ${badFolder}` });
+  if (badPage) throw new HTTPException(400, { message: `Invalid page ID: ${badPage}` });
+
+  let foldersUpdated = 0;
+  let pagesUpdated = 0;
+
+  if (folderIds.length > 0) {
+    const result = await executeQuery(
+      db,
+      sql`UPDATE folders SET workspace_id = ${wsCtx.workspaceId}
+          WHERE id = ANY(${sql.param(folderIds)}::uuid[])`,
+    );
+    foldersUpdated = result.rowCount ?? 0;
+  }
+
+  if (pageIds.length > 0) {
+    const result = await executeQuery(
+      db,
+      sql`UPDATE pages SET workspace_id = ${wsCtx.workspaceId}
+          WHERE id = ANY(${sql.param(pageIds)}::uuid[])`,
+    );
+    pagesUpdated = result.rowCount ?? 0;
+  }
+
+  return c.json({ ok: true, foldersUpdated, pagesUpdated });
 });
 
 export default workspacesRoute;
