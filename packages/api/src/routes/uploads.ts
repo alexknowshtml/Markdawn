@@ -7,7 +7,8 @@ import { bodyLimit } from 'hono/body-limit';
 import { HTTPException } from 'hono/http-exception';
 import { auth } from '../auth';
 import { db } from '../db/connection';
-import { executeQuery, type QueryExecutor } from '../db/query';
+import { executeQuery, query, type QueryExecutor } from '../db/query';
+import { assertEntityWorkspaceAccess } from '../utils/org-auth';
 import { uploadsDir } from '../env';
 import {
   actorColumns,
@@ -67,9 +68,29 @@ const getUploadAccess = async (
        EXISTS (
          SELECT 1
          FROM upload_page_refs upr
+         JOIN pages p ON p.id = upr.page_id
          JOIN LATERAL get_effective_page_permission(upr.page_id, ${userId}) access ON true
          WHERE upr.upload_id = ${uploadId}
            AND access.permission IS NOT NULL
+           AND (
+             p.workspace_id IS NULL
+             OR EXISTS (
+               SELECT 1 FROM workspaces w
+               LEFT JOIN workspace_memberships wm
+                 ON wm.workspace_id = w.id AND wm.user_id = ${userId}
+               LEFT JOIN org_members om
+                 ON om.org_id = w.org_id AND om.user_id = ${userId}
+               JOIN users u ON u.id = ${userId}
+               WHERE w.id = p.workspace_id
+                 AND w.archived_at IS NULL
+                 AND (
+                   wm.user_id IS NOT NULL
+                   OR om.role IN ('owner', 'admin')
+                   OR w.visibility = 'open'
+                   OR u.system_role = 'super_admin'
+                 )
+             )
+           )
        ) AS has_accessible_reference`,
   );
   const access = result.rows[0];
@@ -134,6 +155,11 @@ uploadsRoute.post(
     }
 
     await ensureActorPageAccess(actor, pageId, 'edit');
+
+    const pageWsResult = await query<{ workspace_id: string | null }>(
+      sql`SELECT workspace_id FROM pages WHERE id = ${pageId} LIMIT 1`,
+    );
+    await assertEntityWorkspaceAccess(pageWsResult.rows[0]?.workspace_id ?? null, actor.id);
 
     if (!(file instanceof File)) {
       throw new HTTPException(400, { message: 'File is required' });
