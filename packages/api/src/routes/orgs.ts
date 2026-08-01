@@ -4,7 +4,7 @@ import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
 import { db } from '../db/connection';
 import { inviteTokens, orgMembers, orgs } from '../db/schema';
-import { query } from '../db/query';
+import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import {
   type OrgRole,
@@ -201,12 +201,27 @@ orgsRoute.patch('/:orgSlug/members/:userId/role', async (c) => {
     throw new HTTPException(400, { message: 'role must be admin or member' });
   }
 
-  const result = await query(
-    sql`UPDATE org_members SET role = ${role}
-        WHERE org_id = ${ctx.orgId} AND user_id = ${targetId}
-        RETURNING user_id`,
-  );
-  if (!result.rowCount || result.rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
+  await db.transaction(async (tx) => {
+    const membersResult = await executeQuery<{ user_id: string; role: string }>(
+      tx,
+      sql`SELECT user_id, role FROM org_members WHERE org_id = ${ctx.orgId} FOR UPDATE`,
+    );
+    const members = membersResult.rows;
+    const target = members.find((m) => m.user_id === targetId);
+    if (!target) throw new HTTPException(404, { message: 'Member not found' });
+
+    if (target.role === 'owner') {
+      const ownerCount = members.filter((m) => m.role === 'owner').length;
+      if (ownerCount === 1) {
+        throw new HTTPException(400, { message: 'Cannot demote the last owner of an org' });
+      }
+    }
+
+    await executeQuery(
+      tx,
+      sql`UPDATE org_members SET role = ${role} WHERE org_id = ${ctx.orgId} AND user_id = ${targetId}`,
+    );
+  });
   return c.json({ ok: true, role });
 });
 
@@ -219,10 +234,27 @@ orgsRoute.delete('/:orgSlug/members/:userId', async (c) => {
   const targetId = c.req.param('userId');
   if (targetId !== user.id) assertOrgAdmin(ctx);
 
-  const result = await query(
-    sql`DELETE FROM org_members WHERE org_id = ${ctx.orgId} AND user_id = ${targetId} RETURNING user_id`,
-  );
-  if (!result.rowCount || result.rowCount === 0) throw new HTTPException(404, { message: 'Member not found' });
+  await db.transaction(async (tx) => {
+    const membersResult = await executeQuery<{ user_id: string; role: string }>(
+      tx,
+      sql`SELECT user_id, role FROM org_members WHERE org_id = ${ctx.orgId} FOR UPDATE`,
+    );
+    const members = membersResult.rows;
+    const target = members.find((m) => m.user_id === targetId);
+    if (!target) throw new HTTPException(404, { message: 'Member not found' });
+
+    if (target.role === 'owner') {
+      const ownerCount = members.filter((m) => m.role === 'owner').length;
+      if (ownerCount === 1) {
+        throw new HTTPException(400, { message: 'Cannot remove the last owner of an org' });
+      }
+    }
+
+    await executeQuery(
+      tx,
+      sql`DELETE FROM org_members WHERE org_id = ${ctx.orgId} AND user_id = ${targetId}`,
+    );
+  });
   return c.json({ ok: true });
 });
 
