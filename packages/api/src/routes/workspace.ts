@@ -1,11 +1,15 @@
 import { sql } from 'drizzle-orm';
 import { Hono } from 'hono';
 import { HTTPException } from 'hono/http-exception';
+import { auth } from '../auth';
 import { db } from '../db/connection';
+import { accounts, users } from '../db/schema';
 import { executeQuery, query } from '../db/query';
 import { requireAuth } from '../middleware/auth';
 import { lockWorkspaceAccessMutation } from '../utils/share-access';
 import { notifyWorkspaceEvent } from '../utils/share-notify';
+
+const FRONTEND_URL = process.env.FRONTEND_URL ?? 'http://localhost:5173';
 
 const workspaceRoute = new Hono();
 
@@ -80,14 +84,51 @@ workspaceRoute.post('/members/invite', async (c) => {
   }
 
   const role = parseWorkspaceRole(rawRole, 'editor');
+  const trimmedEmail = email.trim();
 
-  // Find the user by email
+  // Find the user by email; create account if they don't exist yet
   const userResult = await query(
-    sql`SELECT id, name FROM users WHERE lower(email) = lower(${email.trim()}) LIMIT 1`,
+    sql`SELECT id, name FROM users WHERE lower(email) = lower(${trimmedEmail}) LIMIT 1`,
   );
-  const targetUser = userResult.rows[0] as { id: string; name: string } | undefined;
+  let targetUser = userResult.rows[0] as { id: string; name: string } | undefined;
+  let wasCreated = false;
+
   if (!targetUser) {
-    throw new HTTPException(404, { message: 'User not found' });
+    const now = new Date();
+    const [newUser] = await db
+      .insert(users)
+      .values({
+        email: trimmedEmail,
+        name: trimmedEmail.split('@')[0],
+        emailVerified: false,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .returning({ id: users.id, name: users.name })
+      .catch(() => []);
+
+    if (!newUser) {
+      throw new HTTPException(400, { message: 'Could not create an account for that email.' });
+    }
+
+    // Credential account with no password — they set it via the reset link
+    await db.insert(accounts).values({
+      accountId: newUser.id,
+      providerId: 'credential',
+      userId: newUser.id,
+      password: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+
+    targetUser = newUser;
+    wasCreated = true;
+
+    // Send "set your password" email — non-fatal if Resend domain not yet verified
+    auth.api.requestPasswordReset({
+      body: { email: trimmedEmail, redirectTo: `${FRONTEND_URL}/reset-password` },
+      headers: new Headers(),
+    }).catch(() => null);
   }
 
   // Can't invite yourself
@@ -105,7 +146,9 @@ workspaceRoute.post('/members/invite', async (c) => {
     throw new HTTPException(409, { message: 'User is already a member of this workspace' });
   }
 
-  const inviteMessage = `Added ${targetUser.name ?? email} as ${role} to workspace`;
+  const inviteMessage = wasCreated
+    ? `Invited ${targetUser.name ?? trimmedEmail} as ${role} — they'll get an email to set their password`
+    : `Added ${targetUser.name ?? trimmedEmail} as ${role} to workspace`;
 
   await db.transaction(async (tx) => {
     await lockWorkspaceAccessMutation(tx, user.id);

@@ -94,7 +94,6 @@ export function useInviteToWorkspace() {
       queryClient.invalidateQueries({ queryKey: ['shares'] });
       if (data?.message) showSuccessToast(data.message);
     },
-    meta: { errorMessage: 'Failed to invite' },
   });
 }
 

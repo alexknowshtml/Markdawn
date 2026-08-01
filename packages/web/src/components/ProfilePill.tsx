@@ -185,7 +185,7 @@ export function ProfilePill({
           <button
             type="button"
             onClick={handleSignOut}
-            className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg opacity-0 group-hover:opacity-100 hover:bg-red-500/10 transition-all cursor-pointer"
+            className="p-1.5 text-zinc-400 dark:text-zinc-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-500/10 transition-all cursor-pointer"
             title="Sign Out"
           >
             <LogOut size={16} />
