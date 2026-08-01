@@ -47,6 +47,7 @@ import {
 import { notifyShareRecompute } from '../utils/share-notify';
 import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
 import { purgeFolderSubtrees } from '../utils/trashLifecycle';
+import { assertEntityWorkspaceAccess } from '../utils/org-auth';
 import { processUploadDeletionQueue } from '../utils/uploadCleanup';
 
 const foldersRoute = new Hono();
@@ -371,6 +372,7 @@ foldersRoute.patch(':id/restore', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(folder.workspaceId, user.id);
   if (folder.ownerId !== user.id) {
     throw new HTTPException(403, { message: 'You can only restore folders that you own' });
   }
@@ -501,6 +503,7 @@ foldersRoute.delete(':id/permanent', async (c) => {
   if (!folder) {
     const activeFolder = await getFolderById(folderId);
     if (activeFolder) {
+      await assertEntityWorkspaceAccess(activeFolder.workspaceId, user.id);
       if (activeFolder.ownerId !== user.id) {
         throw new HTTPException(403, {
           message: 'You can only permanently delete folders that you own',
@@ -513,6 +516,7 @@ foldersRoute.delete(':id/permanent', async (c) => {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
 
+  await assertEntityWorkspaceAccess(folder.workspaceId, user.id);
   if (folder.ownerId !== user.id) {
     throw new HTTPException(403, {
       message: 'You can only permanently delete folders that you own',
@@ -551,6 +555,7 @@ foldersRoute.get(':id', async (c) => {
     if (!currentFolder) {
       throw new HTTPException(404, { message: 'Folder not found' });
     }
+    await assertEntityWorkspaceAccess(currentFolder.workspaceId, user.id, tx);
     await ensureFolderAccess(currentFolder.id, user.id, 'view', tx);
     const enumerableFolderIds = await getEnumerableFolderIds(user.id, tx);
     return toFolderDto(currentFolder, redactParentId(currentFolder.parentId, enumerableFolderIds));
@@ -567,6 +572,7 @@ foldersRoute.patch(':id', async (c) => {
     throw new HTTPException(404, { message: 'Folder not found' });
   }
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(folder.workspaceId, user.id);
 
   const body = await c.req.json().catch((error: unknown) => {
     if (error instanceof Error && error.name === 'BodyLimitError') throw error;
@@ -680,6 +686,7 @@ foldersPublicRoute.post(':id/copy', publicFolderBodyLimit, async (c) => {
     );
     const currentFolder = await getFolderById(folderId, tx);
     if (!currentFolder) throw new HTTPException(404, { message: 'Folder not found' });
+    if (actor.kind === 'user') await assertEntityWorkspaceAccess(currentFolder.workspaceId, actor.id, tx);
     await ensureActorFolderAccess(actor, folderId, 'view', tx);
     if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
     await ensureNoFolderCycle(folderId, parentId, actor.id, tx);
@@ -728,6 +735,8 @@ foldersPublicRoute.post(':id/copy', publicFolderBodyLimit, async (c) => {
 foldersRoute.delete(':id', async (c) => {
   const folderId = c.req.param('id');
   const user = c.get('user') as { id: string };
+  const wsFolder = await getFolderById(folderId);
+  if (wsFolder) await assertEntityWorkspaceAccess(wsFolder.workspaceId, user.id);
   const force = c.req.query('force') === 'true';
   const deletionResult = await moveFolderToTrash(folderId, user.id, force);
 
@@ -748,6 +757,8 @@ foldersRoute.delete(':id', async (c) => {
 foldersRoute.post(':id/leave', async (c) => {
   const folderId = c.req.param('id');
   const user = c.get('user') as { id: string };
+  const wsFolder = await getFolderById(folderId);
+  if (wsFolder) await assertEntityWorkspaceAccess(wsFolder.workspaceId, user.id);
   await removeFolderFromView(folderId, user.id);
   return c.json({ ok: true });
 });

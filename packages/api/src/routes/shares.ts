@@ -32,6 +32,7 @@ import {
   notifyShareUpdate,
 } from '../utils/share-notify';
 import { getAccessors, getAccessSources, toCollaboratorDisplays } from '../utils/shareAccessors';
+import { assertEntityWorkspaceAccess } from '../utils/org-auth';
 import { getEntityMetaUserIds, mergeMetaUserIds } from '../utils/shareRecipients';
 
 type PublicPermission = 'view' | 'edit';
@@ -41,6 +42,7 @@ type EntityInfo = {
   title: string;
   inheritancePolicy: 'inherit' | 'restricted';
   publicPermission: PublicPermission | null;
+  workspaceId: string | null;
 };
 
 type GrantRow = {
@@ -150,11 +152,12 @@ async function resolveEntity(
           title: string;
           inheritance_policy: 'inherit' | 'restricted';
           public_permission: PublicPermission | null;
+          workspace_id: string | null;
         }>(
           executor,
           sql`select page.id,
                   coalesce(get_root_folder_owner(page.parent_id), page.created_by) as owner_id,
-                  page.title, page.inheritance_policy, page.public_permission
+                  page.title, page.inheritance_policy, page.public_permission, page.workspace_id
            from pages page
            where page.id = ${entityId} and page.is_deleted = false`,
         )
@@ -164,10 +167,12 @@ async function resolveEntity(
           title: string;
           inheritance_policy: 'inherit' | 'restricted';
           public_permission: PublicPermission | null;
+          workspace_id: string | null;
         }>(
           executor,
           sql`select folder.id, get_root_folder_owner(folder.id) as owner_id,
-                  folder.name as title, folder.inheritance_policy, folder.public_permission
+                  folder.name as title, folder.inheritance_policy, folder.public_permission,
+                  folder.workspace_id
            from folders folder
            where folder.id = ${entityId} and folder.is_deleted = false`,
         );
@@ -183,6 +188,7 @@ async function resolveEntity(
     title: entity.title,
     inheritancePolicy: entity.inheritance_policy,
     publicPermission: entity.public_permission,
+    workspaceId: entity.workspace_id,
   };
 }
 
@@ -568,6 +574,7 @@ sharesRoute.get('/entity/:entityType/:entityId', async (c) => {
   return db.transaction(async (tx) => {
     await lockEntityAccess(tx, entityType, entityId);
     const entity = await resolveEntity(entityType, entityId, tx);
+    await assertEntityWorkspaceAccess(entity.workspaceId, user.id, tx);
     const access = await ensureEntityAccess(entityType, entityId, user.id, tx);
     const hasManagementAccess = access.fullAccess || access.permission === 'admin';
     const publicAccess = {
@@ -668,6 +675,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/inheritance', async (c) => {
   }
 
   const entity = await resolveEntity(entityType, entityId);
+  await assertEntityWorkspaceAccess(entity.workspaceId, user.id);
   await ensureCanAdminEntity(entityType, entityId, user.id);
   await db.transaction(async (tx) => {
     await lockEntityAccessMutation(tx, entityType, entityId);
@@ -710,6 +718,7 @@ sharesRoute.patch('/entity/:entityType/:entityId/public-access', async (c) => {
   const requestedPermission =
     body && typeof body === 'object' ? (body as { permission?: unknown }).permission : null;
   const entity = await resolveEntity(entityType, entityId);
+  await assertEntityWorkspaceAccess(entity.workspaceId, user.id);
   await ensureCanAdminEntity(entityType, entityId, user.id);
 
   const nextPermission =
@@ -795,6 +804,7 @@ sharesRoute.post('/entity/:entityType/:entityId/grants', async (c) => {
   }
   const nextPermission = parsePermission(permission);
   const entity = await resolveEntity(entityType, entityId);
+  await assertEntityWorkspaceAccess(entity.workspaceId, user.id);
   await ensureCanAdminEntity(entityType, entityId, user.id);
 
   const recipientResult = await query<{ id: string; email: string }>(

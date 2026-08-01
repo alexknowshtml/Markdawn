@@ -17,6 +17,7 @@ export type FolderDatabaseRow = {
   deletion_batch_id: string | null;
   public_permission: 'view' | 'edit' | null;
   inheritance_policy: 'inherit' | 'restricted';
+  workspace_id: string | null;
 };
 
 export type FolderDatabaseRowWithOwner = FolderDatabaseRow & { owner_id: string | null };
@@ -39,6 +40,7 @@ export function normalizeFolderRow(
     deletionBatchId: row.deletion_batch_id,
     publicPermission: row.public_permission,
     inheritancePolicy: row.inheritance_policy,
+    workspaceId: row.workspace_id,
     ownerId,
   };
 }

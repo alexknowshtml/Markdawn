@@ -74,6 +74,7 @@ import {
   processUploadDeletionQueue,
   purgeUnreferencedUploadsForPages,
 } from '../utils/uploadCleanup';
+import { assertEntityWorkspaceAccess } from '../utils/org-auth';
 import { getUniqueWorkspacePageLookup } from '../utils/wiki-link-lookup';
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -521,6 +522,7 @@ pagesPublicRoute.patch(
       await ensureActorPageAccess(actor, pageId, 'edit', tx);
       const page = await getPageById(pageId, tx);
       if (!page) throw new HTTPException(404, { message: 'Page not found' });
+      if (actor.kind === 'user') await assertEntityWorkspaceAccess(page.workspaceId, actor.id, tx);
       const nextTitle = hasTitle
         ? typeof title === 'string'
           ? normalizePageTitle(title)
@@ -616,6 +618,7 @@ pagesPublicRoute.patch(
         throw new HTTPException(404, { message: 'Page not found' });
       }
       await ensureActorPageAccess(actor, pageId, 'edit', tx);
+      if (actor.kind === 'user') await assertEntityWorkspaceAccess(page.workspaceId, actor.id, tx);
 
       if (page.title !== nextTitle) {
         await executeQuery(
@@ -933,6 +936,7 @@ pagesRoute.patch(':id/restore', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(page.workspaceId, user.id);
   if (page.ownerId !== user.id) {
     throw new HTTPException(403, { message: 'You can only restore pages that you own' });
   }
@@ -1019,6 +1023,7 @@ pagesRoute.patch(':id', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(page.workspaceId, user.id);
 
   let body: unknown;
   try {
@@ -1172,6 +1177,7 @@ pagesRoute.patch(':id/move', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(page.workspaceId, user.id);
 
   const body = await c.req.json().catch(() => null);
   if (!body || typeof body !== 'object') {
@@ -1244,6 +1250,7 @@ pagesRoute.get(':id/export/markdown', async (c) => {
     if (!page) {
       throw new HTTPException(404, { message: 'Page not found' });
     }
+    await assertEntityWorkspaceAccess(page.workspaceId, user.id, tx);
     await ensurePageAccess(page.id, user.id, 'view', tx);
     const uploadResult = await executeQuery<{ filename: string }>(
       tx,
@@ -1328,6 +1335,7 @@ pagesRoute.post(':id/import/markdown', async (c) => {
   }
 
   const user = c.get('user') as { id: string };
+  await assertEntityWorkspaceAccess(page.workspaceId, user.id);
   await ensurePageAccess(page.id, user.id, 'edit');
 
   const contentType = c.req.header('content-type') ?? '';
@@ -1415,6 +1423,8 @@ pagesRoute.post(':id/import/markdown', async (c) => {
 pagesRoute.delete(':id', async (c) => {
   const pageId = c.req.param('id');
   const user = c.get('user') as { id: string };
+  const wsPage = await getPageById(pageId);
+  if (wsPage) await assertEntityWorkspaceAccess(wsPage.workspaceId, user.id);
   await movePageToTrash(pageId, user.id);
   return c.json({ deleted: true });
 });
@@ -1422,6 +1432,8 @@ pagesRoute.delete(':id', async (c) => {
 pagesRoute.post(':id/leave', async (c) => {
   const pageId = c.req.param('id');
   const user = c.get('user') as { id: string };
+  const wsPage = await getPageById(pageId);
+  if (wsPage) await assertEntityWorkspaceAccess(wsPage.workspaceId, user.id);
   await removePageFromView(pageId, user.id);
   return c.json({ ok: true });
 });
@@ -1458,6 +1470,7 @@ pagesPublicRoute.post(
       );
       const currentPage = await getPageById(pageId, tx);
       if (!currentPage) throw new HTTPException(404, { message: 'Page not found' });
+      if (actor.kind === 'user') await assertEntityWorkspaceAccess(currentPage.workspaceId, actor.id, tx);
       await ensureActorPageAccess(actor, pageId, 'view', tx);
       if (parentId) await ensureActorCanCreateInFolder(actor, parentId, tx);
       await persistGuestIdentity(actor, tx);
@@ -1488,6 +1501,7 @@ pagesRoute.delete(':id/permanent', async (c) => {
   if (!deletedPage) {
     const activePage = await getPageById(pageId);
     if (activePage) {
+      await assertEntityWorkspaceAccess(activePage.workspaceId, user.id);
       if (activePage.ownerId !== user.id) {
         throw new HTTPException(403, {
           message: 'You can only permanently delete pages that you own',
@@ -1500,6 +1514,7 @@ pagesRoute.delete(':id/permanent', async (c) => {
     throw new HTTPException(404, { message: 'Page not found' });
   }
 
+  await assertEntityWorkspaceAccess(deletedPage.workspaceId, user.id);
   if (deletedPage.ownerId !== user.id) {
     throw new HTTPException(403, {
       message: 'You can only permanently delete pages that you own',

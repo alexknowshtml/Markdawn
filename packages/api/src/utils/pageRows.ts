@@ -24,6 +24,7 @@ export type PageDatabaseRow = {
   is_deleted: boolean | null;
   deleted_at: Date | null;
   deletion_batch_id: string | null;
+  workspace_id: string | null;
 };
 
 export type PageDatabaseRowWithOwner = PageDatabaseRow & { owner_id: string | null };
@@ -50,6 +51,7 @@ export function normalizePageRow(row: PageDatabaseRow, ownerId: string | null): 
     isDeleted: row.is_deleted,
     deletedAt: row.deleted_at,
     deletionBatchId: row.deletion_batch_id,
+    workspaceId: row.workspace_id,
     ownerId,
   };
 }
