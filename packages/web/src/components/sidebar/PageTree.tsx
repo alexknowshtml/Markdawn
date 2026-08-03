@@ -544,43 +544,44 @@ export function PageTree() {
                       </div>
                     );
                   })}
+                  {owned.length > 0 && shared.length > 0 && (
+                    <div className="border-t border-zinc-200/70 dark:border-zinc-700/40 mx-1 mt-1.5 mb-1" />
+                  )}
                   {shared.map((sharedGroup) => {
                     const isWsCollapsed = sidebar.collapsedWorkspaceIds.has(sharedGroup.ownerId);
                     return (
-                      <div key={`shared-ws-${sharedGroup.ownerId}`}>
-                        {true && (
-                          <div className="flex items-center">
-                            <button
-                              type="button"
-                              onClick={() => sidebar.toggleWorkspace(sharedGroup.ownerId)}
-                              className="flex min-w-0 flex-1 items-center text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer px-1 py-0.5"
-                            >
-                              {isWsCollapsed ? (
-                                <ChevronRight size={12} className="mr-1 shrink-0" />
-                              ) : (
-                                <ChevronDown size={12} className="mr-1 shrink-0" />
-                              )}
-                              <span className="truncate">{sharedGroup.ownerName ?? 'Shared'}</span>
-                              <span className="ml-1.5 shrink-0 text-[10px] text-zinc-400 dark:text-zinc-500">· shared</span>
-                            </button>
-                            <button
-                              type="button"
-                              title="Leave workspace"
-                              aria-label={`Leave ${sharedGroup.ownerName ?? 'workspace'}`}
-                              disabled={leaveWorkspaceMutation.isPending || !currentUserId}
-                              onClick={() => {
-                                if (!currentUserId) return;
-                                leaveWorkspaceMutation.mutate({
-                                  ownerId: sharedGroup.ownerId,
-                                  memberId: currentUserId,
-                                });
-                              }}
-                              className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer shrink-0"
-                            >
-                              <LogOut size={12} />
-                            </button>
-                          </div>
-                        )}
+                      <div key={`shared-ws-${sharedGroup.ownerId}`} className="ml-5">
+                        <div className="flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => sidebar.toggleWorkspace(sharedGroup.ownerId)}
+                            className="flex min-w-0 flex-1 items-center text-xs font-medium text-zinc-400 dark:text-zinc-500 hover:text-zinc-700 dark:hover:text-zinc-300 cursor-pointer px-1 py-0.5 italic"
+                          >
+                            {isWsCollapsed ? (
+                              <ChevronRight size={12} className="mr-1 shrink-0" />
+                            ) : (
+                              <ChevronDown size={12} className="mr-1 shrink-0" />
+                            )}
+                            <span className="truncate">{sharedGroup.ownerName ?? 'Shared'}</span>
+                            <span className="ml-1.5 shrink-0 text-[10px] text-zinc-300 dark:text-zinc-600 not-italic">· shared</span>
+                          </button>
+                          <button
+                            type="button"
+                            title="Leave workspace"
+                            aria-label={`Leave ${sharedGroup.ownerName ?? 'workspace'}`}
+                            disabled={leaveWorkspaceMutation.isPending || !currentUserId}
+                            onClick={() => {
+                              if (!currentUserId) return;
+                              leaveWorkspaceMutation.mutate({
+                                ownerId: sharedGroup.ownerId,
+                                memberId: currentUserId,
+                              });
+                            }}
+                            className="rounded p-1 text-zinc-300 dark:text-zinc-600 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer shrink-0"
+                          >
+                            <LogOut size={12} />
+                          </button>
+                        </div>
                         {!isWsCollapsed && (
                           <div className="space-y-0.5">
                             {sharedGroup.folders.map((folder) => (
