@@ -442,102 +442,85 @@ export function PageTree() {
         />
 
         {hasSharedContent && (
-          <div className="mb-2">
-            <button
-              type="button"
-              onClick={() => sidebar.toggleSection('shared')}
-              aria-expanded={!sidebar.collapsedSections.has('shared')}
-              className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
-            >
-              {sidebar.collapsedSections.has('shared') ? (
-                <ChevronRight size={14} className="mr-1 shrink-0" />
-              ) : (
-                <ChevronDown size={14} className="mr-1 shrink-0" />
-              )}
-              <span>Shared With Me</span>
-            </button>
-            {!sidebar.collapsedSections.has('shared') && (
-              <div className="space-y-1">
-                {visibleWorkspaceGroups.map((group) => {
-                  const isCollapsed = sidebar.collapsedWorkspaceIds.has(group.ownerId);
-                  return (
-                    <div key={`workspace-${group.ownerId}`}>
-                      <div className="flex items-center gap-1 px-3 py-1">
-                        <button
-                          type="button"
-                          onClick={() => sidebar.toggleWorkspace(group.ownerId)}
-                          className="flex min-w-0 flex-1 items-center text-left text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-                        >
-                          {isCollapsed ? (
-                            <ChevronRight size={13} className="mr-1 shrink-0" />
-                          ) : (
-                            <ChevronDown size={13} className="mr-1 shrink-0" />
-                          )}
-                          <span className="truncate">
-                            {group.ownerName
-                              ? `${group.ownerName}'s Workspace`
-                              : 'Shared Workspace'}
-                          </span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Leave workspace"
-                          aria-label={`Leave ${group.ownerName ?? 'workspace'}`}
-                          disabled={leaveWorkspaceMutation.isPending || !currentUserId}
-                          onClick={() => {
-                            if (!currentUserId) return;
-                            leaveWorkspaceMutation.mutate({
-                              ownerId: group.ownerId,
-                              memberId: currentUserId,
-                            });
-                          }}
-                          className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer"
-                        >
-                          <LogOut size={12} />
-                        </button>
-                      </div>
-                      {!isCollapsed && (
-                        <div className="space-y-0.5">
-                          {group.folders.map((folder) => (
-                            <WorkspaceFolderBranch
-                              runtime={sidebarTreeRuntime}
-                              key={folder.id}
-                              folder={folder}
-                              workspaceOwnerId={group.ownerId}
-                              allPagesByFolder={allPagesByFolder}
-                              sourceIsAdmin={group.role === 'admin'}
-                            />
-                          ))}
-                          {group.pages.map((page) => (
-                            <WorkspacePageRow
-                              runtime={sidebarTreeRuntime}
-                              key={page.id}
-                              page={page}
-                              sourceIsAdmin={group.role === 'admin'}
-                            />
-                          ))}
-                        </div>
+          <div className="space-y-1">
+            {visibleWorkspaceGroups.map((group) => {
+              const isCollapsed = sidebar.collapsedWorkspaceIds.has(group.ownerId);
+              return (
+                <div key={`workspace-${group.ownerId}`}>
+                  <div className="flex items-center gap-1 px-3 py-1">
+                    <button
+                      type="button"
+                      onClick={() => sidebar.toggleWorkspace(group.ownerId)}
+                      className="flex min-w-0 flex-1 items-center text-left text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+                    >
+                      {isCollapsed ? (
+                        <ChevronRight size={13} className="mr-1 shrink-0" />
+                      ) : (
+                        <ChevronDown size={13} className="mr-1 shrink-0" />
                       )}
+                      <span className="truncate">
+                        {group.ownerName
+                          ? `${group.ownerName}'s Workspace`
+                          : 'Shared Workspace'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      title="Leave workspace"
+                      aria-label={`Leave ${group.ownerName ?? 'workspace'}`}
+                      disabled={leaveWorkspaceMutation.isPending || !currentUserId}
+                      onClick={() => {
+                        if (!currentUserId) return;
+                        leaveWorkspaceMutation.mutate({
+                          ownerId: group.ownerId,
+                          memberId: currentUserId,
+                        });
+                      }}
+                      className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer"
+                    >
+                      <LogOut size={12} />
+                    </button>
+                  </div>
+                  {!isCollapsed && (
+                    <div className="space-y-0.5">
+                      {group.folders.map((folder) => (
+                        <WorkspaceFolderBranch
+                          runtime={sidebarTreeRuntime}
+                          key={folder.id}
+                          folder={folder}
+                          workspaceOwnerId={group.ownerId}
+                          allPagesByFolder={allPagesByFolder}
+                          sourceIsAdmin={group.role === 'admin'}
+                        />
+                      ))}
+                      {group.pages.map((page) => (
+                        <WorkspacePageRow
+                          runtime={sidebarTreeRuntime}
+                          key={page.id}
+                          page={page}
+                          sourceIsAdmin={group.role === 'admin'}
+                        />
+                      ))}
                     </div>
-                  );
-                })}
-                {sharedPreview.map((item) => (
-                  <SharedNavigationBranch
-                    key={`${item.entityType}-${item.id}`}
-                    item={item}
-                    runtime={sidebarTreeRuntime}
-                  />
-                ))}
-                {hasMoreShared && (
-                  <button
-                    type="button"
-                    onClick={() => navigate('/app?filter=shared-with-me')}
-                    className="w-full px-4 py-1.5 text-left text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
-                  >
-                    View more
-                  </button>
-                )}
-              </div>
+                  )}
+                </div>
+              );
+            })}
+            {sharedPreview.map((item) => (
+              <SharedNavigationBranch
+                key={`${item.entityType}-${item.id}`}
+                item={item}
+                runtime={sidebarTreeRuntime}
+              />
+            ))}
+            {hasMoreShared && (
+              <button
+                type="button"
+                onClick={() => navigate('/app?filter=shared-with-me')}
+                className="w-full px-4 py-1.5 text-left text-xs text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+              >
+                View more
+              </button>
             )}
           </div>
         )}
@@ -553,15 +536,16 @@ export function PageTree() {
                 type="button"
                 onClick={() => sidebar.toggleSection(sectionKey)}
                 aria-expanded={!isCollapsed}
-                className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+                className={`flex items-center w-full px-2 py-1 mb-1 text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors text-left rounded-md ${
+                  color
+                    ? `${color.headerBg} ${color.headerText} hover:opacity-90`
+                    : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                }`}
               >
                 {isCollapsed ? (
                   <ChevronRight size={14} className="mr-1 shrink-0" />
                 ) : (
                   <ChevronDown size={14} className="mr-1 shrink-0" />
-                )}
-                {selectedOrg === 'all' && color && (
-                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 mr-1.5 ${color.dot}`} />
                 )}
                 <span className="truncate">{group.name}</span>
               </button>
