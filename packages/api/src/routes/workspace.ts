@@ -33,13 +33,16 @@ workspaceRoute.get('/memberships', async (c) => {
             owner.name as "ownerName",
             wm.role,
             wm.created_at as "joinedAt",
-            shared_org.org_id as "orgId"
+            (
+              select om_owner.org_id
+              from org_members om_owner
+              join org_members om_me on om_me.org_id = om_owner.org_id
+              where om_owner.user_id = wm.workspace_owner_id
+                and om_me.user_id = ${user.id}
+              limit 1
+            ) as "orgId"
      from workspace_members wm
      join users owner on owner.id = wm.workspace_owner_id
-     left join org_members my_orgs on my_orgs.user_id = ${user.id}
-     left join org_members shared_org
-       on shared_org.org_id = my_orgs.org_id
-       and shared_org.user_id = wm.workspace_owner_id
      where wm.member_id = ${user.id}
      order by wm.created_at asc`,
   );
