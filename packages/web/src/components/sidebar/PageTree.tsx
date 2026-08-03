@@ -465,7 +465,6 @@ export function PageTree() {
           const orgKey = `org-${orgId}`;
           const isOrgCollapsed = sidebar.collapsedSections.has(orgKey);
           const color = orgColorMap.get(orgId);
-          const hasMultiple = owned.length + shared.length > 1;
           return (
             <div key={orgKey}>
               <button
@@ -490,9 +489,10 @@ export function PageTree() {
                   {owned.map((ownedGroup) => {
                     const wsKey = `owned-ws-${ownedGroup.workspaceId ?? 'default'}`;
                     const isWsCollapsed = sidebar.collapsedSections.has(wsKey);
+                    const showOwnedHeader = owned.length > 1;
                     return (
                       <div key={wsKey}>
-                        {hasMultiple && (
+                        {showOwnedHeader && (
                           <button
                             type="button"
                             onClick={() => sidebar.toggleSection(wsKey)}
@@ -506,7 +506,7 @@ export function PageTree() {
                             <span className="truncate">{ownedGroup.name}</span>
                           </button>
                         )}
-                        {(!hasMultiple || !isWsCollapsed) && (
+                        {(!showOwnedHeader || !isWsCollapsed) && (
                           <div className="space-y-0.5">
                             {ownedGroup.folders.map((folder) => (
                               <OwnedFolderBranch
@@ -548,7 +548,7 @@ export function PageTree() {
                     const isWsCollapsed = sidebar.collapsedWorkspaceIds.has(sharedGroup.ownerId);
                     return (
                       <div key={`shared-ws-${sharedGroup.ownerId}`}>
-                        {hasMultiple && (
+                        {true && (
                           <div className="flex items-center">
                             <button
                               type="button"
@@ -581,7 +581,7 @@ export function PageTree() {
                             </button>
                           </div>
                         )}
-                        {(!hasMultiple || !isWsCollapsed) && (
+                        {!isWsCollapsed && (
                           <div className="space-y-0.5">
                             {sharedGroup.folders.map((folder) => (
                               <WorkspaceFolderBranch
