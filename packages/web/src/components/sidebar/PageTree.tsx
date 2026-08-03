@@ -445,13 +445,18 @@ export function PageTree() {
           <div className="space-y-1">
             {visibleWorkspaceGroups.map((group) => {
               const isCollapsed = sidebar.collapsedWorkspaceIds.has(group.ownerId);
+              const sharedColor = group.orgId ? orgColorMap.get(group.orgId) : undefined;
               return (
                 <div key={`workspace-${group.ownerId}`}>
-                  <div className="flex items-center gap-1 px-3 py-1">
+                  <div className="flex items-center gap-1 mb-1">
                     <button
                       type="button"
                       onClick={() => sidebar.toggleWorkspace(group.ownerId)}
-                      className="flex min-w-0 flex-1 items-center text-left text-xs font-medium text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100 cursor-pointer"
+                      className={`flex min-w-0 flex-1 items-center text-left text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors rounded-md px-2 py-1 ${
+                        sharedColor
+                          ? `${sharedColor.headerBg} ${sharedColor.headerText} hover:opacity-90`
+                          : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                      }`}
                     >
                       {isCollapsed ? (
                         <ChevronRight size={13} className="mr-1 shrink-0" />
@@ -476,7 +481,7 @@ export function PageTree() {
                           memberId: currentUserId,
                         });
                       }}
-                      className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer"
+                      className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer shrink-0"
                     >
                       <LogOut size={12} />
                     </button>

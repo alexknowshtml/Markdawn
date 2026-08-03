@@ -5,6 +5,7 @@ export interface WorkspaceMembership {
   ownerName: string | null;
   role: WorkspaceRole;
   joinedAt: string;
+  orgId: string | null;
 }
 
 export interface WorkspaceMember {

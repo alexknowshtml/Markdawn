@@ -171,7 +171,7 @@ export function useSidebarModel(options: {
             (g) => g.workspaceId !== null && wsToOrgMap.get(g.workspaceId) === selectedOrgId,
           );
 
-    const workspaceGroups = workspaceMemberships.map((membership) => ({
+    const allWorkspaceGroups = workspaceMemberships.map((membership) => ({
       ...membership,
       folders: folders.filter(
         (folder) => folder.ownerId === membership.ownerId && folder.workspaceAccess === true,
@@ -183,6 +183,10 @@ export function useSidebarModel(options: {
           page.parentId === null,
       ),
     }));
+    const workspaceGroups =
+      selectedOrgId === 'all'
+        ? allWorkspaceGroups
+        : allWorkspaceGroups.filter((g) => g.orgId === selectedOrgId);
     const sidebarFolderIds = [
       ...new Set([
         ...ownedFolderIds,
