@@ -156,11 +156,9 @@ export function PageTree() {
     foldersByParent,
     getSidebarAuthorization,
     getSidebarCapabilities,
-    ownedFolders,
     ownedWorkspaceGroups,
     pagesByFolder,
     recentRows,
-    rootPages,
     sidebarFolderIds,
     workspaceGroups,
   } = useSidebarModel({
@@ -356,7 +354,6 @@ export function PageTree() {
     );
   }
 
-  const rootFolders = ownedFolders;
   const sharedPreview = directSharedNavigation.slice(0, SIDEBAR_PREVIEW_LIMIT);
   const hasMoreShared = directSharedNavigation.length > SIDEBAR_PREVIEW_LIMIT;
   const visibleWorkspaceGroups = workspaceGroups;
@@ -545,81 +542,32 @@ export function PageTree() {
           </div>
         )}
 
-        <div>
-          <button
-            type="button"
-            onClick={() => sidebar.toggleSection('owned')}
-            aria-expanded={!sidebar.collapsedSections.has('owned')}
-            className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
-          >
-            {sidebar.collapsedSections.has('owned') ? (
-              <ChevronRight size={14} className="mr-1 shrink-0" />
-            ) : (
-              <ChevronDown size={14} className="mr-1 shrink-0" />
-            )}
-            <span>Owned By Me</span>
-          </button>
-          {!sidebar.collapsedSections.has('owned') && (
-            <div className="space-y-0.5">
-              {ownedWorkspaceGroups.length > 1 ? (
-                ownedWorkspaceGroups.map((group) => {
-                  const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
-                  const isCollapsed = sidebar.collapsedSections.has(sectionKey);
-                  const orgId = group.workspaceId ? wsToOrgMap.get(group.workspaceId) : undefined;
-                  const color = orgId ? orgColorMap.get(orgId) : undefined;
-                  return (
-                    <div key={sectionKey}>
-                      <button
-                        type="button"
-                        onClick={() => sidebar.toggleSection(sectionKey)}
-                        className="flex items-center w-full px-1 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors cursor-pointer"
-                      >
-                        {isCollapsed ? (
-                          <ChevronRight size={12} className="mr-1 shrink-0" />
-                        ) : (
-                          <ChevronDown size={12} className="mr-1 shrink-0" />
-                        )}
-                        {selectedOrg === 'all' && color && (
-                          <span className={`h-1.5 w-1.5 rounded-full shrink-0 mr-1.5 ${color.dot}`} />
-                        )}
-                        <span className="truncate">{group.name}</span>
-                      </button>
-                      {!isCollapsed && (
-                        <div className="space-y-0.5">
-                          {group.folders.map((folder) => (
-                            <OwnedFolderBranch
-                              runtime={sidebarTreeRuntime}
-                              key={folder.id}
-                              folder={folder}
-                              foldersByParent={foldersByParent}
-                              pagesByFolder={pagesByFolder}
-                            />
-                          ))}
-                          {group.pages.map((page) => (
-                            <SidebarEntityRow
-                              runtime={sidebarTreeRuntime}
-                              key={page.id}
-                              entity={{
-                                entityType: 'page',
-                                id: page.id,
-                                title: page.title,
-                                icon: page.icon,
-                                ownerId: page.ownerId,
-                                createdBy: page.createdBy,
-                                userPermission: page.userPermission,
-                                parentId: page.parentId,
-                              }}
-                              placement="owned"
-                            />
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })
-              ) : (
-                <>
-                  {rootFolders.map((folder) => (
+        {ownedWorkspaceGroups.map((group) => {
+          const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
+          const isCollapsed = sidebar.collapsedSections.has(sectionKey);
+          const orgId = group.workspaceId ? wsToOrgMap.get(group.workspaceId) : undefined;
+          const color = orgId ? orgColorMap.get(orgId) : undefined;
+          return (
+            <div key={sectionKey}>
+              <button
+                type="button"
+                onClick={() => sidebar.toggleSection(sectionKey)}
+                aria-expanded={!isCollapsed}
+                className="flex items-center px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors w-full text-left"
+              >
+                {isCollapsed ? (
+                  <ChevronRight size={14} className="mr-1 shrink-0" />
+                ) : (
+                  <ChevronDown size={14} className="mr-1 shrink-0" />
+                )}
+                {selectedOrg === 'all' && color && (
+                  <span className={`h-1.5 w-1.5 rounded-full shrink-0 mr-1.5 ${color.dot}`} />
+                )}
+                <span className="truncate">{group.name}</span>
+              </button>
+              {!isCollapsed && (
+                <div className="space-y-0.5">
+                  {group.folders.map((folder) => (
                     <OwnedFolderBranch
                       runtime={sidebarTreeRuntime}
                       key={folder.id}
@@ -628,7 +576,7 @@ export function PageTree() {
                       pagesByFolder={pagesByFolder}
                     />
                   ))}
-                  {rootPages.map((page) => (
+                  {group.pages.map((page) => (
                     <SidebarEntityRow
                       runtime={sidebarTreeRuntime}
                       key={page.id}
@@ -645,16 +593,21 @@ export function PageTree() {
                       placement="owned"
                     />
                   ))}
-                  {rootFolders.length === 0 && rootPages.length === 0 && (
-                    <div className="pl-10 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                  {group.folders.length === 0 && group.pages.length === 0 && (
+                    <div className="pl-6 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
                       No notes yet
                     </div>
                   )}
-                </>
+                </div>
               )}
             </div>
-          )}
-        </div>
+          );
+        })}
+        {ownedWorkspaceGroups.length === 0 && (
+          <div className="px-1 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+            No notes yet
+          </div>
+        )}
       </div>
     </div>
   );
