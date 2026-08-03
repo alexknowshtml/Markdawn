@@ -24,6 +24,7 @@ import {
   useUpdatePage,
 } from '../../hooks/use-pages';
 import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
+import { useOrgsMine } from '../../hooks/use-orgs';
 import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-workspace';
 import { useAuth } from '../../hooks/useAuth';
 import { useEntityCreationActions } from '../../hooks/useEntityCreationActions';
@@ -87,6 +88,7 @@ export function PageTree() {
     refetch: refetchWorkspaceMemberships,
   } = useWorkspaceMemberships();
   const leaveWorkspaceMutation = useLeaveWorkspace();
+  const { data: orgsMine } = useOrgsMine();
   const isBulkRemovalPending = useIsBulkRemovalPending();
   const pages = useStableValueWhile(refreshedPages, isBulkRemovalPending);
   const folders = useStableValueWhile(refreshedFolders, isBulkRemovalPending);
@@ -96,6 +98,11 @@ export function PageTree() {
   const workspaceMemberships = useStableValueWhile(
     refreshedWorkspaceMemberships,
     isBulkRemovalPending,
+  );
+
+  const orgWorkspaces = useMemo(
+    () => orgsMine?.flatMap((org) => org.workspaces) ?? [],
+    [orgsMine],
   );
 
   const favoriteKeys = useMemo(
@@ -134,6 +141,7 @@ export function PageTree() {
     getSidebarAuthorization,
     getSidebarCapabilities,
     ownedFolders,
+    ownedWorkspaceGroups,
     pagesByFolder,
     recentRows,
     rootPages,
@@ -147,6 +155,7 @@ export function PageTree() {
     recentPages: recentPages ?? [],
     sharedNavigation: sharedNavigation ?? [],
     workspaceMemberships: workspaceMemberships ?? [],
+    orgWorkspaces,
   });
 
   const {
@@ -524,36 +533,91 @@ export function PageTree() {
           </button>
           {!sidebar.collapsedSections.has('owned') && (
             <div className="space-y-0.5">
-              {rootFolders.map((folder) => (
-                <OwnedFolderBranch
-                  runtime={sidebarTreeRuntime}
-                  key={folder.id}
-                  folder={folder}
-                  foldersByParent={foldersByParent}
-                  pagesByFolder={pagesByFolder}
-                />
-              ))}
-              {rootPages.map((page) => (
-                <SidebarEntityRow
-                  runtime={sidebarTreeRuntime}
-                  key={page.id}
-                  entity={{
-                    entityType: 'page',
-                    id: page.id,
-                    title: page.title,
-                    icon: page.icon,
-                    ownerId: page.ownerId,
-                    createdBy: page.createdBy,
-                    userPermission: page.userPermission,
-                    parentId: page.parentId,
-                  }}
-                  placement="owned"
-                />
-              ))}
-              {rootFolders.length === 0 && rootPages.length === 0 && (
-                <div className="pl-10 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
-                  No notes yet
-                </div>
+              {ownedWorkspaceGroups.length > 1 ? (
+                ownedWorkspaceGroups.map((group) => {
+                  const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
+                  const isCollapsed = sidebar.collapsedSections.has(sectionKey);
+                  return (
+                    <div key={sectionKey}>
+                      <button
+                        type="button"
+                        onClick={() => sidebar.toggleSection(sectionKey)}
+                        className="flex items-center w-full px-1 py-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors cursor-pointer"
+                      >
+                        {isCollapsed ? (
+                          <ChevronRight size={12} className="mr-1 shrink-0" />
+                        ) : (
+                          <ChevronDown size={12} className="mr-1 shrink-0" />
+                        )}
+                        <span className="truncate">{group.name}</span>
+                      </button>
+                      {!isCollapsed && (
+                        <div className="space-y-0.5">
+                          {group.folders.map((folder) => (
+                            <OwnedFolderBranch
+                              runtime={sidebarTreeRuntime}
+                              key={folder.id}
+                              folder={folder}
+                              foldersByParent={foldersByParent}
+                              pagesByFolder={pagesByFolder}
+                            />
+                          ))}
+                          {group.pages.map((page) => (
+                            <SidebarEntityRow
+                              runtime={sidebarTreeRuntime}
+                              key={page.id}
+                              entity={{
+                                entityType: 'page',
+                                id: page.id,
+                                title: page.title,
+                                icon: page.icon,
+                                ownerId: page.ownerId,
+                                createdBy: page.createdBy,
+                                userPermission: page.userPermission,
+                                parentId: page.parentId,
+                              }}
+                              placement="owned"
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <>
+                  {rootFolders.map((folder) => (
+                    <OwnedFolderBranch
+                      runtime={sidebarTreeRuntime}
+                      key={folder.id}
+                      folder={folder}
+                      foldersByParent={foldersByParent}
+                      pagesByFolder={pagesByFolder}
+                    />
+                  ))}
+                  {rootPages.map((page) => (
+                    <SidebarEntityRow
+                      runtime={sidebarTreeRuntime}
+                      key={page.id}
+                      entity={{
+                        entityType: 'page',
+                        id: page.id,
+                        title: page.title,
+                        icon: page.icon,
+                        ownerId: page.ownerId,
+                        createdBy: page.createdBy,
+                        userPermission: page.userPermission,
+                        parentId: page.parentId,
+                      }}
+                      placement="owned"
+                    />
+                  ))}
+                  {rootFolders.length === 0 && rootPages.length === 0 && (
+                    <div className="pl-10 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                      No notes yet
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}

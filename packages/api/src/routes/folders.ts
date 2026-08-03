@@ -79,6 +79,7 @@ const toFolderDto = (folder: NormalizedFolderRow, parentId: string | null) => ({
   position: folder.position,
   createdBy: folder.createdBy,
   ownerId: folder.ownerId ?? null,
+  workspaceId: folder.workspaceId ?? null,
   createdAt: folder.createdAt,
   updatedAt: folder.updatedAt,
   publicPermission: folder.publicPermission,

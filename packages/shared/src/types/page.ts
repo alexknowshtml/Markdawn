@@ -10,6 +10,7 @@ export interface Page {
   properties: Record<string, unknown> | null;
   createdBy: string | null;
   ownerId?: string | null;
+  workspaceId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   isDeleted?: boolean;
@@ -26,6 +27,7 @@ export interface Folder {
   position: string;
   createdBy: string | null;
   ownerId?: string | null;
+  workspaceId?: string | null;
   createdAt: Date;
   updatedAt: Date;
   isDeleted?: boolean;

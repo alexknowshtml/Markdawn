@@ -72,6 +72,49 @@ orgsRoute.post('/', async (c) => {
   return c.json(org, 201);
 });
 
+// GET /mine — orgs + accessible workspaces for the current user
+orgsRoute.get('/mine', async (c) => {
+  const user = c.get('user') as { id: string };
+  const result = await query<{
+    orgId: string;
+    orgName: string;
+    orgSlug: string;
+    orgRole: string;
+    wsId: string | null;
+    wsName: string | null;
+    wsSlug: string | null;
+    wsRole: string | null;
+  }>(
+    sql`SELECT o.id AS "orgId", o.name AS "orgName", o.slug AS "orgSlug", om.role AS "orgRole",
+               w.id AS "wsId", w.name AS "wsName", w.slug AS "wsSlug", wm.role AS "wsRole"
+        FROM org_members om
+        JOIN orgs o ON o.id = om.org_id AND o.archived_at IS NULL
+        LEFT JOIN workspaces w ON w.org_id = o.id AND w.archived_at IS NULL
+          AND (w.visibility = 'open' OR EXISTS (
+            SELECT 1 FROM workspace_memberships wm2
+            WHERE wm2.workspace_id = w.id AND wm2.user_id = ${user.id}
+          ))
+        LEFT JOIN workspace_memberships wm ON wm.workspace_id = w.id AND wm.user_id = ${user.id}
+        WHERE om.user_id = ${user.id}
+        ORDER BY o.name ASC, w.name ASC`,
+  );
+
+  // Group flat rows into org → workspaces tree
+  const orgsMap = new Map<string, {
+    id: string; name: string; slug: string; role: string;
+    workspaces: { id: string; name: string; slug: string; role: string | null }[];
+  }>();
+  for (const row of result.rows) {
+    if (!orgsMap.has(row.orgId)) {
+      orgsMap.set(row.orgId, { id: row.orgId, name: row.orgName, slug: row.orgSlug, role: row.orgRole, workspaces: [] });
+    }
+    if (row.wsId && row.wsName && row.wsSlug) {
+      orgsMap.get(row.orgId)!.workspaces.push({ id: row.wsId, name: row.wsName, slug: row.wsSlug, role: row.wsRole });
+    }
+  }
+  return c.json([...orgsMap.values()]);
+});
+
 // GET /:orgSlug
 orgsRoute.get('/:orgSlug', async (c) => {
   const user = c.get('user') as { id: string };

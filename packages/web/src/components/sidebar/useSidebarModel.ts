@@ -18,6 +18,13 @@ function collectSharedFolderIds(items: readonly SharedNavigationItem[]): string[
   return ids;
 }
 
+export type OwnedWorkspaceGroup = {
+  workspaceId: string | null;
+  name: string;
+  folders: FolderTreeNode[];
+  pages: PageTreeNode[];
+};
+
 export function useSidebarModel(options: {
   currentUserId: string | undefined;
   pages: PageTreeNode[];
@@ -26,6 +33,7 @@ export function useSidebarModel(options: {
   recentPages: RecentPage[];
   sharedNavigation: SharedNavigationItem[];
   workspaceMemberships: WorkspaceMembership[];
+  orgWorkspaces: { id: string; name: string }[];
 }) {
   const {
     currentUserId,
@@ -35,6 +43,7 @@ export function useSidebarModel(options: {
     recentPages,
     sharedNavigation,
     workspaceMemberships,
+    orgWorkspaces,
   } = options;
   return useMemo(() => {
     const pageById = new Map(pages.map((page) => [page.id, page]));
@@ -121,6 +130,37 @@ export function useSidebarModel(options: {
       foldersByParent.set(parentId, siblings);
     }
     const allPagesByFolder = buildPagesByFolder(pages, new Set(folderById.keys()));
+
+    const wsGroupKey = (wsId: string | null | undefined) => wsId ?? '__no_workspace__';
+    const ownedWorkspaceGroupsMap = new Map<string, OwnedWorkspaceGroup>();
+    for (const folder of ownedFolders) {
+      const key = wsGroupKey(folder.workspaceId);
+      if (!ownedWorkspaceGroupsMap.has(key)) {
+        const ws = orgWorkspaces.find((w) => w.id === folder.workspaceId);
+        ownedWorkspaceGroupsMap.set(key, {
+          workspaceId: folder.workspaceId ?? null,
+          name: ws?.name ?? 'My Notes',
+          folders: [],
+          pages: [],
+        });
+      }
+      ownedWorkspaceGroupsMap.get(key)!.folders.push(folder);
+    }
+    for (const page of rootPages) {
+      const key = wsGroupKey(page.workspaceId);
+      if (!ownedWorkspaceGroupsMap.has(key)) {
+        const ws = orgWorkspaces.find((w) => w.id === page.workspaceId);
+        ownedWorkspaceGroupsMap.set(key, {
+          workspaceId: page.workspaceId ?? null,
+          name: ws?.name ?? 'My Notes',
+          folders: [],
+          pages: [],
+        });
+      }
+      ownedWorkspaceGroupsMap.get(key)!.pages.push(page);
+    }
+    const ownedWorkspaceGroups = [...ownedWorkspaceGroupsMap.values()];
+
     const workspaceGroups = workspaceMemberships.map((membership) => ({
       ...membership,
       folders: folders.filter(
@@ -206,6 +246,7 @@ export function useSidebarModel(options: {
       getSidebarAuthorization,
       getSidebarCapabilities,
       ownedFolders,
+      ownedWorkspaceGroups,
       pageById,
       pagesByFolder,
       recentRows,
@@ -217,6 +258,7 @@ export function useSidebarModel(options: {
     currentUserId,
     favorites,
     folders,
+    orgWorkspaces,
     pages,
     recentPages,
     sharedNavigation,

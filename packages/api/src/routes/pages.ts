@@ -206,6 +206,7 @@ const toPageDto = (page: NormalizedPageRow, parentId: string | null) => ({
   properties: page.properties,
   createdBy: page.createdBy,
   ownerId: page.ownerId ?? null,
+  workspaceId: page.workspaceId ?? null,
   createdAt: page.createdAt,
   updatedAt: page.updatedAt,
   publicPermission: page.publicPermission,
