@@ -279,6 +279,28 @@ export function PageTree() {
     ],
   );
 
+  const { orgSections, ungroupedOwned, ungroupedShared } = useMemo(() => {
+    type OwnedGroup = (typeof ownedWorkspaceGroups)[number];
+    type SharedGroup = (typeof workspaceGroups)[number];
+    const map = new Map<string, { orgId: string; orgName: string; owned: OwnedGroup[]; shared: SharedGroup[] }>();
+    const ungroupedOwndArr: OwnedGroup[] = [];
+    const ungroupedSharedArr: SharedGroup[] = [];
+    for (const group of ownedWorkspaceGroups) {
+      const orgId = group.workspaceId ? wsToOrgMap.get(group.workspaceId) : undefined;
+      if (!orgId) { ungroupedOwndArr.push(group); continue; }
+      const org = orgsMine?.find((o) => o.id === orgId);
+      if (!map.has(orgId)) map.set(orgId, { orgId, orgName: org?.name ?? orgId, owned: [], shared: [] });
+      map.get(orgId)!.owned.push(group);
+    }
+    for (const group of workspaceGroups) {
+      if (!group.orgId) { ungroupedSharedArr.push(group); continue; }
+      const org = orgsMine?.find((o) => o.id === group.orgId);
+      if (!map.has(group.orgId)) map.set(group.orgId, { orgId: group.orgId, orgName: org?.name ?? group.orgId, owned: [], shared: [] });
+      map.get(group.orgId)!.shared.push(group);
+    }
+    return { orgSections: [...map.values()], ungroupedOwned: ungroupedOwndArr, ungroupedShared: ungroupedSharedArr };
+  }, [ownedWorkspaceGroups, workspaceGroups, wsToOrgMap, orgsMine]);
+
   if (isPagesLoading || isFoldersLoading) {
     return (
       <div className="flex flex-col h-full">
@@ -356,8 +378,6 @@ export function PageTree() {
 
   const sharedPreview = directSharedNavigation.slice(0, SIDEBAR_PREVIEW_LIMIT);
   const hasMoreShared = directSharedNavigation.length > SIDEBAR_PREVIEW_LIMIT;
-  const visibleWorkspaceGroups = workspaceGroups;
-  const hasSharedContent = sharedPreview.length > 0 || visibleWorkspaceGroups.length > 0;
 
   return (
     <div className="flex flex-col h-full">
@@ -441,22 +461,224 @@ export function PageTree() {
           runtime={sidebarTreeRuntime}
         />
 
-        {hasSharedContent && (
+        {orgSections.map(({ orgId, orgName, owned, shared }) => {
+          const orgKey = `org-${orgId}`;
+          const isOrgCollapsed = sidebar.collapsedSections.has(orgKey);
+          const color = orgColorMap.get(orgId);
+          const hasMultiple = owned.length + shared.length > 1;
+          return (
+            <div key={orgKey}>
+              <button
+                type="button"
+                onClick={() => sidebar.toggleSection(orgKey)}
+                aria-expanded={!isOrgCollapsed}
+                className={`flex items-center w-full px-2 py-1 mb-1 text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors text-left rounded-md ${
+                  color
+                    ? `${color.headerBg} ${color.headerText} hover:opacity-90`
+                    : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
+                }`}
+              >
+                {isOrgCollapsed ? (
+                  <ChevronRight size={14} className="mr-1 shrink-0" />
+                ) : (
+                  <ChevronDown size={14} className="mr-1 shrink-0" />
+                )}
+                <span className="truncate">{orgName}</span>
+              </button>
+              {!isOrgCollapsed && (
+                <div className="space-y-0.5">
+                  {owned.map((ownedGroup) => {
+                    const wsKey = `owned-ws-${ownedGroup.workspaceId ?? 'default'}`;
+                    const isWsCollapsed = sidebar.collapsedSections.has(wsKey);
+                    return (
+                      <div key={wsKey}>
+                        {hasMultiple && (
+                          <button
+                            type="button"
+                            onClick={() => sidebar.toggleSection(wsKey)}
+                            className="flex items-center w-full px-1 py-0.5 text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer"
+                          >
+                            {isWsCollapsed ? (
+                              <ChevronRight size={12} className="mr-1 shrink-0" />
+                            ) : (
+                              <ChevronDown size={12} className="mr-1 shrink-0" />
+                            )}
+                            <span className="truncate">{ownedGroup.name}</span>
+                          </button>
+                        )}
+                        {(!hasMultiple || !isWsCollapsed) && (
+                          <div className="space-y-0.5">
+                            {ownedGroup.folders.map((folder) => (
+                              <OwnedFolderBranch
+                                runtime={sidebarTreeRuntime}
+                                key={folder.id}
+                                folder={folder}
+                                foldersByParent={foldersByParent}
+                                pagesByFolder={pagesByFolder}
+                              />
+                            ))}
+                            {ownedGroup.pages.map((page) => (
+                              <SidebarEntityRow
+                                runtime={sidebarTreeRuntime}
+                                key={page.id}
+                                entity={{
+                                  entityType: 'page',
+                                  id: page.id,
+                                  title: page.title,
+                                  icon: page.icon,
+                                  ownerId: page.ownerId,
+                                  createdBy: page.createdBy,
+                                  userPermission: page.userPermission,
+                                  parentId: page.parentId,
+                                }}
+                                placement="owned"
+                              />
+                            ))}
+                            {ownedGroup.folders.length === 0 && ownedGroup.pages.length === 0 && (
+                              <div className="pl-6 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                                No notes yet
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {shared.map((sharedGroup) => {
+                    const isWsCollapsed = sidebar.collapsedWorkspaceIds.has(sharedGroup.ownerId);
+                    return (
+                      <div key={`shared-ws-${sharedGroup.ownerId}`}>
+                        {hasMultiple && (
+                          <div className="flex items-center">
+                            <button
+                              type="button"
+                              onClick={() => sidebar.toggleWorkspace(sharedGroup.ownerId)}
+                              className="flex min-w-0 flex-1 items-center text-xs font-medium text-zinc-500 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-100 cursor-pointer px-1 py-0.5"
+                            >
+                              {isWsCollapsed ? (
+                                <ChevronRight size={12} className="mr-1 shrink-0" />
+                              ) : (
+                                <ChevronDown size={12} className="mr-1 shrink-0" />
+                              )}
+                              <span className="truncate">{sharedGroup.ownerName ?? 'Shared'}</span>
+                              <span className="ml-1.5 shrink-0 text-[10px] text-zinc-400 dark:text-zinc-500">· shared</span>
+                            </button>
+                            <button
+                              type="button"
+                              title="Leave workspace"
+                              aria-label={`Leave ${sharedGroup.ownerName ?? 'workspace'}`}
+                              disabled={leaveWorkspaceMutation.isPending || !currentUserId}
+                              onClick={() => {
+                                if (!currentUserId) return;
+                                leaveWorkspaceMutation.mutate({
+                                  ownerId: sharedGroup.ownerId,
+                                  memberId: currentUserId,
+                                });
+                              }}
+                              className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer shrink-0"
+                            >
+                              <LogOut size={12} />
+                            </button>
+                          </div>
+                        )}
+                        {(!hasMultiple || !isWsCollapsed) && (
+                          <div className="space-y-0.5">
+                            {sharedGroup.folders.map((folder) => (
+                              <WorkspaceFolderBranch
+                                runtime={sidebarTreeRuntime}
+                                key={folder.id}
+                                folder={folder}
+                                workspaceOwnerId={sharedGroup.ownerId}
+                                allPagesByFolder={allPagesByFolder}
+                                sourceIsAdmin={sharedGroup.role === 'admin'}
+                              />
+                            ))}
+                            {sharedGroup.pages.map((page) => (
+                              <WorkspacePageRow
+                                runtime={sidebarTreeRuntime}
+                                key={page.id}
+                                page={page}
+                                sourceIsAdmin={sharedGroup.role === 'admin'}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {ungroupedOwned.map((group) => {
+          const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
+          const isCollapsed = sidebar.collapsedSections.has(sectionKey);
+          return (
+            <div key={sectionKey}>
+              <button
+                type="button"
+                onClick={() => sidebar.toggleSection(sectionKey)}
+                className="flex items-center w-full px-1 mb-2 text-[11px] font-bold text-zinc-400 dark:text-zinc-500 uppercase tracking-wider cursor-pointer hover:text-zinc-600 dark:hover:text-zinc-300 transition-colors text-left"
+              >
+                {isCollapsed ? (
+                  <ChevronRight size={14} className="mr-1 shrink-0" />
+                ) : (
+                  <ChevronDown size={14} className="mr-1 shrink-0" />
+                )}
+                <span className="truncate">{group.name}</span>
+              </button>
+              {!isCollapsed && (
+                <div className="space-y-0.5">
+                  {group.folders.map((folder) => (
+                    <OwnedFolderBranch
+                      runtime={sidebarTreeRuntime}
+                      key={folder.id}
+                      folder={folder}
+                      foldersByParent={foldersByParent}
+                      pagesByFolder={pagesByFolder}
+                    />
+                  ))}
+                  {group.pages.map((page) => (
+                    <SidebarEntityRow
+                      runtime={sidebarTreeRuntime}
+                      key={page.id}
+                      entity={{
+                        entityType: 'page',
+                        id: page.id,
+                        title: page.title,
+                        icon: page.icon,
+                        ownerId: page.ownerId,
+                        createdBy: page.createdBy,
+                        userPermission: page.userPermission,
+                        parentId: page.parentId,
+                      }}
+                      placement="owned"
+                    />
+                  ))}
+                  {group.folders.length === 0 && group.pages.length === 0 && (
+                    <div className="pl-6 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
+                      No notes yet
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {(ungroupedShared.length > 0 || sharedPreview.length > 0) && (
           <div className="space-y-1">
-            {visibleWorkspaceGroups.map((group) => {
+            {ungroupedShared.map((group) => {
               const isCollapsed = sidebar.collapsedWorkspaceIds.has(group.ownerId);
-              const sharedColor = group.orgId ? orgColorMap.get(group.orgId) : undefined;
               return (
                 <div key={`workspace-${group.ownerId}`}>
                   <div className="flex items-center gap-1 mb-1">
                     <button
                       type="button"
                       onClick={() => sidebar.toggleWorkspace(group.ownerId)}
-                      className={`flex min-w-0 flex-1 items-center text-left text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors rounded-md px-2 py-1 ${
-                        sharedColor
-                          ? `${sharedColor.headerBg} ${sharedColor.headerText} hover:opacity-90`
-                          : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
-                      }`}
+                      className="flex min-w-0 flex-1 items-center text-left text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors rounded-md px-2 py-1 text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300"
                     >
                       {isCollapsed ? (
                         <ChevronRight size={13} className="mr-1 shrink-0" />
@@ -464,9 +686,7 @@ export function PageTree() {
                         <ChevronDown size={13} className="mr-1 shrink-0" />
                       )}
                       <span className="truncate">
-                        {group.ownerName
-                          ? `${group.ownerName}'s Workspace`
-                          : 'Shared Workspace'}
+                        {group.ownerName ? `${group.ownerName}'s Workspace` : 'Shared Workspace'}
                       </span>
                     </button>
                     <button
@@ -476,10 +696,7 @@ export function PageTree() {
                       disabled={leaveWorkspaceMutation.isPending || !currentUserId}
                       onClick={() => {
                         if (!currentUserId) return;
-                        leaveWorkspaceMutation.mutate({
-                          ownerId: group.ownerId,
-                          memberId: currentUserId,
-                        });
+                        leaveWorkspaceMutation.mutate({ ownerId: group.ownerId, memberId: currentUserId });
                       }}
                       className="rounded p-1 text-zinc-400 hover:bg-black/5 hover:text-red-600 disabled:opacity-40 dark:hover:bg-white/10 cursor-pointer shrink-0"
                     >
@@ -530,69 +747,7 @@ export function PageTree() {
           </div>
         )}
 
-        {ownedWorkspaceGroups.map((group) => {
-          const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
-          const isCollapsed = sidebar.collapsedSections.has(sectionKey);
-          const orgId = group.workspaceId ? wsToOrgMap.get(group.workspaceId) : undefined;
-          const color = orgId ? orgColorMap.get(orgId) : undefined;
-          return (
-            <div key={sectionKey}>
-              <button
-                type="button"
-                onClick={() => sidebar.toggleSection(sectionKey)}
-                aria-expanded={!isCollapsed}
-                className={`flex items-center w-full px-2 py-1 mb-1 text-[11px] font-bold uppercase tracking-wider cursor-pointer transition-colors text-left rounded-md ${
-                  color
-                    ? `${color.headerBg} ${color.headerText} hover:opacity-90`
-                    : 'text-zinc-400 dark:text-zinc-500 hover:text-zinc-600 dark:hover:text-zinc-300'
-                }`}
-              >
-                {isCollapsed ? (
-                  <ChevronRight size={14} className="mr-1 shrink-0" />
-                ) : (
-                  <ChevronDown size={14} className="mr-1 shrink-0" />
-                )}
-                <span className="truncate">{group.name}</span>
-              </button>
-              {!isCollapsed && (
-                <div className="space-y-0.5">
-                  {group.folders.map((folder) => (
-                    <OwnedFolderBranch
-                      runtime={sidebarTreeRuntime}
-                      key={folder.id}
-                      folder={folder}
-                      foldersByParent={foldersByParent}
-                      pagesByFolder={pagesByFolder}
-                    />
-                  ))}
-                  {group.pages.map((page) => (
-                    <SidebarEntityRow
-                      runtime={sidebarTreeRuntime}
-                      key={page.id}
-                      entity={{
-                        entityType: 'page',
-                        id: page.id,
-                        title: page.title,
-                        icon: page.icon,
-                        ownerId: page.ownerId,
-                        createdBy: page.createdBy,
-                        userPermission: page.userPermission,
-                        parentId: page.parentId,
-                      }}
-                      placement="owned"
-                    />
-                  ))}
-                  {group.folders.length === 0 && group.pages.length === 0 && (
-                    <div className="pl-6 pr-3 py-2 text-sm text-zinc-500 dark:text-zinc-400">
-                      No notes yet
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          );
-        })}
-        {ownedWorkspaceGroups.length === 0 && (
+        {orgSections.length === 0 && ungroupedOwned.length === 0 && ungroupedShared.length === 0 && sharedPreview.length === 0 && (
           <div className="px-1 py-2 text-sm text-zinc-500 dark:text-zinc-400">
             No notes yet
           </div>
