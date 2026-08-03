@@ -90,10 +90,14 @@ orgsRoute.get('/mine', async (c) => {
         FROM org_members om
         JOIN orgs o ON o.id = om.org_id AND o.archived_at IS NULL
         LEFT JOIN workspaces w ON w.org_id = o.id AND w.archived_at IS NULL
-          AND (w.visibility = 'open' OR EXISTS (
-            SELECT 1 FROM workspace_memberships wm2
-            WHERE wm2.workspace_id = w.id AND wm2.user_id = ${user.id}
-          ))
+          AND (
+            om.role IN ('owner', 'admin')
+            OR w.visibility = 'open'
+            OR EXISTS (
+              SELECT 1 FROM workspace_memberships wm2
+              WHERE wm2.workspace_id = w.id AND wm2.user_id = ${user.id}
+            )
+          )
         LEFT JOIN workspace_memberships wm ON wm.workspace_id = w.id AND wm.user_id = ${user.id}
         WHERE om.user_id = ${user.id}
         ORDER BY o.name ASC, w.name ASC`,
