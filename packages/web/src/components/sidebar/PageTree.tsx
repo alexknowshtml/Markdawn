@@ -25,7 +25,10 @@ import {
 } from '../../hooks/use-pages';
 import { useSharedWithMeTree } from '../../hooks/use-shared-with-me';
 import { useOrgsMine } from '../../hooks/use-orgs';
+import { useOrgPicker } from '../../hooks/use-org-picker';
 import { useLeaveWorkspace, useWorkspaceMemberships } from '../../hooks/use-workspace';
+import { OrgPicker } from './OrgPicker';
+import { buildOrgColorMap } from '../../utils/orgColors';
 import { useAuth } from '../../hooks/useAuth';
 import { useEntityCreationActions } from '../../hooks/useEntityCreationActions';
 import { useStableValueWhile } from '../../hooks/useStableValue';
@@ -105,6 +108,19 @@ export function PageTree() {
     [orgsMine],
   );
 
+  const orgIds = useMemo(() => orgsMine?.map((o) => o.id) ?? [], [orgsMine]);
+  const orgColorMap = useMemo(() => buildOrgColorMap(orgIds), [orgIds]);
+  const wsToOrgMap = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const org of orgsMine ?? []) {
+      for (const ws of org.workspaces) map.set(ws.id, org.id);
+    }
+    return map;
+  }, [orgsMine]);
+
+  const { selectedOrg, setSelectedOrg } = useOrgPicker(orgIds);
+  const showOrgPicker = (orgsMine?.length ?? 0) > 1;
+
   const favoriteKeys = useMemo(
     () => new Set(favorites?.map((fav) => `${fav.entityType}:${fav.entityId}`) ?? []),
     [favorites],
@@ -156,6 +172,8 @@ export function PageTree() {
     sharedNavigation: sharedNavigation ?? [],
     workspaceMemberships: workspaceMemberships ?? [],
     orgWorkspaces,
+    selectedOrgId: selectedOrg,
+    wsToOrgMap,
   });
 
   const {
@@ -347,6 +365,16 @@ export function PageTree() {
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-2 pt-2 pb-1">
+        {showOrgPicker && (
+          <div className="mb-2">
+            <OrgPicker
+              orgs={orgsMine ?? []}
+              selectedOrg={selectedOrg}
+              orgColorMap={orgColorMap}
+              onSelect={setSelectedOrg}
+            />
+          </div>
+        )}
         <div className="flex items-center justify-center gap-1">
           <button
             type="button"
@@ -537,6 +565,8 @@ export function PageTree() {
                 ownedWorkspaceGroups.map((group) => {
                   const sectionKey = `owned-ws-${group.workspaceId ?? 'default'}`;
                   const isCollapsed = sidebar.collapsedSections.has(sectionKey);
+                  const orgId = group.workspaceId ? wsToOrgMap.get(group.workspaceId) : undefined;
+                  const color = orgId ? orgColorMap.get(orgId) : undefined;
                   return (
                     <div key={sectionKey}>
                       <button
@@ -548,6 +578,9 @@ export function PageTree() {
                           <ChevronRight size={12} className="mr-1 shrink-0" />
                         ) : (
                           <ChevronDown size={12} className="mr-1 shrink-0" />
+                        )}
+                        {selectedOrg === 'all' && color && (
+                          <span className={`h-1.5 w-1.5 rounded-full shrink-0 mr-1.5 ${color.dot}`} />
                         )}
                         <span className="truncate">{group.name}</span>
                       </button>

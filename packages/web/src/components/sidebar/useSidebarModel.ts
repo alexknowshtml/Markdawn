@@ -34,6 +34,8 @@ export function useSidebarModel(options: {
   sharedNavigation: SharedNavigationItem[];
   workspaceMemberships: WorkspaceMembership[];
   orgWorkspaces: { id: string; name: string }[];
+  selectedOrgId: string | 'all';
+  wsToOrgMap: Map<string, string>;
 }) {
   const {
     currentUserId,
@@ -44,6 +46,8 @@ export function useSidebarModel(options: {
     sharedNavigation,
     workspaceMemberships,
     orgWorkspaces,
+    selectedOrgId,
+    wsToOrgMap,
   } = options;
   return useMemo(() => {
     const pageById = new Map(pages.map((page) => [page.id, page]));
@@ -159,7 +163,13 @@ export function useSidebarModel(options: {
       }
       ownedWorkspaceGroupsMap.get(key)!.pages.push(page);
     }
-    const ownedWorkspaceGroups = [...ownedWorkspaceGroupsMap.values()];
+    const allOwnedWorkspaceGroups = [...ownedWorkspaceGroupsMap.values()];
+    const ownedWorkspaceGroups =
+      selectedOrgId === 'all'
+        ? allOwnedWorkspaceGroups
+        : allOwnedWorkspaceGroups.filter(
+            (g) => g.workspaceId !== null && wsToOrgMap.get(g.workspaceId) === selectedOrgId,
+          );
 
     const workspaceGroups = workspaceMemberships.map((membership) => ({
       ...membership,
@@ -261,7 +271,9 @@ export function useSidebarModel(options: {
     orgWorkspaces,
     pages,
     recentPages,
+    selectedOrgId,
     sharedNavigation,
     workspaceMemberships,
+    wsToOrgMap,
   ]);
 }
